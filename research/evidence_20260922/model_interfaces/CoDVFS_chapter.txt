@@ -1,0 +1,940 @@
+       CoDVFS: Improving the Energy Eﬃciency
+       of AI Servers Through Coordinated DVFS
+
+      Yijia Zhang1 , Baoqing Wang1(B) , Shixin Zhang1 , and Qiang Wang2
+                       1
+                        Peng Cheng Laboratory, Shenzhen, China
+                      {zhangyj01,wangbq,zhangshx}@pcl.ac.cn
+                   2
+                     Harbin Institute of Technology, Shenzhen, China
+                                qiang.wang@hit.edu.cn
+
+
+       Abstract. With the widespread adoption of deep learning across indus-
+       tries and academia, the energy consumption of AI computing clus-
+       ters has surged, creating signiﬁcant economic and environmental chal-
+       lenges. Improving AI server energy eﬃciency has therefore become a
+       critical research focus. Traditional dynamic voltage and frequency scal-
+       ing (DVFS) research has primarily focused on regulating either CPU or
+       GPU/NPU frequency in isolation, which cannot fully unlock the energy-
+       saving potential of AI servers. Naively applying joint DVFS requires
+       exhaustively evaluating all frequency combinations to ﬁnd the most
+       energy-eﬃcient one, which becomes prohibitively expensive with many
+       frequency states.
+          To address this limitation, this study proposes CoDVFS, a Coordi-
+       nated Dynamic Voltage and Frequency Scaling framework that employs
+       Bayesian optimization to rapidly converge to optimal frequency conﬁgura-
+       tions for both CPUs and GPU/NPUs. Experimental results on AI servers
+       running HPL-MxP workloads demonstrate that CoDVFS enhances server
+       energy eﬃciency by 17%, achieving signiﬁcant energy savings. We also
+       analyze the relationship between whole-server and accelerator-only energy
+       eﬃciency, proposing an optimum alignment criterion. On our device, the
+       optima of both metrics coincide. However, the criterion reveals that if
+       server and accelerator power scale diﬀerently on other devices, optimiz-
+       ing accelerator eﬃciency alone may not reﬂect true server eﬃciency.
+
+       Keywords: energy eﬃciency · DVFS · server
+
+
+1    Introduction
+Advancements in artiﬁcial intelligence (AI) spanning natural language process-
+ing and computer vision have driven substantial demand for computational
+resources. Research institutions and enterprises worldwide heavily invest in AI
+clusters, relying on GPUs/NPUs (Neural Processing Units) for eﬃcient training
+and inference. However, computational growth brings soaring energy costs. For
+example, GPT-3 training consumed 1,287 MWh (502t CO2 , equal to 8 cars’
+lifetime emissions). Computing facilities like Aurora peak at 38.7 MW [20],
+ c The Author(s), under exclusive license to Springer Nature Singapore Pte Ltd. 2026
+H. Liu et al. (Eds.): ICA3PP 2025, LNCS 16383, pp. 419–439, 2026.
+https://doi.org/10.1007/978-981-95-8405-5_23
+420    Y. Zhang et al.
+
+potentially costing $30M/year and emitting 140,000t CO2 annually. As a result,
+improving the energy eﬃciency of AI servers is now critical.
+    Dynamic Voltage and Frequency Scaling (DVFS) is an important technique
+to control energy consumption and improve energy eﬃciency [1–5,8,10,12,14–
+17,19,22,24,25,27–31]. By applying DVFS, we dynamically adjust a processor’s
+operating frequency and supply voltage: increasing frequency and voltage under
+heavy load to ensure performance, and lowering frequency and voltage under
+light load to reduce power usage. This technique allows processors to minimize
+energy consumption whenever possible.
+    However, existing studies focus solely on applying DVFS to individual compo-
+nents [1–5,8,10,12,14–17,19,22,24,25,27–31]—either the CPU or GPU—while
+overlooking the fact that, in real tasks, the CPU and GPU work in coordina-
+tion to complete computations. If DVFS is applied only to the CPU, the GPU
+may still remain in a high-power state; likewise, optimizing only the GPU fre-
+quency may result in CPU power consumption or execution performance failing
+to match the GPU’s processing pace. Such isolated control strategies often fall
+short in unlocking the full energy eﬃciency potential of an AI server.
+    As a result, joint frequency and voltage scaling for both CPU and GPU
+becomes important. Guided by this motivation, we propose CoDVFS, a Coordi-
+nated Dynamic Voltage and Frequency Scaling framework tailored for AI servers.
+This framework can be applied across diﬀerent workloads and minimize power
+consumption or maximize overall system energy eﬃciency by simultaneously
+tuning the operating frequency and voltage of both the CPU and GPU.
+    To facilitate optimization, we adopt a Bayesian optimization approach to
+eﬃciently search for the optimal processor frequency combination, making the
+control strategy more adaptive and precise.
+    To validate the eﬀectiveness of CoDVFS, we conducted experiments on a
+DGX server equipped with 8×GPU V100. We used external power monitor-
+ing equipment to measure the energy consumption of the server while running
+benchmarks. The experimental results show that, compared to the default DVFS
+setting, CoDVFS improves server energy eﬃciency by 17% (HPL-MxP) and 12%
+(HPCG), signiﬁcantly lowering overall electricity usage. Compared with DVFS
+strategies applied only to CPU or GPU individually, the coordinated control
+approach further exploits the system’s overall energy-saving potential.
+    Since measuring full server power consumption is more challenging than
+monitoring GPU power alone, prior GPU DVFS studies have typically focused
+solely on GPU power measurements [1,3–5,8,12,14,16,22,24,25,28,30,31]. To
+overcome this limitation, we present a detailed description of our methodology
+for server-wide power measurement. More importantly, by comparing the GPU
+power reported by the nvidia-smi tool with the total power measured by exter-
+nal power meters, we conduct an in-depth analysis of the diﬀerences between
+whole-server energy eﬃciency and GPU-only energy eﬃciency.
+    Our analysis reveals that the point of optimal GPU energy eﬃciency does
+not necessarily coincide with the point of optimal whole-server energy eﬃciency,
+especially when the power consumption of other components, such as fans, mem-
+ory, and the motherboard, varies diﬀerently with GPU frequency. We propose an
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through        421
+
+optimal alignment criterion demonstrating that when GPU power and non-GPU
+power grow at equal rates, their optimal operating points coincide. On the other
+hand, when these growth rates diﬀer, optimizing GPU energy eﬃciency alone
+may not accurately represent the overall server energy eﬃciency. This highlights
+the importance of evaluating power consumption from a holistic perspective in
+order to accurately assess energy eﬃciency. These ﬁndings may oﬀer new per-
+spectives for future system-level energy eﬃciency optimization.
+
+
+2   Background
+
+Dynamic Voltage and Frequency Scaling (DVFS) is a key technique used to
+control the power consumption and performance of processors by adjusting
+their operating voltage and frequency [1–5,8,10,12,14–17,19,22,24,25,27–31].
+The dynamic power of a processor can typically be approximated by the for-
+mula P ∝ CV 2 f [9], where C is the capacitance, V is the voltage, and f is the
+frequency. This equation indicates that reducing the voltage and frequency leads
+to a decrease in dynamic power consumption. Compared with other power man-
+agement methods that require changes to application codes or hardware archi-
+tecture, DVFS oﬀers several advantages: it is non-intrusive to user applications,
+easily applicable, and provides fast response times as DVFS adjustment usually
+ﬁnishes within 30 milliseconds [21]. As a result, DVFS is widely integrated into
+modern CPUs and GPUs.
+    Current CPUs and GPUs typically do not expose voltage control interfaces
+to users. Instead, on-chip logic automatically adjusts the voltage based on the
+conﬁgured frequency, and voltage scales approximately linearly with frequency.
+In practice, this means that adjusting the processor’s operating frequency is
+suﬃcient, with the corresponding voltage being managed internally by the pro-
+cessor. The frequency-voltage curves can be found in [13,18]. In this study, we
+regulate the frequencies of CPUs and GPUs, thereby indirectly managing their
+supply voltages.
+    Research on applying DVFS to CPUs has a long history. Numerous stud-
+ies have explored how to achieve optimal power and performance trade-oﬀs
+under various workloads and scenarios by adjusting CPU frequency and volt-
+age [2,7,10,17,19,27,29]. This includes precise modeling of CPU power consump-
+tion and the design of optimal frequency-setting strategies. With the widespread
+adoption of multi-core CPU architectures, researchers have begun to investigate
+the feasibility of applying diﬀerentiated frequency control to individual cores on
+the same chip [19], as well as independent DVFS control of the uncore compo-
+nents [10,27] (which include on-chip caches and memory controllers) to further
+tap into energy-saving potential.
+    Over the past decade, the widespread application of deep learning has driven
+GPUs to the forefront of high-performance computing. Consequently, research
+on GPU DVFS has also seen rapid growth [1,3–5,8,12,14–16,22,24,25,28,30,
+31]. Many studies focus on modeling GPU performance and power consumption
+under diﬀerent frequency settings, seeking to identify frequencies that strike a
+422    Y. Zhang et al.
+
+balance between energy eﬃciency and computational performance. For GPUs
+that support memory frequency scaling, some research has also explored the
+additional optimization opportunities that GPU memory DVFS can provide for
+task execution [23].
+    Most existing studies, however, focus on applying DVFS to either the CPU
+or GPU in isolation and rarely explore the optimization potential of coordinated
+CPU-GPU control. In addition, most prior experiments measured only the power
+of the CPU or GPU chip itself, lacking a comprehensive analysis of whole-server
+power usage. In fact, when server-level energy eﬃciency is assessed by using the
+actual power of the entire server as the denominator, the resulting conclusions
+may diﬀer from those drawn from GPU-only measurements.
+    To address this limitation, our study measures and analyzes the power con-
+sumption of the entire server to provide a more comprehensive evaluation of the
+energy eﬃciency beneﬁts of coordinated DVFS in data center servers. Table 1
+compares the diﬀerence between our work and previous research, showing that
+most prior studies lack investigation into coordinated frequency scaling and
+whole-server power measurement.
+
+                     Table 1. Comparison with related works.
+
+            Related Works            GPU DVFS CPU DVFS Server Power
+                                                       Measurement
+            Paul, 2015 [16]
+            Guerreiro, 2015 [4]
+            Majumdar, 2017 [12]
+            Fan, 2019 [3]
+            Guerreiro, 2019 [5]
+            Ilager, 2020 [8]
+            Zou, 2020 [31]
+            Kumar, 2021 [10]
+            Nabavinejad, 2022 [14]
+            Wang F., 2022 [22]
+            You, 2022 [27]
+            Ali, 2023 [1]
+            Bratek, 2023 [2]
+            Zhang Y., 2024 [30]
+            Piga, 2024 [17]
+            Patel, 2024 [15]
+            Zhang H., 2024 [29]
+            Wang Q., 2024 [24]
+            Stojkovic, 2024 [19]
+            Wang Y., 2024 [25]
+            Yue, 2025 [28]
+            Ours, 2025
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through         423
+
+3     CoDVFS: A Coordinated Dynamic Voltage
+      and Frequency Scaling Framework
+
+Existing frequency and voltage scaling techniques primarily target individual
+computing components—either the CPU or GPU—for optimization. To address
+this issue, it is essential to adopt a holistic perspective and perform coordinated
+energy eﬃciency optimization across both the CPU and GPU.
+    A straightforward way to implement joint CPU-GPU DVFS is to evalu-
+ate all possible combinations of CPU and GPU frequencies exhaustively, and
+then select the conﬁguration that yields the highest energy eﬃciency. However,
+while exhaustive search is conceptually simple, it becomes prohibitively expen-
+sive when the number of frequency states is large. Suppose the CPU has M
+frequency states and the GPU has N states. If each combination is tested R
+times to ensure measurement stability, then M × N ×R experiments are required
+in total. For example, if M = N = 11 and R = 5, a total of 605 experiments
+would be needed, which could take several hours or more. This time and resource
+expenditure is impractical in AI computing environments.
+    To overcome this limitation, we propose CoDVFS, a coordinated dynamic
+voltage and frequency scaling framework for CPU-GPU systems. The core idea
+of CoDVFS is to leverage Bayesian Optimization to eﬃciently approximate the
+optimal solution in high-cost experimental environments. This allows the system
+to discover the optimal CPU/GPU frequencies with few experiments.
+    When using this framework, it can be applied to any target program requiring
+optimization. CoDVFS will then automatically perform experimental evaluations
+and iteratively identify the best frequency conﬁguration. The source codes of
+CoDVFS are available at https://github.com/zyjopensource/CoDVFS.
+
+
+3.1    Optimization Objective
+
+The objective of the optimization process is to maximize the energy eﬃciency,
+which is deﬁned as the ratio of performance to power usage:
+
+
+                          Performance   Workload/Duration   Workload
+      Energy Eﬃciency =               =                   =          .
+                             Power       Energy/Duration     Energy
+
+    According to this formula, when running the same workload (with a ﬁxed
+computational demand), maximizing energy eﬃciency is equivalent to minimiz-
+ing total energy consumption. During optimization on a server, performance,
+power, and runtime duration are all measured directly while the program is
+executing. Each experiment typically lasts tens of seconds to several minutes.
+    The input variables for the optimization process are the combinations of
+CPU and GPU frequencies (fCPU , fGPU ). Since most processor hardware auto-
+matically adjusts voltage according to the selected frequency, it is suﬃcient to
+directly set the frequencies externally.
+424    Y. Zhang et al.
+
+3.2   Reason of Using Bayesian Optimization
+Bayesian Optimization is a global optimization method based on probabilistic
+models. It is particularly well-suited for optimizing functions that are expen-
+sive or time-consuming to evaluate. In our case, because AI computing servers
+are complex systems, the relationship between energy eﬃciency and CPU-GPU
+frequency combinations cannot be described with an explicit analytical formula
+unless complex modeling is done in advance. As a result, traditional methods
+such as derivation-based or gradient-descent approaches are not applicable for
+optimizing energy eﬃciency.
+    Furthermore, since each experiment is relatively time-consuming, naive
+brute-force search incurs a prohibitive computational cost. Bayesian Optimiza-
+tion avoids the need for an analytical formula by constructing a probabilistic
+model of the objective function. This model is then used to intelligently select
+the next sampling point in the search space, allowing the optimization process
+to eﬃciently approach the function’s optimum with relatively few experiments.
+
+3.3   CoDVFS Framework Architecture
+The proposed CoDVFS framework is implemented in Python and comprises key
+modules: a Bayesian optimizer, workload runner, performance/power monitor-
+ing, and CPU/GPU frequency control (Fig. 1).
+    The Bayesian optimizer selects the next CPU-GPU frequency combination
+using historical data and probabilistic modeling to maximize energy eﬃciency.
+The workload runner executes the target program across frequency settings
+for performance measurements. The performance monitoring module evaluates
+workload execution based on program-reported metrics, and the power monitor-
+ing module collects real-time power data from meters. Frequency control lever-
+ages hardware-speciﬁc interfaces to adjust CPU/GPU frequencies.
+    CoDVFS features adaptable interfaces for diﬀerent server setups, allowing
+quick integration with new platforms by modifying frequency control calls. This
+design ensures core optimization logic while enabling ﬂexible task execution,
+monitoring, and coordinated CPU-GPU DVFS across servers, oﬀering a uniﬁed
+solution for system-wide energy eﬃciency in real-world deployments.
+
+
+
+
+                         Fig. 1. The CoDVFS Framework.
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through           425
+
+3.4   Detailed Steps of Bayesian Optimization
+Initialization of Sample Points. First, within the search space of CPU
+and GPU frequencies, one or more initial frequency combinations are randomly
+selected. For each combination, run the workload to collect performance/power
+results and compute its energy eﬃciency.
+
+
+Surrogate Model Construction. Using the data from the initial sample
+points, a surrogate model is constructed to approximate the true objective func-
+tion. A Gaussian Process (GP) is a commonly used surrogate model in Bayesian
+Optimization. It characterizes the distribution of the objective function using a
+mean function and a covariance function: f (x) ∼ GP(m(x), k(x, x )), where
+x is the input variable (a CPU-GPU frequency combination (fCPU , fGPU )),
+f (x) ∼ GP(·, ·) is the Gaussian process, m(x) is the mean function, k(x, x )
+is the covariance function (also called the kernel), which describes the correla-
+tion between inputs x and x .
+    In Bayesian optimization, commonly used kernels include the RBF (Radial
+Basis Function) kernel and the Matern kernel. Our implementation uses the
+Matern kernel, which contains a few hyperparameters denoted as θ here.
+
+Sampling Next Point. The core of Bayesian optimization lies in the sampling
+of the next point. Based on the surrogate model, the next point is selected by
+optimizing an acquisition function. The acquisition function evaluates the value
+of each candidate point, which balances both exploration (gathering information
+about unknown areas) and exploitation (reﬁning known good areas).
+    Common acquisition functions include Expected Improvement (EI) and
+Upper Conﬁdence Bound (UCB). Our implementation uses EI, which is:
+
+                   EI(x) = max(μ(x) − f ∗ , 0)Φ(z) + σ(x)φ(z),                   (1)
+where f ∗ is the current best energy eﬃciency value, μ(x) and σ(x) are the pre-
+dicted mean and standard deviation of the Gaussian process at input point x, and
+           ∗                 z             t2
+z = μ(x)−f
+      σ(x) . Also, Φ(z) = −∞ 2π exp − 2 dt is the cumulative distribution
+                                 √1
+                                                                                  2
+function (CDF) of the standard normal distribution, and φ(z) = √12π exp − z2
+is the probability density function (PDF) of the standard normal distribution.
+max(·, ·) is used to ensure the improvement is non-negative.
+    Based on function EI(x), the next frequency combination is selected by max-
+imizing the EI function: x∗ = arg maxx EI(x). According to (1), when μ(x) is
+much larger than f ∗ , EI is large, indicating a high expected improvement. Even
+if μ(x) is not much larger than f ∗ , a large σ(x) can still yield a high EI, thereby
+encouraging exploration in regions with high uncertainty.
+
+Model Update. After the new sampling point x∗ is selected, an experiment
+is run to measure its energy eﬃciency value, and the result y∗ is added to the
+426     Y. Zhang et al.
+
+existing dataset. With this updated dataset, the Gaussian process (GP) model
+will be recomputed to improve its accuracy.
+    To update the GP model during each iteration, after obtaining the new sam-
+ple point x∗ , y∗ and using the existing samples {(xi , yi )}ni=1 along with the
+covariance function k(·, ·), the posterior distribution of the GP at any new input
+x can be updated as f (x) ∼ N μn (x), σn2 (x) , where the posterior mean and
+variance are given by
+                                                          −1
+                     μn (x) = k(x, X) k(X, X) + σobs
+                                                 2
+                                                     I         y,                (2)
+                                                            −1
+             σn2 (x) = k(x, x) − k(x, X) k(X, X) + σobs
+                                                    2
+                                                        I        k(X, x).        (3)
+Here, X is the set of all previously sampled inputs, y is the corresponding vector
+of observations, I is the identity matrix, μn (x) and σn2 (x) are the posterior mean
+and variance at input x. Also, σobs
+                                  2
+                                      is the observation noise variance. In practice,
+the Matern kernel hyperparameters θ and noise variance σobs      2
+                                                                     are periodically
+re-estimated via maximum likelihood estimation to better ﬁt the data:
+
+                   {θ, σobs
+                        2
+                            } = arg max
+                                     2
+                                        log p yn Xn , θ, σobs
+                                                          2
+                                                              .                  (4)
+                                    θ ,σobs
+
+
+
+Iterative Optimization and Convergence. Repeat the above sampling and
+model updating steps, progressively searching for the optimal frequency combi-
+nation. In each iteration, the updated model and acquisition function are used
+to choose a new sampling point, gradually converging toward the optimum of
+the objective function. After several iterations, when the value of the acquisition
+function becomes suﬃciently small and the new sampling points oﬀer diminish-
+ing improvements to the objective function, the optimization is considered to
+have converged. At this point, the frequency combination returned by Bayesian
+optimization is regarded as the optimal setting.
+
+
+3.5   Computational Complexity
+
+Assume the CPU oﬀers M distinct frequency states and the GPU oﬀers N ,
+                                             (i)   (j)
+leading to a discrete design space X = {(fCPU , fGPU ) | 1 ≤ i ≤ M, 1 ≤ j ≤ N } of
+size K = M N .
+    For the baseline exhaustive search, if each conﬁguration is evaluated R times
+to suppress measurement noise, the baseline requires Cexh = R K = R M N
+individual workload runs. With a single experiment taking wall time τ (tens of
+seconds to a few minutes in our servers), the cost is Cexh τ .
+    For the Bayesian-optimization-based CoDVFS, let T = T0 + TBO be the total
+number of experiments: T0 random initial samples followed by TBO Bayesian-
+guided iterations. Then, the experimental cost is T τ , which is typically 10-40
+runs in our deployments, two orders of magnitude smaller than Cexh when both
+M and N are greater than 10. The algorithmic overhead for each Bayesian
+optimization iteration, Talg , is decomposed in the following:
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through        427
+
+– GP posterior update. Naively O(t3 ) with t samples due to the matrix inver-
+  sion operation of the kernel matrix. If implemented with rank-one Cholesky
+  updates, the amortised cost can be reduced to O(t2 ).
+– Hyper-parameter re-estimation. Performed every H iterations (typically H ≥
+  5). Each call costs O(t3 ) but is infrequent.
+– Acquisition maximization. For a discrete search we can enumerate only the
+  unexplored points, costing O(K − T ) per iteration, or use a continuous opti-
+  mizer whose complexity is O(Ld) where L is the number of L-BFGS steps
+  and d=2 is the dimensionality.
+
+
+
+
+                          Fig. 2. Experimental devices.
+
+
+    Because t ≤ T K and d is small, the algorithmic overhead Talg is negligible
+compared with the cost of running experiments itself.
+    In summary, given T K and τ Talg , the practical runtime of CoDVFS is
+dominated by T τ , yielding a speed-up factor ≈ Cexh /T = RM N/T ∼ 101 −102 .
+As a result, CoDVFS reduces the number of costly workload executions by one
+or two magnitude in practice, making coordinated DVFS feasible for AI servers.
+
+
+4     Experimental Metho dology
+This section describes the details of the hardware, workloads, power measure-
+ment, frequency control, and baseline DVFS policies used in our experiments.
+
+4.1   Server and Workload
+The server used in this study is a DGX V100, as shown in Fig. 2(a). It is equipped
+with two Intel Xeon E5-2698 v4 CPUs, providing a total of 40 physical cores and
+80 threads, along with eight V100 GPUs. The GPUs run on CUDA 10.2. Each
+GPU consumes an idle power of ∼42 W, and the total idle power of all GPUs is
+∼336 W. The entire server consumes ∼750 W in idle state.
+428     Y. Zhang et al.
+
+    To evaluate the eﬀectiveness of our proposed CoDVFS framework, we used
+HPL-MxP [6] as the primary workload and ran it inside the oﬃcial NVIDIA
+container. HPL-MxP is a representative hybrid-precision workload based on the
+traditional HPL benchmark, designed to leverage both CPU and GPU comput-
+ing capabilities. It evaluates both double-precision computation in HPC scenarios
+and low-precision operations commonly found in AI workloads. In addition to
+HPL-MxP, we also tested the HPCG benchmark [11], which solves large sparse
+linear systems using iterative methods. We used the GPU version of these bench-
+marks released on the NVIDIA GPU Cloud platform.
+    After setting both the CPU and GPU set to their maximum frequencies, we
+conducted a grid search over the tunable parameters N (matrix size) and N B
+(block size) of HPL-MxP. This search is a standard procedure, which runs tests
+to identify the conﬁguration that delivers the server’s peak performance. After
+completing the grid search, we used matrix size N = 204800 and block size
+N B = 896 that yielded the highest performance. These two parameters were
+ﬁxed in all subsequent energy eﬃciency optimization experiments, ensuring a
+fair comparison of energy performance across diﬀerent control strategies under
+consistent workload conditions.
+
+4.2    Server/GPU Power Measurement Method and Frequency
+       Control Method
+In this study, we measured the server’s total power consumption using external
+power meters (model GWGJ), as shown in Fig. 2(b). This power meter supports
+TCP/IP-based communication via the SNMP protocol and can be controlled
+through Python scripts with the pysnmp library, enabling remote real-time mon-
+itoring and automated data logging. With a minimum valid sampling interval
+of approximately 0.5 s, it is capable of capturing ﬂuctuations in dynamic server
+power consumption.
+    The DGX V100 server used in our experiments has four power supply units,
+and its nominal maximum power consumption is 3500 W. To cover the full range
+of server power draw, we deployed two power meters, each connected to two
+power supply units, eﬀectively splitting the load. To obtain the total power,
+we summed the readings from both meters. To set up the devices, each power
+meter’s input side was connected to the rack’s power outlet, while the output
+side was connected to two of the server’s power supply units.
+    A simpliﬁed version of our codes for power meter reading is provided below:
+1 from pysnmp . entity . rfc3413 . oneliner import cmdgen
+2 from pysnmp . entity import engine
+3 import time
+
+4 from datetime import datetime
+
+5
+
+6   snmpEngine = engine . SnmpEngine ()
+7   cg = cmdgen . CommandGenerator ( snmpEngine )
+8
+
+9   def get_power ( dev_ip ) :
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through           429
+
+10      errI , errS , errId , varBinds = cg . getCmd (
+11           cmdgen . CommunityData ( ’ pudinfo ’ , ’ public ’ , 0) ,
+12           cmdgen . UdpTransportTarget (( dev_ip , 161) ) ,
+13           ’ 1.3.6.1.4.1.23273.4.4.0 ’
+14      )
+15      return float ( varBinds [0][1]) / 10
+16
+
+17 while True :
+18     t0 = time . time ()
+19     p0 = get_power ( ’ 192.168.242.38 ’)
+20     p1 = get_power ( ’ 192.168.242.39 ’)
+21     ts = datetime . now () . strftime ( ’%Y -% m -% d % H :% M :% S .% f ’)
+22     print ’%s ,%.1 f ’ % ( ts , p0 + p1 )
+23     time . sleep ( max (0 , 1 - ( time . time () - t0 ) ) )
+
+    Here, “p0+p1” represents the total collected power. “192.168.242.x” are the IP
+addresses of our two power meters. “1.3.6.1.4.1.23273.4.4.0” is the power reading
+command speciﬁc to this power meter model. The sleep function maintains the
+reading interval to be 1 s.
+    For monitoring GPU power consumption, we used the nvidia-smi tool,
+which allows periodic readings of each GPU’s power usage with good preci-
+sion [26]. This data helped us analyze the individual power trends of the CPU
+and GPU and was also useful in later comparisons between GPU-only control
+strategies and coordinated control strategies. It is worth noting that, because
+measuring GPU power using nvidia-smi does not require deploying external
+power meters, it is much easier than measuring whole-server power. This is one
+of the main reasons why most prior GPU energy eﬃciency studies (as shown in
+Table 1) have focused only on GPU power measurements. Section 6 will compare
+whole-system energy eﬃciency with GPU-only energy eﬃciency in detail.
+    For frequency control, we used the cpupower tool to set CPU frequencies.
+The CPU frequency range was restricted between 1.2 GHz and 2.2 GHz, with
+0.1 GHz intervals. For GPUs, we again used the nvidia-smi tool to set the
+operating frequency. The GPU V100 we use oﬀers a tunable frequency range
+from 135 MHz to 1440 MHz, with two adjustable frequency points every 15 MHz,
+yielding a total of 175 frequency points. This provides a high degree of ﬂexibility
+in tuning GPU frequency.
+
+
+4.3   Comparison Strategies
+
+In our experiments, we compare the proposed CoDVFS framework with several
+common DVFS strategies to validate its eﬀectiveness:
+
+– Only-CPU-DVFS: This strategy applies DVFS only to the CPU, while the
+  GPU remains ﬁxed at its maximum frequency.
+– Only-GPU-DVFS: This strategy applies DVFS solely to the GPU, keeping
+  the CPU ﬁxed at its maximum frequency.
+430    Y. Zhang et al.
+
+– MaxFreq: In this strategy, both the CPU and GPU operate at their maxi-
+  mum frequencies. This is the default conﬁguration applied in many clusters
+  with the aim of maximizing performance.
+– MinFreq: This strategy sets both the CPU and GPU to their minimum
+  frequencies. It helps measure the power control range of the server and is
+  applicable in scenarios with strict power caps, such as when participating in
+  electricity curtailment plans.
+
+   Our experiments mainly compare metrics including energy eﬃciency, perfor-
+mance, and average power. For performance, we directly read the ﬂoating-point
+computation performance reported by HPL-MxP and HPCG.
+
+
+
+
+  Fig. 3. Performance, power, energy eﬃciency at diﬀerent CPU-GPU frequencies.
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through        431
+
+5     Experimental Results
+In this section, we ﬁrst present the results from a coarse-grained DVFS brute-
+force search. Then, we show the results of experiments using CoDVFS.
+
+5.1   Coarse-Grained CPU-GPU DVFS Brute-Force Search
+To analyze the value of coordinated CPU-GPU DVFS, we ﬁrst performed a
+coarse-grained brute-force search over CPU and GPU frequency combinations.
+In the experiment, we selected 11 frequency points for the CPU, ranging from
+1.2 GHz to 2.2 GHz, and 11 frequency points for the GPU, ranging from 135 MHz
+to 1440 MHz. For each frequency pair, we ran the HPL-MxP workload ﬁve times,
+and the average of the ﬁve runs was taken as the ﬁnal measurement value.
+    Figure 3 shows the results of this exhaustive search: Fig. 3(a) presents the
+measured performance of HPL-MxP in TFlops; Fig. 3(b) shows the average
+server power in watts, measured using the external power meters; Fig. 3(c) shows
+the energy eﬃciency in GFlops/W.
+    From Figs. 3(a) and (b), we observe that as the CPU and GPU frequency
+increases, both overall performance and power show a gradual increase. The high-
+est performance and power are achieved when both CPU and GPU frequencies
+are set near their maximum values. At this point, server power reaches 1702 W,
+signiﬁcantly higher than the 911 W observed at the lowest frequency combina-
+tion. Although in practical scenarios it is uncommon to set both CPU and GPU
+to their minimum frequencies due to performance demands, this extreme case
+demonstrates that coordinated DVFS can regulate server power consumption
+across nearly a 50% range. This has practical signiﬁcance for computing clusters
+whose total power is constrained, such as in power-capped environments.
+    Compared with the monotonic increases observed in power and performance,
+the energy eﬃciency results in Fig. 3(c) reveal more interesting patterns. Energy
+eﬃciency does not continuously increase with rising frequency. Instead, it reaches
+a peak value of 122.6 GFlops/W when the CPU frequency is set to 2.1 GHz and
+the GPU frequency to 915 MHz. This peak highlights the potential advantage of
+coordinated CPU-GPU DVFS.
+    These results show that if DVFS is applied to only the CPU or only the
+GPU, it may not discover this optimal frequency combination, and such single-
+component strategies are unlikely to achieve a comparable level of energy eﬃ-
+ciency. These ﬁndings also emphasize that to fully exploit the potential of coor-
+dinated CPU-GPU control, it is essential for both the CPU and GPU to sup-
+port a suﬃcient number of adjustable frequency levels. If only a small set of
+DVFS options is available, optimization accuracy will be greatly reduced, and
+the resulting energy eﬃciency may fall short of the theoretical optimum.
+
+5.2   CoDVFS Optimization Exp eriment
+In this experiment, we ran the CoDVFS framework to perform Bayesian opti-
+mization for coordinated CPU-GPU frequency control. Unlike the previous
+432    Y. Zhang et al.
+
+
+
+
+                   Fig. 4. Trajectory of Bayesian optimization.
+
+
+section where GPU frequency selection was limited to 11 points, here we
+expanded the GPU frequency search space to all 175 available frequency points,
+aiming to ﬁnd the optimal solution in the complete frequency space.
+    Experimental results show that CoDVFS was able to determine the opti-
+mal frequency setting in just 20 iterations. For HPL-MxP, the obtained optimal
+setting is CPU at 2.1 GHz and GPU at 1035 MHz, resulting in a server energy
+eﬃciency of 123.2 GFlops/W. The optimization trajectory is illustrated in Fig. 4.
+It can be observed that the algorithm balances exploration and exploitation and
+eventually identiﬁes the frequency combination with the best energy eﬃciency.
+    This result clearly demonstrates the eﬃciency of CoDVFS in coordinated
+DVFS control. In contrast, using an exhaustive search approach would require
+evaluating 11 CPU frequency points × 175 GPU frequency points = 1925 combi-
+nations, which is impractical to execute on real-world systems. While experienced
+engineers may be able to manually reduce the number of tests by heuristically
+pruning the search space, manual tuning lacks scalability and automation, mak-
+ing it diﬃcult to apply broadly in complex and dynamic cluster environments
+across various programs.
+    CoDVFS, by leveraging the eﬃcient search mechanism of Bayesian optimiza-
+tion, can rapidly locate high-eﬃciency conﬁgurations even in large search spaces.
+This oﬀers a practical and scalable solution for extending the framework to other
+deep learning or high-performance computing workloads.
+    In Fig. 5(a), we compare this optimal point with the baseline strategies, with
+all values normalized against the MaxFreq strategy (i.e., both CPU and GPU set
+to their highest frequencies). The ﬁgure shows that while MaxFreq can shorten
+execution time to some extent, it signiﬁcantly reduces energy eﬃciency. In con-
+trast, under the CoDVFS strategy, energy eﬃciency improves by 17.5% compared
+to the MaxFreq baseline, while performance is only 4.3% lower, and average
+power consumption drops by more than 18%. Considering that many computing
+          CoDVFS: Improving the Energy Eﬃciency of AI Servers Through       433
+
+
+
+
+Fig. 5. Comparison of diﬀerent DVFS strategies, and comparison of whole-
+server/GPU-only energy eﬃciency.
+
+
+clusters default to running processors at their maximum frequencies, this result
+demonstrates the importance of coordinated CPU-GPU DVFS.
+    Furthermore, comparing with a scenario that applies CPU-only frequency
+optimization (CPU at 2.1 GHz, GPU at 1440 MHz), CoDVFS still achieves a 17%
+higher energy eﬃciency. When compared to GPU-only frequency optimization
+(CPU at 2.2 GHz, GPU at 915 MHz), CoDVFS improves energy eﬃciency by
+1.2%. These comparisons indicate that while optimizing a single component can
+bring some energy eﬃciency gains, it is insuﬃcient to fully exploit the joint
+potential of the CPU and GPU. Only by integrating DVFS strategies for both
+components can we achieve the maximum possible energy eﬃciency.
+    Similar results are observed for the HPCG benchmark. CoDVFS achieves an
+energy eﬃciency of 15.63 GFlops/W at the optimal point found within 20 itera-
+tions, representing a 12% improvement compared to MaxFreq’s 13.93 GFlops/W,
+while the performance degrades by only 1%.
+434    Y. Zhang et al.
+
+6     Discussion: Comparing Whole-Server Energy Eﬃciency
+      and GPU Energy Eﬃciency
+
+In previous work, it was often assumed by default that optimizing GPU energy
+eﬃciency is equivalent to optimizing server energy eﬃciency. In this section, we
+carefully analyze the diﬀerences between the two and provide a criterion for
+establishing their equivalence.
+
+
+6.1   The Distinction Between Two Metrics
+
+In an AI computing server, components such as the CPU, GPU, motherboard,
+fans, memory, storage, and network adapters collectively determine the total
+server power consumption. Therefore, server-level energy eﬃciency is deﬁned
+as the ratio of application performance to the total power consumption of all
+components. In contrast, if we consider only the GPU, we are calculating the
+ratio of performance to GPU power, resulting in the GPU energy eﬃciency.
+    The distinction between the two can be clearly understood through the fol-
+lowing formulas:
+    GPU energy eﬃciency = (Performance)/(GPU power),
+    Server energy eﬃciency = (Performance)/(GPU power + non-GPU power).
+From the deﬁnition above, we also have:
+    Server energy eﬃciency = GPU energy eﬃciency × GPU power ratio,
+    GPU power ratio = (GPU power)/(GPU power + non-GPU power).
+Clearly, when the GPU power ratio is constant, optimizing server energy eﬃ-
+ciency is equivalent to optimizing GPU energy eﬃciency. However, in real-world
+environments, the GPU power ratio varies dynamically, so we cannot directly
+treat these two quantities as equivalent.
+    In fact, during coordinated DVFS, the frequencies and voltages of both the
+CPU and GPU are continuously adjusted, which not only aﬀects their individual
+power consumption but also indirectly alters the power draw of other components
+such as fans, memory, and the motherboard. This variability makes the GPU
+power ratio no longer ﬁxed.
+    In most prior research (see Table 1), due to experimental constraints, the
+focus has been solely on GPU energy eﬃciency, using tools like nvidia-smi to
+obtain GPU power data for analysis and optimization. However, comprehen-
+sively evaluating whole-server energy eﬃciency requires external power meters
+and power wiring reconﬁguration to measure total consumption, which is often
+infeasible in real data centers. Consequently, research on whole-server energy
+eﬃciency has been relatively limited.
+    The problem of focusing on GPU energy eﬃciency is that the optimal point
+for GPU energy eﬃciency does not always coincide with the optimal point for
+server energy eﬃciency. Although the discrepancy was small in our experiments,
+there is no guarantee that the alignment of the two optimal points will hold true
+under diﬀerent hardware conﬁgurations and workloads.
+            CoDVFS: Improving the Energy Eﬃciency of AI Servers Through                435
+
+6.2    The Two Energy Eﬃciency Values in Our Experiments
+
+In Table 2, we present the performance, GPU power, and non-GPU power col-
+lected while running the HPL-MxP program, as well as the corresponding GPU
+energy eﬃciency and server energy eﬃciency calculated from these values. In
+this table, the CPU frequency was ﬁxed at 2.1 GHz (where the maximal energy
+eﬃciency is achieved), while the GPU frequency was gradually increased from
+525 MHz to 1440 MHz. The power values listed are averages over the entire exe-
+cution period, and the GPU power represents the total power of all 8 GPUs.
+
+
+   Table 2. Power and Energy Eﬃciency Metrics under GPU Frequency Scaling.
+
+      GPU Frequency          525   660    787    915    1050 1177      1312 1440
+      (MHz)
+      Server Power (W)       1177.2 1247.6 1328.7 1352.2 1433.6 1513   1601.3 1678.6
+      GPU Power (W)          677.5 714.5 728.2 731.2 759.8 839.2 945.2 1017.7
+      Non-GPU Power (W) 499.7 533.1 600.5 621           673.8 673.8 656.1 660.9
+      Performance (TFlops) 123.4 137.7 159.7 165.9 170.7 173.1 172.4 176.6
+      Server Energy      Eﬃ- 104.8 110.4 120.2 122.7 119       114.4 107.7 105.2
+      ciency
+      (GFlops/W)
+      GPU Energy         Eﬃ- 182.2 192.7 219.3 226.9 224.6 206.3 182.4 173.5
+      ciency
+      (GFlops/W)
+      GPU Power Ratio        57.5% 57.3% 54.8% 54.1% 53.0% 55.5% 59.0% 60.6%
+      GPU Power Increase 5.5% 1.9% 0.4% 3.9% 10.5% 12.6% 7.7% NA
+      Rate
+      Performance Increase 11.6% 15.9% 3.9% 2.9% 1.5% −0.4% 2.4% NA
+      Rate
+      Non-GPU Power          6.7% 12.6% 3.4% 8.5% 0.0% −2.6% 0.7% NA
+      Increase Rate
+
+
+
+    From Table 2, we see the non-GPU power varied between 499.7 W and
+673.8 W, while the GPU power varied between 677.5 W and 1017.7 W. The GPU
+power ratio (i.e., the proportion of GPU power to total power) ranged from
+53.0% to 60.6%. This indicates that as GPU frequency increases, the power con-
+sumption of components other than the GPU also changes signiﬁcantly, and it
+is inaccurate to assume a constant non-GPU power ratio.
+    In Fig. 5(b), we compare the curves of GPU energy eﬃciency and server
+energy eﬃciency as the GPU frequency varies. Across the sampled frequency
+points, the two eﬃciency metrics show a clear numerical diﬀerence, though both
+reach their respective peaks around 915 MHz. With a ﬁner-grained frequency
+search, their actual optimal frequency points would not exactly coincide. How-
+436    Y. Zhang et al.
+
+ever, since energy eﬃciency curves tend to be relatively ﬂat near their extrema,
+this discrepancy would not result in signiﬁcant performance or power loss.
+    In other words, in this setting, if we choose to use GPU energy eﬃciency as
+a reference, the resulting optimal frequency is likely to be close to the system-
+wide optimal frequency. From a practical application perspective, this represents
+a feasible approximation method.
+
+
+6.3   The Criterion for Energy Eﬃciency Optimum Alignment
+
+To further analyze the conditions under which the optimal points of GPU and
+server energy eﬃciency coincide, we present an analytical criterion.
+    Let performance be denoted as f (x), GPU power as g(x), and non-GPU
+power as h(x), all of which are smooth functions of frequency x. Then, the
+GPU energy eﬃciency is deﬁned as U (x) = fg(x) (x)
+                                                   , and its extremum satisﬁes
+the condition U (x) = 0, which is equivalent to ff (x)
+                                                   (x)
+                                                       = gg(x)
+                                                           (x)
+                                                               . The server energy
+                                 f (x)
+eﬃciency is deﬁned as V (x) = g(x)+h(x) , and its extremum satisﬁes the condition:
+f (x)   g (x)+h (x)
+f (x) = g(x)+h(x) . From these, we can derive that the criterion for GPU energy
+eﬃciency and server energy eﬃciency to reach their optimal points at the same
+frequency is: ff (x)
+                 (x)
+                     = gg(x)
+                         (x)
+                             = hh(x)
+                                 (x)
+                                     .
+    The solution to this equation is the shared optimum point. In other words, we
+have the following Optimum Alignment Criterion: if at the GPU’s energy
+eﬃciency optimal point, the relative growth rate of GPU power is equal to the
+relative growth rate of non-GPU power, then this point is also the server’s energy
+eﬃciency optimal point.
+    In the last three rows of Table 2, we present the discrete diﬀerences between
+adjacent columns to approximate the growth rates of each quantity across fre-
+quency intervals. We observe that around 915 MHz, the growth rates of both
+performance and non-GPU power begin to decline, while the growth rate of
+GPU power increases rapidly, which is consistent with our criterion.
+    We suspect that the operational behavior of the server’s cooling fans explains
+why non-GPU power initially increases signiﬁcantly and later stabilizes as GPU
+frequency increases. In our experiment, the CPU frequency was ﬁxed at 2.1 GHz,
+meaning CPU-side power remained relatively stable. However, as the GPU fre-
+quency rose, system heat output increased sharply, triggering an increase in fan
+speed, which in turn boosted non-GPU component power.
+    Once the fans approached their maximum speed, further increases in GPU
+frequency no longer caused fan power increases, leading to a plateau in non-GPU
+power, as shown by the green line in Fig. 5(c). This power trend is relatively
+common in servers using air-cooling technologies. If alternative cooling methods
+such as liquid cooling are adopted, the impact of the fans may be signiﬁcantly
+reduced, which could also change the overall trend of non-GPU power. In such
+cases, the deviation between GPU energy eﬃciency and server energy eﬃciency
+may increase, necessitating further in-depth comparative study.
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through              437
+
+    In summary, when comparing GPU and server energy eﬃciency, their two
+optimal points do not necessarily align under DVFS control, due to the non-
+constant GPU power ratio. However, in the workload and hardware conﬁguration
+used in our experiment, the two optima were closely aligned, which validates
+the feasibility of using GPU energy eﬃciency (which is easier to measure) to
+approximate whole-server energy eﬃciency.
+    At the same time, it’s important to recognize that in other setups, such as
+liquid-cooled servers, cooling power characteristics may diﬀer signiﬁcantly. This
+could widen the gap between GPU and server energy eﬃciency, underscoring
+the need for further study. Deeper understanding of this issue will contribute to
+more accurate system-level energy eﬃciency evaluation and optimization, and
+provide new insights for future research in green computing and thermal design.
+
+7   Conclusion and Future Work
+This study proposes CoDVFS, a CPU-GPU joint frequency control framework
+for AI server energy eﬃciency. Experiments on a DGX V100 show Bayesian opti-
+mization eﬀectively ﬁnds optimal frequency combinations, achieving 17% higher
+energy eﬃciency than default settings under HPL-MxP workloads. While GPU-
+only and whole-server optima show minor diﬀerences, GPU eﬃciency serves as
+a reliable proxy. Future work includes ﬁner-grained DVFS for multi-stage work-
+loads, multi-task CPU-GPU coordination, and revisiting GPU-system eﬃciency
+alignment under liquid cooling.
+
+Acknowledgments. This study was funded by Project No. 2024B0101010003.
+
+
+References
+ 1. Ali, G., Side, M., Bhalachandra, S., Wright, N.J., Chen, Y.: Performance-aware
+    energy-eﬃcient GPU frequency selection using DNN-based models. In: Proceedings
+    of the 52nd International Conference on Parallel Processing, pp. 433–442. ICPP
+    ’23, Association for Computing Machinery, New York (2023)
+ 2. Bratek, P., Szustak, L., Wyrzykowski, R., et al.: Reducing energy consumption
+    using heterogeneous voltage frequency scaling of data-parallel applications for mul-
+    ticore systems. J. Parallel Distrib. Comput. 175, 121–133 (2023)
+ 3. Fan, K., Cosenza, B., Juurlink, B.: Predictable GPUS frequency scaling for energy
+    and performance. In: Proceedings of the 48th International Conference on Parallel
+    Processing. ICPP, New York (2019)
+ 4. Guerreiro, J., Ilic, A., Roma, N., Tomás, P.: Multi-kernel auto-tuning on GPUS:
+    performance and energy-aware optimization. In: Euromicro International Confer-
+    ence on Parallel, Distributed, and Network-Based Processing, pp. 438–445 (2015)
+ 5. Guerreiro, J., Ilic, A., Roma, N., Tomás, P.: DVFS-aware application classiﬁcation
+    to improve GPGPUS energy eﬃciency. Parallel Comput. 83, 93–117 (2019)
+ 6. Haidar, A., Tomov, S., Dongarra, J., Higham, N.J.: Harnessing GPU tensor cores
+    for fast fp16 arithmetic to speed up mixed-precision iterative reﬁnement solvers.
+    In: SC18: International Conference for High Performance Computing, Networking,
+    Storage and Analysis, pp. 603–613 (2018)
+438     Y. Zhang et al.
+
+ 7. hsing Hsu, C., chun Feng, W.: A power-aware run-time system for high-
+    performance computing. In: SC ’05: Proceedings of the 2005 ACM/IEEE Con-
+    ference on Supercomputing, pp. 1–1 (2005)
+ 8. Ilager, S., Muralidhar, R., Rammohanrao, K., Buyya, R.: A data-driven frequency
+    scaling approach for deadline-aware energy eﬃcient scheduling on graphics process-
+    ing units (GPUS). In: 2020 20th IEEE/ACM International Symposium on Cluster,
+    Cloud and Internet Computing (CCGRID), pp. 579–588 (2020)
+ 9. Kandiah, V., et al.: Accelwattch: a power modeling framework for modern GPUS.
+    In: MICRO-54: 54th Annual IEEE/ACM International Symposium on Microar-
+    chitecture, pp. 738–753. MICRO ’21, Association for Computing Machinery, New
+    York (2021)
+10. Kumar, S., Gupta, A., Kumar, V., et al.: Cuttleﬁsh: library for achieving energy
+    eﬃciency in multicore parallel programs. In: International Conference for High
+    Performance Computing, Networking, Storage and Analysis, pp. 1–14 (2021)
+11. Kwack, J., Bauer, G.H.: HPCG and HPGMG benchmark tests on multiple pro-
+    gram, multiple data (MPMD) mode on blue waters—a cray xe6/xk7 hybrid system.
+    Concurr. Comput. Pract. Exper. 30(1), e4298 (2018), e4298 CPE-17-0255
+12. Majumdar, A., Piga, L., Paul, I., Greathouse, J.L., Huang, W., Albonesi, D.H.:
+    Dynamic GPGPU power management using adaptive model predictive control. In:
+    2017 IEEE International Symposium on High Performance Computer Architecture
+    (HPCA), pp. 613–624 (2017)
+13. Mei, X., Wang, Q., Chu, X.: A survey and measurement study of GPU DVFS on
+    energy conservation. Digit. Commun. Netw. 3(2), 89–100 (2017)
+14. Nabavinejad, S.M., Reda, S., Ebrahimi, M.: Coordinated batching and DVFS for
+    DNN inference on GPU accelerators. IEEE Trans. Parallel Distrib. Syst. 33(10),
+    2496–2508 (2022)
+15. Patel, P., Choukse, E., Zhang, C., Goiri, I.n., Warrier, B., Mahalingam, N., Bian-
+    chini, R.: Characterizing power management opportunities for llms in the cloud. In:
+    Proceedings of the 29th ACM International Conference on Architectural Support
+    for Programming Languages and Operating Systems, vol. 3, pp. 207–222. ASPLOS
+    ’24, Association for Computing Machinery, New York (2024)
+16. Paul, I., Huang, W., Arora, M., Yalamanchili, S.: Harmonia: balancing compute
+    and memory power in high-performance GPUS. In: Proceedings of the 42nd Annual
+    International Symposium on Computer Architecture, pp. 54–65. ISCA ’15, Asso-
+    ciation for Computing Machinery, New York (2015)
+17. Piga, L., et al.: Expanding datacenter capacity with DVFS boosting: a safe and
+    scalable deployment experience. In: Proceedings of the 29th ACM International
+    Conference on Architectural Support for Programming Languages and Operating
+    Systems, vol. 1, pp. 150–165. ASPLOS ’24, Association for Computing Machinery,
+    New York (2024)
+18. Schoonhoven, R., Veenboer, B., Van Werkhoven, B., Batenburg, K.J.: Going green:
+    optimizing GPUS for energy eﬃciency through model-steered auto-tuning. In: 2022
+    IEEE/ACM International Workshop on Performance Modeling, Benchmarking and
+    Simulation of High Performance Computer Systems (PMBS), pp. 48–59 (2022)
+19. Stojkovic, J., Iliakopoulou, N., Xu, T., Franke, H., Torrellas, J.: Ecofaas: rethinking
+    the design of serverless environments for energy eﬃciency. In: Annual International
+    Symposium on Computer Architecture (ISCA), pp. 471–486 (2024)
+20. TOP500.org: The TOP500 list. Nov 2024 Edition (2024). https://www.top500.org/
+    lists/top500/, Accessed Mar 2025
+21. Velicka, D., Vysocky, O., Riha, L.: Methodology for GPU frequency switching
+    latency measurement (2025). http://arxiv.org/abs/2502.20075
+           CoDVFS: Improving the Energy Eﬃciency of AI Servers Through             439
+
+22. Wang, F., Zhang, W., Lai, S., Hao, M., Wang, Z.: Dynamic GPU energy optimiza-
+    tion for machine learning training workloads. IEEE Trans. Parallel Distrib. Syst.
+    33(11), 2943–2954 (2022)
+23. Wang, Q., Chu, X.: GPGPU performance estimation with core and memory fre-
+    quency scaling. IEEE Trans. Parallel Distrib. Syst. 31(12), 2865–2881 (2020)
+24. Wang, Q., Li, L., Luo, W., Zhang, Y., Wang, B.: DSO: a GPU energy eﬃciency
+    optimizer by fusing dynamic and static information. In: 2024 IEEE/ACM 32nd
+    International Symposium on Quality of Service (IWQoS), pp. 1–6 (2024)
+25. Wang, Y., et al.: DRLCAP: runtime GPU frequency capping with deep reinforce-
+    ment learning. IEEE Trans. Sustain. Comput. 9(5), 712–726 (2024)
+26. Yang, Z., Adamek, K., Armour, W.: Accurate and convenient energy measurements
+    for GPUS: a detailed study of nvidia GPU’s built-in power sensor. In: SC24: Inter-
+    national Conference for High Performance Computing, Networking, Storage and
+    Analysis, pp. 1–17 (2024)
+27. You, X., Yang, H., Xuan, Z., Luan, Z., Qian, D.: Powerspector: towards energy
+    eﬃciency with calling-context-aware proﬁling. In: 2022 IEEE International Parallel
+    and Distributed Processing Symposium (IPDPS), pp. 1272–1282 (2022)
+28. Yue, A., Yew, P.C., Mehta, S.: Everest: an eﬀective and versatile runtime energy
+    saving tool for GPUS. In: Proceedings of the 30th ACM SIGPLAN Annual Sym-
+    posium on Principles and Practice of Parallel Programming, pp. 57–69. PPoPP
+    ’25, Association for Computing Machinery, New York (2025)
+29. Zhang, H., Nukada, A., Liao, Q.: FCUFS: core-level frequency tuning for energy
+    optimization on intel processors. In: 2024 IEEE International Conference on Cluster
+    Computing (CLUSTER), pp. 214–225 (2024)
+30. Zhang, Y., Wang, Q., Lin, Z., Xu, P., Wang, B.: Improving GPU energy eﬃ-
+    ciency through an application-transparent frequency scaling policy with perfor-
+    mance assurance. In: Proceedings of the Nineteenth European Conference on Com-
+    puter Systems, pp. 769–785. EuroSys ’24 (2024)
+31. Zou, P., Li, A., Barker, K., Ge, R.: Indicator-directed dynamic power management
+    for iterative workloads on GPU-accelerated systems. In: 2020 20th IEEE/ACM
+    International Symposium on Cluster, Cloud and Internet Computing (CCGRID),
+    pp. 559–568 (2020)

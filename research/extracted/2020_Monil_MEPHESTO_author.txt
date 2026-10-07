@@ -1,0 +1,761 @@
+                              MEPHESTO: Modeling Energy-Performance
+                             in Heterogeneous SoCs and Their Trade-Offs
+          Mohammad Alaul Haque                                             Mehmet E. Belviranli                                     Seyong Lee
+                Monil                                                      Colorado School of Mines                      Oak Ridge National Laboratory
+               University of Oregon                                         belviranli@mines.edu                                lees2@ornl.gov
+              mmonil@cs.uoregon.edu
+
+                                                  Jeffrey S. Vetter                                    Allen D. Malony
+                                        Oak Ridge National Laboratory                                University of Oregon
+                                            vetter@computer.org                                     malony@cs.uoregon.edu
+
+ABSTRACT                                                                                      CCS CONCEPTS
+Integrated shared memory heterogeneous architectures are perva-                               • Computer systems organization → Multicore architectures;
+sive because they satisfy the diverse needs of mobile, autonomous,                            Heterogeneous (hybrid) systems; System on a chip.
+and edge computing platforms. Although specialized processing
+units (PUs) that share a unified system memory improve perfor-                                KEYWORDS
+mance and energy efficiency by reducing data movement, they also                              Memory contention; Heterogeneous systems; Energy-performance
+increase contention for this memory since the PUs interact with                               trade-off; System on a Chip
+each other. Prior work has investigated performance degradation
+due to memory contention, but few have studied the relationship of                            ACM Reference Format:
+power and energy to memory contention. Moreover, a comprehen-                                 Mohammad Alaul Haque Monil, Mehmet E. Belviranli, Seyong Lee, Jef-
+                                                                                              frey S. Vetter, and Allen D. Malony. 2020. MEPHESTO: Modeling Energy-
+sive solution that models memory contention for kernel placement
+                                                                                              Performance in Heterogeneous SoCs and Their Trade-Offs. In Proceedings of
+on contemporary heterogeneous systems on chip (SoCs) in response
+                                                                                              the 2020 International Conference on Parallel Architectures and Compilation
+to energy and performance has been largely unaddressed.                                       Techniques (PACT ’20), October 3–7, 2020, Virtual Event, GA, USA. ACM, New
+   This paper presents MEPHESTO, a novel and holistic approach                                York, NY, USA, 13 pages. https://doi.org/10.1145/3410463.3414671
+for managing this balance. The authors characterize applications
+and PUs in terms of two memory contention factors—time fac-
+tors and power factors—to achieve the desired trade-off between
+                                                                                              1    INTRODUCTION
+energy and performance for collocated kernel execution on het-                                Heterogeneous systems are a popular solution for overcoming the
+erogeneous systems. The authors believe that this investigation is                            temperature barrier when designing processing units (PUs) with
+the first to combine all of these factors and present a simple knob-                          high computation capabilities [28, 32]. Although powerful CPUs
+based approach that expresses the target trade-off. The approach is                           once dominated computing, GPUs and multi/many-core CPUs are
+evaluated on a diverse integrated shared memory heterogeneous                                 now the go-to solution for high-performance systems [23]. Follow-
+system with a CPU, GPU, and programmable vision accelerator.                                  ing this trend, special-purpose hardware for emerging domains—
+By using an empirical model for memory contention that provides                               such as tensor PUs, bionic processors, and vision accelerators—
+up to 92% accuracy, the kernel collocation approach can provide                               have become a commodity in data centers, mobile devices, and
+a near-optimal ordering and placement based on the user-defined,                              autonomous platforms. Moreover, chip manufacturers are embed-
+energy-performance trade-off parameter. Moreover, the dynamic                                 ding a variety of PUs that serve different types of computing needs
+programming-based heuristics provide up to 30% better energy                                  on a single die in the form of integrated shared memory heteroge-
+or 20% performance benefits when compared with the greedy ap-                                 neous systems (iSMHS) [37]. Although Intel’s Ivy Bridge [11] and
+proaches commonly employed by previous studies.                                               AMD’s Fusion [3, 31] architectures were among the early systems
+                                                                                              that combined two compute capable PUs (i.e., CPUs and GPUs)
+                                                                                              under the same memory subsystem, later generations of integrated
+                                                                                              heterogeneous systems—such as NVIDIA’s Tegra Xavier, Apple’s
+                                                                                              A12 Bionic chip, and Qualcomm’s Snapdragon 855 system on chip
+                                                                                              (SoC)—have brought the degree of heterogeneity within the same
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed         chip to extreme ends. In such systems, dozens of PUs with diverse
+for profit or commercial advantage and that copies bear this notice and the full citation     instruction set architectures work together to accelerate kernels
+on the first page. Copyrights for components of this work owned by others than ACM            that belong to emerging application domains.
+must be honored. Abstracting with credit is permitted. To copy otherwise, or republish,
+to post on servers or to redistribute to lists, requires prior specific permission and/or a      One of the most prominent features of iSMHS is that all PUs can
+fee. Request permissions from permissions@acm.org.                                            directly access the system memory, alleviating additional data trans-
+PACT ’20, October 3–7, 2020, Virtual Event, GA, USA                                           fer costs between the CPU and device memory [7]. The optimal
+© 2020 Association for Computing Machinery.
+ACM ISBN 978-1-4503-8075-1/20/10. . . $15.00                                                  use of these systems heavily relies on collocating tasks simulta-
+https://doi.org/10.1145/3410463.3414671                                                       neously in different PUs while using the system memory as an
+intermediate medium for inter-PU data communication. For exam-
+ple, an iSMHS for an autonomous car must simultaneously run
+image and video processing, inference for object detection, and
+other decision-making continuously in a pipeline-like execution
+scheme.
+   Collocated kernel execution on an iSMHS will likely cause con-
+tention on the shared memory bus, and the resulting interference
+could negatively affect perceived bandwidth (BW) on collocated
+kernels. Several studies [4, 7, 15, 37] focused on identifying the mem-
+ory access patterns of collocated kernels in CPU+GPU iSMHS and            Figure 1: A logical representation of iSMHS with CPU and
+suggested smart scheduling mechanisms to minimize contention              GPU and kernel queues for O&P: 123|45.
+effects, mostly via ad hoc approaches. However, these approaches
+do not provide a systematic solution for systems with different           • A collocation algorithm was designed that takes the target EPTO
+heterogeneity characteristics and an arbitrary number of PUs.               as a user-defined input parameter and employs a novel heuristic
+   Apart from performance, memory contention also has a con-                to reach a near-optimal ordering and placement (O&P) of a given
+siderable impact on chip-level power consumption. Several stud-             set of kernels on a target set of PUs.
+ies [1, 6, 8, 13, 17, 20, 28] focused on iSMHS energy characteristics     • The feasibility of MEPHESTO was empirically evaluated by col-
+and relied on greedy algorithms or machine learning-based ap-               locating a collection of scientific kernels across three heteroge-
+proaches to control the power consumption via dynamic voltage               neous PUs of NVIDIA’s Tegra Xavier platform: CPU, GPU, and
+and frequency scaling (DVFS) and thermal design power (TDP)                 programmable vision accelerator (PVA). The proposed schedul-
+based power caps. However, the impact of contention on energy               ing algorithm was demonstrated to be able to find near-optimal
+usage of PU and the chip is not addressed, and these studies do not         O&P with a reasonable (on an average 10%) modeling error rate.
+build an analytical approach that establishes a direct relationship         It also provides up to 30% improvement over a greedy approach.
+between energy and memory contention.
+   The ubiquitous deployment of iSMHS in environments in which            2     UNDERSTANDING THE EFFECTS OF
+the use-case priorities can dramatically vary makes the kernel collo-
+                                                                                COLLOCATED EXECUTION ON ISMHS
+cation problem more challenging. Since the objectives are dynamic
+and constrained by the throughput and power budget needs, meet-           This section explores the energy and performance implications of
+ing them is crucial for optimizing overall utilization of iSMHS. For      collocated kernel execution on an iSMHS similar to that portrayed
+example, in an autonomous driving scenario, the system software           in Fig. 1. In this example, the CPU and GPU are connected to a
+should collocate kernels in the most performance-maximized man-           shared memory, and the GPU does not have a private memory.
+ner when approaching an intersection with multiple objects to             There could also be other heterogeneous PUs, such as PVAs and
+track. On the other hand, while cruising on a highway at a stable         deep learning accelerators (DLAs), connected to the same memory
+speed for which processing throughput needs are lower, kernels            subsystem; however, they are excluded in this specific case for
+can be scheduled to minimize total energy usage. Ideally, such an         simplicity. In this system, the collocation of five ready-to-execute
+objective-aware kernel collocation could be achieved with a simple        kernels with the O&P configuration of 123|45, in which kernels 1, 2,
+parameter that controls the energy-performance trade-off (EPTO).          and 3 will be orderly executed on the GPU and kernels 4 and 5 will
+   This paper presents MEPHESTO, which proposes a holistic ap-            be placed for CPU execution. Kernels placed on different queues
+proach for controlling the EPTO in the collocated kernel execution        could execute in a collocated manner and result in contention on
+on iSMHS. A per-PU kernel operational intensity [12, 33] was used         the memory bus.
+to approximate the effects of contention on performance and energy
+along with the kernel collocation algorithm to intelligently find         2.1    Contention vs. Energy and Performance
+near-optimal collocation that satisfies the provided EPTO objective.      To observe the effects of the collocated execution of two maximum
+The authors believe that this is the first effort to propose a generic    memory BW-demanding kernels on performance and energy, the
+formulation for memory contention in iSMHS that considers factors         authors ran the STREAM benchmark [21] on the ARM Carmel
+that directly correlate to energy and performance during kernel           CPU and Volta GPU of NVIDIA’s Xavier platform concurrently.
+collocation.                                                              The amount of data that the CPU and GPU were able to process
+   The paper makes the following contributions:                           during execution was recorded, and the total execution time and
+                                                                          power consumed by the CPU and GPU were measured at 50 ms
+• Integrated performance and energy behavior representation are           intervals. The runs are repeated for the same amount of data in
+  introduced based on time factors and power factors, which are           standalone mode, and the execution time, total energy consumption,
+  nonlinear functions of the ratios between standalone and collo-         and average power consumption are reported in Fig. 2a. Signifi-
+  cated execution measurements of a PU in a given iSMHS.                  cant increases in execution time and energy consumption were
+• A novel empirical model was built to estimate the energy and            observed for both kernels while running simultaneously on the
+  performance of a set of collocated kernels on an arbitrary num-         CPU and GPU. On the other hand, average power consumption
+  ber of PUs while considering the variation caused by memory             decreased for collocation, particularly from the GPU perspective.
+  contention.                                                             Although the authors ensured that CPU and GPU utilization was
+(a) Effect of memory contention on time, energy,   (b) Per-flop energy consumption when kernels with      (c) Per-flop execution time when kernels with differ-
+and power for collocated/standalone execution      different operational intensities are run in a stan-   ent operational intensities are run in a standalone
+of the STREAM benchmark on CPU and GPU.            dalone mode.                                           mode.
+
+                                  Figure 2: Energy and performance behavior under different scenarios.
+
+100% all the time and that the system did not throttle CPU, GPU, or               but operational intensity can indirectly include those effects since
+memory frequencies, the BW utilization dropped to almost half of                  traffic between LLC and memory reflects those effects. In this way,
+the standalone value during collocated execution. This observation                operational intensity provides a simplified and unified metric that
+resulted in the realization that the impact of contention on time                 presents a fair trade-off between modeling complexity and predic-
+and energy is different for CPUs and GPUs and further motivated                   tion accuracy.
+the establishment of a PU-centric contention model for energy and
+performance (i.e., execution time).                                               2.3     Ordering and Placement
+                                                                                  Figure 2a shows that collocating kernels can significantly impact
+2.2    Need for Characterizing Kernels and PUs
+                                                                                  energy and performance. As a result, kernel ordering is important
+Since contention depends on the amount of memory access requests                  for energy and performance. The example given in Fig. 1 implies
+generated by the kernel, the kernels running on each PU must be                   that kernel 1 will be collocated with kernel 4 and that kernel 2 will
+characterized in terms of their memory access requests to identify                be collocated with kernel 5. This work strives to determine the best
+the level of contention they might incur. Also, contention only oc-               O&P for a given set of kernels. One systematic way to approach
+curs when the processor cannot find the requested data in the cache               this problem is to start by running synthetic kernels standalone on
+and data must be brought from the system memory. For this reason,                 the CPU and GPU with different operational intensities to observe
+this work identified kernels based on their frequency of system                   how much time and energy is spent for each flop. The Empirical
+memory accesses by using an operational intensity metric, which                   Roofline Toolkit [19] was modified to produce various intensities,
+is the ratio of the total number of flops and total bytes read/write              and the energy and performance behaviors are shown in Figs. 2b
+(R/W) between last-level cache (LLC) and system memory, as de-                    and 2c, respectively. The results show that with greater operational
+fined by the Roofline model [33]. The lesser the operational inten-               intensity, the CPU becomes more favorable than the GPU since it
+sity, the more likely it is to have contention. Moreover, contention              spends less energy and time per flop.
+also depends on the physical BW of the system and the amount of                      Another observation at the intersection point of the CPU and
+cache attached to the processors. For this reason, PU behavior must               GPU curve is that if the operational intensity that identifies a spe-
+also be characterized by cross-running different kernels with differ-             cific kernel falls to the left of the intersection, it is more suited
+ent operational intensities in both PUs simultaneously to observe                 for GPU, and vice versa. Thus, if the operational intensity of a
+the level of contention.                                                          kernel being run is known, an accurate placement decision can be
+2.2.1 Justification for Using Operational Intensity. Operational in-              made as to where the kernel should run. However, the intersection
+tensity depends on traffic between LLC and memory, which rep-                     points might be different for energy and performance behavior,
+resents the common contention point for different PUs in iSMHS.                   making the placement decision more complicated. More impor-
+Other factors affect the performance of collocation, such as the                  tantly, Figs. 2b and 2c do not consider collocation or contention.
+memory access patterns of the kernels and caching optimizations,                  Therefore, a combined solution is needed that will incorporate the
+                       Table 1: Roofline kernels used to understand the outcomes of different O&P variations.
+
+  Kernel        Flop per        DRAM R/W byte            Operational        Total          GPU (standalone)                    CPU (standalone)
+  name        array index       per array index           intensity         flop      Flop/s Avg. power (Watt)            Flop/s Avg. power (Watt)
+    1              1                   16                   0.0625         273.8 G     7.2 G         6.9                   6.2 G         13.3
+    2              6                   16                   0.375          273.8 G    40.3 G         7.3                  36.9 G         12.8
+    3              12                  16                    0.75          273.8 G    41. 9G         7.0                  72.6 G         12.4
+    4              20                  16                    1.25          273.8 G    42.7 G         6.8                  99.8 G         12.1
+    5              48                  16                     3.0          273.8 G    43.3 G         6.5                  115.9 G        10.3
+outcomes of Figs. 2a, 2b, and 2c together. The confluence of O&P           3     AN EMPIRICAL MODEL FOR MEMORY
+for a given set of kernels must be considered.                                   CONTENTION
+                                                                           This section presents a core component of MEPHESTO, an empirical
+2.4    Kernel Collocation for Varying Energy and                           model that characterizes kernels and PUs with respect to memory
+       Performance                                                         contention. The impact of memory contention is defined in terms
+To demonstrate how various O&P configurations affect energy                of energy consumption and performance (i.e., execution time). For
+consumption and performance differently, the Empirical Roofline            a given O&P of kernels, this model predicts the execution time and
+Toolkit was used to generate five kernels, whose details are given         energy consumption.
+in Table 1, with varying operational intensity ratios. These kernels
+operate in a read-compute-write fashion. The first 8 bytes of data                          Table 2: The notations used by the model.
+(i.e., double-precision floating point) are read from an array, a series
+of additions and multiplications is performed, and the data are             Notation           Explanation
+written back to the same memory location. In this way, data are                𝐾𝑖              𝑖th kernel from 𝑛 kernels 𝐾 = {𝐾1, 𝐾2, ..., 𝐾𝑛 }
+ensured to be fully read from and written back to the DRAM. The                𝑃𝑗              𝑗th PU from 𝑚 PUs 𝑃 = {𝑃1, 𝑃2, ..., 𝑃𝑚 }
+second and third columns of Table 1 show the number of floating-              𝐹𝐾𝑖              Number of flops in kernel 𝐾𝑖
+point operations and the total amount of bytes R/W from DRAM                  𝑇𝑃𝐾𝑖             Standalone execution time of 𝐾𝑖 on PU 𝑃 𝑗
+                                                                                   𝑗
+for every array index the kernels process, respectively. Based on
+                                                                               𝑃𝑤 𝑃𝐾𝑖          Standalone power of PU 𝑃 𝑗 for 𝐾𝑖
+these values, the operational intensities per kernel were calculated.                   𝑗
+
+Through profiling, flops per second and the average power data for             𝑂𝐼𝑃 𝑗           Operational intensity of the kernel on 𝑃 𝑗
+each kernel in the standalone mode were generated for CPU and                  𝑇 𝐹𝑃 𝑗          Time factor of 𝑃 𝑗
+GPU.                                                                           𝑃𝐹𝑃 𝑗           Power factor of 𝑃 𝑗
+                                                                               𝑇𝐶𝑃𝐾𝑖           Collocated execution time of 𝐾𝑖 on PU 𝑃 𝑗
+                                                                                        𝑗
+                                                                                 𝐸𝑃𝐾𝑖          Energy consumption of 𝐾𝑖 on PU 𝑃 𝑗
+                                                                                    𝑗
+                                                                                 𝐶             Total number of possible O&P
+                                                                                  𝜌            PU wise queues (i.e., O&P)
+                                                                                 𝜏𝑐            Execution time of current O&P
+                                                                                 𝜀𝑐            Energy consumption of current O&P
+                                                                               𝑆 (𝑉 )          Resultant kernel collocation of 𝑉 kernels
+                                                                                 𝜔             Weight for a given O&P
+
+
+                                                                           3.1     Definitions
+                                                                           All symbols and terms used in this model are introduced in this
+Figure 3: Different total energy and performance behaviors                 section and are also presented in Table 2. An O&P is a set of n
+for various collocation combinations for the same kernels.                 kernels 𝐾 = {𝐾1, 𝐾2, ..., 𝐾𝑛 } in which a kernel is an uninterrupted
+                                                                           computation that is ready to be executed on any of the available
+    Four different O&P configurations were used, and the execution         PUs in the system. The kernel collocator finds the placement of
+time and energy consumption are shown in Fig. 3. The results show          every 𝐾𝑖 on a set of m heterogeneous PUs, which is represented by
+that different O&P configurations lead to different time/energy            𝑃 = {𝑃1, 𝑃2, ..., 𝑃𝑚 }.
+profiles. Although the common strategy in the related literature
+                                                                                             𝐾𝑖 = [𝐹𝐾𝑖 , 𝑂𝐼𝐾𝑖 , ∀𝑃 𝑗 𝜖𝑃 {𝑇𝑃𝐾𝑖 , 𝑃𝑤 𝑃𝐾𝑖 }].        (1)
+is to collocate compute-intensive kernels with memory-intensive                                                             𝑗        𝑗
+
+kernels to improve overall performance, the optimal O&P strategy               A kernel 𝐾𝑖 is represented by using three terms, as shown in
+might vary when a trade-off is being sought between energy and             Eq. (1). The first term, 𝐹𝐾𝑖 , is the number of floating point operations
+performance. This situation raises a few questions: How can the            of that kernel. The second term, 𝑂𝐼𝐾𝑖 , is the operational intensity.
+cut-off point for the compute-memory intensity be defined? What            When a kernel, 𝐾𝑖 , is placed on a processor, 𝑃 𝑗 , the standalone
+happens if the number of memory-intensive kernels is more than             execution time and average power consumption are represented by
+the compute-intensive kernels, or vice versa? How can trade-off            𝑇𝑃𝐾𝑖 and 𝑃𝑤 𝑃𝐾𝑖 , respectively. So, the third term represents the pair
+                                                                              𝑗           𝑗
+control be established between energy and performance? As shown            of standalone execution time and average power consumption for
+in the following sections, greedy algorithms commonly employed             each PU. The objective is to determine these values at compile time
+by the related studies are not sufficient to address all these consid-     and also by partially profiling the kernels at run time. However,
+erations.                                                                  when collocated, each 𝐾𝑖 exhibits different slowdown in execution
+    This research revolves around addressing the four motivations          time and consumes different average power based on their compute
+presented in this section. The remainder of the paper presents an          and memory intensity. As suggested previously, in Fig. 2, there is a
+empirical model for defining memory contention by considering              factor for execution time,𝑇 𝐹𝑃 𝑗 , and a factor for average power, 𝑃𝐹𝑃 𝑗 ,
+the kernel and processors, defines optimal O&P, and presents the           for a given PU 𝑃 𝑗 . These factors are the ratio of their collocated to
+kernel collocation algorithm for obtaining a desired EPTO.                 standalone values. Thus, PU is represented as 𝑃 𝑗 = [𝑇 𝐹𝑃 𝑗 , 𝑃𝐹𝑃 𝑗 ].
+                (a) GPU time factor.                           (b) GPU power factor.                             (c) GPU energy factor.
+
+
+
+
+                (d) CPU time factor.                           (e) CPU power factor.                             (f) CPU energy factor.
+
+
+ Figure 4: Collocation factors: collocated/standalone values of time, power, and energy for different operational intensities.
+
+3.2    Characterization of Memory Contention                                    This PU characterization is a one-time effort for any new system.
+To define and characterize memory contention, three factors must             In this case, the authors were interested in NVIDIA Xavier’s CPU
+be determined: (1) how kernels, 𝐾, are characterized; (2) how PUs, 𝑃,        and GPU. Figure 4 plots the results. In these heat maps, the x-
+are characterized, and (3) how time factor, 𝑇 𝐹𝑃 𝑗 , and power factor,       axis is the operational intensity of kernels that are running on the
+𝑃𝐹𝑃 𝑗 , are formulated. To determine the first factor, operational           CPU, and the y-axis is for the GPU. Time and power are captured
+intensity must be considered as a measure to characterize a kernel’s         for both the CPU and GPU, from which energy consumption was
+compute or memory intensity. The Empirical Roofline Toolkit [19,             calculated. When operational intensity is low (i.e., high memory
+33] was modified to generate kernels with different operational              intensity), the impact of contention is visible in both the CPU and
+intensities, and their execution was observed. Roofline kernels are          GPU. The time factor goes up to 2.2𝑥 for the GPU (Fig. 4a) and 1.8𝑥
+designed in a read-compute-write fashion. For this reason, a fixed           for the CPU when contention is present (Fig. 4d). Similar behavior is
+number of bytes are exchanged between the cache and system                   observed for energy consumption (Fig. 4c). The opposite is observed
+memory; as a result, the operational intensities of those kernels            for the power factor; 0.6𝑥 is observed for the GPU (Fig. 4b), and
+do not vary across different PUs with different cache hierarchy. To          0.8𝑥 is observed for the CPU (Fig. 4b). Interestingly, after a certain
+determine the second factor, a range of kernels was collocated with          operational intensity occurs, the impact of contention vanishes
+different operational intensities in PUs of iSMHS. A kernel was kept         because the available system BW is enough for the request, and
+running in one processor, and the impact on another was observed.            there is no bus contention.
+While doing this, execution time and power consumption were                     After capturing the impact of different kernels, the time factor,
+recorded. From these values, energy consumption was calculated.              𝑇 𝐹𝑃 𝑗 , and power factor, 𝑃𝐹𝑃 𝑗 , can be represented as a function of
+To capture the impact in a structured way, a ratio of collocated to          the operational intensity of the kernel of the current PU, 𝑂𝐼𝑃 𝑗 , and
+standalone time and power was made, which are termed time factor             collocated PU, 𝑂𝐼𝑃𝑐𝑜𝑙 , as in Eq. (2). A fifth order multivariate polyno-
+and power factor, respectively. This addresses the third concern.            mial regression curve was generated by using the CxxPolyFit [16]
+                                                                             tool that supports up to the ninth order for 𝑇 𝐹𝑃 𝑗 , and 𝑃𝐹𝑃 𝑗 , in which
+the independent variables are 𝑂𝐼𝑃 𝑗 and 𝑂𝐼𝑃𝑐𝑜𝑙 . Using a lower order        with the smallest kernel, 𝑃𝑚𝑖𝑛 , is determined, and at [Line 14], the
+provides faster evaluation with low accuracy, whereas higher order          minimum time is added to the total time, 𝜏𝑐 . The minimum execu-
+(e.g., fifth order or higher) provides more accuracy but takes more         tion time was taken because the other kernels in other processors
+time to evaluate. Fifth order was used due to a reasonable balance          will now have a different kernel as collocated since the minimum
+between the evaluation time and accuracy, as recommended by                 one has finished its execution. At [Line 15], energy is calculated
+CxxPolyFit [16].                                                            by considering the minimum time and collocated average power.
+                                                                            Collocated average power is determined by multiplying standalone
+                    𝑇 𝐹𝑃 𝑗 𝑜𝑟𝑃𝐹𝑃 𝑗 = 𝑓 (𝑂𝐼𝑃 𝑗 , 𝑂𝐼𝑃𝑐𝑜𝑙 ).            (2)    average power, 𝑃𝑤 𝑃𝐾𝑖 , with the power factor, 𝑃𝐹𝑃 𝑗 . Since one kernel
+                                                                                                 𝑗
+
+3.3    Collocation Estimator Algorithm                                      has finished its execution, the remaining part of the longer kernels
+                                                                            must be calculated. For this reason, at [Lines 16–18], the remaining
+The objective of the collocation estimator algorithm is to take an          part of collocated time, 𝑇𝐶𝑃 𝑗 , is factored back to standalone time,
+O&P of variable length kernels and predict the execution time and           𝑇𝐶𝑟𝑒𝑚𝑎𝑖𝑛𝑖𝑛𝑔𝑃 𝑗 , and pushed to the corresponding queue, 𝜌 𝑗 . These
+energy consumption while considering memory contention. To                  leftover kernels are considered to be just like a new kernel in the
+calculate the total execution time, 𝜏𝑐 , for the current O&P, 𝑐, the        next iterations, and this occurs until every queue is empty. The
+collocated execution time must be estimated from time factor and            total execution time, 𝜏𝑐 , and energy, 𝜀𝑐 , are determined when every
+standalone execution time. For the total energy consumption, 𝜀𝑐 ,           queue is empty. Algorithm 1 finds 𝜏𝑐 and 𝜀𝑐 in O(nm) time, where
+collocated average power must be estimated from collocated power            n is the number kernels, and m is the number of processors.
+factor and standalone average power. Moreover, the length (i.e., the
+time span of execution) of a kernel must be considered since one
+kernel can be collocated with multiple shorter kernels during its
+lifetime.                                                                   4    DEFINING OPTIMAL ORDERING AND
+    The collocation estimator algorithm given in Algorithm 1 was                 PLACEMENT
+designed by considering the aforementioned objectives. This algo-           This section discusses the cost function design to define an op-
+rithm takes an O&P of kernels, 𝑐, scheduled on PUs, 𝑃. Every PU             timal O&P based on a given trade-off target. For this reason, all
+has its own queue 𝜌 = {𝜌 1, 𝜌 2, ..., 𝜌𝑚 } in which kernels are stored      possible combinations of O&P must be considered for all kernels,
+in such an order so that the kernel in the head of the queue will be        𝐾 = {𝐾1, 𝐾2, ..., 𝐾𝑛 } in all PUs, 𝑃 = {𝑃1, 𝑃2, ..., 𝑃𝑚 }. Let C represent
+scheduled first to the corresponding PU. The algorithm determines           all the possible ways that n kernels can be ordered and placed on
+the overall execution time, 𝜏𝑐 , and total energy, 𝜀𝑐 , incrementally.      m processors. The execution time of all possible O&P is denoted
+In the beginning, at [Line 3], 𝜏𝑐 , and 𝜀𝑐 are initialized. Then, at        as 𝜏 = {𝜏1, 𝜏2, ..., 𝜏𝑐 }, and energy is denoted as 𝜀 = {𝜀 1, 𝜀 2, ..., 𝜀𝑐 },
+[Line 4], a loop is started, which continues until all queues are           where minimum and maximum execution times are represented
+empty or all kernels are scheduled. In [Lines 5–7], the queue item          by 𝜏𝑚𝑖𝑛 and 𝜏𝑚𝑎𝑥 , respectively. The minimum and the maximum
+at the head is popped from each 𝜌 𝑗 and stored as 𝐾𝑃 𝑗 . At [Lines          energy consumption for all O&P are represented by 𝜀𝑚𝑖𝑛 and 𝜀𝑚𝑎𝑥 .
+9–10], the time factor, 𝑇 𝐹𝑃 𝑗 , and power factor, 𝑃𝐹𝑃 𝑗 , are calculated   For example, for five jobs in two processors, there are 482 possible
+by using Eq. (2) for all nonempty 𝐾𝑃 𝑗 . Collocated time, 𝑇𝐶𝑃 𝑗 , is        O&P and thus 482 pairs of energy and time. Since there are two
+then calculated by multiplying the standalone execution time and            parameters—energy and performance—a reference point is needed
+collocation time factor at [Line 11]. At [Line 13], the processor           to define the optimal O&P. This reference point is called the EPTO
+Algorithm 1 Collocation Estimator                                           parameter.
+                                                                                The EPTO parameter is represented as a pair of energy perfor-
+ 1: Input: PU wise kernel queue 𝜌 = {𝜌 1 , 𝜌 2 ...𝜌𝑚 }
+ 2: Output: Execution time, 𝜏𝑐 , and energy consumption, 𝜀𝑐
+                                                                            mance in the following format—(performance, energy)—where the
+ 3: Initialize: 𝜏𝑐 ← 0&𝜀𝑐 ← 0                                               value of performance or energy can be 0–100. If EPTO is set to
+ 4: while ∃𝜌 𝑗 𝜖𝜌 𝑆𝑖𝑧𝑒 (𝜌 𝑗 ) > 0 do                                        (0,100), then minimizing execution time is given the highest prior-
+ 5:     for each 𝜌 𝑗 𝜖𝜌 where 𝑆𝑖𝑧𝑒 (𝜌 𝑗 ) > 0 do                            ity. If EPTO is set to (100,0), then minimizing energy consumption
+ 6:          𝐾𝑃 𝑗 = 𝜌 𝑗 .𝑃𝑂𝑃 ()                                             is given the highest priority. If EPTO is set to (30,70), then 70%
+ 7:     end for                                                             priority is given to minimize execution time and 30% priority is
+ 8:     for each 𝐾𝑃 𝑗 ≠ 𝑁𝑈 𝐿𝐿 do                                            given to minimize energy consumption.
+ 9:          𝑇 𝐹𝑃 𝑗 = 𝑡𝑖𝑚𝑒_𝑓 𝑎𝑐𝑡𝑜𝑟 (𝑂𝐼𝑃 𝑗 , 𝑂𝐼𝑃𝑐𝑜𝑙 )                            To achieve this functionality, energy and time pairs of every
+10:          𝑃 𝐹𝑃 𝑗 = 𝑝𝑜𝑤𝑒𝑟 _𝑓 𝑎𝑐𝑡𝑜𝑟 (𝑂𝐼𝑃 𝑗 , 𝑂𝐼𝑃𝑐𝑜𝑙 )                      O&P were converted to a range from 0 to 100. Then, every O&P
+                     𝐾
+11:        𝑇𝐶𝑃 𝑗 = 𝑇𝑃 𝑖 ∗ 𝑇 𝐹𝑃 𝑗                                            becomes a point at which energy and time can vary from 0 to 100,
+                      𝑗
+12:    end for                                                              where 0 represents the minimum time or energy and 100 represents
+13:    𝑃𝑚𝑖𝑛 = min∀𝑃 𝑗 [𝑇𝐶𝑃 𝑗 ]                                              the maximum. In this way, the energy-time pair of all O&P can be
+14:    𝜏𝑐 += 𝑇𝐶𝑃𝑚𝑖𝑛                                                         plotted in a 100 × 100 plot in which EPTO also becomes another
+       𝜀𝑐 += Σ∀𝑃 𝑗 [𝑃 𝑤𝑃 𝑖 ∗ 𝑃 𝐹𝑃 𝑗 ∗ 𝑇𝐶𝑃𝑚𝑖𝑛 ]
+                       𝐾
+15:                                                                         point. Then, the distance from EPTO to every O&P is measured.
+                          𝑗
+16:    for each 𝑇𝐶𝑃 𝑗 > 𝑇𝐶𝑚𝑖𝑛 do                                            The lower the distance, the higher the weight assigned, and at the
+17:       𝑇𝐶𝑟𝑒𝑚𝑎𝑖𝑛𝑖𝑛𝑔𝑃 𝑗 = [𝑇𝐶𝑃 𝑗 − 𝑇𝐶𝑚𝑖𝑛 ]/𝑇 𝐹𝑃 𝑗                          end, the O&P with the highest weight is selected. This is achieved
+18:        𝜌 𝑗 .𝑃𝑈 𝑆𝐻 (𝑇𝐶𝑟𝑒𝑚𝑎𝑖𝑛𝑖𝑛𝑔𝑃 𝑗 )                                     by a cost function expressed in Eq. (3). Based on the value of EPTO,
+19:    end for                                                              𝜏𝑐 , and 𝜀𝑐 , the weight of every O&P is calculated. A set of C weight
+20: end while
+                                                                            is expressed as 𝜔 = {𝜔 1, 𝜔 2, ..., 𝜔𝑐 }. The O&P of kernels, 𝑆 (𝐽 ), were
+selected where the weight is the highest, and this is the optimal                       Algorithm 2 DP-Based Kernel Collocation
+O&P for the kernels and defined EPTO.                                                    1: Input: 𝑛 Kernels, 𝐾 = {𝐾1 , 𝐾2 , ..., 𝐾𝑛 },
+                                                                                                     𝑚 Processors, 𝑃 = {𝑃 1 , 𝑃 2 , ..., 𝑃𝑚 }, and EPTO
+                                                                                         2: Output: O&P with MAX weight, 𝑆 (𝑉 ).
+                                                                  
+                        𝜏𝑐 − 𝜏𝑚𝑖𝑛          𝜀𝑐 − 𝜀𝑚𝑖𝑛
+𝜔𝑐 = 1/𝑑𝑖𝑠𝑡                        ∗ 100,             ∗ 100 , {𝐸𝑃𝑇𝑂 } .                  3: for 𝑖 = 2 to 𝑛 do
+                       𝜏𝑚𝑎𝑥 − 𝜏𝑚𝑖𝑛        𝜀𝑚𝑎𝑥 − 𝜀𝑚𝑖𝑛
+                                                                                         4:     if 𝑖 == 2 then
+                                                                     (3)
+                                                                                         5:          Calculate all possible base cases.
+                                                                                         6:         𝑐𝑜𝑛𝑡𝑖𝑛𝑢𝑒
+5      KERNEL COLLOCATION STRATEGY                                                       7:     end if
+This section formulates a heuristics based on dynamic programming                        8:     for each 𝑉 ∈ 𝐾 where |𝑉 | = 𝑖 do
+(DP) for MEPHESTO. By using the DP-based heuristics, a kernel                            9:          𝑆 (𝑉 ) ← { ∅ }
+                                                                                        10:          for each 𝐾𝑖 ∈ 𝑉 do
+collocation algorithm is designed, followed by a discussion of the
+                                                                                        11:              𝑀𝑎𝑥_𝑤𝑒𝑖𝑔ℎ𝑡 ← 0
+complexity analysis of the approach.                                                    12:              𝑉 _𝑝𝑎𝑟𝑡𝑖𝑎𝑙 = 𝑉 − {𝐾𝑖 }
+                                                                                        13:              for each 𝑃 𝑗 ∈ 𝑃 do
+5.1       Dynamic Programming Formulation                                               14:                  𝑆 (𝑉𝑃 𝑗 ) = 𝐶𝑜𝑙𝑙𝑜𝑐𝑎𝑡𝑒 (𝑆 (𝑉 _𝑝𝑎𝑟𝑡𝑖𝑎𝑙), {𝐾𝑖 }, 𝜌 𝑗 ) ]
+                                                                                        15:                  Get time 𝜏𝑐 and energy 𝜀𝑐
+An exhaustive search throughout all the kernel O&Ps guarantees an
+                                                                                        16:                  Update 𝜏𝑚𝑎𝑥 , 𝜏𝑚𝑖𝑛 , 𝜀𝑚𝑎𝑥 , 𝜀𝑚𝑖𝑛
+optimal solution but is computationally expensive. For this reason,                     17:              end for
+a DP approach was formulated to reach a near-optimal solution                           18:              for each 𝑃 𝑗 ∈ 𝑃 do
+and reduce the complexity [2]. The solution is built from a smaller                     19:                  𝜔 (𝑉𝑃 𝑗 ) = 𝐶𝑎𝑙𝑐𝑢𝑙𝑎𝑡𝑒_𝑤𝑒𝑖𝑔ℎ𝑡 (𝜏𝑐 , 𝜀𝑐 , 𝐸𝑃𝑇 𝑂)
+set and recursively builds the bigger ones by selecting maximum                         20:                  if 𝜔 (𝑉𝑃 𝑗 ) > 𝑀𝑎𝑥_𝑤𝑒𝑖𝑔ℎ𝑡 then
+weighted subsolutions. At each step, a new placement for one kernel,                    21:                      Set 𝑀𝑎𝑥_𝑤𝑒𝑖𝑔ℎ𝑡 = 𝜔 (𝑉𝑃 𝑗 )
+𝐾 𝑗 , is found, which maximizes the weight for the current O&P. V                       22:                      Update 𝑆 (𝑉 ) = 𝑆 (𝑉𝑃 𝑗 )
+is considered a varying set of kernels, where 𝑉 ⊆ 𝐾. Kernel O&P                         23:                  end if
+is represented as S(V), which provides the processor wise queue                         24:              end for
+information 𝜌 = {𝜌 1, 𝜌 2, ..., 𝜌𝑚 }. In Eq. (4), S(V) is built recursively.            25:          end for
+                                                                                        26:     end for
+                                                                                        27: end for
+      𝑆 ( {𝐾1 , 𝐾2 }) = 𝑀𝑎𝑥 [𝐶𝑜𝑙𝑙𝑜𝑐𝑎𝑡𝑒 ( { ∅ }, {𝐾1 , 𝐾2 }, 𝜌 𝑗 ) ],
+                                                                                        5.2     DP-Based Kernel Collocation Algorithm
+    
+    
+    
+    
+    
+    
+                                                                   if |𝑉 | = 2
+                                                                                        The objective of the DP-based kernel collocation algorithm is to de-
+     𝑆 (𝑉 )           = 𝑀𝑎𝑥 [𝐶𝑜𝑙𝑙𝑜𝑐𝑎𝑡𝑒 (𝑆 (𝑉 − {𝐾𝑖 }), {𝐾𝑖 }, 𝜌 𝑗 ) ],
+    
+    
+                                                                                       termine a near-optimal O&P based on a defined EPTO. Algorithm 2
+    
+                                                                   if |𝑉 | > 2         provides a simplistic pseudo-code that implements Eq. (4). This
+                                                                                  (4)
+                                                                                        algorithm takes three inputs: (1) list of kernels, (2) list of PUs, and
+   Here, the function 𝐶𝑜𝑙𝑙𝑜𝑐𝑎𝑡𝑒 (𝑆 (𝑉 ), 𝐾𝑖 , 𝜌 𝑗 ) represents the collo-
+                                                                                        (3) EPTO. The output of the algorithm is the near-optimal O&P,
+cation estimator algorithm given at Algorithm 1. As the collocation
+                                                                                        which is denoted as 𝑆 (𝑉 ). This starts with finding the O&P for
+estimator algorithm takes a specific O&P as an input, the param-
+                                                                                        minimal subset V (i.e., the base case where |𝑉 | = 2) by finding the
+eters constitute the processor wise queue 𝜌 (i.e., the O&P). The
+                                                                                        maximum weight based on EPTO and the cost function. The algo-
+parameters are given as follows:
+                                                                                        rithm then increases the size of V by one new kernel while reusing
+      𝑆 (𝑉 ) is the current O&P.                                                        the saved maximum weighted (i.e., best) O&Ps from past iterations.
+      𝐾𝑖 is a new kernel that will be added to 𝑆 (𝑉 ).                                  The algorithm finds the best O&P, which is processor wise queues,
+      𝜌 𝑗 is the processor queue into which 𝐾𝑖 will be added.                           𝜌𝑚𝑎𝑥 𝑤𝑒𝑖𝑔ℎ𝑡 = {𝜌 1, 𝜌 2, ..., 𝜌𝑚 }. At [Lines 1–2], input and output are
+                                                                                        defined. At [Line 3], the algorithm iterates through the smallest
+   The 𝐶𝑜𝑙𝑙𝑜𝑐𝑎𝑡𝑒 function provides the execution time and energy
+                                                                                        (|𝑉 | = 2) to the largest subset size |𝑉 | = 𝑛. In [Lines 4–7], the base
+consumption for that O&P. The 𝑀𝐴𝑋 operation then considers
+                                                                                        case of Eq. (4) is calculated by considering two kernels and 𝑚 PUs.
+the placement of 𝐾𝑖 in all processors, P, and selects the placement
+                                                                                        In [Line 8], the algorithm iterates over every possible subset 𝑉 of
+where the weight is the maximum based on the cost function and
+                                                                                        𝐾, where |𝑉 | = 𝑖. [Line 9] initializes 𝑆 (𝑉 ). In [Line 10], every 𝐾𝑖 is
+EPTO. The base case of Eq. (4) determines the placement with
+                                                                                        considered from the current set 𝑉 . In [Line 12], 𝐾𝑖 is separated, and
+maximum weight for two kernels since it takes (at least) two kernels
+                                                                                        a partial set 𝑉 _𝑝𝑎𝑟𝑡𝑖𝑎𝑙 is formed. The best O&P for this partial set
+to collocate. For example, there are four O&Ps in a scenario with
+                                                                                        is already calculated in the previous iteration. At [Line 13], every
+two kernels and two PUs. The base case determines the best O&P
+                                                                                        processor, 𝑃 𝑗 , is considered for a potential placement for kernel 𝐾𝑖 .
+from these four O&Ps by using the cost function. For a scenario
+                                                                                        At [Line 14], 𝐾𝑖 is added to the O&P of 𝑆 (𝑉 _𝑝𝑎𝑟𝑡𝑖𝑎𝑙), Collocation
+with three kernels and two PUs, the second case of Eq. (4) is used.
+                                                                                        Estimator algorithm (i.e., Algorithm 1) is called, and the result is
+In this case, one kernel is separated and placed in all the PUs along
+                                                                                        stored at 𝑆 (𝑉𝑃 𝑗 ). In [Line 15], execution time, 𝜏𝑐 , and energy con-
+with the best O&P of the remaining two kernels, which are derived
+                                                                                        sumption, 𝜀𝑐 , are updated, which are the output of Algorithm 1. In
+from the base case. Again, the cost function and EPTO are applied
+                                                                                        [Line 16], 𝜏𝑚𝑖𝑛 , 𝜏𝑚𝑎𝑥 , 𝜀𝑚𝑖𝑛 , and 𝜀𝑚𝑎𝑥 are updated. In this way, time
+to determine the best O&P of the three kernels. In this way, the total
+                                                                                        and energy are calculated for all the possible subsets that are built
+set gets bigger by applying the cost function while DP eliminates
+                                                                                        on top of the best O&P of previous iterations. Now, there is a set
+unnecessary combinations.
+of execution time and energy consumption. At [Line 19], the cost
+function in Eq. (3) is invoked by using the 𝐶𝑎𝑙𝑐𝑢𝑙𝑎𝑡𝑒_𝑤𝑒𝑖𝑔ℎ𝑡 () func-
+tion that uses energy, time, EPTO, and all the minimum-maximum
+values. In [Lines 21–22], the algorithm checks whether the cur-
+rent O&P provides maximum weight. If it does, 𝑀𝑎𝑥_𝑤𝑒𝑖𝑔ℎ𝑡 and
+𝑆 (𝑉 ) are updated. When the algorithm finishes its iterations, 𝑆 (𝑉 )
+contains the desired near-optimal O&P for the given inputs.
+
+
+5.3    Complexity                                                           Figure 5: Result for benchmark kernels for EPTO (0, 0): near-
+As mentioned previously, Algorithm 1 has a complexity of 𝑂 (𝑛𝑚).            optimal O&P selection for all combinations. The red star is
+The outer loop of Algorithm 2 at [Line 3] is iterated (𝑛−1) times, and      EPTO, the blue triangle is the optimal solution, and the ma-
+the selection of subsets 𝑉 with size 𝑖 results    the loop at [Line
+                                               in                   8]    genta square is the near-optimal solution by DP. The abso-
+                                       Í𝑛 𝑛            Í𝑛      𝑛            lute minimum-maximum value pairs for energy and time
+and the innermost loop to be iterated 𝑖=2          and 𝑖=2 𝑖       times,
+                                               𝑖               𝑖            are 0.72–3.3 kWatt-seconds and 45.5–255.5 seconds.
+respectively, resulting in a complexity of 𝑂 (𝑛 2 2𝑛−1𝑚 2 ). However, a
+brute force search over all the combinations will reach a complexity        7     EXPERIMENTAL RESULTS
+of 𝑂 (𝑛𝑚 2𝑛!). The DP solution is faster but might not always yield         This section evaluates the efficacy of MEPHESTO in six steps: (1) the
+the optimal O&P. The performance of the DP-based strategy is                model and algorithms are shown to result in a near-optimal solution
+evaluated in the next section.                                              in a CPU+GPU collocated execution scenario, (2) the prediction
+                                                                            accuracy of the model is evaluated, (3) different EPTO goals are
+                                                                            evaluated, (4) a comparison with a greedy algorithm is presented, (5)
+6     EXPERIMENTAL SETUP                                                    the experiments are extended to include concurrent execution on
+These experiments were conducted on NVIDIA’s Tegra Xavier SoC               CPU+GPU+PVA, and (6) the overhead associated with MEPHESTO
+development platform. For parallel kernel execution on the CPU,             is discussed.
+the OpenMP programming model was used. All the CPU executions
+refer to the multithreaded execution that uses all the available cores.
+For GPU and PVA execution, the CUDA and OpenCV programming                  7.1    Kernel Collocation Using Scientific Kernels
+models are used, respectively. The Xavier platform gives users the          The first experiment was a high-level feasibility study to demon-
+ability to measure power consumption for the CPU, GPU, and PVA              strate how the proposed collocation technique can find a near-
+separately. The tegra_parser tool [24] was used to measure PU-wise          optimal solution among hundreds of thousands of possible O&P
+power consumption. To measure the number of flops and memory                combinations. In this experiment, the EPTO goal is set as (0,0),
+R/W bytes from the LLC to the system memory (i.e., operational              which indicates that energy and performance should both be opti-
+intensities) for the kernels, NVIDIA’s proprietary profiling tool           mized. Although this is an unrealistic goal for the targeted platforms,
+nvprof was used. Since the ARM Carmel CPU of Xavier does not                this experiment is used to argue why the EPTO should be treated
+yet have the required counters to calculate operational intensity,          as a trade-off knob rather than an “optimize-all" target between
+the values reported by nvprof were used. This approach led to a             energy and performance with more realistic goals such as (100,0),
+reasonable approximation for the CPU execution, which is further            (0,100), and (50,50).
+explained in Section 7.2.                                                      The proposed algorithm was evaluated by using the eight bench-
+   For GPU and CPU characterization and execution, scientific ker-          mark kernels listed in Table 3. The LLC-to-DRAM R/W bytes and
+nels from the Rodinia benchmark suite [5] and synthetic kernels             the number of flops reported in the table are generated by using
+from the Roofline toolkit [33] were used to demonstrate the effec-          the counters provided by NVIDIA. The execution time and average
+tiveness of MEPHESTO. For PVA, applications from the OpenCV [29]            power data for each kernel are collected in standalone mode for
+benchmark suite, which is bundled with NVIDIA’s Vision Program-             the CPU and GPU. There are 282, 241 possible ways in which eight
+ming Interface (VPI) software development kit [25], were used. The          kernels can be collocated (i.e., 282, 241 O&Ps on two PUs). To apply
+data corresponding to the characteristics of these kernels is pre-          the EPTO of (0,0), the energy consumption and execution time of
+sented in Tables 3 and 4. While experimenting, no power cap was set         each O&P were normalized to a value between 0 and 100. Then, all
+in the device. Power caps in Xavier limit the maximum frequency             the possible O&Ps were plotted in Fig. 5. The green circles represent
+in PUs and thus change the kernel behavior; DVFS picks frequency            all the possible O&P (random scheduling). The EPTO (0, 0) was
+from a defined set of frequency for a power cap. Changing power             marked with a red star, the optimal solution with a blue triangle,
+caps requires the kernels in the affected PUs to be reprofiled to gen-      and the DP-based solution with a magenta square. The optimal
+erate data for Tables 3 and 4. By using these kernels, the proposed         O&P and the near-optimal solution found by the algorithm are
+DP-based scheduling was compared with three other scheduling                closely located. Hence, the DP-based strategy is capable of selecting
+approaches: (1) optimal scheduling for a specific EPTO, (2) random          a reasonable near-optimal solution.
+scheduling, and (3) a greedy scheduling approach commonly used                 A trade-off between the execution time and the energy consump-
+by the related work [37].                                                   tion is necessary when the inverse relationship between them is
+                                                        Table 3: Benchmark kernels.
+
+ Sl.    Benchmark         Benchmark        Total DRAM        Total       Operational      GPU (standalone)        CPU (standalone)        Favorable
+            name            source          R/W byte          flop        intensity     Flop/s Avg. Power        Flop/s Avg. Power        processor
+  1          𝑐𝑓 𝑑           Rodinia           210 G          518 G           2.46        31.0 G      8.3         22.5 G      9.5            Both
+  2         𝑠𝑟𝑎𝑑1           Rodinia           449 G          441 G           0.88        29.8 G      8.3         87.1 G      9.0            CPU
+  3         𝑠𝑟𝑎𝑑2           Rodinia           663 G          1.3 T           2.0         77.1 G      7.7         21.8 G     10.6            GPU
+  4    𝑝𝑎𝑟𝑡𝑖𝑐𝑙𝑒 𝑓 𝑖𝑛𝑑𝑒𝑟     Rodinia             6G            33 G           5.2         2.8 G       7.9          2.3 G     17.3            Both
+  5    𝑠𝑡𝑟𝑒𝑎𝑚 − 𝑡𝑟𝑖𝑎𝑑       Roofline          918 G          115 G          0.125        22.6 G      9.1         19.4 G     15.3            Both
+  6       ℎ𝑒𝑎𝑟𝑡𝑤𝑎𝑙𝑙         Rodinia           221 G          1.1 T           5.27       113.8 G     15.6          9.3 G      9.4            GPU
+  7          𝑛𝑤             Rodinia            91 G           12 G           0.14        1.2 G       5.5          2.4 G     12.1            Both
+  8          𝑙𝑢𝑑            Rodinia            18 G           74 G           3.93        1.3 G      12.1         18.9 G     10.6            CPU
+
+observed. However, in Fig. 5, the inverse relation is absent; hence,          𝑎𝑐𝑐𝑢𝑟𝑎𝑐𝑦 = [1 − 𝐴𝑏𝑠𝑜𝑙𝑢𝑡𝑒 (𝑅𝑒𝑎𝑙 − 𝑀𝑜𝑑𝑒𝑙)/𝑅𝑒𝑎𝑙]*100, and then av-
+the need for a trade-off seems unnecessary (i.e., there is no need            eraged for all. The average model accuracy for execution time and
+for EPTO) because some kernels are better suited for one processor.           energy consumption is 88.4 and 92%, respectively.
+Running a kernel on the ill-suited processor leads to a nonopti-
+mal result (i.e., higher execution time and a higher level of energy
+consumption). This explains why there are multiple clusters in                7.3      Experiments with Different EPTO Goals
+Fig. 5. Section 7.3 further delves into the most close-to-optimal             The experiment presented in Fig. 5 includes many possible O&P
+cluster, which is the leftmost-bottom cluster and shows the effects           combinations that result in unpractical high-energy consumption
+of different EPTO values on the success of the proposed scheduling            and execution times. To better demonstrate the scale at which
+technique.                                                                    various EPTO goals can be used to achieve the desired trade-off,
+                                                                              the amount of O&P combination space was reduced by identifying
+                                                                              the kernels that are more suitable to run on CPUs or GPUs and
+                                                                              fixing them to the corresponding PU.
+                                                                                  A kernel is considered to be more suited for a specific processor
+                                                                              if the ratio of the execution time is at least two times faster while
+                                                                              taking average power into consideration. For example, a kernel has
+                                                                              a 𝐹𝑙𝑜𝑝𝑠/𝑠 value of 𝑡1 and 𝑡2 in PU1 and PU2 and the 𝐴𝑣𝑔.𝑃𝑜𝑤𝑒𝑟
+                                                                              of 𝑝𝑤1 and 𝑝𝑤2 in PU1 and PU2. If 𝑡1/𝑡2 > 2 (at least two times
+                                                                              faster) and 𝑝𝑤1/𝑝𝑤2 < 2, then the kernel is suitable for PU1. In the
+                                                                              same way, the authors determined whether the kernel is suitable for
+                                                                              PU2. If the kernel does not satisfy the condition for any processor,
+   (a) Execution time comparison.   (b) Energy consumption comparison.        then the kernel is considered favorable by both processors, and its
+                    Figure 6: Model accuracy.
+                                                                              placement in all these processors is considered.
+                                                                                  Based on the 𝐹𝑙𝑜𝑝𝑠/𝑠 and the 𝐴𝑣𝑔.𝑃𝑜𝑤𝑒𝑟 values reported in
+                                                                              Table 3, the CPU-friendly kernels were identified as 𝑠𝑟𝑎𝑑1 and
+7.2    Accuracy of the Empirical Model                                        𝑙𝑢𝑑, and the GPU-friendly kernels were identified as 𝑠𝑟𝑎𝑑2 and
+The proximity of the O&P generated by the algorithm to the opti-              ℎ𝑒𝑎𝑟𝑡𝑤𝑎𝑙𝑙 (last column of the table). On the other hand, the 𝑐 𝑓 𝑑,
+mal O&P relies on the accurate estimation of collocated execution             𝑝𝑎𝑟𝑡𝑖𝑐𝑙𝑒 𝑓 𝑖𝑛𝑑𝑒𝑟 , 𝑠𝑡𝑟𝑒𝑎𝑚 − 𝑡𝑟𝑖𝑎𝑑, and 𝑛𝑤 kernels can be run on any
+times and energy consumption for each kernel produced by the                  processor since no PU always favors their execution.
+model. To further evaluate the prediction accuracy of the models,                 After the fixed affinities are set, badly performing O&Ps are
+the authors focused on a subset of five kernels in Table 3. The au-           eliminated, and the inverse relationship between the execution
+thors observed how the modeled energy and execution time match                time and energy consumption is revealed in Fig. 7a. The circled
+with the actual execution for all the combinations possible with              diagonal region demonstrates that there is no best solution that
+five kernels, which is 482. Figures 6a and 6b depict the execution            optimizes energy and performance, and there is a clear need for
+time and energy consumption for all 482 combinations by com-                  different EPTO goals. Figures 7b, 7d, and 7c show the optimal O&P
+paring the estimations from the model and the actual execution.               combination (triangle), the near-optimal combination found by the
+In these figures, the x-axis shows the specific O&P combination.              algorithm (square), and the solution found by a greedy algorithm
+The model energy consumption and execution time values, which                 (circle) for different EPTO goals (shown by stars) of (0, 100), (50,
+are denoted by the orange lines, are sorted, resulting in a smooth            50), and (100, 0), respectively. These figures demonstrate that the
+curve. The real execution time and energy consumption corre-                  DP-based scheduling can select the near-optimal O&P to achieve
+sponding to the specific O&P for every data point are denoted by              the desired trade-off between energy consumption and execution
+blue lines. The analysis shows that the model estimate is on par              time.
+with the actual values for the execution time and energy consump-                 EPTO provides significant control over kernel collocation deci-
+tion. Relative accuracy for an O&P is computed by the formula,                sions. If the user wants to pick an O&P without having a desired
+                   (a) Inversely relation of time and energy.                                     (b) EPTO (0,100).
+
+
+
+
+                               (c) EPTO (100,0).                                                  (d) EPTO (50,50).
+
+Figure 7: Demonstration of the need for EPTO. The red star is EPTO, the blue triangle is the optimal solution,the magenta
+square is the near-optimal solution by DP, and the black circle is the greedy solution. The x- and y-axes are normalized. The
+absolute minimum-maximum value pairs for energy and execution time are 0.72–1.2 kWatt-seconds and 45.5–77.4 seconds.
+
+trade-off in mind, EPTO (0, 0) can be chosen. EPTO (0, 0) will al-        kernel to collocate. This strategy of collocation excludes lower
+ways provide an O&P that is close to the diagonal line shown in           operational intensity for reducing memory contention. This is a
+Fig. 7a, but no specific trade-off is guaranteed. If the user wants the   classic scenario that stems from the fact that a compute-intensive
+fastest execution time or the least energy consumption, EPTO (0,          kernel should be collocated with a memory-intensive kernel. When
+100) and EPTO (100, 0), respectively, will guarantee that trade-off.      one kernel in one processor finishes its execution, the next PU-
+Other EPTOs, such as EPTO (50, 50), also guarantee the desired            friendly kernel to that processor is chosen. When all PU-friendly
+trade-off. This strategy provides the run time system with more           kernels are scheduled, the neutral kernels are chosen.
+control over the device and, if necessary, empowers the run time             Following this strategy, an O&P of 3675|2841 is chosen by the
+system to dynamically choose different EPTO values based on the           greedy solution for which the numbers represent the kernels from
+device’s energy consumption priority. Moreover, this algorithm            Table 3. This O&P is compared in Fig. 7d by using a black circle. The
+works irrespective of the system power cap, which in turn provides        positioning of the black circle reveals that there are many better
+an extra level of control.                                                solutions available in terms of the energy consumption and the
+                                                                          execution time. Figure 8 presents a better comparison between the
+                                                                          greedy approach and the proposed DP-based algorithm. The blue
+                                                                          points are DP-based solutions for different EPTO points of 0–100,
+                                                                          10–90, 20–80, ..., 100–0, and a trade-off line is also drawn based on
+                                                                          the positioning of different levels of EPTO. The greedy solution is
+                                                                          observed to be significantly far from the trade-off line. The best case
+                                                                          for execution time—EPTO (0, 100)—provides a scheduling in which
+                                                                          execution time is 46.5 seconds for eight kernels, whereas the sched-
+                                                                          uling picked by the greedy solution provides an execution time of
+                                                                          58.3 seconds, which is 11.8 seconds more (i.e., 20% savings by the
+Figure 8: Comparison with greedy scheduling. Blue dots are                DP-based approach). On the other hand, the best case for energy
+EPTO points, and the black circle is the greedy solution.                 consumption—EPTO(100, 0)—provides the total energy consump-
+                                                                          tion of 0.75 kWatt-seconds, whereas the greedy solution shows
+7.4    Comparison with Greedy Algorithms                                  the energy consumption of 1.1 kWatt-seconds, which translates
+The authors believe that a study that consults execution time and         to 32% energy savings. Although the DP-based solution is more
+energy consumption to mitigate memory contention has never been           computationally expensive than the greedy algorithm, it can save
+performed. For this reason, the closest work in which the greedy          more execution time. For example, the DP-based solution takes 1.1
+algorithm is only dependent on the execution time [37] was chosen         seconds to find the scheduling for eight kernels but can save 11.8
+for comparison. The greedy algorithm [37] starts by scheduling the
+longest GPU-friendly kernel in GPU and selects a CPU-friendly
+                 (a) EPTO (0,100).                                (b) EPTO (50,50).                                (c) EPTO (100,0).
+
+
+Figure 9: Experiments with three processors: CPU, GPU, and PVA. The red star is the EPTO, the blue triangle is the optimal
+solution, and the magenta square is the near-optimal solution picked by DP. The x- and y-axes are normalized. The absolute
+minimum-maximum value pairs for energy and execution time are 0.47–0.78 kWatt-seconds and 34.01–58.47 seconds.
+
+                                                     Table 4: OpenCV kernels for PVA.
+
+      Benchmark        Benchmark         Total DRAM       Total    Operational                       PVA (standalone)
+          name           source           R/W byte         flop     intensity         Execution time (sec) Flop/s Avg. Power (Watt)
+       𝑘𝑙𝑡_𝑡𝑟𝑎𝑐𝑘𝑒𝑟       VPI.0.1             26 G          72 G        2.41                   2.41          30.0 G       1.24
+      𝑐𝑜𝑛𝑣𝑜𝑙𝑣𝑒_2𝐷        VPI.0.1              7G           70 G        5.35                   5.35          13.2 G       1.39
+         𝑡𝑖𝑚𝑖𝑛𝑔          VPI.0.1             15 G         122 G        7.87                   7.87          15.5 G       1.39
+
+seconds. Moreover, the DP-based approach provides the means to                in Fig. 10. For eight kernels, the algorithm finds the near-optimal
+achieve the desired EPTO.                                                     solution in 1,061 milliseconds, and this time corresponds to only
+                                                                              1.9% (mentioned in the x-axis) of the total execution time com-
+7.5    Three-PU Scenario: CPU, GPU, and PVA                                   pared with the minimum execution time. On the other hand, since
+                                                                              the overhead increases exponentially, for larger kernel counts and
+To demonstrate that MEPHESTO can work for diversely hetero-
+                                                                              shorter kernel execution times, the algorithm should be comple-
+geneous systems, the experiments were extended to cover three
+                                                                              mented with a windowing technique similar to the one proposed in
+different PUs: CPU, GPU, and PVA. In this experiment, a different
+                                                                              Belviranli et al. [2]. Although this technique limits the benefits that
+subset of eight kernels was used: five top kernels from Table 3 for
+                                                                              can be obtained from considering all potential O&P possibilities,
+execution on CPU and GPU and three OpenCV kernels from the
+                                                                              it is a simple and effective approach for controlling the increas-
+NVIDIA VPI samples from Table 4 for execution on PVA. Among
+                                                                              ing overhead. Moreover, the authors foresee that a multithreaded
+the five kernels from Table 3, 𝑠𝑟𝑎𝑑1 is CPU-friendly, 𝑠𝑟𝑎𝑑2 is GPU-
+                                                                              implementation of their DP-based algorithm will help reduce the
+friendly, and remaining three are considered for both CPU and GPU.
+                                                                              overhead.
+For all eight kernels in which one kernel favors CPU, one favors
+GPU, and three favor PVA, there are 720 O&Ps. The optimal and
+near-optimal O&P selections are plotted in Fig. 9. For two different
+EPTO targets—(0, 100) and (100, 0)—the DP-based algorithm was
+able to select near-optimal solutions in Figs. 9a and 9c, respectively.
+However, EPTO(50, 50) in Fig. 9b shows an interesting case where
+optimal and the DP-based solution are far away from each other.
+While the distance between the optimal point (denoted by a trian-
+gle) and the EPTO point (denoted by a star) is shorter, the DP-based
+solution was able to locate a more energy efficient solution. This is
+mainly due to the fact that the Euclidean-distance-based method of
+finding the optimal reference point (denoted by a triangle) relies
+on the absolute distances and ignores whether the optimal point                                Figure 10: Overhead analysis.
+uses more or less energy/execution-time. However, the DP-based
+approach was able to pick a solution from one of the closest clus-
+ters from the EPTO point. This experiment demonstrates that the
+proposed algorithm can also achieve the desired trade-off for three           8 RELATED WORK
+PU diversely heterogeneous systems.                                           8.1 Memory Contention Studies
+                                                                              This section reports two studies that are similar to this work. The
+7.6    Overhead Analysis of DP-Based Search                                   first study was done by Zhu et al. [36, 37] in which the authors stud-
+The overhead of the proposed DP-based solution in MEPHESTO                    ied co-scheduling on an integrated CPU-GPU system and consid-
+for varying numbers of kernels to be ordered and placed is shown              ered a power cap. They devised a greedy algorithm that addressed
+memory contention from degradation in the execution time per-           power limit) in CPUs [30]. Liu et al. [17] designed an energy-aware
+spective while selecting frequency for power capping. However,          kernel mapping strategy in a heterogeneous system in which PUs
+they did not consider the impact of memory contention on power          are assigned different frequencies by using DVFS. Unlike these
+or energy. Moreover, the greedy algorithm does not provide any          studies, as mentioned previously, the method in this paper con-
+trade-off opportunity. The second study was done by Lee et al. [15]     siders finding a collocation mapping that can lead to user-defined
+in which the authors designed a strategy to dynamically predict         energy-performance balance while considering contention.
+the slowdown due to memory contention. However, this study only
+considered execution time. Compared with these works, the strat-        9    CONCLUSION AND FUTURE WORK
+egy in this paper defines memory contention from both the energy        This study presents MEPHESTO, which defines memory contention
+and time perspectives while achieving the desired trade-off. Other      in an integrated shared memory heterogeneous system in terms of
+works [7, 9, 22] studied memory contention and stalling in hetero-      energy and performance. MEPHESTO presents an empirical model
+geneous systems with shared LLC. Pan et al. [26] designed an LLC        to estimate a kernel collocation scenario for multiple kernels and
+management strategy for better performance. Cavicchioli et al. [4]      devises a strategy to reach a desired energy-performance balance.
+studied different SoCs and fused CPU-GPU devices to characterize        Based on experiments, this strategy can predict execution time and
+memory contention. Hill et al. [10] extended the Roofline model for     energy consumption with an acceptable error rate and find a near-
+mobile SoCs to address memory contention from the perspective           optimal solution that outperforms a greedy approach. Moreover,
+of PU BW usage. These studies mainly focused on performance             experiments demonstrated the efficacy of MEPHESTO by yielding
+and did not consider the impact of memory contention on power           near-optimal solutions for more than two processors. The authors
+or energy consumption.                                                  plan to integrate their kernel collocation mechanism into a run
+                                                                        time system.
+8.2    Kernel Collocation in CPU-GPU Systems
+Kernel collocation in a CPU-GPU environment is also another well-       ACKNOWLEDGMENTS
+studied area. Kaleem et al. [13] studied scheduling in integrated       This research was supported in part by the following sources: De-
+heterogeneous systems in which an online profile was used for load      fense Advanced Research Projects Agency (DARPA) Microsystems
+balancing between CPU and GPU. Panneerselvam et al. [28] de-            Technology Office (MTO) Domain-Specific System-on-Chip Pro-
+vised a task placement strategy in a CPU-GPU system that achieves       gram, the US Department of Energy (DOE) Advanced Scientific
+application-specific performance goals. Zhu et al. [37] designed a      Computing Research (ASCR) program, and by an appointment to
+greedy algorithm with post-local refinement for memory contention-      the Oak Ridge National Laboratory ASTRO Program, sponsored by
+aware kernel collocation. Cho et al. [6] devised an on-the-fly strat-   DOE and administered by the Oak Ridge Institute for Science and
+egy to partition irregular workloads in integrated CPU-GPU sys-         Education.
+tems without considering energy consumption. Zhang et al. [34, 35]         This manuscript has been co-authored by UT-Battelle, LLC under
+designed a decision tree-based model to determine the impact of         Contract No. DE-AC05-00OR22725 with the U.S. Department of
+kernel collocation on different applications in integrated CPU-GPU      Energy. The United States Government retains and the publisher, by
+systems. Pandit et al. [27] designed a dynamic work distribution        accepting the article for publication, acknowledges that the United
+that considered the data transfer need of kernels in OpenCL run         States Government retains a non-exclusive, paid-up, irrevocable,
+time. Liu et al. [18] designed a scheduling policy for tree traversal   worldwide license to publish or reproduce the published form of this
+algorithms in which CPU and GPU transfer information to make            manuscript, or allow others to do so, for United States Government
+a decision. Although there are more studies in the literature that      purposes. The Department of Energy will provide public access to
+investigated kernel collocation under memory contention, to the         these results of federally sponsored research in accordance with
+best of the authors’ knowledge, there are no schemes that con-          the DOE Public Access Plan.
+sider kernel collocation with the intention of addressing energy
+and performance simultaneously while considering the effects of
+                                                                        REFERENCES
+memory contention on both factors. Moreover, almost all exist-           [1] Rajkishore Barik, Naila Farooqui, Brian T Lewis, Chunling Hu, and Tatiana
+ing work focuses only on CPU/GPU-based systems, whereas this                 Shpeisman. 2016. A black-box approach to energy-aware scheduling on integrated
+method works for more diverse heterogeneous systems, such as                 CPU-GPU systems. In Proceedings of the 2016 International Symposium on Code
+                                                                             Generation and Optimization. ACM, 70–81.
+SoCs consisting of CPU, GPU, and PVA.                                    [2] Mehmet E Belviranli, Farzad Khorasani, Laxmi N Bhuyan, and Rajiv Gupta. 2016.
+                                                                             CuMAS: Data transfer aware multi-application scheduling for shared GPUs. In
+                                                                             Proceedings of the 2016 International Conference on Supercomputing. ACM, 31.
+8.3    Energy-Aware Algorithm Studies                                    [3] Alexander Branover, Denis Foley, and Maurice Steinman. 2012. Amd fusion apu:
+Barik et al. [1] introduced a black-box approach for finding energy-         Llano. Ieee Micro 32, 2 (2012), 28–37.
+                                                                         [4] Roberto Cavicchioli, Nicola Capodieci, and Marko Bertogna. 2017. Memory
+aware scheduling by characterizing applications. Ma et al. [20]              interference characterization between CPU cores and integrated GPUs in mixed-
+designed GreenGPU, which dynamically throttles the frequency                 criticality platforms. In 2017 22nd IEEE International Conference on Emerging
+                                                                             Technologies and Factory Automation (ETFA). IEEE, 1–10.
+of GPU and memory. Zhu et al. [37] dynamically finds the appro-          [5] S. Che, M. Boyer, J. Meng, D. Tarjan, J. W. Sheaffer, S.-H. Lee, and K. Skadron.
+priate frequency for applications to keep the execution under a              2009. Rodinia: A benchmark suite for heterogeneous computing. In Workload
+power cap. Komoda et al. [14] also studied power capping by using            Characterization, 2009. IISWC 2009. IEEE International Symposium on. Ieee, 44–54.
+                                                                         [6] Younghyun Cho, Florian Negele, Seohong Park, Bernhard Egger, and Thomas R
+DVFS to find near-optimal frequency settings for CPU-GPU. Intel              Gross. 2018. On-the-fly workload partitioning for integrated CPU/GPU architec-
+introduced a power capping mechanism RAPL (running average                   tures.. In PACT. 21–1.
+ [7] Marvin Damschen, Frank Mueller, and Jörg Henkel. 2018. Co-Scheduling on                    of the 22nd international conference on Parallel architectures and compilation
+     Fused CPU-GPU Architectures With Shared Last Level Caches. IEEE Transactions               techniques. IEEE Press, 225–234.
+     on Computer-Aided Design of Integrated Circuits and Systems 37, 11 (2018), 2337–      [23] Sparsh Mittal and Jeffrey S Vetter. 2015. A survey of CPU-GPU heterogeneous
+     2347.                                                                                      computing techniques. ACM Computing Surveys (CSUR) 47, 4 (2015), 69.
+ [8] Gaurav Dhiman and Tajana Simunic Rosing. 2007. Dynamic voltage frequency              [24] Mohammad Alaul Haque Monil. 2020. Tegra parser: A tool to parse power
+     scaling for multi-tasking systems using online learning. In Proceedings of the 2007        consumption for NVIDIA tegra devices. https://github.com/monil01/tegra_
+     international symposium on Low power electronics and design. ACM, 207–212.                 parser/tree/master/c_parser
+ [9] Víctor García, Juan Gomez-Luna, Thomas Grass, Alejandro Rico, Eduard Ayguade,         [25] NVIDIA. 2020. NVIDIA® Vision Programming Interface (VPI). https://docs.
+     and Antonio J Pena. 2016. Evaluating the effect of last-level cache sharing on             nvidia.com/vpi/index.html
+     integrated GPU-CPU systems with heterogeneous applications. In 2016 IEEE              [26] Abhisek Pan and Vijay S Pai. 2015. Runtime-driven shared last-level cache
+     International Symposium on Workload Characterization (IISWC). IEEE, 1–10.                  management for task-parallel programs. In SC’15: Proceedings of the International
+[10] Mark Hill and Vijay Janapa Reddi. 2019. Gables: A Roofline Model for Mobile SoCs.          Conference for High Performance Computing, Networking, Storage and Analysis.
+     In 2019 IEEE International Symposium on High Performance Computer Architecture             IEEE, 1–12.
+     (HPCA). IEEE, 317–330.                                                                [27] Prasanna Pandit and R Govindarajan. 2014. Fluidic kernels: Cooperative execution
+[11] Y Jiang, X Shen, J Chen, and R Tripathi. 2011. The complexity and approximation            of opencl programs on multiple heterogeneous devices. In Proceedings of Annual
+     of optimal job co-scheduling on chip multiprocessors. IEEE Transactions on                 IEEE/ACM International Symposium on Code Generation and Optimization. ACM,
+     Parallel and Distributed Systems 22, 7 (2011).                                             273.
+[12] Norman P Jouppi, Cliff Young, Nishant Patil, David Patterson, Gaurav Agrawal,         [28] Sankaralingam Panneerselvam and Michael Swift. 2016. Rinnegan: Efficient re-
+     Raminder Bajwa, Sarah Bates, Suresh Bhatia, Nan Boden, Al Borchers, et al. 2017.           source use in heterogeneous architectures. In Proceedings of the 2016 International
+     In-datacenter performance analysis of a tensor processing unit. In Proceedings of          Conference on Parallel Architectures and Compilation. ACM, 373–386.
+     the 44th Annual International Symposium on Computer Architecture. 1–12.               [29] Kari Pulli, Anatoly Baksheev, Kirill Kornyakov, and Victor Eruhimov. 2012. Real-
+[13] Rashid Kaleem, Rajkishore Barik, Tatiana Shpeisman, Chunling Hu, Brian T                   time computer vision with OpenCV. Commun. ACM 55, 6 (2012), 61–69.
+     Lewis, and Keshav Pingali. 2014. Adaptive heterogeneous scheduling for inte-          [30] Efraim Rotem, Alon Naveh, Avinash Ananthakrishnan, Eliezer Weissmann, and
+     grated GPUs. In 2014 23rd International Conference on Parallel Architecture and            Doron Rajwan. 2012. Power-management architecture of the intel microarchitec-
+     Compilation Techniques (PACT). IEEE, 151–162.                                              ture code-named sandy bridge. Ieee micro 32, 2 (2012), 20–27.
+[14] Toshiya Komoda, Shingo Hayashi, Takashi Nakada, Shinobu Miwa, and Hiroshi             [31] K. L. Spafford, J. S. Meredith, S. Lee, D. Li, P. C. Roth, and J. S. Vetter. 2012. The
+     Nakamura. 2013. Power capping of CPU-GPU heterogeneous systems through                     tradeoffs of fused memory hierarchies in heterogeneous computing architectures.
+     coordinating DVFS and task mapping. In 2013 IEEE 31st International Conference             In Proceedings of the 9th conference on Computing Frontiers. ACM, 103–112. https:
+     on Computer Design (ICCD). IEEE, 349–356.                                                  //doi.org/10.1145/2212908.2212924
+[15] Shin-Ying Lee and Carole-Jean Wu. 2017. Performance characterization, pre-            [32] J. S. Vetter, R. Brightwell, M. Gokhale, P. McCormick, R. Ross, J. Shalf, K. Antypas,
+     diction, and optimization for heterogeneous systems with multi-level memory                D. Donofrio, T. Humble, C. Schuman, B. Van Essen, S. Yoo, A. Aiken, D. Bernholdt,
+     interference. In 2017 IEEE International Symposium on Workload Characterization            S. Byna, K. Cameron, F. Cappello, B. Chapman, A. Chien, M. Hall, R. Hartman-
+     (IISWC). IEEE, 43–53.                                                                      Baker, Z. Lan, M. Lang, J. Leidel, S. Li, R. Lucas, J. Mellor-Crummey, P. Peltz Jr., T.
+[16] Leek. 2020. CxxPolyFit: A simple library for producing multidimensional poly-              Peterka, M. Strout, and J. Wilke. 2018. Extreme Heterogeneity 2018 - Productive
+     nomial fits for C++. https://github.com/LLNL/CxxPolyFit                                    Computational Science in the Era of Extreme Heterogeneity: Report for DOE ASCR
+[17] Cong Liu, Jian Li, Wei Huang, Juan Rubio, Evan Speight, and Xiaozhu Lin. 2012.             Workshop on Extreme Heterogeneity. Technical Report. USDOE Office of Science
+     Power-efficient time-sensitive mapping in heterogeneous systems. In Proceed-               (SC) (United States). https://doi.org/10.2172/1473756
+     ings of the 21st international conference on Parallel architectures and compilation   [33] Samuel Williams, Andrew Waterman, and David Patterson. 2009. Roofline: An
+     techniques. ACM, 23–32.                                                                    insightful visual performance model for floating-point programs and multicore ar-
+[18] Jianqiao Liu, Nikhil Hegde, and Milind Kulkarni. 2016. Hybrid CPU-GPU sched-               chitectures. Technical Report. Lawrence Berkeley National Lab.(LBNL), Berkeley,
+     uling and execution of tree traversals. In Proceedings of the 2016 International           CA (United States).
+     Conference on Supercomputing. ACM, 2.                                                 [34] Feng Zhang, Bo Wu, Jidong Zhai, Bingsheng He, and Wenguang Chen. 2017.
+[19] Yu Jung Lo, Samuel Williams, Brian Van Straalen, Terry J Ligocki, Matthew J                FinePar: Irregularity-aware fine-grained workload partitioning on integrated ar-
+     Cordery, Nicholas J Wright, Mary W Hall, and Leonid Oliker. 2014. Roofline                 chitectures. In Proceedings of the 2017 International Symposium on Code Generation
+     model toolkit: A practical tool for architectural and program analysis. In Interna-        and Optimization. IEEE Press, 27–38.
+     tional Workshop on Performance Modeling, Benchmarking and Simulation of High          [35] Feng Zhang, Jidong Zhai, Bingsheng He, Shuhao Zhang, and Wenguang Chen.
+     Performance Computer Systems. Springer, 129–148.                                           2016. Understanding co-running behaviors on integrated CPU/GPU architectures.
+[20] Kai Ma, Xue Li, Wei Chen, Chi Zhang, and Xiaorui Wang. 2012. Greengpu: A                   IEEE Transactions on Parallel and Distributed Systems 28, 3 (2016), 905–918.
+     holistic approach to energy efficiency in gpu-cpu heterogeneous architectures.        [36] Qi Zhu, Bo Wu, Xipeng Shen, Li Shen, and Zhiying Wang. 2014. Understanding
+     In 2012 41st International Conference on Parallel Processing. IEEE, 48–57.                 co-run degradations on integrated heterogeneous processors. In International
+[21] J. D. McCalpin. 2002. Stream Benchmarks.                                                   Workshop on Languages and Compilers for Parallel Computing. Springer, 82–97.
+[22] Vineeth Mekkat, Anup Holey, Pen-Chung Yew, and Antonia Zhai. 2013. Managing           [37] Qi Zhu, Bo Wu, Xipeng Shen, Li Shen, and Zhiying Wang. 2017. Co-run scheduling
+     shared last-level cache in a heterogeneous multicore processor. In Proceedings             with power cap on integrated cpu-gpu systems. In 2017 IEEE International Parallel
+                                                                                                and Distributed Processing Symposium (IPDPS). IEEE, 967–977.
+

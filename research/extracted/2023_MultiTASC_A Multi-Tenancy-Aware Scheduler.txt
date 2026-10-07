@@ -1,0 +1,536 @@
+                                          MultiTASC: A Multi-Tenancy-Aware Scheduler for
+                                           Cascaded DNN Inference at the Consumer Edge
+                                                                    Sokratis Nikolaidis† , Stylianos I. Venieris‡ , and Iakovos S. Venieris†
+                                                       † National Technical University of Athens, Athens, Greece, ‡ Samsung AI Center, Cambridge, UK
+
+                                                            Email: sokratisnikolaidis@mail.ntua.gr, s.venieris@samsung.com, venieris@cs.ece.ntua.gr
+
+                                            Abstract—Cascade systems comprise a two-model sequence,              Despite the progress, the majority of these works have solely
+                                         with a lightweight model processing all samples and a heavier,       focused on the setting where the server is used by a single
+                                         higher-accuracy model conditionally refining harder samples to       device at any given time. Such an assumption no longer holds
+                                         improve accuracy. By placing the light model on the device side
+                                         and the heavy model on a server, model cascades constitute           in upcoming intelligent environments where multiple devices
+arXiv:2306.12830v1 [cs.LG] 22 Jun 2023
+
+
+
+
+                                         a widely used distributed inference approach. With the rapid         execute DL inference tasks simultaneously under the support
+                                         expansion of intelligent indoor environments, such as smart          of the same AI hub [10]. This gives rise to the new setting of
+                                         homes, the new setting of Multi-Device Cascade is emerging           Multi-Device Cascade, where multiple devices use the same
+                                         where multiple and diverse devices are to simultaneously use         model on a shared edge-based server. Such a system needs
+                                         a shared heavy model on the same server, typically located
+                                         within or close to the consumer environment. This work presents      to be scalable in terms of number of devices, balancing fast
+                                         MultiTASC, a multi-tenancy-aware scheduler that adaptively           response time and high accuracy across them. In this con-
+                                         controls the forwarding decision functions of the devices in         text, status-quo approaches, which treat each model cascade
+                                         order to maximize the system throughput, while sustaining            independently, would either lead to brute-forcing inference
+                                         high accuracy and low latency. By explicitly considering device      requests through the server’s resources, resulting in the system
+                                         heterogeneity, our scheduler improves the latency service-level
+                                         objective (SLO) satisfaction rate by 20-25 percentage points (pp)    being overwhelmed, or force all devices to fallback to on-
+                                         over state-of-the-art cascade methods in highly heterogeneous        device execution, negating any accuracy benefits. Therefore,
+                                         setups, while serving over 40 devices, showcasing its scalability.   there is an emerging need for novel methods that explicitly
+                                                                                                              target the challenges of a Multi-Device Cascade.
+                                                               I. I NTRODUCTION
+                                                                                                                 In this work, we propose MultiTASC, a multi-tenancy-aware
+                                            In recent years, there has been significant progress in the       scheduler that allows the Multi-Device Cascade architecture
+                                         field of on-device execution of deep learning (DL) inference         to adapt to dynamic conditions by reconfiguring on-the-fly
+                                         tasks [1]. At the same time, with the rapid expansion of             the forwarding criterion of the cascades, thus controlling the
+                                         indoor intelligent environments [2], such as smart homes and         server’s inference request rate at run time. To sustain smooth
+                                         offices, DL is poised to enable new use-cases by expanding           operation under device heterogeneity, we further introduce
+                                         to a greater variety of smart devices, such as IoT cameras           a heterogeneity-aware prioritization scheme that selectively
+                                         and AI speakers. Nevertheless, due to their form-factor and          adapts each device’s operation depending on its capabilities.
+                                         energy-efficiency constraints, most of these devices lie on the      Overall, MultiTASC sustains high responsiveness, throughput
+                                         low end of the computational spectrum. In contrast to modern         and accuracy while the number of assisted devices scales in
+                                         high-end smartphones, which host powerful processors and             both homogeneous and heterogeneous device ecosystems. The
+                                         accelerators (GPUs, NPUs) [3], low-end devices are not able to       key contributions of this paper are the following:
+                                         deploy state-of-the-art deep neural networks (DNNs), resorting
+                                         to lightweight, but lower-accuracy models.                             • A system model of the Multi-Device Cascade architec-
+                                            Given that offloading data to the cloud for inference can             ture. By expanding the cascade architecture to accom-
+                                         incur significant costs in terms of bandwidth, latency and               modate multiple devices, our parametrization exposes
+                                         privacy, an alternative scheme is emerging that places the               the tunable parameters and enables system designers to
+                                         server inside or closer to the consumer environment in the form          systematically investigate its trade-offs.
+                                         of a dedicated AI hub that assists the surrounding devices [2].        • A multi-tenancy-aware scheduler optimized for the Multi-
+                                         In this context, a prominent deployment approach are the                 Device Cascade architecture. The proposed scheduler
+                                         cascade architectures [4]–[9]. Cascade architectures make use            aims to maximize throughput and accuracy while satisfy-
+                                         of the fact that not all samples are of the same difficulty and          ing a latency constraint. This is accomplished through
+                                         choose to process only the more challenging cases with a                 the adaptive manipulation of the forwarding decision
+                                         powerful model deployed on the server, while letting easier              functions of the devices that control the inference request
+                                         samples, which usually form the majority of the data, to be              flow to the server. By introducing a new metric, Capacity,
+                                         processed on-device with a light model. A lot of research has            our scheduler estimates the maximum amount of samples
+                                         been conducted on such architectures, mainly focusing on the             that can be processed on the server within a given latency
+                                         forwarding decision criterion and selection of model pairs,              constraint and utilizes it to dynamically reconfigure the
+                                         progressing the potency of the scheme.                                   forwarding decision functions on the assisted devices.
+           II. BACKGROUND & R ELATED W ORK                                               No
+
+On-Device DNN Inference. In recent years, the on-device                                Forwarding
+deployment of DL models has rapidly gained ground [1].                                  Decision
+                                                                                                       Yes
+Although on-device training remains a distant possibility,
+                                                                                         No
+inference has been achieved on computationally constrained
+devices through the utilization of various methods, such as                            Forwarding    Yes       Request
+                                                                                        Decision                Queue
+lightweight model design [11], quantization [12], pruning [13],
+knowledge distillation [14], and optimized scheduling [15].                              No
+                                                                                                                           Server
+Still, despite the maturity of these techniques, upcoming                                               Yes
+                                                                                       Forwarding
+intelligent spaces, such as smart homes and offices, are often                          Decision
+                                                                                                                      Results
+populated with small-form factor, resource-constrained devices
+(e.g. smart cameras, AI speakers), which lack the processing
+                                                                          Fig. 1: System architecture of Multi-Device Cascade.
+power to support high-accuracy, computationally intensive
+models. This fact has motivated the development of distributed     may host different models. The output predictions of each
+collaborative inference approaches.                                sample are passed on to a Forwarding Decision function that
+Distributed Collaborative Inference. Distributed inference         determines whether the DL model of the device is confident
+systems employ a server to assist mobile and embedded              about its output. Depending on the decision, either the result
+devices in performing DNN inference tasks. This approach           remains as is, or the sample is forwarded to a server to be
+has given rise to two main schemes: offloading and cascading.      processed by a more accurate model. The forwarded samples
+Offloading [16]–[18] leverages the server’s resources to alle-     from all devices are put into a Request Queue from where
+viate part of the computational load on the device by splitting    they are drawn to form the input of the server-hosted model;
+the DNN model into two parts; the first part is executed on the    as such, the server-side model is shared among all devices.
+device, with the intermediate results forwarded to the server      Finally, the results produced on the server are sent back to
+to proceed with the execution of the second part.                  their corresponding devices.
+   In the cascade scheme, samples are fed into a two-model         Single-Device Cascade. Let x∈X be the input of a DL
+sequence of DNNs, with progressively increasing complexity         inference task performed on an IoT device and y∈{1, ..., K}
+and accuracy. Once the input is processed by a model, its          the classification label produced by the model, where K is
+output is evaluated by a forwarding decision function, which       the number of classes. By using a decision function, d(·), on
+determines whether the inference ends using the current result     the output of the light device model, we can decide whether
+or proceeds to the next model. Several works have been             the result is satisfactory (d(·)=0) or we should forward the
+conducted on this area. [4] proposes to analyze the difference     sample to the heavier model for further processing (d(·)=1).
+between the best and the second best softmax result in order       Denoting the classification function of the light model by
+to determine which inputs can be processed only by the light       fl : X → [0, 1]K that yields the softmax ouput vector of the
+model and which require the heavy model. [5] introduces a          model whose maximum value is the predicted class, and the
+trainable forwarding criterion by training a neural head on the    classification of the heavy model by fh : X → [0, 1]K , we
+light model’s feature extractor. [6] explores the idea of using    formally define a collaborative cascade system as:
+more than two DNN models and compares different decision                                           (
+metrics. Finally, [7] and [8] propose solutions for deploying                                       fl (x) if d(fl (x)) = 0
+                                                                             casc fl ,fh ,d (x ) =                            (1)
+cascades under tight energy constraints.                                                            fh (x) if d(fl (x)) = 1
+Multi-Device Cascades. Previous works on cascades [4]–[8]
+have focused on an isolated setting, where a single device has     Multi-Device Cascade. To capture Multi-Device Cascade
+exclusive access to a server. Nonetheless, with an increased       architectures (Fig. 1), we extend the single-device cascade
+rate of AI-enabled applications deployed in indoor environ-        system modeling as follows. Let D be the set of devices
+ments, this assumption is unrealistic; instead, multiple devices   that use the server as a collaborator. Then, the Multi-Device
+will require support from the same server at any given time.       Cascade system is defined as:
+Such a setting requires principled investigation, since a brute-
+                                                                                            i i
+                                                                                       i    f (x ) if di (fli (x)) = 0 ∀i ∈ {1, ..., |D|}
+force deployment, where devices run independently of each          casc fli ,fh ,d i (x ) = l i        i    i
+                                                                                          fh (x ) if d (fl (x)) = 1
+other, would lead to either an overloaded server, and in turn to
+long response times, or significant drop in accuracy by falling    where xi ∈X i is a sample processed by the i-th device, fli the
+back to local execution. The Multi-Device Cascade setting          classification function of the DL model deployed on the i-th
+remains unexplored and is the focus of this work.                  device, fh the shared heavy model on the server, and di (fli (x))
+                                                                   the forwarding decision function of the i-th device.
+      III. M ULTI -D EVICE C ASCADE OF C LASSIFIERS                Congestion Problem. When a single device is using the
+  Fig. 1 presents the system architecture of a Multi-Device        server as the collaborator, it has exclusive access to the
+Cascade, where IoT devices are running DL inference tasks.         server’s computational resources and hence the response time
+All devices perform the same task, e.g. object detection, but      is minimized. With the proliferation of IoT devices, such a
+server should be utilized by many devices at the same time, to                                                       Mean Batch Size         Queue Length
+amortize its cost and provide maximum utility. Nonetheless,
+
+
+
+
+                                                                                                   Initialization
+depending on the conditions, if the arrival rate of incoming                       Inference
+                                                                                   Latencies
+
+
+
+
+                                                                                                                                   Runtime
+                                                                                                                                                  Threshold
+requests exceeds the attainable processing throughput of the                                                         Capacity                      Update
+server, the server will be overloaded and the requests will                       Latency SLO
+
+experience severe waiting times in the request queue.
+    Given the number of devices |D|, we express the arrival                                                                                       Scheduler
+                                                      P|D| pi
+rate of requests to the server as ARserver =            i = 1
+                                                               casc/ i
+                                                                    tinf
+           i                                                                               Fig. 2: MultiTASC’s internal architecture.
+where tinf is the average inference latency of a sample on
+the i-th device and picasc is the probability of a sample giving
+di (fli (xi )) = 1. Given the attainable throughput Tserver of the         BvSB           =P1 − P2 , where P1 and P2 are the maximum and
+                                                                                  f (x)
+server, we distinguish between three different states:                     second maximum values, respectively, in the output softmax
+    • ARserver < Tserver : the server’s processing rate is larger
+                                                                           vector of classifier f (x). Other metrics, such as top-1 softmax
+       than the arrival rate, resulting in the server being under-         or entropy, can be used with minimal modifications, potentially
+       utilized. A larger number of difficult samples could be             leading to different latency-accuracy trade-offs.
+       sent to the server to achieve higher accuracy.                         The vast majority of existing cascade systems opts to select
+    • ARserver = Tserver : equilibrium is attained. Requests are           a specific threshold at design time, which then remains fixed
+       processed upon arrival without accumulating and the                 upon deployment. In this work, to accommodate the adaptabil-
+       server’s processing power is fully utilized.                        ity needs of our target system, we adopt an alternative scheme
+    • ARserver > Tserver : the requests arrive faster than the server      where the decision function can be dynamically reconfigured.
+       can process. If this state lasts, the request queue will be         The decision function di (·) is thus defined as:
+       large, resulting in unwanted latency.                                                                        
+Since the probability picasc of the forwarding decision function                                                    0
+                                                                                                                        if     BvSB              ≥ ci,t
+                                                                                                                                        fli (x)
+is not static, but changes during inference, such an architecture
+                                                                                           i
+                                                                                          d (fli (x)) =                                                       (2)
+                                                                                                                    1
+                                                                                                                        if     BvSB              < ci,t
+could benefit by dynamically adapting its state depending on                                                                            fli (x)
+the current conditions. Since tiinf and Tserver are fixed based on
+the device and server-side processors, we opt to manipulate                where ci,t is the decision threshold of device i at time t.
+picasc by changing the parameters of di (fli (xi )) in order to            The per-device decision thresholds are exposed to our server-
+introduce adaptability to the system.                                      residing scheduler, which adapts them at run time.
+Problem Optimization. We formulate the aforementioned
+problem as a multi-objective optimization problem, aiming
+                                                                           B. The Capacity Metric
+to maximize accuracy and throughput subject to a latency
+service-level objective (SLO). The next section describes our                 To fully take advantage of the server’s computational re-
+proposed scheduler that tackles this problem.                              sources and boost throughput, it is important to use batching,
+                                                                           i.e. processing multiple samples at the same time. To avoid the
+                    IV. P ROPOSED SOLUTION                                 latency that would arise from waiting for the request queue to
+   To combat the accumulation of requests or underutilization              reach a specific batch size, we employ dynamic batching [21].
+of server resources, we propose MultiTASC, a multi-tenancy-                With dynamic batching, we use the maximum batch size that is
+aware scheduler that dynamically adapts the forwarding de-                 feasible with the current request queue length. Available batch
+cision functions on assisted devices in order to control the               sizes are B={1, 2, 4, 8, 16, 32, 64}. Due to diminishing returns,
+arrival rate of samples. Fig. 2 depicts its internal design. The           in some cases we use a lower maximum batch size, e.g. with
+scheduler monitors the state of the request queue, communi-                EfficientNetB3 a batch size of 16 provides higher throughput
+cates with the assisted devices and tunes the flow of incoming             and lower latency than a batch size of 32 and above.
+requests based on the current conditions. To this end, we in-                 To calculate the amount of samples that can be processed
+troduce four techniques: i) reconfigurable forwarding decision             by the server within a given latency constraint, we introduce
+functions, ii) the Capacity metric on the server, iii) fractional          the Capacity metric. Based on the inference latency of each
+update, and iv) device heterogeneity-aware prioritization for              batch size and a given latency SLO, the scheduler calculates
+effectively communicating updates to the devices.                          the maximum amount of samples that can be classified without
+                                                                           latency violations. We call that amount Capacity.
+A. Reconfigurable Forwarding Decision Function                                To obtain the value of the server’s Capacity, we cast the
+   Research effort has been invested into quantifying the pre-             problem as an unbounded variation of the Knapsack prob-
+diction confidence of DNNs, leading to several approaches [6],             lem, where the batch size throughput is analogous to the
+[19]. In this work, we adopt the Best-versus-Second-Best                   value/weight ratio. Since we know that the larger the batch
+(BvSB) metric [20], using the difference between the two                   size the higher the throughput (up to the point where the
+highest values of the softmax outputs of the model as                      server’s processing power is saturated), we introduce a greedy
+                                                                                                                                                             SLO 100ms                                            SLO 200ms
+                  TABLE I: Evaluated DNN Models
+                                                                                                                                                                                            100
+
+                                                                                                                                              90
+
+
+
+
+                                                                                                                   Inferences below SLO (%)
+ Model           Location Device            Clock Rate Accuracy Latency FLOPs #Params                                                                                                             95
+
+ MobileNetV2       Low-end Sony Xperia C5    1.69 GHz    71.85%    31 ms      0.6 B    3.5 M                                                  85                                                  90
+ EfficientNetLite0 Mid-tier Samsung A71      2.20 GHz    75.02%    43 ms      0.8 B    4.7 M
+ EfficientNetB0 High-end Samsung S20 FE      2.73 GHz    77.04%    33 ms      0.8 B    5.3 M                                                                                                      85
+ InceptionV3       Server   Tesla T4 GPU     585 MHz     78.29%    15 ms     11.4 B   23.8 M                                                  80
+ EfficientNetB3 Server      Tesla T4 GPU     585 MHz     81.49%    25 ms      3.7 B   12.2 M                                                                                                      80
+                                                                                                                                              75
+   * See Table 1 in [1] for the detailed resource characteristics of the target mobile phones.                                                                                                    75
+                                                                                                                                                        Static                                              Static
+                                                                                                                                              70        Dynamic                                   70        Dynamic
+algorithm that adds the largest batch size as many times as
+                                                                                                                                                   10       20    30     40   50                       10        20     30     40   50
+possible. Let B be the pool of batch sizes, then:                                                                                                         Number of Devices                                   Number of Devices
+
+
+                |B|                         |B|                                                             Fig. 3: SLO satisfaction rate for EfficientNetLite0-InceptionV3 pair.
+                                                     b
+                X                           X
+ C = max              bj n j ,     s.t.            Linfj nj ≤ LSLO , nj ≥ 0 (3)
+          n
+                j=1                         j=1                                                                             1200
+
+
+
+
+                                                                                                 Throughput (samples/s)
+                                                                                                                                                                                                  79
+                                                                                                                            1000
+where C is the Capacity metric, bj is the j-th batch size, nj is
+
+
+
+
+                                                                                                                                                                                   Accuracy (%)
+                                              b                                                                                       800                                                         78
+the amount of times the batch size is used, Linfj is the inference
+                                     SLO                                                                                                                                                                    Static Threshold
+latency of the j-th batch size and L     is the latency SLO.                                                                          600
+                                                                                                                                                                                                  77
+                                                                                                                                                                                                            Light Model
+                                                                                                                                      400                                                                   Heavy Model
+                                                                                                                                                                                                  76        Target 100ms
+C. Fractional Update                                                                                                                                                     Static
+                                                                                                                                      200                                                                   Target 200ms
+                                                                                                                                                                         Dynamic
+                                                                                                                                                                                                  75
+   Changing the thresholds of all devices at once could lead                                                                                       10       20    30     40   50                       10        20     30     40   50
+                                                                                                                                                         Number of Devices                                   Number of Devices
+to unwanted, sudden oscillations of the system. To achieve
+a smoother operation of the system and give enough time                                                     Fig. 4: Throughput and accuracy for EfficientNetLite0-InceptionV3
+for each adaptation step to affect the execution, MultiTASC                                                 pair.
+introduces the fractional update technique. With fractional
+update, MultiTASC updates the thresholds of only a certain                                                                                                                V. E VALUATION
+percentage, denoted by P , of the total number of devices for                                               A. Experimental Setup
+each update. Thresholds are updated as dictated by Eq. (4).
+                                                                                                               To evaluate the performance of MultiTASC, we built a
+We set the invocation rate of the scheduler to be once every
+                                                                                                            prototype on top of TensorFlow 2.9.1 targeting an edge server
+2 seconds, allowing for update results to affect the system.
+                                                                                                            and three tiers of mobile devices. The edge server hosts an
+                                                                                                           NVIDIA Tesla T4 GPU, Intel(R) Xeon(R) 2.30GHz CPU and
+           −M if b̄ > α · C and QL > α · C
+           
+                                                                                                            12GB of RAM. For the clients, we target three smartphones
+     TC = +M if b̄ ≤ β · C and QL ≤ β · C                  (4)
+                                                                                                           of increasing processing capabilities, namely: Sony Xperia
+               0    otherwise
+           
+                                                                                                            C5 Ultra, Samsung A71 and Samsung S20 FE, representing
+                                                                                                            low-, mid- and high-end clients, respectively. To assess our
+where M is the margin by which the threshold of the chosen
+                                                                                                            system across various settings, we conduct simulation-based
+devices changes, b̄ the average of the last L batch sizes
+                                                                                                            experiments, varying the target latency SLO and the number
+used for inference on the server, C the Capacity metric and
+                                                                                                            of client devices. We measure the average inference time
+QL the request queue length. Capacity is weighted using the
+                                                                                                            across 200 runs on the target devices for the evaluated models.
+parameters α and β. If requests accumulate beyond a certain
+                                                                                                            We follow the same approach for the server-side models
+limit despite the dynamic threshold updates, all thresholds are
+                                                                                                            across different batch sizes. All on-device measurements were
+set to 0 until the server is decongested.
+                                                                                                            performed using TensorFlow Lite and targeting the CPU of
+                                                                                                            the respective mobile device. For the device-server communi-
+D. Device Heterogeneity-Aware Prioritization
+                                                                                                            cation, we employ the AMQP protocol, following the widely
+   MultiTASC explicitly considers device heterogeneity in                                                   used practice for communication between IoT devices.
+order to maximize both the average accuracy and the system                                                  Models & Datasets. We target the task of 1k-class image
+throughput. Our heterogeneity-aware prioritization strategy                                                 classification. Concretely, we use the ImageNet dataset and its
+updates the threshold values using Eq. (4), but expands the                                                 50k-images validation set in our experiments. Table I shows
+pipeline by selecting which type of devices receive the update.                                             the evaluated models. We obtain the ImageNet-pretrained
+The key insight of our strategy is that when it comes to                                                    models as provided by TensorFlow Hub. On the client side,
+decreasing the thresholds, MultiTASC prioritizes high-end                                                   to emulate the common approach where models are selected
+and mid-tier devices since they host larger models and can                                                  based on the capabilities of each device, we deploy Mo-
+maintain higher accuracy even with low thresholds. In contrast,                                             bileNetV2, EfficientNetLite0 and EfficientNetB0 on low-, mid-
+when increasing thresholds, our scheduler prioritizes low-end                                               and high-end devices, respectively. On the server side, we
+devices, since they are the ones benefiting the most from                                                   chose InceptionV3 and EfficientNetB3 as representative mod-
+higher thresholds due to hosting lighter models.                                                            els that are computationally heavy, but provide high accuracy.
+                                                   SLO 100ms                                                          SLO 200ms                                                                           SLO 100ms                                                          SLO 200ms
+                                                                                           100                                                                                                                                                   100
+                                                                                                                                                                                95
+                           95
+Inferences below SLO (%)
+
+
+
+
+                                                                                                                                                     Inferences below SLO (%)
+                                                                                                                                                                                                                                                 95
+                                                                                           95
+                                                                                                                                                                                90
+                           90                                                                                                                                                                                                                    90
+                                                                                           90                                                                                   85
+                                                                                                                                                                                                                                                 85
+                           85
+                                                                                           85                                                                                   80
+                                                                                                                                                                                                                                                 80
+                           80            Static low                                                      Static low                                                             75              Static low                                                      Static low
+                                                                                           80                                                                                                                                                    75
+                                         Static mid                                                      Static mid                                                                             Static mid                                                      Static mid
+                                         Static high                                                     Static high                                                            70              Static high                                      70             Static high
+                           75                                                              75
+                                         Dynamic low                                                     Dynamic low                                                                            Dynamic low                                                     Dynamic low
+                                                                                                                                                                                65                                                               65
+                           70            Dynamic mid                                                     Dynamic mid                                                                            Dynamic mid                                                     Dynamic mid
+                                                                                           70
+                                         Dynamic high                                                    Dynamic high                                                           60              Dynamic high                                     60             Dynamic high
+
+                                         10         20           30         40                           10            20        30        40                                               4         6        8        10   12    14                       4      6          8          10       12        14
+                                              Number of Devices                                               Number of Devices                                                                       Number of Devices                                            Number of Devices
+
+
+                                 Fig. 5: SLO satisfaction rate for InceptionV3 on the server.                                                                                                       Fig. 7: SLO satisfaction rate for EfficientNetB3.
+                                    Low-End Devices                              Mid-Tier Devices                           High-End Devices                                               Low-End Devices                              Mid-Tier Devices                           High-End Devices
+
+
+
+
+                                                                                                                                                       Throughput (samples/s)
+  Throughput (samples/s)
+
+
+
+
+                                                                                                                                                                                                                             120
+                           500                                                                                                                                                  160
+                                                                      350
+                                                                                                                                                                                                                                                                       140
+                                                                      300                                      400                                                              140                                          100
+                           400
+                                                                                                                                                                                                                                                                       120
+                                                                      250                                                                                                       120
+                                                                                                               300                                                                                                           80
+                           300                                                                                                                                                                                                                                         100
+                                                                      200                                                                                                       100
+
+                                                                                                                                                                                                                             60                                        80
+                                                                      150                                      200                                                              80
+                           200
+
+                                                   Static             100                    Static                                   Static                                    60                         Static            40
+                                                                                                                                                                                                                                                   Static              60                          Static
+                                                                                                               100
+                           100
+                                                   Dynamic            50                     Dynamic                                  Dynamic                                   40                         Dynamic                                 Dynamic             40                          Dynamic
+                                                                                                                                                                                                                             20
+                                    10        20   30       40                   10   20     30     40                      10   20   30        40                                     4        6     8   10       12   14         4     6   8    10   12   14                 4     6        8   10   12        14
+
+                                   Number of Devices                         Number of Devices                              Number of Devices                                              Number of Devices                           Number of Devices                           Number of Devices
+                            (a)                                                                                                                                                  (a)
+                                    Low-End Devices                              Mid-Tier Devices                           High-End Devices                                               Low-End Devices                              Mid-Tier Devices                           High-End Devices
+                                                                                                                                                                                82                                           82                                        82
+                                                                                                               80.0
+                           79
+                                                                      79                                                                                                                                                     81
+                                                                                                               79.5                                                             80
+
+
+
+
+                                                                                                                                                             Accuracy (%)
+                           78                                                                                                                                                                                                                                          81
+        Accuracy (%)
+
+
+
+
+                                                                                                                                                                                                                             80
+                           77                                                                                  79.0
+                                                                      78                                                                                                        78
+                                                                                                                                                                                                                             79                                        80
+                           76            Static Threshold                                                      78.5                                                                             Static Threshold
+                           75            Light Model                  77
+                                                                                                               78.0
+                                                                                                                                                                                76              Light Model                  78
+                                                                                                                                                                                                                                                                       79
+
+                           74            Target 100ms                                                                                                                           74
+                                                                                                                                                                                                Target 100ms                 77
+                                                                      76                                       77.5                                                                                                                                                    78
+                           73
+                                         Target 200ms                                                                                                                                           Target 200ms                 76
+                                                                                                               77.0
+                           72                                                                                                                                                   72                                           75                                        77
+                                                                      75
+                                    10        20   30       40                   10   20     30     40                      10   20   30        40                                     4        6     8   10       12   14         4     6   8    10   12   14                 4     6        8   10   12        14
+
+                                   Number of Devices                         Number of Devices                              Number of Devices                                              Number of Devices                           Number of Devices                           Number of Devices
+                            (b)                                                                                                                                                  (b)
+
+               Fig. 6: (a) Throughput and (b) accuracy for InceptionV3 on the server.                                                                Fig. 8: (a) Throughput and (b) accuracy for EfficientNetB3 on the server.
+
+Evaluation Settings. We focus on two types of device                                                                                                 B. Evaluation of MultiTASC’s Performance
+ecosystems: i) homogeneous, which comprises devices of                                                                                                  Here, we assess the performance of our scheduler across
+equal processing capabilities that host the same local model;                                                                                        both device ecosystems. We optimized MultiTASC’s parame-
+and ii) heterogeneous, which comprises devices of diverse                                                                                            ters P , M , L, α and β using grid search and set them equal
+processing capabilities, with each device hosting a model sized                                                                                      to 20%, 0.05, 5, 0.83 and 0.125, respectively.
+to its tier. In the homogeneous scenario, all devices were mid-                                                                                      Homogeneous Scenario. Fig. 3 shows the SLO satisfaction
+tier, i.e. A71 phones, and ran EfficientNetLite0 with an average                                                                                     rate comparison for the pair EfficientNetLite0-InceptionV3.
+on-device inference latency of 43 ms. In the heterogeneous                                                                                           For a small amount of devices, MultiTASC keeps the satis-
+scenario, all three tiers of devices were deployed in equal                                                                                          faction rate close to the baseline. As the baseline starts failing
+percentage. In both cases, the dataset of each device consisted                                                                                      at 20 and 40 devices for SLOs of 100 and 200 ms, respectively,
+of 5,000 randomly selected samples from the last 40,000                                                                                              MultiTASC gradually reconfigures the thresholds of the for-
+images of ImageNet’s validation set. Three different seeds                                                                                           warding decision functions and manages to keep satisfaction
+were used and the average is reported. The metrics used for                                                                                          rate high, gaining 15-20 pp across the SLOs. In Fig. 4, we can
+the evaluation are: the system throughput, the average accuracy                                                                                      see that after 45 devices the baseline’s throughput is starting
+across devices, latency SLO satisfaction rate for 100- and 200-                                                                                      to plateau, due to the queue not being served quickly enough.
+ms SLOs, and scalability in terms of number of devices.                                                                                              The users of the devices would experience this plateau as
+Baseline. As a baseline, we use a scheduler with statically                                                                                          excessive response time. In contrast, with MultiTASC, the
+selected thresholds that remain fixed at run time. To choose the                                                                                     aggregate throughput continues to increase linearly with a
+static threshold, we use the first 10,000 images of ImageNet’s                                                                                       growing number of devices, indicating that the requests are
+validation set as our calibration set and evaluate all cascade                                                                                       not allowed to accumulate and more devices can be served.
+model pairs in terms of accuracy and forwarding probability.                                                                                            With respect to accuracy, for a small number of devices,
+As such, we tune the threshold so that approximately 30%                                                                                             MultiTASC slightly increases accuracy. This happens because
+of samples are forwarded to the heavy model, providing                                                                                               our approach recognizes that the server is being underutilized
+a balanced accuracy-latency trade-off. In cases where that                                                                                           and increases the thresholds accordingly. As the number of
+threshold yielded an accuracy loss of more than 1 pp compared                                                                                        devices becomes larger, accuracy is traded off to achieve
+to the highest achievable cascade accuracy, we used the                                                                                              lower latency and sustain higher throughput, but still stays
+lowest threshold that satisfied the 1 pp limit. This baseline                                                                                        within 2 pp of the baseline. Additionally, we observe that the
+is equivalent to a set of state-of-the-art cascades [5], [6], [9].                                                                                   accuracy achieved by the cascade is in most cases higher than
+the accuracy of the heavy model, showcasing the benefits of          ple devices at the same time. By dynamically updating the
+classifier cascades for the specific model pair. Moreover, we        thresholds of forwarding decision functions on devices during
+observe the scalability of MultiTASC, serving up to 50 devices       run time, MultiTASC manages to avoid request accumulation
+without significant loss of accuracy. Different model pairings       on server-side which keeps response latency below SLO
+gave similar results, providing high satisfaction rate, sustaining   targets and throughput high across different device pool sizes.
+the throughput and keeping accuracy within acceptable limits.        Moreover, it considers the device heterogeneity problem and is
+When comparing server-side models, InceptionV3 can serve a           able to maintain performance while accommodating different
+larger amount of devices compared to EfficientNetB3, due to          tiers of devices. The flexibility and scalability of MultiTASC
+its lower computational demands, but EfficientNetB3 achieves         will help push collaborative cascade systems to enable broader
+higher accuracy when it comes to a lower number of devices.          DL deployment in indoor intelligent environments.
+   We further observe that when the on-device inference
+                                                                                                   R EFERENCES
+latency is below the SLO, the lowest limit for the SLO
+                                                                      [1] S. I. Venieris, I. Panopoulos, and I. S. Venieris, “OODIn: An Optimised
+satisfaction rate is the percentage of samples that are not               On-Device Inference Framework for Heterogeneous Mobile Devices,”
+forwarded to the server. For the EfficientNetLite0-InceptionV3            in SMARTCOMP, 2021.
+pair, this is around 69% and can be observed when the baseline        [2] S. Laskaridis, S. I. Venieris, A. Kouris, R. Li, and N. D. Lane, “The
+                                                                          Future of Consumer Edge-AI Computing,” arXiv, 2022.
+solution reaches 40 devices for the 100-ms SLO (Fig. 3)               [3] M. Almeida, S. Laskaridis, A. Mehrotra, L. Dudziak, I. Leontiadis, and
+Heterogeneous Scenario. Fig. 5-6 show the SLO satisfaction                N. D. Lane, “Smart at What Cost? Characterising Mobile Deep Neural
+rate, throughput and accuracy comparison between MultiTASC                Networks in the Wild,” in IMC, 2021.
+                                                                      [4] E. Park, D. Kim, S. Kim, Y.-D. Kim, G. Kim, S. Yoon, and S. Yoo,
+and the baseline, when targeting a heterogeneous device                   “Big/little deep neural network for ultra low power inference,” in
+environment with InceptionV3 as the server-side model. We                 CODES+ISSS, 2015.
+report the performance results separately for each device tier.       [5] M. Li, Y. Li, Y. Tian, L. Jiang, and Q. Xu, “AppealNet: An Efficient
+                                                                          and Highly-Accurate Edge/Cloud Collaborative Architecture for DNN
+When calculating the throughput, different latency targets                Inference,” in DAC, 2021.
+give similar results, so we present only one. Similarly to            [6] X. Wang, Y. Luo, D. Crankshaw, A. Tumanov, F. Yu, and J. E. Gonzalez,
+the homogeneous case, we observe that the satisfaction rates              “IDK Cascades: Fast Deep Learning by Learning not to Overthink,” in
+                                                                          UAI, 2018.
+are maintained high across all tiers of devices, while the            [7] S. I. Mirzadeh and H. Ghasemzadeh, “Optimal Policy for Deployment
+baseline leads to catastrophically degraded latency after 30              of Machine Learning Models on Energy-Bounded Systems,” in IJCAI,
+and 40 devices for SLOs of 100 and 200 ms, respectively                   2020.
+                                                                      [8] D. Stamoulis, T.-W. R. Chin, A. K. Prakash, H. Fang, S. Sajja,
+(Fig. 5). Our approach achieves gains of approximately 20-                M. Bognar, and D. Marculescu, “Designing Adaptive Neural Networks
+25 pp in satisfaction rate across all device tiers. We also               for Energy-Constrained Image Classification,” in ICCAD, 2018.
+observe the throughput plateau, but only for the low- and             [9] A. Kouris, S. I. Venieris, and C.-S. Bouganis, “CascadeCNN: Pushing
+                                                                          the Performance Limits of Quantisation in Convolutional Neural Net-
+high-end devices. This is attributed to the fact that the latency         works,” in FPL, 2018.
+of EfficientNetLite0 on the mid-tier devices is 1.32× slower         [10] T. Nakamura, S. Saito, K. Fujimoto, M. Kaneko, and A. Shiraga,
+than the other tiers, resulting in mid-tier devices continuing            “Spatial- and Time-Division Multiplexing in CNN Accelerator,” Parallel
+                                                                          Computing, 2022.
+inference after the inference on low-end and high-end devices        [11] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen,
+has finished. This allows the server to decongest since only 1/3          “MobileNetV2: Inverted Residuals and Linear Bottlenecks,” in CVPR,
+of the devices remains. Accuracy is again within acceptable               2018.
+                                                                     [12] S. Han, H. Mao, and W. J. Dally, “Deep Compression: Compressing
+values, never dropping below 2 pp from the baseline.                      Deep Neural Networks with Pruning, Trained Quantization and Huffman
+   Fig. 7-8 show the performance comparison when Efficient-               Coding,” in ICLR, 2015.
+NetB3 is used as the server-side model. Our observations             [13] Y. He, X. Zhang, and J. Sun, “Channel Pruning for Accelerating Very
+                                                                          Deep Neural Networks,” in ICCV, 2017.
+are similar to the previous case of InceptionV3, showcasing          [14] G. Hinton, O. Vinyals, and J. Dean, “Distilling the Knowledge in a
+the generality of our approach. From this set of experiments,             Neural Network,” in NeurIPS, 2014.
+we infer that the highest-performing server-side model is            [15] B. Cox, R. Birke, and L. Y. Chen, “Memory-aware and Context-aware
+                                                                          Multi-DNN Inference on the Edge,” Pervasive and Mobile Computing,
+in most cases the higher-throughput one, e.g. InceptionV3.                2022.
+Specifically, we observe that InceptionV3 can serve a much           [16] M. Almeida, S. Laskaridis, S. I. Venieris, I. Leontiadis, and N. D. Lane,
+larger number of devices while keeping accuracy within                    “DynO: Dynamic Onloading of Deep Neural Networks from Cloud to
+                                                                          Device,” TECS, 2022.
+acceptable levels compared to the complex, low-throughput            [17] J. Huang, C. Samplawski, D. Ganesan, B. Marlin, and H. Kwon, “CLIO:
+EfficientNetB3. EfficientNetB3 achieves higher accuracy when              Enabling Automatic Compilation of Deep Learning Pipelines across IoT
+the number of devices is 9 or lower for SLO of 100 ms or 14               and Cloud,” in MobiCom, 2020.
+                                                                     [18] Y. Kang, J. Hauswald, C. Gao, A. Rovinski, T. Mudge, J. Mars, and
+and lower for SLO of 200 ms. In all cases, via adjusting the              L. Tang, “Neurosurgeon: Collaborative Intelligence Between the Cloud
+forwarding decision thresholds during execution, MultiTASC                and Mobile Edge,” in ASPLOS, 2017.
+manages to keep response times low and system throughput             [19] C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger, “On Calibration of
+                                                                          Modern Neural Networks,” in ICML, 2017.
+high by gradually trading off accuracy.                              [20] A. J. Joshi, F. Porikli, and N. Papanikolopoulos, “Multi-Class Active
+                                                                          Learning for Image Classification,” in CVPR, 2009.
+                      VI. C ONCLUSION                                [21] A. Ali, R. Pinciroli, F. Yan, and E. Smirni, “BATCH: Machine Learning
+                                                                          Inference Serving on Serverless Platforms with Adaptive Batching,” in
+  This paper presents MultiTASC, a novel scheduler that                   SC, 2020.
+enables cascade collaborative systems when assisting multi-
+

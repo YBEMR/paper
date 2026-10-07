@@ -1,0 +1,788 @@
+Received December 11, 2019, accepted February 16, 2020, date of publication March 2, 2020, date of current version March 12, 2020.
+Digital Object Identifier 10.1109/ACCESS.2020.2977496
+
+
+
+
+Scheduling of Deep Learning Applications Onto
+Heterogeneous Processors in an
+Embedded Device
+DUSEOK KANG 1 , (Member, IEEE), JINWOO OH                                         1 , JONGWOO CHOI                  1 , YOUNGMIN YI                2,
+
+AND SOONHOI HA 1 , (Fellow, IEEE)
+1 Department of Computer Engineering, Seoul National University, Seoul 08826, South Korea
+2 Department of Electrical and Computer Engineering, University of Seoul, Seoul 02504, South Korea
+
+Corresponding author: Soonhoi Ha (sha@snu.ac.kr)
+This work was supported in part by the National Research Foundation of Korea (NRF) funded by the Ministry of Education under
+Grant 2018R1D1A1B07050463, and in part by the Ministry of Science and ICT under Grant 2019R1A2B5B02069406.
+
+
+
+
+  ABSTRACT As the need for on-device machine learning is increasing recently, embedded devices tend to be
+  equipped with heterogeneous processors that include a multi-core CPU, a GPU, and/or a DNN accelerator
+  called a Neural Processing Unit (NPU). In the scheduling of multiple deep learning (DL) applications in
+  such embedded devices, there are several technical challenges. First, a task can be mapped onto a single
+  core or any number of available cores. So we need to consider various possible configurations of CPU cores.
+  Second, embedded devices usually apply Dynamic Voltage and Frequency Scaling (DVFS) to reduce energy
+  consumption at run-time. We need to consider the effect of DVFS in the profiling of task execution times.
+  Third, to avoid overheat condition, it is recommended to limit the core utilization. Lastly, some cores will
+  be shut-down at run-time if core utilization is not high enough, in case the hot-plugging option is turned
+  on. In this paper, we propose a scheduling technique based on Genetic Algorithm to run DL applications on
+  heterogeneous processors, considering all those issues. First, we aim to optimize the throughput of a single
+  deep learning application. Next, we aim to find the Pareto optimal scheduling of multiple DL applications in
+  terms of the response time of each DL application and overall energy consumption under the given throughput
+  constraints of DL applications. The proposed technique is verified with real DL networks running on two
+  embedded devices, Galaxy S9 and HiKey970.
+
+
+  INDEX TERMS Deep learning scheduling, genetic algorithm, heterogeneous processor, mobile device.
+
+
+I. INTRODUCTION                                                                                concurrently in the emerging embedded systems such as self-
+As deep learning (DL) is making significant progress in                                        driving cars and smartphones. In those systems, it is necessary
+almost all areas of machine learning, more applications based                                  to schedule multiple DL applications on the shared heteroge-
+on DL will be seen in our daily life. To avoid any concern of                                  neous processing elements, which is a challenging problem
+privacy and network condition, running the DL applications                                     tackled in this paper.
+directly in a mobile embedded device instead of resorting                                         A DL application is usually developed with DL frame-
+to the cloud system will be more popular. In order to cope                                     works and libraries such as TensorFlow [1], Caffe2 [2],
+with the high computing demand of DL applications under                                        PyTorch [2], ARM Compute Library (ACL) [3], and so
+a limited power budget, an embedded device is becoming                                         on. The current practice of running a DL application in an
+more heterogeneous, equipped with multi-core CPU, GPU,                                         embedded system is to run the DL framework itself, and
+and other accelerators such as Neural Processing Unit (NPU)                                    the DL framework usually uses a single processing element
+and/or Digital Signal Processors (DSP) array. In addition,                                     (PE) to run the application. For instance, ACL that can be
+there is a growing need to run multiple DL applications                                        used to run a DL application in a Galaxy S9 smartphone
+                                                                                               assumes that the application is run on the multi-core CPU or a
+     The associate editor coordinating the review of this manuscript and                       Mali GPU, not both. It is expected that we can improve the
+approving it for publication was Zhipeng Cai            .                                      performance of the smartphone for DL applications if we can
+
+                     This work is licensed under a Creative Commons Attribution 4.0 License. For more information, see http://creativecommons.org/licenses/by/4.0/
+43980                                                                                                                                                                VOLUME 8, 2020
+D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+use heterogeneous PEs cooperatively. In particular, we aim                     thermal management policy, the schedule that can avoid this
+to increase the throughput performance and minimize energy                     unexpected behavior should be selected.
+consumption by using both CPU and GPU in embedded                                 While parallel scheduling of task graphs has been exten-
+devices for a single DL application. In addition, we find the                  sively researched so far, there is no previous work that con-
+Pareto optimal mapping of multiple concurrent DL appli-                        siders the aforementioned practical issues to the best of our
+cations onto heterogeneous processors (PEs) in terms of a                      knowledge. The proposed methodology is verified by running
+response time of each DL application and overall energy                        2 widely used Convolutional Neural Networks (CNNs) on a
+consumption under the given throughput constraints of DL                       Galaxy S9 smartphone [4] and a HiKey970 board [5]. For the
+applications.                                                                  experimentation, we implemented a DL inference engine that
+   A DL inference algorithm is usually specified with an                       can utilize heterogeneous PEs using a low-level library of the
+acyclic task graph where a node represents a computation                       ACL, which is another contribution of this work.
+task, called layer 1 , and an arc represents the dependency                       We summarize our contributions as follows:
+between two end nodes. Since a task or a layer contains mas-                      • We propose a scheduling framework that maps (sub-)
+sively parallel computation inside, a task can be mapped to                         layers of a CNN on heterogeneous PEs such as CPU,
+multiple processing cores to exploit data-level parallelism of                      GPU, and NPU, taking into account several practical
+a task or intra-layer parallelism. On the other hand, multiple                      issues in the embedded devices.
+tasks that have no dependency on each other can run in paral-                     • This is the first work to schedule multiple DL appli-
+lel to exploit task-level parallelism of the algorithm or inter-                    cations on heterogeneous PEs with processor sharing,
+layer parallelism.                                                                  considering both inter-layer parallelism and intra-layer
+   If the computation workload of each task does not vary                           parallelism.
+at run-time, we can perform static scheduling of a DL                             • The proposed methodology is verified by running CNNs
+application onto the available PEs, considering both task-                          on two different embedded devices: a Galaxy S9 smart-
+level and data-level parallelism. In this paper, we propose a                       phone and a Hikey970 board.
+scheduling framework for DL applications that covers from
+profiling on real embedded devices to verifying the sched-                        The remainder of this paper is organized as follows. The
+uler results on the devices. We use a Genetic Algorithm                        related work on on-device deep learning frameworks and
+(GA)-based scheduling technique for the effective schedul-                     scheduling techniques on heterogeneous PEs are discussed
+ing of DL applications onto heterogeneous PEs, exploring                       in Section II. The hardware platform and system model used
+both data-parallelism and task-parallelism to find Pareto-                     in this work are described in section III. In section IV,
+optimal schedules in terms of real-time performance and                        we describe the overall flow and how to profile execution
+energy consumption. In the parallel scheduling of multiple                     time and communication time of each layer on different PEs.
+DL applications with different throughput constraints, a crit-                 After the scheduling technique for a single application is
+ical issue is to check the schedulability of mapped tasks                      explained in section V, section VI describes how to extend
+on each processor. We have to consider not only the task                       our scheduling framework to multi-application scheduling.
+dependency between tasks in the same application but also the                  Section VII verifies our scheduling method by comparing the
+interference among tasks that belong to different applications                 scheduling results with the results obtained from the actual
+when processor sharing is allowed.                                             implementation. Section VIII concludes this paper.
+   There are several issues to be considered in the scheduling
+of a DL application on an embedded device. First, the device                    II. RELATED WORK
+usually runs a Dynamic Voltage Frequency Scaling (DVFS)                         A. ON-DEVICE DEEP LEARNING FRAMEWORK
+governor to dynamically change the frequency of a PE, based                    There are many recent studies for executing DL applications
+on the utilization. It means that the task execution time may                  on embedded devices. While they mostly consider a single
+vary at run-time dynamically due to the DVFS policy adopted                    DL application, we also consider the scheduling of multiple
+in the device. Second, a multi-core CPU can be configured                      applications that share the processors. CNNDroid [6] is a
+in various ways. For instance, a 4-core CPU can be con-                        library that accelerates a DNN by dividing layers into GPU
+figured as a single PE with 4 cores at one extreme, or it                      and CPU. It simply maps the convolution and fully-connected
+can be configured as 4 PEs with a single core at the other                     layers to GPU and the other layers to CPU. RSTensorflow [7]
+extreme. It should be determined which configuration is the                    is a framework for users to use heterogeneous processors
+best. Third, an embedded device typically has a restriction                    such as CPU and GPU easily. It uses RenderScript [8] to
+on the CPU utilization below a certain threshold in order                      manually parallelize the computation workloads in a layer,
+not to overheat the system. If the chip becomes hotter than                    such as matrix multiplication and convolution, across CPU
+a given temperature threshold, it reduces the frequency to                     cores and GPUs.
+the minimum and cools down the chip. Considering such the                         Mirhoseini et al. [9] proposed a hierarchical DNN model
+                                                                               for the efficient placement of a neural network graph onto
+                                                                               hardware devices. The Grouper groups graph operations, and
+  1 We use the terms, task and layer, interchangeably throughout this paper.   the Placer maps them to the devices. Even if they also try to
+
+VOLUME 8, 2020                                                                                                                         43981
+                                         D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+utilize not only GPUs but also CPUs in the system, unlike                  Finish Time (PEFT) algorithm proposed by Arabnejad and
+our approach, they do not consider the various configurations              Barbosa [13] uses the Optimistic Cost Table (OCT), which
+with multi-cores in a CPU, nor the pipelining scenario: only               has different task execution times for each processor. These
+task-parallelism with parallel edges is considered.                        heuristics are concerned about the scheduling of a single task
+   µLayer [10] is the latest work to accelerate a DNN on                   graph. Roy et al. [14] proposed an Integer Linear Program-
+heterogeneous processors on Samsung Galaxy Note 5 and                      ming (ILP) algorithm to find the optimal schedule result in
+Galaxy A5. It aims to exploit only data-level parallelism of               terms of a makespan, or response time, of an application.
+each layer using the heterogeneous PEs, unlike ours which                  This work differs from other works in that it finds the optimal
+also exploits task-level parallelism. Since all PEs need to                schedule. While this work considers only one application, our
+be synchronized and data communication between PEs is                      method can schedule multiple applications. Also, our method
+necessary at the end of each layer, the communication and                  maximizes throughput when scheduling a single application,
+synchronization overhead is significant. Also, it did not                  while other studies aim to reduce the makespan.
+consider a DVFS policy and CPU utilization constraints of                     Zhao and Sakellariou [15] have addressed the scheduling
+the smartphone. Nonetheless, experimentation with the real                 problem of multiple applications. Their solution is to simply
+smartphone is laudable since practical issues need to be                   merge multiple applications into one large task graph. Hence
+resolved like this work.                                                   it does not allow applications to have different periods and
+   DeepX [11] considers data-level parallelism in the map-                 random starting offsets. Xie et al. [16] proposed two static
+ping and scheduling of DL applications on heterogeneous                    heuristic algorithms, F_MHEFT and D_MHEFT, which are
+multi-processor platforms. DeepX performs layer-wise parti-                global scheduling algorithms that schedule multiple appli-
+tioning first and divides the workload of a layer into a group of          cations with mixed criticality levels on heterogeneous PEs.
+unit blocks that are defined as the computation requirements               They present two scheduling algorithms; F_MHEFT aims
+to update a single output node in a layer. The authors propose             to improve the system performance based on the fairness
+an Integer Linear Programming (ILP) formulation to find a                  policy while D_MHEFT aims to meet the deadline of high-
+trade-off between energy consumption and latency by allo-                  criticality applications. D_MHEFT is similar to our method
+cating the unit blocks to PEs layer by layer. While they show              in that it schedules the target applications with deadlines of
+the experimental results of layer-wise partitioning onto the               tasks in mind. However, we schedule multiple applications
+heterogeneous PEs, no performance comparison is reported                   with different periods and starting offsets, and also consider
+between the simple layer-wise partitioning and the ILP-based               the worst interference by other application tasks. To apply
+block-level partitioning. Their work differs from ours in that             D_MHEFT to multiple applications with different periods
+they do not consider task-level parallelism and their objective            and starting offsets, it would have to simulate all possible
+function does not consider throughput constraint.                          cases.
+
+B. SCHEDULING MULTIPLE APPLICATIONS ON                                     2) SCHEDULABILITY WHEN SCHEDULING
+HETEROGENEOUS PROCESSORS                                                   MULTIPLE APPLICATIONS
+We schedule multiple applications on heterogeneous proces-                 When we schedule multiple applications onto a multiproces-
+sors with processor sharing, exploiting data parallelism inside            sor system, a popular solution is to partition the processors to
+a task as well as task-level parallelism. This section presents            the applications spatially and/or temporarily. In other words,
+some related work on scheduling techniques.                                each PE is assigned exclusively to a single application. Then,
+                                                                           each application can run on the assigned set of processors
+1) SCHEDULING TECHNIQUES ON                                                exclusively without worrying about schedulability. If we
+HETEROGENEOUS PROCESSORS                                                   allow a processor to be shared among multiple task graphs,
+Since scheduling acyclic task graphs on a heterogeneous sys-               however, any parallel scheduling should check if the mapped
+tem is a well-known NP-hard problem, several heuristics have               tasks are schedulable on each processor.
+been proposed to solve this problem. Topcuoglu et al. [12]                    There are two approaches to tackle this scheduling prob-
+proposed a Heterogeneous Earliest Finish Time (HEFT) algo-                 lem. One is to transform the task graph into a set of inde-
+rithm and a Critical Path On a Processor (CPOP) algorithm,                 pendent tasks that have different starting offsets and relative
+which both reduce task finish time in a greedy manner. HEFT                deadlines [17]. In this approach, the starting offsets and
+uses the concept of rank, which calculates the execution time              deadlines should be conservatively assigned, considering the
+of a critical path from one task to the last task, to prioritize           dependency between tasks. After transformation, the conven-
+each task, and schedule tasks by mapping them to the pro-                  tional schedulability analysis method for independent tasks is
+cessor in a way that minimizes the finish time. CPOP, on the               applied.
+other hand, reduces the overall latency of the application by                 The second approach is to compute the time range in which
+first mapping all tasks in the critical path to one fastest proces-        each task should be scheduled to guarantee the satisfaction
+sor. When HEFT and CPOP schedule tasks on heterogeneous                    of the deadline and to check if the possible interference
+PEs, the rank of a task is determined by the average execution             from the other applications is smaller than the range [18].
+time on all processors. On the other hand, the Predict Earliest            Since the former approach, transformation approach, checks
+
+43982                                                                                                                                  VOLUME 8, 2020
+D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+schedulability pessimistically [18], we choose the latter
+approach, schedule-based approach.
+
+3) SCHEDULING TECHNIQUES CONSIDERING DATA
+PARALLELISM INSIDE A TASK
+Even though there exist numerous scheduling techniques                         FIGURE 1. Five different CPU core configurations considering inter-layer
+                                                                               parallelism and intra-layer parallelism.
+that have been proposed for homogeneous or heterogeneous
+multi-core systems, they mostly assumed that a task is run on
+a processor, and seldom considered data parallelism inside
+a task. Some recent studies considered data parallelism of                     to avoid such an unpleasant situation. We profile DL networks
+tasks as well as task parallelism. Liu et al. [19] proposed                    considering DVFS and hot-plug, and propose a mapping
+heuristic algorithms to minimize the scheduling length of a                    technique that can limit CPU utilization.
+task graph with data-parallel tasks. Yang et al. [20] proposed                    For software implementation of DL applications on ARM
+an evolutionary algorithm to schedule a task graph, consider-                  processors, ARM provides an open source software develop-
+ing task parallelism, data parallelism, and pipelining, with an                ment kit, called ARM NN [21]. Unfortunately, it does not
+objective to maximize the throughput performance. The same                     support Galaxy S9. Moreover, it does not support the par-
+authors proposed an ILP based technique for minimizing the                     allel execution of a DL network on a heterogeneous system.
+total processor cost while satisfying the time constraints.                    Thus partitioned DL applications need to be written manually
+   The previous works are usually based on a static model of                   using ACL [3] that contains OpenCL implementation of DL
+a hardware platform. They do not consider the characteristics                  operations for GPUs and NEON 2 implementation for CPU.
+of the actual hardware platform on which the scheduling                        APIs for utilizing the NPU are more limited. Even though
+algorithm will run. Thus it is simply assumed that the exe-                    HiKey970 has an NPU inside, the software development
+cution time of a task on each PE is given and the processor                    environment is not open to the public so that the NPU could
+configuration is also fixed. On the other hand, we integrate                   not be used to verify our schedule results in section VII.
+the characteristics of the hardware platform into problem                         Most deep learning libraries and previous works consider
+formulation by profiling each task considering various pro-                    a multi-core CPU as a single processor and exploit the data-
+cessor configurations. This makes our approach distinguished                   parallelism of the mapped layer using multi-threading. For
+from the existent ones. Moreover, the scheduling results are                   instance, ACL executes a convolution layer either on a multi-
+verified with actual implementations, which has not been                       core CPU or a GPU exploiting the data-parallelism in the
+carried out in most of the previous works.                                     layer to reduce overall inference time. In contrast, we model
+                                                                               the quad-core CPU as a set of logical processing elements
+III. HARDWARE PLATFORM AND SYSTEM MODEL                                        since multiple layers may run concurrently on different cores
+Since the proposed framework is applied to embedded                            in the CPU. Figure 1 illustrates five different configurations
+devices, we first explain the characteristics of hardware                      that we can choose with four CPU cores. Each figure in
+platforms used in this work: Galaxy S9 smartphone and                          Figure 1 shows that four CPU cores can be utilized differently
+HiKey970 board. Galaxy S9 is a heterogeneous system that                       with different combinations of inter-layer and intra-layer
+consists of a Mali-G72 MP18 GPU and big.LITTLE CPUs                            parallelism degree that is indicated by numbers below the
+with a quad-core M3 CPU running at 2.7GHz and a quad-core                      figures. The degree of inter-layer parallelism indicates how
+Cortex-A55 CPU at 1.79GHz. HiKey970 is also a heteroge-                        many layers are executed concurrently, and the degree of
+neous system that consists of a Mali-G72 MP12 GPU and                          intra-layer parallelism is given as a tuple that represents how
+big.LITTLE CPUs with a quad-core A73 running at 2.36GHz                        many cores are assigned to the layers running concurrently.
+and a quad-core Cortex-A53 at 1.8GHz. Besides, it has an                       For example, Figure 1 (b) illustrates the case in which the
+NPU that can accelerate DL applications. We believe that our                   degree of inter-layer parallelism is 2 and that of intra-layer
+approach can be applied to other hardware platforms since it                   parallelism is (3, 1), meaning that two layers are mapped on
+uses a black box model for each processing element (PE) with                   the CPU of which one layer is executed by 3 cores while the
+the profiled execution time and communication time at the                      other layer by 1 core.
+task level without assuming a specific hardware architecture.
+   Since reducing the energy consumption is critical in mobile                 IV. PROPOSED SCHEDULING FRAMEWORK
+embedded devices, Galaxy S9 adopts an aggressive DVFS                          AND PROFILING
+policy, called schedutil, that lowers the frequency and the                    Figure 2 displays the overview of the proposed scheduling
+voltage level of CPU cores if the average utilization of cores                 framework of deep learning (DL) applications on an embed-
+is below a pre-specified threshold. No DVFS policy is used                     ded device. While the proposed methodology is applied to
+in HiKey970. Galaxy S9 even shutdowns some cores dynam-                        two specific embedded devices in this work, it is applicable
+ically using a CPU hot-plug feature supported by Linux.                        to other embedded devices. Before a scheduling decision is
+Since the overheating induces unexpected slow-down of an
+application, the maximum CPU core utilization is usually set                      2 NEON is a SIMD architecture extension for ARM Cortex-A processors.
+
+
+VOLUME 8, 2020                                                                                                                                    43983
+                                           D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+                                                                             TABLE 1. An example of profiling (network: SqueezeNet).
+
+
+
+
+                                                                             the kernel time can be measured by using OpenCL profiling
+                                                                             APIs.
+                                                                                The GPU execution time is easy to obtain since OpenCL
+                                                                             utilizes all GPU cores, and the task execution time does not
+                                                                             vary in a DL application. On the other hand, CPU profiling
+                                                                             of a task is tricky, with many issues that should be taken into
+                                                                             account. First, the five different CPU configurations should
+                                                                             be considered as discussed in Figure 1: a task should be
+                                                                             profiled with a varying number of cores from 1 to 4, as shown
+                                                                             in Table 1. For profiling with the different number of CPU
+                                                                             cores, a Linux command taskset is used to assign specific
+FIGURE 2. The proposed deep learning (DL) applications scheduling flow       CPU cores to a process.
+(The numbers in the small circles indicate the order of the scheduling
+flow.).                                                                         Second, the CPU execution time should be adjusted since
+                                                                             the embedded device may run a Dynamic Voltage Frequency
+                                                                             Scaling (DVFS) governor that changes the CPU frequency
+made, it should be known how much time is taken to execute                   depending on the utilization. Moreover, the Linux kernel may
+a task on each processing element (PE) and the communi-                      turn on and off a CPU core at run-time, supporting the CPU
+cation overhead between two dependent tasks, which would                     hot-plug feature. For example, if a task is executed on a single
+vary if they are mapped to different PEs. Such profiles are                  core and no other applications or processes are running on
+obtained by running the DL application on each PE in the                     the other cores, Galaxy S9 would turn off the other cores
+preprocessing step.                                                          to reduce the energy consumption and increase the CPU
+   With the profiled task information, we perform static                     frequency up to the maximum of 2.7 GHz. If a task is mapped
+scheduling of DL applications on the heterogeneous pro-                      to all four cores, on the other hand, the DVFS governor would
+cessors in the given hardware platform to optimize a given                   lower the CPU frequency to 1.79GHz to reduce the heat and
+objective function under the constraint on the CPU utilization.              power consumption. With two cores assigned, a task is run
+For a single DL application, the objective is to increase the                at the frequency of 2.31GHz. Since other processes may be
+throughput and to minimize energy consumption. The output                    running while the target DL applications are running, it is
+of the framework is a set of Pareto optimal schedules, which                 safe to assume that all CPU cores will be busy in reality.
+includes mapping information of layers onto PEs.                             Thus the profiled CPU execution time is calibrated based
+   When scheduling multiple DL applications, we assume                       on the observed CPU frequency, assuming that all cores are
+that the period of each application is given as the throughput               busy even though a task is not mapped onto four cores. For
+constraint. While we can use other objectives, the scheduling                instance, the execution time profiled on a PE with two CPU
+objective assumed in this paper is to minimize the response                                                  2.31
+                                                                             cores has to be increased by 1.79    . This simple interpolation is
+time of each application and the total energy consumption of                 based on the assumption that computation time will increase
+the system. The deadline is set to be the same as the period.                inversely proportional to the CPU frequency, which is a
+The framework finds a set of Pareto optimal schedules that                   source of error between our profiling results and the actual
+meet the deadline of each application. Before we explain                     measurements.
+the proposed scheduling techniques in subsequent sections,                      More detailed profiling of convolution layers is performed
+we elaborate on the profiling and performance estimation                     to examine the cause of varying speedup ratio. Table 2 shows
+technique in this section.                                                   the measured execution time of four kernels involved in each
+                                                                             convolution layer for c1, c9, and c14. Note that a convolution
+A. TASK PROFILING AND ESTIMATION                                             operation is computed by GEMM (general matrix multiplica-
+Profiling is performed with an in-house deep learning frame-                 tion) after converting the input image to a suitable matrix. If a
+work [22] that generates an OpenCL code for the Mali GPU                     target device has four cores, the ACL creates three threads in
+and multi-threaded NEON code for the multi-core ARM CPU                      addition to the main thread. The main thread first distributes
+in the device using ACL. By adding a time-stamping code                      the workload to the threads and computes the remaining
+at each task (or layer) boundary, the elapsed time between                   workload. Then, it synchronizes with other threads waiting
+any two points of interest can be measured. For the GPU,                     for them to be joined. In the table, Sync Overhead is this
+
+43984                                                                                                                                    VOLUME 8, 2020
+D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+TABLE 2. Intra-Layer parallelism analysis.
+
+
+
+
+                                                                               FIGURE 3. Task-clustering mapping of an application.
+
+
+
+
+                                                                               memory to the host (CPU) in order to send data to GPU and
+                                                                               then unmap it for the next layer’s GPU processing.
+waiting time including the conditional wait API overhead.                         To measure the overhead of those APIs, we made a micro-
+In c1 and c9, the synchronization overhead is small compared                   bench and ran it 1000 times, from which the averaged over-
+to the computation time. In c14, however, the overhead is                      head was obtained. By changing the data size in the APIs,
+comparable to or even larger than the computation time.                        the overhead of memcpy on Galaxy S9 is approximated as
+It makes the CPU cores idle and hinders the performance                        1.06×10−2 ×(DataSize)2 +2.75×10−1 ×(DataSize)+1.70,
+improvement of c14 when intra-layer parallelism is four,                       unmap as 9.97 × (DataSize) + 526.39, and map as 21.75 ×
+as shown in Table 1.                                                           (DataSize) + 569.25.
+   It is noteworthy that, in some layers, Col2Im time is greater
+than the GEMM time. This is because the memory access                           C. NPU PROFILING AND ESTIMATION
+pattern of Col2Im has very poor locality: the kernel mainly                    Accurate profiling on an NPU could not be made since the
+consists of memory operations, but the stride of the write                     API for executing a layer on an NPU is not available, which
+operations is the 2-D output tensor size (width × height), and                 makes direct profiling impossible. Instead, performance esti-
+the size per access is only 4 Bytes.                                           mation on the NPU in HiKey970 is made indirectly by assum-
+                                                                               ing that the NPU is about 6.5 times faster than that of the
+B. COMMUNICATION OVERHEAD PROFILING                                            quad-core CPU based on the performance comparison reports
+AND ESTIMATION                                                                 in [23], [24]. Also, the communication time between CPU
+Communication overhead between two tasks should be con-                        and NPU is assumed to be the same as the time between CPU
+sidered in making a scheduling decision. In ACL, the input                     and GPU. For energy consumption, a similar estimation is
+and output tensor buffers of each layer (or task) should be                    made with the comparison reported in [23], [24] since it is
+defined statically. If two adjacent tasks are mapped onto the                  not possible to measure the power consumption of a task on
+same PE, the output tensor buffer of a task can be shared with                 each PE. As a result, the power consumption of CPU, GPU,
+the input tensor buffer of its successor task, resulting in no                 and NPU is assumed to be 3.5W, 4W, and 2W, respectively.
+communication overhead between them. If they are mapped
+onto different PEs, however, a buffer cannot be shared, but                    V. SCHEDULING OF A SINGLE DEEP
+separate buffers are required for each tensor in order to run                  LEARNING (DL) APPLICATION
+tasks in a pipelined fashion. Likewise, the two adjacent tasks                 A. BASELINE TASK-CLUSTERING SCHEDULER
+that are mapped to different logical PEs among four cores in                   As a baseline scheduling method, we partition the DNN into a
+a CPU cannot share a tensor buffer. Data should be copied                      set of sub-networks, map them onto processors, and run them
+between separate buffers using memcpy. For the communi-                        in a pipelined fashion. The intuition for this is to minimize the
+cation between CPU and GPU, map and unmap OpenCL                               communication overhead, also keeping the code complexity
+APIs are used. The map API is used to access the data in the                   low. The mapping problem is defined as the task-clustering
+GPU memory address space from the CPU, while the unmap                         problem in which the input, a DL application, is partitioned
+releases the mapping so that the mapped data can then be                       into a number of PEs. A processing element(PE) is assigned
+computed by the GPU.                                                           a single task-cluster only. One exception is allowed for a
+   Thus communication overhead is estimated differently                        logical PE of CPU, as illustrated in Figure 3 (a) where the
+depending on the types of communicating PEs. Communi-                          CPU is assigned two task-clusters: the first cluster and the
+cation time between different CPU PEs is equal to memcpy                       last cluster. If we attach the scheduler of the second iteration
+time, and the time from GPU to CPU is set to (map+memcpy)                      and move the cluster of one period, however, the schedule
+time since the OpenCL maps GPU memory to the host and                          becomes as shown in Figure 3 (b) so that the restriction still
+then copies the data to CPU. The time from CPU to GPU is                       holds. We implement this scheduler using ILP to find the best
+set to (map+memcpy+unmap) time since it has to map GPU                         solution in this restricted solution space.
+
+VOLUME 8, 2020                                                                                                                            43985
+                                              D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+   Let L = {L1 , L2 , . . . , Ln } be a set of layers, or tasks, in a
+DL application sorted in the topology order, and PE = {PE1 ,
+                                                              j
+PE2 , . . . , PEm } be a set of logical PEs in the device.3 Ei is the
+                                           j,k
+computation time of Li on PEj and Ti is the communication
+time taken when transferring Li ’s output from PEj to PEk .
+   There are three sets of constraints in the ILP formulation.
+                                                         j
+First, a task is mapped onto only one PE. When Mi is a binary
+decision variable that indicates whether Li is mapped to PEj ,
+the following constraint, expressed by Eq. (1), makes each
+task mapped onto only one PE. Let pred(Li ) and succ(Li )
+be the set of preceding and succeeding layers of layer Li ,                      FIGURE 4. Overview of the proposed GA scheduler.
+respectively.
+                                    m
+                                         j
+                                   X
+                       ∀Li ∈ L,        Mi = 1                     (1)
+                                   j=1
+   The second set of constraints is related to task-clustering                   FIGURE 5. GA chromosome structure with PE configuration (1, 1, 1, 1).
+                                                             j
+mapping. We introduce two additional binary variables, depi
+          j
+and Pipei . The former indicates whether any predecessor of Li
+                                   j
+is mapped on the PEj . The Pipei variable indicates whether                      Then the objective function is to minimize the longest cluster
+a cluster or pipeline stage starts from layer Li on PEj . The                    execution time, which is presented as follows:
+                    j          j
+definitions of depi and Pipei are presented in Eq. (2) and                                          minimize( max (CT (PEj ))                         (8)
+                                                                                                               PEj ∈PE
+Eq. (3), respectively:
+                     (
+                                              j
+                j     1, ∃Lk ∈ pred(Li ), Mk = 1                                 B. PROPOSED GA-BASED SCHEDULER
+             depi =                                        (2)
+                      0, otherwise                                               Genetic algorithm (GA) is a widely used meta-heuristic
+                     ( j                                                         inspired by evolutionary processes in nature, where a solution
+                j     Mi ,           i=1                                         of the problem is encoded as a chromosome, and the fitter
+            Pipei =     j        j                         (3)
+                      Mi ∧ ¬depi , otherwise                                     survives to the next generation, populating new chromosomes
+   With these two variables, Eq. (4) tells that only one pipeline                with operations such as crossover and mutation on their chro-
+stage is allowed for each PE, except the PE onto which the                       mosomes. The proposed scheduling algorithm is displayed
+first and last stages are mapped.                                                in Figure 4. The overall flow and population generation pro-
+                          n                                                      cedure is not much different from the standard GA algorithm.
+                                j               j
+                        X
+          ∀PEj ∈ PE,        Pipei − (Mnj ∧ M1 ) = 1           (4)                   Figure 5 shows an example of a chromosome configured to
+                            i=1                                                  solve the problem using the proposed GA scheduler. A chro-
+   Lastly, we need to specify dependency constraints. Let                        mosome consists of an array, where each element represents a
+Start(Li ) be the start time of a task or layer Li , End(Li ) be the             layer, and the number in the array indicates the PE onto which
+end time of Li , and m(Li ) be the index of the PE onto which                    the layer is mapped. For example, the chromosome shown
+layer Li is mapped. Then, the following two constraints of                       in Figure 5 indicates that the first layer is mapped on PE 0
+Eq. (5) and Eq. (6) enforce all dependencies between tasks to                    (CPU PE) and the third layer is mapped on PE 4 (GPU PE),
+be satisfied.                                                                    and so on. Since encoding varies depending on the configu-
+                                                                                 ration of the multi-core CPU, we iterate this encoding with
+    ∀Li ∈ L, ∀Lj ∈ succ(Li ),                                                    different number of PEs (i.e., different maximum number in
+                                          m(Li ),m(Lj )
+         Start(Lj ) ≥ End(Li ) + Ti                                        (5)   the array) for each possible configuration.
+    ∀Li ∈ L, ∀Lj ∈/ succ(Li ), j > i,                                               The objective of the proposed scheduling is to maximize
+                                                   m(Lj )
+                                                                                 throughput and to minimize energy consumption. The CPU
+            Start(Lj ) ≥ End(Li ) − ((1 − Mi                ) × ∞)         (6)   utilization should not be higher than some threshold to avoid
+   Note that we aim to maximize the throughput of a DL                           overheating. Thus we define the fitness function with the
+application, which is determined by the longest cluster in                       following three terms and let GA find the solutions with
+the pipelined execution. Thus we define the cluster execution                    the minimal fitness value. The first term is the inverse of the
+time, CT (PEj ), as follows:                                                     throughput that is obtained by Eq. (9) [25].
+                      n                                                                                                      n
+                      X       j      j
+                                              X             j,m(Lk )              Throughput(graph) = lim                                    (9)
+        CT (PEj ) =         Mi × (Ei +                    Ti           )   (7)                            n→∞ time to finish n iterations
+                      i=1                 Lk ∈succ(Li )                          The second term is the total energy consumption, which is
+  3 n is the number of layers in the DL application, and m is the number of      computed by multiplying the execution time of the mapped
+PEs in the device.                                                               tasks on each PE and the power consumption of the PE. The
+
+43986                                                                                                                                       VOLUME 8, 2020
+D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+                                                                               FIGURE 7. Scheduling results from Hikey 970 (Unit: µs).
+
+
+
+
+                                                                               FIGURE 8. Scheduling results from two different methods.
+
+FIGURE 6. Comparison of the GA-based method and the ILP-based
+method (Device: Galaxy S9 / Unit: µs).
+                                                                                  From Figure 6, we make three observations. First,
+                                                                               as the CPU utilization constraint gets tighter, the inference
+                                                                               time increases and the throughput decreases, as expected.
+third term is the penalty in case the CPU utilization is greater               In Figure 6(g), the inference time does not decrease with
+than a given utilization constraint.                                           larger CPU utilization constraint, which is indicating that the
+                                                                               GPU execution is the performance bottleneck.
+C. EXPERIMENTAL RESULTS                                                           Second, the throughput performance is the best with
+The proposed scheduler is implemented with DEAP [26]                           (1,1,1,1) PE configuration in most cases, which implies
+and SPEA2 [27] is used as the selection algorithm, which                       that exploiting inter-layer parallelism is more beneficial
+is known to perform well for multi-objective problems.                         than exploiting intra-layer parallelism. From this obser-
+MobileNet v1 [28], MobileNet v2 [29], SqueezeNet [30],                         vation, we decided to use (1,1,1,1) PE configuration for
+and DenseNet-40 (k = 32) [31] are selected as benchmark                        scheduling multiple applications, as will be explained in the
+applications in this work.                                                     later section. Figure 7 shows that (1,1,1,1) configuration
+                                                                               also gives the best throughput performance for HiKey970.
+1) THROUGHPUT PERFORMANCE                                                      There is one exception in the proposed GA-based schedul-
+We first set the optimization criteria of single application                   ing result: the inference time of (2,1,1) PE configuration,
+scheduling to be the throughput performance ignoring energy                    indicated by a red arrow, is smaller than (1,1,1,1) configu-
+consumption. Figure 6 shows the scheduling results of the                      ration when the utilization constraint is 100% as shown in
+GA-based scheduler and the ILP-based task-clustering sched-                    Figure 7(d).
+uler. The x-axis represents the CPU configurations that deter-                    The third observation is that the GA-based scheduling
+mine how to exploit intra- and inter-layer parallelism on a                    outperforms the task-clustering scheduling in almost all
+CPU. The y-axis represents the average inference time of                       cases. It is because the partitioning restriction imposed on
+a single input image in µs. The throughput performance                         the task-clustering method prunes the solution space too
+is the reciprocal of the average inference time. Since the                     much. To understand the difference between the two meth-
+typical CPU utilization limit to avoid overheating is within                   ods, Figure 8 compares the results of scheduling methods
+the range of [40%, 70%], we set the constraint within the                      for a single problem instance (SqueezeNet with (3,1) CPU
+range and compare the result with the one without any con-                     configuration under 60% CPU utilization constraint). The
+straint (100%). Note that the CPU utilization is the average                   figure shows that the GA-based method can better utilize the
+utilization across the whole CPU cores.                                        CPU cores than the task-clustering method.
+
+VOLUME 8, 2020                                                                                                                            43987
+                                              D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+                                                                                of AppA and AppB . The green box in Figure 10(c) illustrates
+                                                                                that task B3 in application AppB is delayed by the tasks A2
+                                                                                and A3 of application AppA which has higher priority. As we
+                                                                                do not know the relative offset of AppA to AppB , we have to
+                                                                                consider the worst-case scenario of interference from AppA
+                                                                                in calculating the delay of task B3 . In addition, task B5 on
+                                                                                another PE is delayed due to the dependency with task B3 as
+                                                                                shown in the red box in Figure 10(c).
+                                                                                   There are two methods to check the schedulability of mul-
+                                                                                tiple task graphs. One is to convert each task graph into a
+                                                                                set of independent real-time tasks with relative deadlines and
+                                                                                starting offsets. Dependency between tasks is expressed by
+                                                                                the relative starting offsets of the tasks. The other method is
+                                                                                the schedule-based analysis method proposed in [18].
+                                                                                   The schedule-based analysis is based on the scheduling
+                                                                                results of each application. For this analysis, the maximum
+FIGURE 9. Multi-objective scheduling results.                                   resource demand (MRD) and maximum allowable interfer-
+                                                                                ence (MAI) are computed. The former, MRD, means the
+                                                                                maximum duration for which a high priority application
+                                                                                can delay lower priority applications, while the latter (MAI)
+                                                                                means the maximum duration for which a task can be delayed
+                                                                                by higher priority tasks. MRD can be obtained by using
+                                                                                the demand bound function (DBF) that returns the maxi-
+                                                                                mum processor execution time during a time interval given
+                                                                                as an argument [32]. MAI is derived from the mobility
+                                                                                concept of behavioral synthesis by subtracting the As-Soon-
+                                                                                As-Possible (ASAP) schedule offset from the As-Late-As-
+                                                                                Possible (ALAP) schedule offset [33].
+                                                                                   For each task Ti , let Pi be the period of the task Ti , M(Ti )
+                                                                                be the processor onto which Ti is mapped, and H(Ti ) be
+                                                                                the application set whose priority is higher than Ti . Also,
+                                                                                let dbfpe (A, t) be the demand bound value of the tasks in
+FIGURE 10. Multiple application scheduling example.                             an application A which are mapped onto pe during time
+                                                                                interval t. Then, the application is schedulable if each task
+                                                                                Ti satisfies the following equation: Eq. (10).5
+2) MULTI-OBJECTIVE SCHEDULING                                                                           X
+As shown in Figure 9, the proposed GA scheduler generates                                   MAITi −            dbfM (Ti ) (hp, Pi ) ≥ 0      (10)
+Pareto optimal solutions in terms of throughput and energy                                                hp∈H (Ti )
+consumption. Each Pareto optimal solution is associated with                       Since we assume non-preemptive scheduling as GPU
+a different scheduling result. Thus a user can find the best                    and NPU cannot support preemptive scheduling, we mod-
+trade-off from the results.                                                     ify Eq. (10) such that it considers the maximum possible
+                                                                                interference by a lower priority task. If we denote a set of
+VI. SCHEDULING MULTIPLE DL APPLICATIONS                                         applications whose priority is lower than Ti as L(Ti ) and the
+A. SCHEDULABILITY ANALYSIS                                                      computation time of task lp as Clp , then the final equation
+Since the schedule of an application affects the other appli-                   becomes Eq. (11).
+cations, schedulability analysis can be performed only after                                X
+the mapping and scheduling decisions made. On the other                          MAITi −          dbfM (Ti ) (hp, Pi ) − max (Clp ) ≥ 0 (11)
+                                                                                                                                lp∈L(Ti )
+hand, we need to consider the schedulability when mak-                                       hp∈H (Ti )
+ing the mapping and scheduling decisions. The proposed
+                                                                                B. GA-BASED SCHEDULER
+GA-based scheduler solves this cyclic-dependency naturally
+in an iterative fashion.                                                        The scheduler shown in Figure 4 is applied to the scheduling
+   Suppose that we map two applications on three heteroge-                      of multiple applications with a similar chromosome structure.
+neous processors as shown in Figure 10 and AppA has a higher                    For the scheduling of multiple DL applications, the fitness
+priority than AppB .4 Figure 10(c) shows a scheduling example                      5 In the general case, after subtracting the interference of one higher prior-
+                                                                                ity application from the MAI, the MAI value should be updated iteratively,
+  4 A lower number means a higher priority.                                     but this equation does not include that part for simplicity.
+
+43988                                                                                                                                            VOLUME 8, 2020
+D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+FIGURE 11. Pareto-optimal solutions in terms of relative response time
+when scheduling SqueezeNet(SQ), MobileNet v1(MBv1), and MobileNet
+v2(MBv2) .
+
+
+
+
+function is redefined since the objective and the constraints
+are changed. We set multiple objectives, minimizing the
+response time of each application, and minimizing the total
+energy consumption. Thus the fitness function has as many
+terms as the number of applications, each of which is the
+response time of the corresponding DL application, plus the
+term for the total energy. If the response time of an application
+is greater than the throughput constraint of the application,
+a large penalty is added to the term so that it cannot be
+selected.
+
+C. EXPERIMENTAL RESULTS
+The same configurations are used as in Section V-C except
+that the three CNNs are scheduled together and the objectives
+are different: to minimize response times of three applications
+and total energy consumption of the device. The CPU config-
+uration is fixed to (1,1,1,1), as this configuration has resulted
+in better solutions for a single DL application in most cases.
+   Figure 11 and Figure 12 show the scheduling result of
+three benchmark CNNs with different periods; SqueezeNet,
+MobileNet v1, and MobileNet v2. Each application has peri-
+ods of 33, 40, and 50 ms, respectively. In this experiment,
+the highest priority is assigned to SqueezeNet while the low-
+                                                                               FIGURE 12. Pareto-optimal solutions in terms of energy when scheduling
+est one to MobileNet v2.                                                       SqueezeNet(SQ), MobileNet v1(MBv1), and MobileNet v2(MBv2).
+   Figure 11 shows 288 Pareto-optimal solutions in terms of
+the relative response times of the three applications. We do
+not include energy information on this chart for a simple                          Figure 12 shows the change in energy consumption as
+illustration. The grayscale indicates the response time of                     the response time of two different application changes.
+MobileNet v2: the darker is the color, the smaller is the                      The darker color indicates less energy consumption.
+response time. The x-axis indicates the relative response time                 In Figure 12(a), we can observe that the energy consumption
+of SqueezeNet to the fastest response time of SqueezeNet                       is low when the response times of SqueezeNet and MobileNet
+on the device. The minimum response times of SqueezeNet,                       v1 are 1 and 1.8, respectively.
+MobileNet v1, and MobileNet v2 are 10.3 ms, 13.7 ms, and
+16.9 ms, respectively. The y-axis and z-axis represent the rela-                VII. VERIFICATION WITH REAL HARDWARE PLATFORMS
+tive response time of MobileNet v1 and MobileNet v2 respec-                    Based on the scheduling results of a single DL application,
+tively. We could observe that the application with the higher                  we parallelize two benchmark networks, MobileNet v1 and
+priority has the smaller response time, as expected: the min-                  MobileNet v2, on two hardware platforms: Galaxy S9 and
+imal relative response times of SqueezeNet, MobileNet V1,                      HiKey970. Since there is no existent software framework to
+and MobileNet v2 are 1, 1, and 1.43, respectively.                             generate the parallelized code, we extended our own deep
+
+VOLUME 8, 2020                                                                                                                                 43989
+                                            D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+TABLE 3. Verification results on two hardware platforms.                      VIII. CONCLUSION
+                                                                              In this paper, we propose a scheduling framework of deep
+                                                                              learning (DL) applications for embedded devices with hetero-
+                                                                              geneous processors. We exploit both task-level and data-level
+                                                                              parallelism in the scheduling of a DL application. In particu-
+                                                                              lar, we propose to consider five different PE configurations
+                                                                              for a multi-core CPU to exploit both types of parallelism
+                                                                              in various ways. We also consider the DVFS policy and
+                                                                              the CPU utilization constraints to avoid thermal throttling in
+                                                                              the profiling of tasks on each processing element. We use a
+                                                                              GA-based method for scheduling a single DL application.
+                                                                              The GA-based scheduler is also applied to the scheduling
+learning software framework [22]. For pipelined execution,
+                                                                              of multiple DL applications. We modify the schedule-based
+we make a separate thread for each logical PE in CPU and
+                                                                              schedulability analysis to apply to non-preemptive tasks.
+implement double buffering for the tensor of which the source
+                                                                                 We verified the proposed scheduling methods by compar-
+layer and the destination layer are mapped onto different PEs.
+                                                                              ing the results with the measured ones in two real hardware
+And we use the conditional wait API for synchronization.
+                                                                              platforms: Galaxy S9 and HiKey970. By considering several
+   Due to the limitation imposed by ACL, however, we could
+                                                                              practical issues in the real implementation, we could achieve
+not implement all PE configurations of the multi-core CPU,
+                                                                              quite accurate estimation, with the error smaller than 7%
+and we could not verify the scheduling of multiple DL appli-
+                                                                              except for one case. The primary source of error is the inac-
+cations. The current ACL implementation does not allow
+                                                                              curacy of task and communication profiling. Nonetheless,
+more than one task to use multi-threading for data-parallel
+                                                                              we believe the comparison with the actual implementation is
+execution simultaneously. For example, (2,2) configuration
+                                                                              a meaningful contribution.
+is not allowed since it would have two tasks, each of which
+in turn would create two threads. In (1,1,1,1) configuration,
+we disable the threading option for data-parallelism. Conse-                  REFERENCES
+quently, we could verify the scheduling results of a single DL                 [1] M. Abadi. (2015). TensorFlow: Large-Scale Machine Learning on Hetero-
+                                                                                   geneous Systems. [Online]. Available: http://tensorflow.org/
+application for the following two cases:                                       [2] A. Paszke, ‘‘Automatic differentiation in PyTorch,’’ in Proc. NIPS Autodiff
+   • (C1): With ACL scheduler disabled, scheduling with (1,                        Workshop, 2017, pp. 1–4.
+      1, 1, 1) PE configuration                                                [3] ARM. (2017). Arm Compute Library. [Online]. Available: https://
+                                                                                   developer.arm.com/technologies/compute-library
+   • (C2): With ACL scheduler enabled, scheduling with a
+                                                                               [4] Samsung Electronics. (2018). Galaxy S9. [Online]. Available: https://www.
+      quad-core CPU: (4) configuration                                             samsung.com/global/galaxy/galaxy-s9
+   In this experiment, the scheduling objective is to max-                     [5] Kirin. (2018). Hikey970. [Online]. Available: https://www.96boards.
+                                                                                   org/product/hikey970/
+imize the throughput under no CPU utilization constraint,                      [6] S. S. L. Oskouei, H. Golestani, M. Hashemi, and S. Ghiasi, ‘‘CNNdroid:
+and comparison is made in terms of the processing time for                         GPU-accelerated execution of trained deep convolutional neural networks
+1000 images. Since we can change the DVFS governor and                             on android,’’ in Proc. ACM Multimedia Conf. (MM), 2016, pp. 1201–1205.
+                                                                               [7] M. Alzantot, Y. Wang, Z. Ren, and M. B. Srivastava, ‘‘RSTensorFlow:
+GPU frequency of HiKey970, unlike Galaxy S9, we chose the                          GPU enabled TensorFlow for deep learning on commodity Android
+performance CPU governor and 767MHz GPU frequency for                              devices,’’ in Proc. 1st Int. Workshop Deep Learn. Mobile Syst. Appl.
+HiKey970. Neural Processing Unit (NPU) is not used even                            (EMDL), 2017, pp. 7–12.
+though HiKey970 has it.                                                        [8] Google. Renderscript. Accessed: Dec. 6, 2019. [Online]. Available: https://
+                                                                                   developer.android.com/guide/topics/renderscript/compute
+   Table 3 shows the verification results. It can be observed                  [9] A. Mirhoseini, ‘‘A hierarchical model for device placement,’’ in
+that the performance difference of the parallelized MobileNet                      Proc. ICLR, 2018, pp. 1–11. [Online]. Available: https://openreview.
+v1 between the scheduling result and the measured one                              net/forum?id=Hkc-TeZ0W
+                                                                              [10] Y. Kim, J. Kim, D. Chae, D. Kim, and J. Kim, ‘‘µLayer: Low latency on-
+is less than 7% on both hardware platforms for two PE                              device inference using cooperative single-layer acceleration and processor-
+configurations. For MobileNet v2, the performance gap is                           friendly quantization,’’ in Proc. 14th EuroSys Conf., 2019, p. 45.
+relatively larger, particularly on HiKey970 for (C1) config-                  [11] N. D. Lane, S. Bhattacharya, P. Georgiev, C. Forlivesi, L. Jiao, L. Qendro,
+uration. The main reason is that we underestimate the com-                         and F. Kawsar, ‘‘DeepX: A software accelerator for low-power deep learn-
+                                                                                   ing inference on mobile devices,’’ in Proc. 15th ACM/IEEE Int. Conf. Inf.
+munication cost between processors in HiKey970. We found                           Process. Sensor Netw. (IPSN), Apr. 2016, pp. 1–12.
+that Galaxy S9 uses only two CPU cores instead of four                        [12] H. Topcuoglu, S. Hariri, and M.-Y. Wu, ‘‘Performance-effective and low-
+for (C2) configuration with MobileNet v2, turning off two                          complexity task scheduling for heterogeneous computing,’’ IEEE Trans.
+                                                                                   Parallel Distrib. Syst., vol. 13, no. 3, pp. 260–274, Mar. 2002.
+CPU cores as the CPU utilization becomes lower than the                       [13] H. Arabnejad and J. G. Barbosa, ‘‘List scheduling algorithm for heteroge-
+given threshold that is not known to us. Thus we re-run the                        neous systems by an optimistic cost table,’’ IEEE Trans. Parallel Distrib.
+GA-based scheduler with profiling results with two CPU                             Syst., vol. 25, no. 3, pp. 682–694, Mar. 2014.
+cores for the layers. Then, we could obtain no performance                    [14] S. K. Roy, R. Devaraj, A. Sarkar, S. Sinha, and K. Maji, ‘‘Optimal schedul-
+                                                                                   ing of precedence-constrained task graphs on heterogeneous distributed
+difference as shown with parentheses in the last row of                            systems with shared buses,’’ in Proc. IEEE 22nd Int. Symp. Real-Time
+Table 3.                                                                           Distrib. Comput. (ISORC), May 2019, pp. 185–192.
+
+43990                                                                                                                                         VOLUME 8, 2020
+D. Kang et al.: Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device
+
+
+
+
+[15] H. Zhao and R. Sakellariou, ‘‘Scheduling multiple DAGs onto heteroge-                                     JINWOO OH received the B.S. degree from
+     neous systems,’’ in Proc. 20th IEEE Int. Parallel Distrib. Process. Symp.,                                the Department of Computer Science and Engi-
+     Apr. 2006, p. 14.                                                                                         neering, Soongsil University, Seoul, South Korea,
+[16] G. Xie, G. Zeng, L. Liu, R. Li, and K. Li, ‘‘High performance real-time                                   in 2018. He is currently pursuing the M.S.
+     scheduling of multiple mixed-criticality functions in heterogeneous dis-                                  degree with Seoul National University, Seoul. His
+     tributed embedded systems,’’ J. Syst. Archit., vol. 70, pp. 3–14, Oct. 2016.                              research interest includes hardware-aware soft-
+[17] H. I. Ali, B. Akesson, and L. M. Pinho, ‘‘Generalized extraction of real-                                 ware optimization.
+     time parameters for homogeneous synchronous dataflow graphs,’’ in Proc.
+     23rd Eur. Int. Conf. Parallel, Distrib., Netw.-Based Process., Mar. 2015,
+     pp. 701–710.
+[18] S.-H. Kang, D. Kang, H. Yang, and S. Ha, ‘‘Real-time co-scheduling of
+     multiple dataflow graphs on multi-processor systems,’’ in Proc. 53rd Annu.
+     Design Automat. Conf. (DAC), 2016, p. 159.
+[19] H. Tomiyama, I. Taniguchi, L. Meng, and Y. Liu, ‘‘A dual-mode schedul-
+     ing approach for task graphs with data parallelism,’’ Int. J. Embedded Syst.,
+     vol. 9, no. 2, pp. 147–156, 2017.
+[20] H. Yang and S. Ha, ‘‘Pipelined data parallel task mapping/scheduling
+     technique for MPSoC,’’ in Proc. Design, Automat. Test Eur. Conf. Exhibit.,                               JONGWOO CHOI received the bachelor’s degree
+     Apr. 2009, pp. 69–74.                                                                                    from the Business School, Korea University,
+[21] ARM. (2018). Arm NN. [Online]. Available: https://www.arm.com/                                           Seoul, South Korea, in 2015. He served in South
+     products/silicon-ip-cpu/machine-learning/arm-nn                                                          Korean military as a Public Service Agent, from
+[22] D. Kang, E. Kim, I. Bae, B. Egger, and S. Ha, ‘‘C-GOOD: C-code genera-                                   2006 to 2009, and worked as a Lecturer in SBS
+     tion framework for optimized on-device deep learning,’’ in Proc. Int. Conf.                              Game Academy, in 2016. He translated and pub-
+     Comput.-Aided Design (ICCAD), 2018, pp. 1–8.                                                             lished Unity 5 game programming optimization by
+[23] A. Frumusanu. (2018). The Samsung Galaxy S9 and S9+ Review.                                              Han-Bit Media, in 2017, and has also published
+     [Online]. Available: https://www.anandtech.com/show/12520/the-galaxy-                                    ‘‘Task-Processor ILP Scheduling for CNN on Het-
+     s9-review/                                                                                               erogeneous Computing Environment Embedded
+[24] (2018). Hisilicon Kirin 970—Android Soc Power & Performance                     Device’’ by KIISE, in 2018. He is currently attending the Co-design and
+     Overview. [Online]. Available: https://www.anandtech.com/show/
+                                                                                     Parallel Processing Lab, Seoul National University, as the master’s degree
+     12195/hisilicon-kirin-970-power-performance-overview/
+                                                                                     student.
+[25] T.-H. Shin, H. Oh, and S. Ha, ‘‘Minimizing buffer requirements for
+     throughput constrained parallel execution of synchronous dataflow graph,’’
+     in Proc. 16th Asia South Pacific Design Automat. Conf. (ASP-DAC),
+     Jan. 2011, pp. 165–170.
+[26] F.-A. Fortin, F.-M. De Rainville, M.-A. G. Gardner, M. Parizeau, and
+     C. Gagné, ‘‘DEAP: Evolutionary algorithms made easy,’’ J. Mach. Lang.
+     Res., vol. 13, pp. 2171–2175, Jul. 2012.
+[27] E. Zitzler, ‘‘Spea2: Improving the strength Pareto evolutionary algo-
+     rithm,’’ Swiss Federal Inst. Technol. (ETH) Zürich, Zürich, Switzerland,
+                                                                                                              YOUNGMIN YI received the B.S. degree in com-
+     TIK-Rep. 103, 2001, vol. 103.                                                                            puter engineering and the Ph.D. degree in electri-
+[28] A. G. Howard, M. Zhu, B. Chen, D. Kalenichenko, W. Wang, T. Weyand,                                      cal engineering and computer science from Seoul
+     M. Andreetto, and H. Adam, ‘‘MobileNets: Efficient convolutional neu-                                    National University, in 2000 and 2007, respec-
+     ral networks for mobile vision applications,’’ 2017, arXiv:1704.04861.                                   tively. He was a Postdoctoral Researcher at the
+     [Online]. Available: http://arxiv.org/abs/1704.04861                                                     University of California, Berkeley, CA, USA, from
+[29] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen,                                             2007 and 2009, and as a Senior Researcher at
+     ‘‘MobileNetV2: Inverted residuals and linear bottlenecks,’’ in                                           the Samsung Advanced Institute of Technology,
+     Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit., Jun. 2018,                                          from 2009 to 2010, before he joined the School of
+     pp. 4510–4520.                                                                                           Electrical and Computer Engineering, University
+[30] F. N. Iandola, S. Han, M. W. Moskewicz, K. Ashraf, W. J. Dally, and             of Seoul, where he is currently a Professor. His research interests include
+     K. Keutzer, ‘‘SqueezeNet: AlexNet-level accuracy with 50x fewer param-          on-device deep learning, algorithm/architecture codesign for heterogeneous
+     eters and <0.5 MB model size,’’ 2016, arXiv:1602.07360. [Online]. Avail-        manycore platforms, and GPU computing.
+     able: http://arxiv.org/abs/1602.07360
+[31] G. Huang, Z. Liu, L. V. D. Maaten, and K. Q. Weinberger, ‘‘Densely con-
+     nected convolutional networks,’’ in Proc. IEEE Conf. Comput. Vis. Pattern
+     Recognit. (CVPR), Jul. 2017, vol. 1, no. 2, p. 3.
+[32] S. K. Baruah, A. K. Mok, and L. E. Rosier, ‘‘Preemptively scheduling
+     hard-real-time sporadic tasks on one processor,’’ in Proc. 11th Real-Time
+     Syst. Symp., 1990, pp. 182–190.
+[33] B. M. Pangrle and D. D. Gajski, ‘‘Slicer: A state synthesizer for intelligent                              SOONHOI HA (Fellow, IEEE) received the B.S.
+     silicon compilation,’’ in Proc. ICCAD, 1987, pp. 42–45.
+                                                                                                                and M.S. degrees in electronics engineering from
+                                                                                                                Seoul National University, Seoul, South Korea,
+                         DUSEOK KANG (Member, IEEE) received the                                                in 1985 and 1987, respectively, and the Ph.D.
+                         B.S. degree from the Department of Semiconduc-                                         degree in electrical engineering and computer sci-
+                         tor System Engineering, Sungkyunkwan Univer-                                           ence from the University of California at Berkeley,
+                         sity, Suwon, South Korea, in 2014. He is currently                                     Berkeley, CA, USA, in 1992. He is currently a
+                         pursuing the Ph.D. degree of the M.S.-Ph.D. inte-                                      Professor with Seoul National University. His cur-
+                         grated program with Seoul National University,                                         rent research interests include HW/SW codesign
+                         Seoul, South Korea. His research interests include                                     of embedded systems, embedded machine learn-
+                         embedded deep learning and hardware-aware soft-             ing, and the IoT. He is a member of the ACM. He has actively participated in
+                         ware optimization. He took first place in the               the premier international conferences in the EDA area, for instance, serving
+                         2017 IEEE Low Power Image Recognition Chal-                 CODES+ISSS 2006, ASPDAC 2008, as the Program Co-Chair and ESWeek
+lenge (LPIRC). In the following year, in 2018, he ranked first on track              2018 as the General Chair.
+2 and second on track 3 at LPIRC.
+
+VOLUME 8, 2020                                                                                                                                              43991
+

@@ -1,0 +1,1073 @@
+                                                                   J. Parallel Distrib. Comput. (    )   –
+
+
+
+                                                               Contents lists available at ScienceDirect
+
+
+                                                            J. Parallel Distrib. Comput.
+                                                         journal homepage: www.elsevier.com/locate/jpdc
+
+
+
+
+Rate-based thermal, power, and co-location aware resource
+management for heterogeneous data centers
+Mark A. Oxley a, *, Eric Jonardi a , Sudeep Pasricha a , Anthony A. Maciejewski a ,
+Howard Jay Siegel a , Patrick J. Burns b , Gregory A. Koenig c
+a
+  Department of Electrical and Computer Engineering, Colorado State University, Fort Collins, CO 80523, USA
+b
+  Vice President for Information Technology, Colorado State University, Fort Collins, CO 80523, USA
+c
+  Oak Ridge National Laboratory, Oak Ridge, TN, 37830, USA
+
+
+
+
+highlights
+
+• Derivation of a new detailed model of a heterogeneous data center.
+• Design of resource management methods for co-location, power, and temperature.
+• Analyses of resource management methods using several facility configurations.
+• Sensitivity analysis under a range of constraint values and workload environments.
+
+
+article               info                             a b s t r a c t
+Article history:                                       Today’s data centers contain large numbers of compute nodes that require substantial power, and
+Received 22 August 2016                                therefore require a large amount of cooling resources to operate at a reliable temperature. The high
+Received in revised form 2 February 2017               power consumption of the computing and cooling systems produces extraordinary electricity costs,
+Accepted 29 April 2017
+                                                       requiring some data center operators to be constrained by a specified electricity budget. In addition, the
+Available online xxxx
+                                                       processors within these systems contain a large number of cores with shared resources (e.g., last-level
+Keywords:                                              cache), heavily affecting the performance of tasks that are co-located on cores and contend for these
+Heterogeneous computing                                resources. This problem is only exacerbated as processors move to the many-core realm. These issues lead
+Resource management                                    to interesting performance-power tradeoffs; by considering resource management in a holistic fashion,
+Thermal-aware computing                                the performance of the computing system can be maximized while satisfying power and temperature
+Power-aware computing                                  constraints. In this work, the performance of the system is quantified as the total reward earned from
+DVFS                                                   completing tasks by their individual deadlines. By designing three resource allocation techniques, we
+Memory interference                                    perform a rigorous analysis on thermal, power, and co-location aware resource management using two
+                                                       different facility configurations, three different workload environments, and a sensitivity analysis of the
+                                                       power and thermal constraints.
+                                                                                                                          © 2017 Elsevier Inc. All rights reserved.
+
+
+
+
+1. Introduction                                                                            to chip designers increasing the number of cores in their mul-
+                                                                                           ticore processors, and led data center administrators to include
+    Faster execution time has long been the highest priority design                        these high-performance multicore processors in their facilities.
+objective for data centers. The great success achieved thus far in                         The increased number of processing chips in data centers also
+optimizing performance of these systems has come at the cost                               has increased the power consumption of computing and cool-
+of increased power consumption, leading to increased ownership                             ing. The increased number of cores per chip has led to greater
+costs from powering and cooling these systems. Furthermore, the                            interference between cores competing for shared resources. The
+increased demand for performance from these systems has led                                push to exaflop-capable systems will require even more on-chip
+                                                                                           parallelism (and sharing nodes among multiple tasks), thereby
+                                                                                           reducing performance because of this interference and requiring
+    * Corresponding author.                                                                larger systems to meet needs, thus exacerbating power consump-
+     E-mail addresses: mark.oxley@colostate.edu (M.A. Oxley),
+eric.jonardi@colostate.edu (E. Jonardi), sudeep@colostate.edu (S. Pasricha),
+                                                                                           tion.
+aam@colostate.edu (A.A. Maciejewski), hj@colostate.edu (H.J. Siegel),                          Motivated by the need to reduce electricity costs and encourage
+patrick.burns@colostate.edu (P.J. Burns), koenig@ornl.gov (G.A. Koenig).                   green computing, the Green500 list aims to switch the paradigm
+
+http://dx.doi.org/10.1016/j.jpdc.2017.04.015
+0743-7315/© 2017 Elsevier Inc. All rights reserved.
+
+
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+2                                                      M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –
+
+
+of performance as a primary design objective to metrics such                              temperatures and the total power consumed by the compute nodes
+as energy efficiency and performance-per-watt as higher priority                          and CRAC units do not exceed a given power constraint. Though
+design objectives. The DGX SATURNV supercomputer currently                                it is not typical for today’s resource managers (e.g., SLURM [38],
+tops the Green500 list with a performance-to-power ratio of 9.46                          MOAB [30]) to consider DVFS performance states (P-states) for
+GFLOPS per Watt [15]. A linear extrapolation of the DGX SATURNV                           its allocations, and we assume an oversubscribed environment
+system to exascale results in a power consumption of 105 MW,                              (i.e., the system is not capable of executing all incoming tasks)
+or approximately $33 million per year in electricity in the United                        where it would be common to execute the workload in the fastest
+States. The Defense Advanced Research Projects Agency (DARPA)                             P-state, we believe the consideration of DVFS by our resource
+has set the target for an exaflop capable system to consume no                            manager provides greater control of the power consumption of
+more than 20 MW [26], consuming only approximately one-fifth                              compute nodes and the intelligent selection of P-states allows for
+of the power of today’s most power-efficient supercomputer.                               greater performance gains within that power budget.
+    Designing new power-aware and thermal-aware resource man-                                 To solve this optimization problem, we design a new greedy
+agement techniques is one method to reduce the power con-                                 heuristic, develop a genetic algorithm (GA) based approach, and
+sumption of large-scale systems and to alleviate the amount of                            improve a non-linear programming (NLP) approach from our
+cooling to further reduce power consumption and total cost of                             previous work [1] to consider the effect of co-locating tasks on
+ownership. Examples of power-aware and thermal-aware resource                             multicore processors. We perform extensive analyses of these
+management include exploiting different power and performance                             techniques on different workload environments, data center facil-
+characteristics of heterogeneity across compute nodes, configuring                        ity cold-aisle isolation configurations, and data center facility sizes
+dynamic voltage and frequency scaling (DVFS) in cores, and setting                        (large and small).
+computer room air conditioning (CRAC) thermostats to higher                                   In summary, we make the following novel contributions:
+temperatures during operation. These decisions must ensure the
+temperatures of the compute nodes do not exceed the red-line
+                                                                                               • Derivation of a new detailed model of a heterogeneous data
+                                                                                                 center that considers the power consumption and perfor-
+threshold, defined as the maximum allowable equipment intake
+                                                                                                 mance of the compute nodes and cooling system, thermal
+temperature [2].
+                                                                                                 constraints, DVFS, and co-location interference.
+    The prevalence of multicore processors in modern enterprise
+data center facilities has given rise to heavy contention for shared
+                                                                                               • Design of resource management techniques based on a
+                                                                                                 greedy heuristic, a GA with local search, and an adaptation
+resources among the cores, such as at the last-level cache and
+                                                                                                 of a previously proposed NLP approach with consideration
+DRAM. This has led to performance degradation when running
+                                                                                                 of co-location while ensuring that power consumption and
+tasks on cores that share these resources, with a significant im-
+                                                                                                 thermal constraints are obeyed.
+pact on the execution time of those tasks [18]. The performance
+                                                                                               • In-depth simulation-based analyses of resource manage-
+degradation can range from negligible to severe, and the amount of
+                                                                                                 ment techniques under several important physical facility
+degradation is correlated with attributes such as how many tasks
+                                                                                                 configurations with different system sizes and cold-aisle
+are co-located (i.e., running on cores within the same processor),
+                                                                                                 isolation capabilities.
+the memory intensity of the co-located tasks (defined as the ra-
+                                                                                               • Sensitivity analysis of our resource management techniques
+tio of last-level cache misses to the total number of instructions
+                                                                                                 under a range of values for the power and thermal con-
+executed), and clock frequency of the core. With knowledge of
+                                                                                                 straints across different cold-aisle isolation configurations
+these workload characteristics, it is possible to predict the exe-
+                                                                                                 and workload environments.
+cution time degradation of tasks under co-location interference
+effects [12]. Typically, performance degradation is more severe                               The rest of the paper is organized as follows. We discuss related
+when memory intensive tasks are co-located, because they try to                           work in Section 2. In Section 3, we explain our models for compute
+access shared memory simultaneously more often than compute                               nodes, CRAC units, and workload, as well as how we consider co-
+intensive tasks. Therefore, to mitigate interference, it is intuitive to                  location interference. Section 4 describes our proposed resource
+co-locate memory intensive tasks with compute intensive tasks.                            allocation techniques. Our simulation and evaluation setup and
+    We consider an enterprise data center with workload arrival                           results are in Sections 5 and 6, respectively. In Section 7, we
+rates that can be predicted over a decision interval (epoch) [6,10],                      conclude and discuss ideas for future work.
+where the task arrival rates, temperatures at compute nodes and
+CRAC units, and the power consumption of the computing system                             2. Related work
+and CRAC units remain virtually invariant over that interval of
+time. That is, a day split into epochs, and over the course of an                         2.1. Overview
+epoch the workload arrival rates can be reasonably approximated
+as constant, e.g., the Argonne National Lab Intrepid log that shows                           Data centers use a large amount of power, resulting in high
+mostly-constant arrival rates over large intervals of time [14]. The                      electricity costs and a large carbon footprint. In an attempt to
+performance of the data center is measured by the reward collected                        encourage green data center design by reducing the power con-
+from completing tasks by their individual deadlines, where reward                         sumption in data centers, the authors of [20] have identified four
+represents the worth of completing that task to the system. In                            factors that can drive green data center design: (1) improved phys-
+a rate-based resource management framework, maximizing re-                                ical design to reduce heat recirculation and hot-spots, (2) using
+ward is equivalent to maximizing the reward rate. The goal of                             highly energy-efficient computing and cooling systems, (3) using
+our resource management techniques is to maximize reward rate.                            sustainable energy sources such as solar power, and (4) using in-
+Our techniques mitigate the impact of co-location interference by                         telligent computing resource management strategies. In this study,
+maximizing a reward rate objective function that considers co-                            we focus on designing and analyzing green resource management
+location interference. The problem we solve is to maximize the                            techniques. Temperature, power, and performance of the compute
+reward rate earned by the system while obeying red-line tem-                              nodes are all tightly coupled, and thus we take a holistic approach
+perature thresholds and a power constraint on the whole facility                          to data center resource management that considers heterogeneous
+(both compute and cooling power). By taking a holistic approach to                        compute nodes, spatial temperature knowledge, P-states, CRAC
+the control of such a facility, we maximize the reward rate earned                        outlet temperatures, and interference caused by co-location on
+while ensuring that the compute nodes do not exceed their red-line                        multicore processors.
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+                                                       M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –                                                       3
+
+
+2.2. Thermal-aware scheduling                                                             CPU utilization. Lastly, some thermal-aware works only examine
+                                                                                          thermal and power metrics, while not considering performance
+    While larger data centers such as Google’s have small power                           metrics of any sort [44]. Today’s systems typically require abiding
+usage effectiveness (PUE) and therefore only 6% of the power con-                         by performance constraints to ensure either deadlines or SLAs are
+sumption is due to cooling and power distribution [17], a survey                          not violated.
+conducted in 2014 found an average data center PUE of 1.7 that                               We consider a similar environment and problem to solve as
+implies approximately 40% of data center power consumption is                             our previous work in [1]. The goal of [1] is to maximize the re-
+due to cooling and power distribution [39]. Also, our collaboration                       ward rate earned in a data center in a power and thermal con-
+with Oak Ridge National Labs (ORNL) has demonstrated that large                           strained environment. We improve significantly upon that work by
+computing systems (e.g., Titan) have significant cooling power                            considering the effects of co-location interference, designing new
+costs. A holistic approach to management of both the cooling and                          techniques to mitigate the effects of co-location interference, and
+computing components is vital in reducing electricity costs. The                          performing analyses across a broader range of different workload
+power and temperature relationship between the compute nodes                              environments and facility configurations.
+and cooling infrastructure is highly correlated. That is, reducing
+the power of compute nodes also reduces the temperatures of                               2.3. Co-location interference
+those nodes, therefore easing the load on the cooling infrastructure
+and reducing cooling costs. However, thermal-aware and power-                                 Multicore processors are prominent in today’s data centers,
+aware computing decisions are often conflicting. Power-aware                              and the number of cores per processor is increasing. In such
+computing techniques often attempt to concentrate the workload                            processors, many (if not all) cores share resources such as the
+to a few active nodes, allowing those nodes without a workload to                         last-level cache, causing contention and performance degradation
+switch into an idle state or be deactivated. Intuitively, this leads                      for tasks executing on those cores because of the thrashing in
+to high heat dissipation in a small area, creating thermal hotspots                       shared caches or competition for main memory bandwidth. The
+and increasing the local cooling power for just a small number of                         degradation experienced is dependent on the characteristics of the
+the nodes. Thermal-aware scheduling techniques reduce cooling                             co-located tasks, and ranges from negligible to severe [18]. The
+power by minimizing hotspots and total heat generated [9].                                problem of co-location interference between tasks on multicore
+    Both minimizing hotspots and total heat generated is examined                         processors is fairly new; thus, most recent works are still related
+in [44], where virtual machines are dynamically migrated based on                         to measuring or modeling of the phenomena, with very few on
+                                                                                          the actual design of resource management techniques that use
+temperatures and compute node loads to try to satisfy the conflict-
+                                                                                          such models to mitigate interference effects. The research in [24]
+ing objectives of reducing cooling costs by spreading the workload,
+                                                                                          proposes a general methodology for measuring task interference
+and reducing compute node power costs by consolidating the
+                                                                                          in multicore processors, and tests it in a real data center. In [46],
+workload. The fundamental idea of their migration algorithm is to
+                                                                                          an empirical approach to predict performance degradation is pro-
+detect overheating compute nodes (through onboard sensors), and
+                                                                                          posed. Focusing on shared cache and memory bandwidth as the
+migrate virtual machines from an overheated compute node to the
+                                                                                          two shared resources that affect performance the most, functions
+coolest one in the facility. By placing a temperature cap for detect-
+                                                                                          that predict a task’s pressure on those subsystems are found.
+ing overheating, and then migrating loads from hot nodes to the
+                                                                                          Both linear models and neural network models are created using
+coolest ones, hotspots are managed and heat is spread more evenly
+                                                                                          empirical data in [12]. A set of benchmarks from both the PARSEC
+throughout the room. But neither DVFS nor heat recirculation is
+                                                                                          benchmark suite and NAS benchmark suite are co-located on cores
+considered, as we do.
+                                                                                          of multicore processors in numerous configurations to collect data
+    The research in [19] takes an interesting approach in its
+                                                                                          for correlated features such as last-level cache misses, memory
+thermal-aware workload management by considering multiple
+                                                                                          intensities, and execution times. These models allow predictions
+facilities, each located in different geographical locations. Each
+                                                                                          to be made for performance degradation when multiple tasks are
+facility has intermittent and unreliable renewable energy sources                         co-located on a multicore processor.
+attached (e.g., wind or solar), making it sensible to migrate ‘‘time                          To mitigate co-location interference among virtual machines
+insensitive’’ batch workloads to facilities with high renewable                           allocated to the same multicore processor, the algorithm in [13]
+energy generation at a given point in time. The computing facilities                      aims to leverage information from tasks the system has seen in
+also are equipped with a thermal energy storage (TES) system. The                         the past to classify and then schedule tasks without violating
+intuition behind the two kinds of thermal energy storage systems                          QoS guarantees. In [5], it is argued that consolidation of several
+in today’s computing facilities are to either (1) excessively cool the                    tasks onto a compute node (e.g., through virtualization) increases
+data center when an abundance of renewable energy is available so                         utilization but results in degrading task performance significantly.
+it remains at a reasonable temperature when no renewable energy                           Therefore, a technique that increases node utilization while still
+is available, or (2) attach a dedicated thermal storage unit that uses                    maintaining SLAs is proposed and tested. A weighting scheme is
+renewable energy to chill liquid for use later. That paper considers                      used to determine the pairings for critical (strict SLA agreements)
+the latter, and models the thermal storage unit similarly to a                            and non-critical workloads onto compute nodes.
+battery with a capacity, charge, and discharge rate. The problem                              Our paper does not focus on modeling co-location interference
+is formulated as an economics problem to minimize the operating                           effects as [12,18,24,46] do. We focus on the design of resource
+cost (energy and ‘‘bandwidth’’ cost for migration) to complete                            management techniques that use predictive models to avoid in-
+the workload. Unlike [19], our research considers heterogeneity                           terference effects, such as [5,13]. However, our work also considers
+of compute nodes, DVFS, and CRAC unit control in our resource                             power and temperature as constraints in the decision matrix of our
+management techniques.                                                                    resource management techniques.
+    There have been many recent works that consider thermal-
+aware resource management (e.g., [19,23,25,27,33,35,40,41,43,44]).                        3. System model
+Some do not consider heterogeneity in their work [19,43,44] or
+recirculation of heat in the room [19,33,41,44]. Others do not                            3.1. Overview
+consider DVFS control [19,25,27,33,35,40,41,44] or CRAC unit con-
+trol [19,35,41,44], leaving the thermal-aware allocation choices                             Our model of a data center and workload builds on the model
+limited to only turning nodes on/off or basing the choices on                             proposed in [1]. We assume the facility is configured in a hot
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+4                                                         M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )     –
+
+
+                                                                                                 The system we consider is heterogeneous, i.e., the power and
+                                                                                             performance characteristics of the compute node-types are differ-
+                                                                                             ent. Therefore, tasks of the same type can have different execu-
+                                                                                             tion rates on different node-types and P-states. We assume that
+                                                                                             we know the estimated computational speed (ECS) of any task of
+                                                                                             type i on a core of type j in P-state k, ECS(i, j, k) (measured in
+                                                                                             number of tasks per second). In many computing environments,
+                                                                                             such as those in national labs (e.g., NCAR, ORNL) and industry
+                                                                                             (e.g., DigitalGlobe), the tasks executed are from a known set of
+                                                                                             tasks and therefore their arrival rates can be predicted and their
+                                                                                             execution times pre-characterized using historical, experimental,
+                                                                                             or analytical techniques [22,28,37]; in Section 5, we discuss the
+                                                                                             values used for our simulations using benchmark data collected
+                                                                                             from server class machines.
+                                                                                                 We assign a desired fraction of time each core k will spend
+                                                                                             executing tasks of type i, denoted DF (i, k), and the P- state each
+                                                                                             core k is configured when executing tasks of type i, denoted PS(i, k).
+                                                                                             We assume tasks will run serially until completion. That is, a core
+             Fig. 1. Data center in hot aisle/cold aisle configuration.                      sharing its time among multiple tasks implies that an online sched-
+                                                                                             uler using information from solutions provided by our rate-based
+                                                                                             resource manager will assign different tasks to execute on the core
+                                                                                             in such a manner that, over a long period of time (i.e., steady-
+aisle/cold aisle fashion (Fig. 1). In such a configuration, cold air is
+                                                                                             state), the amount of time a core k spends executing a task of type i
+supplied from the CRAC units to a cold aisle through perforated
+                                                                                             would equal its assigned DF (i, k) value. Our goal is to maximize the
+floor tiles that face the inlets of the compute nodes. The compute                           reward we can obtain and meet the power and thermal constraints
+nodes consume power and expel hot air through the opposite end                               of the system. Given DF (i, k) and PS(i, k), we calculate the execution
+to a hot aisle. The CRAC units draw the hot air from the hot aisles                          rate of tasks of type i on core k, ER(i, k), as
+to cool. If the cold aisles are isolated using containment technology
+(e.g., using plastic curtains or commercial Plexiglass systems), the                         ER(i, k) = DF (i, k) · ECS(i, CT (k), PS(i, k)).                              (1)
+recirculation of heat among compute nodes in a data center may
+or may not be important to consider. Some facilities have isolated
+                                                                                             3.4. Power model
+aisles (e.g., the research computing facility at Hewlett Packard in
+Fort Collins, CO) and some have non-isolated aisles (e.g., the data                              In an oversubscribed environment such as the one we con-
+center at Colorado State University). In our work, we compare both                           sider, non-CPU components are always active and thus their power
+and examine the benefits of isolation.                                                       dissipation can be assumed to be static (i.e., not time-varying).
+                                                                                             We consider the static power consumption of a compute node
+3.2. Compute nodes                                                                           (e.g., from main memory, disks, fans) in addition to the dynamic
+                                                                                             power consumption of the CPU cores. We assume that CPU cores
+                                                                                             are able to change P-states over time depending on what task-
+   The number of compute nodes in the data center is NN, and
+                                                                                             type is currently being executed, and that the time associated with
+each compute node j belongs to a compute node type NT (j). We
+                                                                                             switching P-states is negligible in comparison to the execution
+assume a heterogeneous system with the number of compute node-                               time of tasks. The power consumed by cores is a function of the
+types equal to NNT , and compute nodes that belong to a specific                             task-type being executed and the P-state in which the core is exe-
+compute node-type are identical and contain the same number                                  cuting the task. Let S(j) be the static power consumption of compute
+of cores, power characteristics, and performance characteristics.                            node j, let APC(i, NT (j), PS(i, k)) be the average power consumed by
+Cores within a compute node type are homogeneous, and we                                     a core k in a node of type NT (j) executing tasks of type i in P-state
+assume the cores can be independently assigned performance                                   PS(i, k), and NCN(j) be the set of cores in node j. We calculate the
+states (P-states) that provide a tradeoff between power and per-                             power consumption of node j, PN(j), as
+formance [21]. P-states are discrete voltage and clock frequency                                                      T
+pairings, with lower-numbered P-states consuming more power
+                                                                                                                    ∑ ∑
+                                                                                             PN(j) = S(j) +                       APC (i, NT (j), PS(i, k)) · DF (i, k).   (2)
+but increasing the execution speed of tasks. We model a case
+                                                                                                                   k∈NCN(j) i=1
+where a core is deactivated by adding one additional P-state to
+the available P-states of a core, where the deactivated state is the                         We assume a constant static power S(j), but in cases where a core
+highest-numbered P-state. The total number of cores in the data                              may not be active 100% of the time (i.e., the sum of DF (i, k) values
+                                                                                             across all T task types is less than 100%), that core would not
+center is NC , and CT (k) is the type of the compute node to which core
+                                                                                             consume its full power according to Eq. (2).
+k belongs. If core k is in node j, then CT (k) = NT (j). We provide a
+                                                                                                 The power consumed at a CRAC unit is a function of the heat
+table of notations (Table 14) in the appendices.
+                                                                                             removed at that CRAC unit in addition to the Coefficient of Perfor-
+                                                                                             mance (CoP) of the CRAC unit [31]. Let NCR be the total number
+3.3. Workload                                                                                of CRAC units in the data center, TC in (i) be the inlet temperature of
+                                                                                             CRAC unit i, TC out (i) be the outlet temperature of CRAC unit i, ρ be
+     We assume that we have a set of T known task types. We                                  the density of air, C be the specific heat capacity of air, and AFC (i) be
+consider a data center in the steady-state where it is assumed                               the air flow rate of CRAC unit i. The power consumed by CRAC unit i,
+that for a given epoch interval, the arrival rates of tasks of type i,                       PC (i), is calculated as [31]
+denoted λi are known (or can be predicted [6,10]. A reward ri is                                        ρ · C · AFC (i) · (TC in (i) − TC out (i))
+obtained for completing a task of type i by its individual deadline                          PC (i) =                                                .                     (3)
+                                                                                                                         CoP(TC out (i))
+di , relative to its arrival time.
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+                                                              M.A. Oxley et al. / J. Parallel Distrib. Comput. (     )      –                                           5
+
+
+3.5. Thermal model                                                                               task-type of memory intensity class m on core k, then with z as the
+                                                                                                 constant, the equation for co-located execution time of a task-type
+   To calculate the temperatures at compute nodes and CRAC                                       i on core k (CET (i, k)) is
+units, we use the concept of thermal influence indices that char-
+                                                                                                 CET (i, k) = u · A(k) + v · B(i, k) + w · C (i, k)
+acterizes the causal relationship between heat sources and sinks                                                                                                     (7)
+                                                                                                              + x · D(k) + y · E(i, k) + z .
+from [4]. That is, the thermal influence indices are used to help
+estimate the recirculation of air between compute nodes and                                      The coefficients of the model for the various features in Eq. (7)
+CRAC units, similar to the recirculation models introduced in [31]                               (e.g., u, v , w ) were calculated using the linear regression model [12]
+and [42]. Let TN in (j) be the inlet temperature at compute node j and                           for task types of memory intensity class m on a core k. The ex-
+TN out (j) be the outlet temperature at compute node j. The outlet                               ecution rate is the reciprocal of the execution time. Therefore,
+temperature at compute node j is a function of the inlet temper-                                 the co-located execution rate for task-type i on core k, CER(i, k),
+ature, the power consumed, and the air flow rate of the node AFN(j),                             is 1/CET (i, k). To assist our resource management techniques in
+calculated as                                                                                    estimating actual reward rate under the effects of co-location
+                                                                                                 interference, we introduce an objective function called reward rate,
+TN out (j) = TN in (j) + PN(j)/(ρ · C · AFN(j)) .                                     (4)        calculated as
+       out             in                                                                                T
+                                                                                                               (                ( NC                   ))
+Let TC    and TC be the vectors of outlet and inlet temperatures                                         ∑                       ∑
+of CRAC units. Also, let ACRAC be a matrix of thermal influence                                  RR =              ri · min            CER(i, k), λi        .        (8)
+indices where each element ACRAC [i, y] represents the percentage                                        i=1                     k=1
+
+of heat transferred from CRAC unit i to CRAC unit or node y, and                                 Eq. (8) states that the reward rate for a given task-type i is the
+let ANode be a matrix of indices where each element ANode [j, y]                                 product of the reward earned and its co-located execution rate.
+represents the percentage of heat transferred from node j to CRAC                                The min function in Eq. (8) enforces the constraint that if a task
+unit or node y. The ACRAC matrix intuitively represents how much                                 is assigned for execution at a faster rate than its arrival rate λi ,
+of the heat generated by a CRAC unit (a row of ACRAC ) is transferred                            additional reward is not earned. One goal of our proposed resource
+to a CRAC unit or node (a column of ACRAC ). Similarly, the ANode                                management techniques is to maximize the RR objective function
+matrix intuitively represents how much of the heat generated by                                  for a given epoch in the rate-based problem that we study. Using
+a node (a row of ANode ) is transferred to a CRAC unit or node (a                                Eq. (8) allows our techniques to evaluate co-location interference
+column of ANode ). We derive the thermal influence indices from                                  effects on reward rate earned over an epoch interval.
+computational fluid dynamics (CFD) simulations using the physical                                    We also present an objective named naïve estimated reward rate,
+layout of the data center we study (see Section 5). We can then                                  denoted NERR. NERR uses the execution rate (ER) rather than co-
+calculate the inlet temperatures of any CRAC unit or node y as [4]                               located execution rate (CER) values, and is therefore naïve to co-
+             NCR                                 NN                                              located interference effects. NERR is a false reward rate, however,
+                                                                                                 because co-location interference exists. We use NERR as an objec-
+             ∑                                   ∑
+T in (y) =         ACRAC [i, y] · TC out (i) +         ANode [j, y] · TN out (j).     (5)
+                                                                                                 tive in co-location unaware versions of the techniques we propose
+             i=1                                 i=j
+                                                                                                 to demonstrate the value of considering co-location interference
+The ASHRAE guidelines have designated the inlets of IT equip-                                    effects. NERR is calculated as
+ment as the common measurement point for temperature com-                                                    T
+                                                                                                                     (              ( NC                  ))
+pliance [2], and therefore we consider thermal constraints at the
+                                                                                                             ∑                       ∑
+                                                                                                 NERR =                  ri · min          ER(i, k), λi         .    (9)
+inlets of compute nodes. If we let Tredline be the vector of red-line
+                                                                                                               i=1                   k=1
+temperatures, the thermal constraint is the element-wise inequal-
+ity                                                                                              Reward is only earned when tasks are completed by their deadline.
+                                                                                                 We have no way of guaranteeing deadlines are met in our rate-
+Tin ≤ Tredline .                                                                      (6)        based model, but we can help minimize the number of deadlines
+                                                                                                 that would be missed by eliminating any task-type/core-type/
+                                                                                                 P-state combinations from consideration that would result in a
+3.6. Co-location interference                                                                    missed deadline even if a task of type i starts immediately after
+                                                                                                 its arrival, i.e., we eliminate combinations from consideration that
+    Tasks competing for shared memory in multicore processors                                    violate
+can cause severe performance degradation, especially when com-
+                                                                                                             1
+peting tasks are memory intensive [18]. Analysis of performance                                                            ≥ di .                                (10)
+counters in computing systems (e.g., as in [11]) when executing                                  ECS(i, CT (k), PS(i, k))
+a task allows for determination of the memory intensity of that                                  The goal of this study is to maximize true reward rate when subject
+task. The memory intensity of a task refers to the ratio of last-level                           to power consumption and thermal constraints. RR is a better es-
+cache misses to the total number of instructions executed [12].                                  timate of reward rate than NERR because co-location interference
+We employ a linear regression model from [12] that combines a                                    exists. The total power consumed by both CRAC units and compute
+set of disparate features (i.e., inputs that are correlated with task                            nodes must be less than the power constraint, denoted as φ . The
+execution time) based on the current tasks assigned to a multicore                               thermal constraint is defined in Eq. (6). In the next section, we
+processor to predict the execution time of a target task i on a                                  describe several approaches to solve this problem.
+target core k. A description of the features we use, in addition
+to the symbols representing each feature, is given in Table 1. In                                4. Heuristics
+a linear model, the output is a linear combination of all features
+and their calculated coefficients, where the coefficients are used                               4.1. Non-linear programming approach
+to combine the disparate features together into one measure. We
+classify the task-types into memory intensity classes to calculate                                   We adapt a power and thermal-aware approach from [1], and
+these coefficients for the different memory intensity classes using                              improve it to include the effects of co-location by using our RR
+the linear regression model. If we denote u, v , w , x, and y as the                             objective to estimate the reward rate instead of NERR. The problem
+coefficients for feature symbols A, B, C , D, and E (from Table 1) for a                         in [1] is formulated as a non-linear program and then solved using
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+6                                                       M.A. Oxley et al. / J. Parallel Distrib. Comput. (     )   –
+
+                         Table 1
+                         Description of features for predicting execution time.
+                           Name                                        Symbol                    Description
+                           Number of co-located tasks                  A(k)                      The number of tasks co-located with target task
+                                                                                                 on core k
+                           Base execution time                         B(i, k)                   Base execution time of target task i when
+                                                                                                 executing alone on core k in P-state PS(i, k)
+                           Frequency of target core                    C (i, k)                  Clock frequency of target core k when running
+                                                                                                 target task i in P-state PS(i, k)
+                           Average memory intensity                    D(k)                      Average memory intensity of all tasks on the
+                                                                                                 multicore processor that contains core k
+                           Target memory intensity                     E(i, k)                   Memory intensity of target task i on core k
+
+
+
+approximations, heuristics, and linear programming. The complex-                           4.2. Greedy heuristic
+ity of common interior point algorithms (i.e., the type of algorithms
+used in many non-linear programming solvers) is O(n3.5 L), where                               We designed a two-phase greedy approach similar in concept to
+n is the number of variables and L is the input length of the                              ‘‘Min–min’’ in [7,29] to assign task-types to cores. For this heuristic,
+problem [32]. We refer the reader to [1] for the full details of                           cores are dedicated to a single particular task-type (i.e., 100% of the
+this technique, but give the problem formulation in Appendix A in                          core’s time is dedicated to tasks of that type). Our greedy heuristic
+addition to a brief summary below.                                                         (see Alg. 2) iteratively assigns task-types to cores to find the most
+    The NLP technique is divided into three steps to solve the                             efficient mapping, where we define efficiency for a task mapping
+formulated mixed integer NLP for maximizing naïve estimated re-                            of type i on a node of type j in P-state k, EFF (i, j, k), as
+ward rate (using Eq. (9)) while obeying the power and thermal con-
+                                                                                           EFF (i, j, k) = ECS(i, j, k)/APC (i, j, k).                              (11)
+straints. (1) The first step relaxes the integer constraint on P-states
+(by assuming continuous P-states) and solves for the CRAC outlet                           We start by finding the P-states with the highest EFF values for
+temperatures and power consumption of compute cores such that                              all task-types and node-types (line 1); all other P-states are not
+reward rate is maximized and the power and thermal constraints                             considered. All T × NNT task-type to node-type pairings are then
+are met. (2) Using the core power consumption values obtained                              sorted by their efficiency in descending order (line 2). At each
+from the first step, the second step uses a simple heuristic to round                      iteration of the heuristic, the first pairing (i.e., most efficient) is
+the continuous power consumption values of cores to discrete                               selected and the heuristic checks if at least one core within the
+P-states, while maintaining the power and thermal constraints.                             chosen node-type remains unmapped. If so, that core is assigned
+                                                                                           a 100% desired fraction of time for that task-type (line 6). After
+(3) Lastly, a linear program is solved to find the desired fraction of
+                                                                                           making an assignment, that core is removed from consideration
+time values that every core spends executing a given task so that
+                                                                                           (line 7). If the new mapping results in the execution rate of the task-
+reward rate is maximized, assuming the CRAC outlet temperatures
+                                                                                           type exceeding its arrival rate (line 8), that core is unmapped (line
+from the first step and the discrete P-state assignments from the
+                                                                                           9), returned to the pool of available cores (line 10), and that task-
+second step. A non-feasible solution can sometimes be returned                             type/node-type pair is removed from future consideration (line
+by the NLP if the power or thermal constraints are set to extreme                          11). The heuristic uses the CER value to estimate execution rate
+values. In that case, the local search technique from the GA (Alg. 4)                      (line 8), thus making the decision to provision task-type execution
+is performed on the resulting solution to set the CRAC outlet                              rates as long as the CER value does not exceed the arrival rate.
+temperatures such that the thermal constraint is met (but possibly                         The CRAC outlet temperatures are set to the red-line temperature,
+not the power constraint).                                                                 and then the outlet temperatures of all CRAC units are iteratively
+    We improve upon this approach in two ways. First, we incorpo-                          decreased by one degree until the thermal constraints are met (line
+rate the knowledge of the memory intensity of tasks by considering                         12). If no unmapped cores within the selected node-type exist, the
+the APC matrix (because a core consumes a different amount                                 current task-type/node-type pair is removed from consideration
+of power based on task-type) instead of assuming all task-types                            (line 14). The algorithm repeats using the next pairing until the
+consume the same amount of power in a given P-state. Second,                               power constraint is violated, or there are no more task-type/node-
+we incorporate knowledge of co-location interference in this algo-                         type pairings to consider (line 3).
+rithm by maximizing our RR measure, which is a better estimate of
+reward rate than NERR. Pseudo-code for our NLP technique is given                          4.3. Genetic algorithm
+in Alg. 1.
+                                                                                           4.3.1. Overview
+                                                                                              We also designed a GA to solve our resource allocation opti-
+                                                                                           mization problem (e.g., as in [7]), based on the Genitor GA [45].
+Algorithm 1 Pseudo-code for our NLP technique
+                                                                                           Our GA in this study operates on a population of 200 chromosomes
+1. Step 1:
+                                                                                           (empirically determined). Each chromosome represents one possi-
+2. relax integer constraints on P-states
+                                                                                           ble solution, i.e., a complete resource allocation. Each chromosome
+3. solve for CRAC outlet temperatures and power consumption of
+      cores to maximize RR and obey power/thermal constraints                              consists of a matrix of T × NC genes, where each gene is a pair
+4. Step 2:                                                                                 of DF (i, k) and PS(i, k) values representing the desired fraction
+5. use the solved continuous power consumption                                             of time and P-state of a task-type/core combination. The initial
+      of cores to round to discrete P-states                                               population is generated by assigning random desired fractions of
+6. Step 3:                                                                                 time and P-states to each gene within the chromosome, and then
+7. solve linear program to determine DF (i, k) values, assuming the CRAC                   normalizing the desired fractions of time so that cores cannot
+      outlet temperatures determined in Step 1 and P-states found in                       spend greater than 100% of their time executing tasks. That is, if a
+      Step 2                                                                               core k is spending greater than 100% of the time executing tasks,
+8. if power/thermal constraints violated, apply local search from GA
+                                                                                           we normalize the DF (i, k) values on that core. Normalization is
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+                                                       M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –                                                       7
+
+Algorithm 2 Pseudo-code for our greedy heuristic                                          fraction of time and P-state for its task-type on this core are set
+1. get most efficient P-state for each task-type/node-type pair                           to random values. Then, the chromosome is normalized so that
+2. sort these task-type/node-type pairs by efficiency                                     the desired fractions of time for all cores sum to 100%. Unlike the
+3. while power constraint not violated and at                                             greedy heuristic that dedicates a core to one task-type (i.e., 100%
+  least one task-type/node-type pair remains                                              desired fraction to one task-type), the GA can have cores assigned
+4. choose first task-type/node-type pair                                                  to execute multiple task-types.
+5. if unmapped core within selected node-type exists
+6.         assign 100% desired fraction of time for selected
+                                                                                          4.3.3. Local search
+           task-type to a core from selected node-type
+                                                                                             We perform a local search on (possibly mutated) offspring
+7.         remove core from future consideration (mapped)
+8.         if execution rate of task-type exceeds its arrival rate                        chromosomes that sets CRAC outlet temperatures and P-states
+9.              unmap core running that task-type                                         such that the power consumption and thermal constraints are
+10.              return unmapped core to pool of available cores                          met. The pseudo-code for our local search is given in Alg. 4. The
+11.             remove task-type/node-type pair                                           step described in line 3 is performed by setting the CRAC outlet
+               from future consideration                                                  temperatures to the red-line temperature, and then the outlet
+12.       set CRAC outlet temperatures to hottest temperatures                            temperatures of all CRAC units are iteratively decreased by one
+         such that thermal constraints are met                                            degree until the thermal constraints of the nodes are met. The steps
+13. else                                                                                  performed in lines 4 to 7 have a two-fold effect to reduce power
+14.      remove task-type/node-type pair from consideration                               consumption. First, increasing the number of the P-state assign-
+15. end while
+                                                                                          ment (i.e., reducing the power and frequency) directly reduces the
+                                                                                          power consumption of the hottest node. Second, the CRAC units
+Algorithm 3 Pseudo-code for our GA heuristic                                              may be able to run with a higher outlet temperature, reducing the
+1. create an initial population of chromosomes                                            overall power required to maintain red-line temperatures. In our
+2. evaluate and rank population                                                           environment, our local search typically ensures that the power and
+3. while time limit (e.g., epoch interval) not surpassed                                  thermal constraints are met, but the resource allocation may have a
+4. perform crossover to generate two offspring chromosomes                                poor reward rate. If the power and thermal constraints are difficult
+5. perform mutation on offspring chromosomes                                              to meet, there is a limit to how long the search proceeds (maxIter)
+6. normalize DF (i, k) values in offspring chromosomes
+                                                                                          before allowing the GA to continue. We set the value of maxIter to
+7. perform local search on offspring to meet constraints
+                                                                                          2000 in this study. We examine the effects of our resource man-
+8. evaluate and rank population
+9. trim population to original size                                                       agement techniques under different power and thermal constraint
+10. end while                                                                             values in Section 6.4.
+11. return best chromosome from population
+                                                                                          5. Evaluation setup
+
+performed by summing the desired fractions of time all task-types                         5.1. Overview
+spend executing on a given core k, denoted SumDF (k), and dividing
+the desired fraction of time values for all T task-types by SumDF (k),                        In this section, we provide the simulation parameters we used
+forcing their sum to equal 100%. Normalization is not performed on                        for the platform configuration and workload. Many of our simu-
+a core if the value of SumDF (k) is less than 100%.                                       lation parameters (e.g., power values, workload execution times,
+    One chromosome of the initial population is from the greedy                           coefficients for the co-location interference model) were obtained
+heuristic to seed the GA and assist the GA by providing better                            from executing benchmarks on actual servers in our lab. These val-
+genetic material than randomly generated chromosomes. After the                           ues can be found in Appendix B (for example, data representing the
+initial population generation, the chromosomes in the population                          power consumption of a core when executing PARSEC benchmarks
+are evaluated and ranked by reward rate (RR). We then perform                             on our lab servers at the lowest frequency P-state can be found
+crossover and mutation that alter existing solutions to generate                          in Table 11). Also, error values for the thermal and co-location
+offspring chromosomes. After the offspring are generated, local                           execution time models can be found in Appendix B.
+search is performed on the offspring to meet the power consump-
+tion and thermal constraints. The population is then evaluated                            5.2. Platform
+and ranked, and subsequently the population is trimmed to its
+original size by eliminating the least-fit chromosomes. By using RR                           In our simulations, we consider two heterogeneous platforms
+instead of NERR to evaluate chromosomes, we consider co-location                          of different sizes. The small platform (see Fig. 2(a)) consists of
+interference effects by effectively penalizing solutions that have                        one CRAC unit, and 30 compute node cabinets of size 42U with
+low reward rate due to co-location interference. The pseudo-code                          36 nodes per cabinet (typically some cabinet slots are left empty,
+for our GA heuristic is provided in Alg. 3.                                               e.g., due to power and cooling requirements). This gives a total
+4.3.2. Crossover and mutation                                                             Algorithm 4 Pseudo-code for our local search technique
+    Crossover starts by selecting two parent chromosomes using
+                                                                                          1. repeat for maxIter or until power and thermal constraints met
+a linear bias [45] and generates two points, x and y, such that                           2. set CRAC outlet temperatures to hottest temperatures
+x < y ≤ NC . All genes for cores ranging from x to y are swapped                               such that thermal constraints are met
+among parent chromosomes to create two offspring solutions. This                          3. find node with highest temperature (node j)
+operation spans over all task-types for the cores ranging from x                          4. while node j is hottest node and not all core/task-type
+to y.                                                                                          combinations in node j are assigned maximum numbered P-state
+    Mutation is probabilistically performed on offspring chromo-                          5.        choose random core/task-type
+somes to introduce perturbations in the genes, allowing a broader                                  combination from node j
+search. Offspring chromosomes have a probability pm of being                              6.        increase P-state assignment by 1
+mutated (empirically set to 0.1). If a chromosome is selected for                                  if not already in maximum P-state
+mutation, each gene has a probability pg of being mutated (em-                            7. end while
+pirically set to 0.05). If a gene is selected for mutation, the desired
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+8                                                       M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –
+
+
+
+
+                                  Fig. 2. (a) Small data center platform configuration, and (b) large data center platform configuration.
+
+
+of 1080 compute nodes, where each node is one of three node                                6. Simulation results
+types (see Table 2). The large platform (see Fig. 2(b)) consists of
+two CRAC units, and 120 compute node cabinets with 36 nodes                                6.1. Overview
+per cabinet (a total of 4320 compute nodes), where each node
+is one of the three node types. These platforms represented the                                A primary contribution of this research is to provide extensive
+physical layout of the facility we considered when performing CFD                          analyses of our co-location interference and thermal-aware tech-
+simulations to calculate the thermal influence matrices (ACRAC and                         niques for maximizing reward under a range of physical facility
+ANode ). The evaluation of the accuracy for the technique used to                          configurations and workload environments. Large-scale comput-
+calculate the ACRAC and ANode matrices was performed in [4]. The                           ing systems fall into several different categories that execute a
+power characteristics of our different node-types were obtained                            diverse set of workloads, making it important to simulate a variety
+from power measurements of three server class machines when                                of environments so a system administrator can choose resource
+executing different PARSEC benchmarks across all P-states (see                             management techniques that are most applicable to a specific
+Table 2), and the workload characteristics were also obtained from
+                                                                                           environment. For example, it is common in supercomputing en-
+executing the benchmarks on the node-types listed in Table 2.
+                                                                                           vironments to run scientific tasks that are compute intensive, with
+For a given P-state on a given server type, a power and execution
+                                                                                           less co-location interference effects and therefore less of a need
+time measurement was obtained by executing the desired PARSEC
+                                                                                           to consider them in resource management. However, in a data
+benchmark serially on a core. The power constraint was set to 900
+                                                                                           processing environment the tasks access memory often (memory
+kW for the large platform, and 230 kW for the small platform. The
+red-line temperature was set to 30◦ C, which is on the high end of                         intensive), and ignoring co-location interference effects can cause
+ASHRAE’s temperature guidelines [2].                                                       severe performance issues. The analyses we present are also use-
+    In this study, we assume that the CRAC units are homogeneous.                          ful for physical data center facility design (compute node place-
+The CoP for a CRAC unit is a function of its outlet temperature, τ ,                       ment optimization), where researchers can determine potential
+given by CoP(τ ) = 0.0068τ 2 + 0.0008τ + 0.458 [31]. We used                               hotspots and optimal use of space for node and CRAC placement
+that particular CoP function for simulations, but it could be easily                       with an ‘‘average’’ workload.
+changed depending on the particular CRAC unit considered. The air                              The bar graphs discussed in the rest of this section represent
+flow rate of each CRAC unit is set to 26.1 m3 /s, which is the air flow                    the averages of 48 trials, with each trial varying in the deadline,
+rate of a CRAC unit with capacity to cool approximately 350 kW [3].                        reward, and arrival rate values of the task-types. The ECS and
+                                                                                           power values are obtained from experimental data of the PARSEC
+5.3. Workload                                                                              benchmarks (see Section 5.3) on three heterogeneous server class
+                                                                                           machines. The error bars are the 95% confidence intervals around
+    The task-types are from the PARSEC benchmark suite [36], and                           the mean of those 48 trials.
+corresponding ECS matrix entries for each benchmark on each
+node-type in each P-state are obtained from taking the recipro-                            6.2. Workload experiments
+cals of the execution times of those benchmarks on each of the
+machines and P-states. We chose to represent the workload in this                               In our first experiment, we examine the effects that the different
+study based on the PARSEC benchmark suite because of the diverse                           workload environments have on the performance of our resource
+set of tasks it offers. For example, benchmarks we consider are                            management techniques. Fig. 3 shows a comparison of the greedy,
+associated with fluid dynamics, option pricing, body tracking of a                         GA, and NLP techniques across the three different workload en-
+person, simulated annealing optimization, and pricing a portfolio
+                                                                                           vironments: CPU intensive, hybrid, and memory intensive. In this
+of swap options. In all, the following benchmarks were used:
+                                                                                           figure, we also compare each of the co-location aware techniques
+canneal, cg, ua, sp, lu, fluidanimate, blackscholes, bodytrack, ep, and
+                                                                                           (non-hashed bars) with versions that are co-location unaware
+swaptions. With regards to their memory intensity class, canneal,
+                                                                                           (hashed bars). That is, we compare the GA and NLP techniques
+cg, and ua were classified as ‘‘heavy’’, sp, lu, and fluidanimate were
+                                                                                           when using either the naïve estimated reward rate (NERR) or
+classified as ‘‘medium’’, blackscholes and bodytrack were classified
+                                                                                           reward rate (RR) as their objective functions, and greedy uses either
+as ‘‘light’’, and ep and swaptions were classified as ‘‘very-light’’.
+    We split the benchmarks into three workload environments                               the ER values or CER values to estimate execution rates (line 8
+based on their memory intensities to be representative of three dif-                       of Alg. 2). The NLP technique that uses RR as its objective (co-
+ferent types of real-world computing environments. The memory                              location unaware) is similar to [1]. The reward rate is normalized
+intensive workload consists of canneal, cg, ua, sp, and lu to represent                    by the total reward rate that the system is capable of obtaining,
+a database style workload. The hybrid workload includes ua, sp,                            i.e., when all task-types are allocated to execute at rates equal to
+lu, fluidanimate, and blackscholes to form an all-purpose group of                         their respective arrival rates. To make a fair comparison between
+both CPU and memory intensive tasks. Finally, the CPU intensive                            the NLP and GA techniques, the GA was terminated at the same
+environment is formed of fluidanimate, blackscholes, bodytrack, ep,                        time as it took the NLP to finish (approximately four hours). All
+and swaptions to emulate scientific computing.                                             techniques were able to meet the power and thermal constraints.
+    The reward for task types are generated based on a uniform                                  We can see in Fig. 3(a) that for all workload types, the NLP
+random variable in the range [0.5, 1]. The di and arrival rate λi                          technique works best, GA is second best, and greedy last. Though
+values are generated using the same techniques as in [1].                                  none of the proposed techniques are guaranteed to find the global
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+                                                         M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –                                                       9
+
+                                            Table 2
+                                            Node-types used in simulations.
+                                              Node-type                Lenovo TS140        HP Z600                    HP Z820
+                                              Processor (Xeon)         E3-1225v3           E5649                      E5-2697v2
+                                              Architecture             22 nm               32 nm                      22 nm
+                                              Number of cores          4                   6                          12
+                                              Number of P-states       16                  9                          16
+                                              Case fans                2 x 80 mm           2 x 92 mm, 1 x 80 mm       3 x 92 mm
+                                              Air flow rate (m3 /s)    0.0284              0.0519                     0.0566
+
+
+
+
+Fig. 3. (a) Normalized reward rate comparison between different workload environments on the 1080 node system, and (b) power consumption comparison in relation to
+power budget constraint (red line). Solid bars represent the GA, NLP, or greedy technique when using RR as the objective (co-location aware), and the hashed bars represent
+those techniques when using NERR as the objective (co-location unaware). (For interpretation of the references to color in this figure legend, the reader is referred to the
+web version of this article.)
+
+
+optimum (within reasonable time limits), the NLP technique is                               CPU intensive workload, GA is able to achieve 1% more reward rate
+guaranteed to find a local optimum that is better than the solutions                        than the greedy heuristic when using RR as the objective, and 1%
+found by the GA and greedy techniques. We can also see, within the                          more reward rate than greedy when using NERR as the objective.
+same power budget (demonstrated in Fig. 3(b)), that all techniques                          For the memory intensive workload, the GA is able to earn 29%
+earn significantly less reward as the memory intensity of the work-                         more reward rate than the greedy heuristic when using RR as the
+load increases (moving from CPU intensive to hybrid, and hybrid                             objective, and 23% more reward rate than the greedy heuristic
+to memory intensive). Intuitively, this makes sense as the co-                              when using NERR as the objective.
+location interference effects become exacerbated as the memory
+intensity increases. The NLP technique achieves approximately half                          6.3. Isolation experiments
+of the reward on the memory intensive workload environment
+than on the CPU intensive environment. Comparing the co-location                                The isolation of the cold-aisles in a data center provides many
+interference aware (RR) with those that are unaware (NERR), we
+                                                                                            benefits at a low upfront cost to purchase the isolation system.
+can see the benefits of considering co-location interference, and
+                                                                                            Isolating cold aisles can be done using several different methods
+those benefits become more significant as the memory intensity of
+                                                                                            (e.g., hanging plastic curtains, installing custom Plexiglass walls
+the workload increases. Fig. 3(b) demonstrates that all techniques
+                                                                                            and ceiling), all with the same goal of minimizing the heat re-
+were able to meet the power budget exactly, and in conjunction
+                                                                                            circulation among nodes. Isolating the cold aisles has previously
+with Fig. 3(a), we can observe that the more sophisticated tech-
+                                                                                            been shown to have the intuitive result of significantly reducing
+niques are able to achieve more reward rate within that power
+                                                                                            node inlet temperatures when CRACs are set to the same outlet
+budget.
+                                                                                            temperatures or higher [16], because the nodes’ inlets are located
+    Another observation to note is the difference in performance
+                                                                                            in the cold aisle and experience little heat recirculation from the
+of algorithms within a given workload type. For example, we can
+                                                                                            hot aisles. In our thermal-aware resource management problem,
+see in Fig. 3(a) that the dropoff in performance between the NLP
+and greedy techniques for the CPU intensive workload is much                                reducing the inlet temperatures of the compute nodes allows the
+less than for the memory intensive workload, because it becomes                             CRAC units to run at higher temperatures, reducing the cooling
+more important to intelligently mitigate co-location interference                           power required and allowing more power budget to be allocated to
+effects as the memory intensity of the workload increases. De-                              the compute nodes for executing tasks. Because the cold aisles are
+pending on the requirements of the system administrator and the                             isolated, the node inlets do not experience a significant amount of
+mapping event interval (epoch length), it may be more worthwhile                            the extra heat that is generated due to the greater amount of power
+to employ a simple greedy heuristic when the workload environ-                              being used by the compute nodes.
+ment experiences little co-location interference because it is much                             To quantify the impact of isolation, we experiment with our re-
+faster to make decisions than the GA and NLP. The performance                               source management techniques after calculating an additional set
+difference between the NLP, GA, and greedy heuristics become                                of the thermal influence indices (i.e., the ACRAC [i, y] and ANode [j, y]
+more pronounced and extremely significant when executing the                                values). These coefficients were calculated by placing isolation cur-
+memory intensive workload environment, with the greedy per-                                 tains around the cold aisles in the mesh of the computational fluid
+forming half as well as the NLP in that case. In summary, for                               dynamic (CFD) simulations. Fig. 4 shows a comparison between
+the CPU intensive workload, NLP outperforms GA by 4% and GA                                 using the isolated and non-isolated aisles for the CPU intensive
+outperforms the greedy heuristic by 3% when they are considering                            and memory intensive workload environments. In Fig. 4(a), the
+the same objective function (RR or NERR). However, when the                                 normalized reward rate is shown, and in Fig. 4(b), the power
+workload is memory intensive, NLP earns 30% more reward rate                                consumption is shown, with hashed portion of the bars showing
+than the GA when using RR as the objective, and 24% more reward                             the power consumed by the CRAC unit and the solid portion of the
+rate than GA when using NERR as the objective. Similarly, for the                           bars showing the power consumed by the compute nodes.
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+10                                                     M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –
+
+
+
+
+Fig. 4. (a) Normalized reward rate comparison between isolated and non-isolated cold aisle configurations on the 1080 node system, and (b) power consumption comparison
+in relation to power budget constraint (red line). Hashed portion of bars show power consumed by the CRAC unit, and solid portion of bars show the power consumed by
+the compute nodes. (For interpretation of the references to color in this figure legend, the reader is referred to the web version of this article.)
+
+
+    In Fig. 4(a), we observe that the reward earned is more in an                         constraints are met. When the CRAC outlet temperatures are set
+isolated configuration for all techniques, following similar trends                       low for the compute node temperatures to be under red line, the
+as the non-isolated configuration. Fig. 4(b) gives the reason why                         power consumption of the CRAC units becomes very high (see
+the isolated configuration can earn more reward: under the same                           Eq. (3)), and the system is unable to meet the power budget even
+power constraint, the techniques when using the isolated configu-                         with most (if not all) of the compute cores deactivated (either
+ration are able to use less power for cooling (hashed portion of the                      assigned zero desired fraction of time, or running in the highest-
+bars) and more power for computing (solid portion of the bars). In                        numbered P-state). With all cores deactivated, a compute node
+summary, for the CPU intensive workload, isolation of the aisles                          still consumes static power (S(j)) and would still require cooling.
+provides all techniques with the ability to achieve approximately                         The amount of reward earned decreases non-linearly with the
+12% greater reward rate, and approximately 20% greater reward                             red-line temperature threshold. This is because when the CRAC
+rate for the memory intensive workload. With the cold aisles                              units have to run at a cooler temperature to ensure that red-
+isolated, the NLP is to obtain approximately 5% more reward rate                          line temperatures are not violated, a quadratically greater amount
+than the GA, and the GA earns 3% more reward rate than the                                of the power budget must be used for cooling. This non-linear
+greedy heuristic when considering the CPU intensive workload.                             relationship between a CRAC unit’s outlet temperature and its
+For the memory intensive workload, NLP outperforms GA by 28%                              power consumption is captured by the quadratic term in the CoP
+and the GA outperforms greedy by about 52%. If the reward earned                          equation (see Section 5.2). The non-isolated configuration shows
+is analogous to some form of revenue (e.g., in a cloud computing                          the techniques earning less reward, and also violating the power
+environment), the initial cost of isolating the aisles could be worth                     constraint at lower red-line temperature values, but overall sim-
+the price over time.                                                                      ilar trends as the isolated configuration. However, in the isolated
+                                                                                          configuration, we see that the greedy technique does not use all
+6.4. Power and thermal constraint sensitivity analysis                                    available power when the red-line threshold is set to 32◦ C. This
+                                                                                          is because assigning all core/task-type combinations to execute in
+     Our third set of experiments examines the effects of varying                         their most power-efficient P-state, in combination with the small
+the power and thermal constraints on the normalized reward that                           amount of cooling power required to maintain a 32◦ C threshold,
+can be earned in both isolated and non-isolated configurations.                           does not use all of the allotted power budget. The GA and NLP
+The values of both of these constraints have a significant effect on                      are able to assign core/task-types to execute in faster P-states to
+the ratio of power consumed by cooling and computing, and the                             consume that additional power.
+reward that can be earned by the system. Such studies are valuable                            Fig. 6 shows that all techniques are effective at using all of
+to the system administrator or data center owner to answer ‘‘what-                        the power budget and not violating the power budget. The re-
+if’’ questions, such as ‘‘what-if’’ the system is allowed 20% more                        ward earned varies almost linearly with the power budget, and
+power, or ‘‘what-if’’ the maximum allowable (red line) tempera-                           the relationship between power budget and reward rate is not
+ture is reduced to increase reliability?                                                  as exaggerated as in Fig. 5. Giving the system a greater power
+     The results of our temperature and power constraint sensitivity                      budget to operate within does result in more reward rate earned,
+analysis are shown in Figs. 5 and 6. Fig. 5 shows the normalized                          because nodes can operate in faster P-states and execute more
+reward rate and associated total power consumption results of our                         tasks. However, as evidenced by Fig. 5, it may be more worthwhile
+resource management techniques when varying the thermal con-                              to operate the compute nodes and CRAC units at a slightly higher
+straint (red-line temperature) from 24◦ C to 32◦ C with the power                         temperature to realize significant gains in reward rate earned. If
+constraint set to 230 kW. Fig. 6 shows the normalized reward                              reward rate is analogous to a revenue generated for computing,
+rate and total power consumption of our resource management                               analyses such as these would give important insights into the most
+techniques when varying the power budget constraint from 200                              profitable operating point.
+kW to 300 kW in 10 kW increments with the thermal constraint
+set to 30◦ C.                                                                             6.5. Scalability analysis
+     Note in Fig. 5 that if the red-line temperature becomes difficult
+to meet (less than 26◦ C for the isolated configuration and less                             As data centers become larger, it is important to address the
+than 28◦ C for the non-isolated configuration), none of the tech-                         scalability of resource allocation techniques on larger system com-
+niques are able to meet the power constraint, and also earn no                            plexities. Figs. 3 and 4 showed that NLP was able to achieve the best
+reward. This is due to the thermal-aware aspects of the techniques,                       results for a 1080 node platform size across three different work-
+where the CRAC outlet temperatures are set such that the thermal                          load environments and both non-isolated and isolated cold-aisle
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+                                                         M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –                                                        11
+
+
+
+
+Fig. 5. Sensitivity analysis of our greedy, GA, and NLP resource management techniques for both isolated and non-isolated data center configurations using the 1080 node
+system on the thermal (red line) constraint. (For interpretation of the references to color in this figure legend, the reader is referred to the web version of this article.)
+
+
+
+configurations. However, the primary drawback associated with                               techniques (GA or NLP) lends itself to such environments. In an
+the NLP technique is its poor scalability. GAs hold an advantage in                         environment where the types or arrival rates of the workload
+that they are able to provide a solution within any given algorithm                         changes rapidly, resource allocation decisions would have to be
+runtime bounds, though typically better results are obtained the                            fast, motivating the use of the greedy technique. Over time, how-
+longer they run. Fig. 7(a) and (b) show a comparison of greedy and                          ever, our GA and NLP heuristics are able to provide better solutions,
+GA on the small (1080 nodes) and large (4,320 node) platforms,                              and the GA can be terminated at any point, e.g., at the start of a new
+respectively. We recorded the performance of GA at many different                           epoch when new execution rates and P-states need to be found.
+heuristic execution times to examine the benefits of running it for
+different time intervals. The NLP is excluded, as it was unable to                          7. Conclusions
+finish within two weeks. Simulations were performed on a laptop
+with an Intel i7-4700HQ CPU and 8GB of RAM within a virtual                                     We studied the problem of maximizing the reward collected for
+machine using an Ubuntu Linux operating system. The simulation                              completing tasks by their deadlines subject to power and thermal
+framework was written in C++.                                                               constraints for heterogeneous data centers. Co-location interfer-
+    In summary, for a small platform and problem size, the better                           ence can have a significant impact on the execution speeds of
+                                                                                            tasks (and thus total reward). We capture these effects with our
+results obtained using the NLP approach motivates its use to gen-
+                                                                                            performance metric that considers co-location. We analyzed sev-
+erate resource allocations that optimize reward rate. However, as
+                                                                                            eral resource management techniques: a greedy technique based
+the platform size becomes larger, the NLP technique becomes in-
+                                                                                            on assigning tasks to machines in order of their efficiency (most
+tractable, and GA offers a solution in a reasonable amount of time.
+                                                                                            performance per unit of power), a GA combined with a local search
+                                                                                            technique that maximizes the reward rate and ensures the power
+6.6. Epoch size interval considerations                                                     and thermal constraints are met, and an NLP technique building on
+                                                                                            our prior work to maximize reward rate instead of naïve estimated
+                                                                                            reward rate that ignores the impact of co-location interference.
+    The length of the epoch interval has a large impact on the choice                           The primary contributions of this research were to provide
+of a resource management technique. For a computing environ-                                in-depth analyses of the problems and solutions associated with
+ment that has long running and predictable tasks (e.g., supercom-                           co-location and thermal-aware resource management in hetero-
+puting environments dedicated to climate analysis or molecular                              geneous computing systems. We used a new thermal model that
+biology simulations), the task arrival rates would not change sig-                          directly considers CRAC units in its calculation of the thermal
+nificantly in short periods of time and thus not frequently require                         influence coefficients, and a new co-location interference model
+new resource allocations. Setting a longer epoch interval time                              created from a linear regression technique using data from our lab
+and performing resource management using the longer running                                 servers. Because the amount of co-location interference can vary
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+12                                                     M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –
+
+
+
+
+Fig. 6. Sensitivity analysis of our greedy, GA, and NLP resource management techniques for both isolated and non-isolated data center configurations using the 1080 node
+system on the power constraint.
+
+
+
+
+Fig. 7. Comparison of normalized reward rate on the (a) small (1080 nodes) platform, and (b) large (4320 nodes) platform when using the hybrid workload. NLP excluded
+in (b) because it was unable to finish within two weeks. The power constraint was set to 230 kW for the small platform, and 900 kW for the large platform. The red-line
+temperature was set to 30◦ C. (For interpretation of the references to color in this figure legend, the reader is referred to the web version of this article.)
+
+
+
+greatly between workloads, we classified task-types into three dif-                       and facility operators in deciding what power budget or thermal
+ferent workload environments of varying memory intensities. We                            constraints would be ideal.
+found that our greedy technique can perform almost as well as the                            We have several directions we wish to pursue relating to this
+more complex GA and NLP techniques when interference between                              research. First is examining the co-location and thermal-aware
+tasks is small, but the complex techniques become significantly                           resource management problem in a real-time dynamic environ-
+                                                                                          ment instead of rate-based allocations in epoch intervals. The
+better at heavy interference.
+                                                                                          complexity associated with predicting co-location interference
+   Isolation of the cold-aisles has a significant impact on the
+                                                                                          and thermal profiles fast enough to make real-time decisions is a
+thermal profile of the data center. We quantify the usefulness of                         daunting task. Second, we wish to account for uncertainties in task
+isolation by comparing the reward rate our resource management                            execution times that can vary due to changes in the data inputs
+techniques are able to earn in both configurations. We then show                          or network load (e.g., such as techniques in [8,28,37]), and design
+a power and thermal constraint sensitivity analysis to answer                             co-location and thermal-aware resource management techniques
+some ‘‘what-if’’ questions that would help system administrators                          that are robust against such uncertainties to more closely match
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+                                                          M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –                                                             13
+
+
+real-world problems. In high-performance computing (HPC)                                     [9] M. Chaudhry, T. Ling, A. Manzoor, S. Hussain, J. Kim, Thermal-aware scheduling
+environments, it is typical to execute large, parallel workloads.                                in green data centers, ACM Comput. Surv. 47 (3) (2015) 48 pp.
+                                                                                            [10] G. Chen, W. He, J. Liu, S. Nath, L. Rigas, L. Xiao, F. Zhao, Energy-aware server
+Extending this work to consider tasks that span multiple nodes in-
+                                                                                                 provisioning and load dispatching for connection-intensive internet services,
+troduces considerations such as data sharing and communication                                   in: 5th USENIX Symp. Networked Systems Design and Implementation, 2008,
+latencies that would be interesting to analyze and mitigate. Finally,                            pp. 337–350.
+classifying unknown tasks into task types as they arrive would                              [11] G.T. Chetsa, L. Lefévre, J. Pierson, P. Stolf, G.D. Costa, Exploiting performance
+be an intriguing addition to this work, as would multi-objective                                 counters to predict and improve energy performance of HPC systems, Future
+                                                                                                 Gener. Comput. Syst. 38 (1) (2014) 287–298.
+Pareto front analyses to determine efficient performance per en-
+                                                                                            [12] D. Dauwe, E. Jonardi, R. Friese, S. Pasricha, A.A. Maciejewski, D.A. Bader, H.J.
+ergy operating points.                                                                           Siegel, A methodology for co-location aware application performance model-
+                                                                                                 ing in multicore computing, in: 17th Workshop on Advances on Parallel and
+Acknowledgments                                                                                  Distributed Computational Models (APDCM ’15), 2015, pp. 434–443.
+                                                                                            [13] C. Delimitrou, C. Kozyrakis, Quality-of-service-aware scheduling in heteroge-
+                                                                                                 neous datacenters with paragon, IEEE Micro. 34 (3) (2014) 17–30.
+    The authors thank Tim Hansen and Daniel Duawe for their                                 [14] D.G. Feitelson, Parallel workload archive. http://www.cs.huji.ac.il/labs/paralle
+valuable comments on this work. This research was supported by                                   l/workload/l_anl_int/index.html, 2011 (Accessed 17 September 2015).
+NSF grants CNS-0905399, CCF-1302693, and CCF-1252500. This                                  [15] W. Feng, The Green500 list—November 2016. https://www.top500.org/green
+research used the CSU ISTeC Cray System supported by NSF Grant                                   500/list/2016/11/, 2016 (Accessed 8 January 2017).
+                                                                                            [16] S. Gondipalli, S. Bhopte, B. Sammakia, M. Iyengar, R. Schmidt, Effect of isolating
+CNS-0923386. We also thank Hewlett Packard for donating servers
+                                                                                                 cold aisles on rack inlet temperature, in: 11th Conf. Thermal and Thermo-
+for this work.                                                                                   mechanical Phenomena in Electronic Systems (ITHERM ’08), 2008, pp. 1247–
+    A preliminary version of portions of this material appear in the                             1254.
+2014 International Green Computing Conference [34]. This paper                              [17] Google. Efficiency: How we do it. http://www.google.com/about/datacenters/
+extends [34] in the following ways: (a) enhances our greedy heuris-                              efficiency/internal, 2015 (Accessed 20 November 2015).
+                                                                                            [18] S. Govindan, J. Liu, A. Kansal, A. Sivasubramaniam, Cuanta: quantifying effects
+tic by considering co-location interference in its decision making
+                                                                                                 of shared on-chip resource interference for consolidated virtual machines,
+and an unmapping feature that unmaps task types on overprovi-                                    in: 2nd ACM Symp. on Cloud Comp. (SOCC ’11), 2011 14 pp.
+sioned cores, (b) integrates a new model to predict execution times                         [19] Y. Guo, Y. Gong, Y. Fang, P.P. Khargonekar, X. Geng, Energy and network aware
+of tasks under co-location interference with the model coeffi-                                   workload management for sustainable data centers with thermal storage, IEEE
+cients obtained by executing benchmarks on server class machines,                                Trans. Parallel Distrib. Syst. 25 (8) (2014) 2030–2042.
+                                                                                            [20] S.K.S. Gupta, A. Banerjee, Z. Abbasi, G. Varsamopoulos, M. Jonas, J. Ferguson, R.
+(c) analyzes our techniques using a different thermal model that
+                                                                                                 Gilbert, T. Mukherjee, GDCSim - A simulator for green data center design and
+directly includes CRAC units, (d) performs in-depth analysis of                                  analysis, ACM Trans. Model. Comput. Simul. 24 (1) (2014) 37 pp.
+resource management techniques under several important data                                 [21] Hewlett-Packard, Intel, Microsoft, Phoenix Technologies, and Toshiba. Ad-
+center configurations (e.g., isolated and non-isolated cold-aisle                                vanced configuration and power interface specification, rev. 5.0, 2011.
+configurations), and workload environments of differing memory-                             [22] M.A. Iverson, F. Ozgüner, L. Potter, Statistical prediction of task execution times
+                                                                                                 through analytic benchmarking for scheduling in a heterogeneous environ-
+intensities, and (e) presents sensitivity analysis of the power and
+                                                                                                 ment, IEEE Trans. Comput. 48 (12) (1999) 1374–1379.
+thermal constraints under the different data center configurations                          [23] Z. Jiang, W. Huang, I. You, Z. Qian, S. Lu, Thermal-aware task placement
+and workload environments.                                                                       with dynamic thermal model in an established datacenter, in: 8th Int’l Conf.
+                                                                                                 Innovative Mobile and Internet Services in Ubiquitous Comp. (IMIS ’14), 2014,
+Appendix A. Supplementary data                                                                   pp. 1–8.
+                                                                                            [24] M. Kambadur, T. Mosely, R. Hank, M.A. Kim, Measuring interference between
+                                                                                                 live datacenter applications, in: Int’l Conf. High Performance Comp., Network-
+   Supplementary material related to this article can be found                                   ing, Storage, and Analysis (SC ’12), 2012 12 pp.
+online at http://dx.doi.org/10.1016/j.jpdc.2017.04.015.                                     [25] F. Kaplan, J. Meng, A.K. Coskun, Optimizing communication and cooling costs
+                                                                                                 in data centers via intelligent job allocation, in: 4th Int’l Green Comp. Conf.
+                                                                                                 (IGCC ’13), 2013 10 pp.
+References                                                                                  [26] P. Kogge, et al., Exascale computing study: technology challenges in achieving
+                                                                                                 exascale systems, DARPA, 2008.
+[1] A.M. Al-Qawasmeh, S. Pasricha, A.A. Maciejewski, H.J. Siegel, Power and                 [27] E.K. Lee, H. Viswanathan, D. Pompili, VMAP: Proactive Thermal-aware Virtual
+    thermal-aware workload allocation in heterogeneous data centers, IEEE Trans.                 Machine Allocation in HPC Cloud Datacenters, in: 19th Int’l Conf. on High
+    Comput. 64 (2) (2015) 477–491.                                                               Performance Comp. (HiPC ’12), 2012 10 pp.
+[2] ASHRAE Technical Commitee, Thermal Guidelines for Data Processing                       [28] Y.A. Li, J.K. Antonio, H.J. Siegel, M. Tan, D.W. Watson, Determining the ex-
+    Environments—Expanded Data Center Classes and Usage Guidance, Tech. rep.,                    ecution time distribution for a data parallel program in a heterogeneous
+    American Society of Heating, Refrigerating, and Air-Conditioning Engineers,                  computing environment, J. Parallel Distrib. Comput. 44 (1) (1997) 33–52.
+    Inc., 2011.                                                                             [29] M. Maheswaran, S. Ali, H.J. Siegel, D. Hensgen, R.F. Freund, Dynamic mapping of
+[3] BASX Solutions, CRAC / CRAH Units. http://www.basxsolutions.com/--crac-                      a class of independent tasks onto heterogeneous computing systems, J. Parallel
+    crah-units (Accessed 15 October 2015).
+                                                                                                 Distrib. Comput. 59 (2) (1999) 107–131.
+[4] H. Bhagwat, U. Singh, A. Deodhar, A. Singh, A. Vasan, A. Sivasubramaniam, Fast
+                                                                                            [30] Moab HPC Suite. http://www.adaptivecomputing.com/products/hpc-product
+    and accurate evaluation of cooling in data centers, J. Electron. Packag. 137 (1)
+                                                                                                 s/moab-hpc-basic-edition/, 2015 (Accessed 20 November 2015).
+    (2015) 9 pp.
+                                                                                            [31] J. Moore, J. Chase, P. Ranganathan, R. Sharma, Making scheduling ‘‘cool’’:
+[5] S. Blagodurov, D. Gmach, M. Arlitt, Y. Chen, C. Hyser, A. Fedorova, Maximizing
+                                                                                                 temperature-aware workload placement in data centers, in: USENIX Annual
+    server utilization while meeting critical SLAs via weight-based collocation
+                                                                                                 Technical Conf. (ATEC ’05), 2005, pp. 61–75.
+    management, in: 2013 Int’l Symp. Integrated Network Management (IM ’13),
+                                                                                            [32] A. Nemirovski, Interior point polynomial time methods in convex program-
+    2013, pp. 277–285.
+                                                                                                 ming. http://www2.isye.gatech.ed/~nemirovs/Lect_IPM.pdf, 2004 (Accessed
+[6] P. Bodik, R. Griffith, C. Sutton, A. Fox, M.I. Jordan, D.A. Patterson, Automatic ex-
+    ploration of datacenter performance regimes, in: 1st Workshop on Automated                   11 March 2016).
+    Control for Datacenters and Clouds, 2009, pp. 1–6.                                      [33] S. Nesmachnow, C. Perfumo, I. Goiri, Controlling datacenter power consump-
+[7] T.D. Braun, H.J. Siegel, N. Beck, L. Bölöni, R.F. Freund, D. Hensgen, M. Maheswaran,         tion while maintaining temperature and QoS levels, in: 3rd Int’l Conf. Cloud
+    A.I. Reuther, J.P. Robertson, M.D. Theys, B. Yao, A comparison of eleven static              Networking (CloudNet ’14), 2014, pp. 242–247.
+    heuristics for mapping a class of independent tasks onto heterogeneous                  [34] M.A. Oxley, E. Jonardi, S. Pasricha, A.A. Maciejewski, G.A. Koenig, H.J. Siegel,
+    distributed computing systems, J. Parallel Distrib. Comput. 61 (6) (2001) 810–               Thermal, power, and co-location aware resource allocation in heterogeneous
+    837.                                                                                         high performance computing systems, in: 5th Int’l Green Comp. Conf. (IGCC
+[8] L. Briceño, H.J. Siegel, A.A. Maciejewski, M. Oltikar, J. Brateman, J. White, J.             ’14), 2014 10 pp.
+    Martin, K. Knapp, Heuristics for robust resource allocation of satellite weather        [35] M. Polverini, A. Cianfrani, S. Ren, A.V. Vasilakos, Thermal-aware scheduling
+    data processing onto a heterogeneous parallel system, IEEE Trans. Parallel                   of batch jobs in geographically distributed data centers, IEEE Trans. Cloud
+    Distrib. Syst. 22 (11) (2011) 1780–1787.                                                     Comput. 2 (1) (2014) 71–84.
+
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+14                                                         M.A. Oxley et al. / J. Parallel Distrib. Comput. (   )   –
+
+
+[36] Princeton University. The parsec Benchmark Suite. http://parsec.cs.princeton.                                      Sudeep Pasricha received his B.E. degree in Electronics
+     edu/overview.htm, 2009 (Accessed 7 December 2014).                                                                 and Communications from Delhi Institute of Technology in
+[37] V. Shestak, J. Smith, A.A. Maciejewski, H.J. Siegel, Stochastic robustness metric                                  2000, and his M.S. and Ph.D. degrees in Computer Science
+     and its use for static resource allocations, J. Parallel Distrib. Comput. 68 (8)                                   from University of California, Irvine, in 2005 and 2008. He
+     (2008) 1157–1173.                                                                                                  is currently an Associate Professor in the Department of
+[38] SLURM Workload Manager. http://slurm.schedmd.com/, 2015 (Accessed 20                                               Electrical and Computer Engineering and also the Depart-
+     November 2015).                                                                                                    ment of Computer Science at Colorado State University.
+[39] M. Stansberry, 2014 data center industry survey. https://journal.uptimeinstit                                      He is a Senior Member of the IEEE and ACM. Homepage:
+     ute.com/2014-data-center-industry-survey/, 2014.                                                                   http://www.engr.colostate.edu/_sudeep.
+[40] H. Sun, P. Stolf, J. Pierson, G.D. Costa, Energy-efficient and thermal-aware re-
+     source management for heterogeneous datacenters, Sustainable Computing:
+     Informatics and Systems 4 (4) (2014a) 292–306.
+[41] H. Sun, P. Stolf, J.M. Pierson, G.D. Costa, Multi-objective scheduling for hetero-
+     geneous server systems with machine placement, in: 14th Int’l Symp. Cluster,                                       Anthony A. Maciejewski received the B.S.E.E., M.S., and
+                                                                                                                        Ph.D. degrees from The Ohio State University in 1982,
+     Cloud, and Grid Comp. (CCGRID ’14), 2014b, pp. 334–343.
+                                                                                                                        1984, and 1987. From 1988 to 2001, he was a professor
+[42] Q. Tang, T. Mukherjee, S.K. Gupta, P. Cayton, Sensor-based fast thermal eval-
+                                                                                                                        of Electrical and Computer Engineering at Purdue Uni-
+     uation model for energy efficient high-performance datacenters, in: 4th Int’l
+                                                                                                                        versity, West Lafayette. He is currently a Professor and
+     Conf. on Intelligent Sensing and Information Processing (ICISIP ’06), 2006,
+                                                                                                                        Department Head of Electrical and Computer Engineering
+     pp. 203–208.
+                                                                                                                        at Colorado State University. He is a Fellow of the IEEE. A
+[43] O. Tuncer, K. Vaidyanathan, K. Gross, A.K. Coskun, Coolbudget: data center
+                                                                                                                        complete vita is available at: http://www.engr.colostate.
+     power budgeting with workload and cooling asymmetry awareness, in: 32nd
+                                                                                                                        edu/_aam.
+     Int’l Conf. Computer Design (ICCD ’14), 2014, pp. 497–500.
+[44] V. Villebonnet, D.D. Costa, Thermal-Aware cloud middleware to reduce cool-
+     ing needs, in: 23rd IEEE Int’l Conf. Enabling Technologies: Infrastructure for
+     Collaborative Enterprises (WETICE ’14), 2014, pp. 115–120.
+[45] D. Whitley, The GENITOR algorithm and selective pressure: Why rank-based
+     allocation of reproductive trials is best, in: 3rd Int’l Conf. on Genetic Algo-                                    Howard Jay (’’H.J.’’) Siegel was appointed the Abell En-
+     rithms, 1989, pp. 116–121.                                                                                         dowed Chair Distinguished Professor of Electrical and
+[46] J. Zhao, X. Feng, H. Cui, Y. Yan, J. Xue, W. Yang, An empirical model for pre-                                     Computer Engineering at Colorado State University in
+     dicting cross-core performance interference on multicore processors, in: 22nd                                      2001, where he is also a Professor of Computer Science.
+                                                                                                                        From 1976 to 2001, he was a professor at Purdue Univer-
+     Int’l Conf. Parallel Architectures and Compilation Techniques (PACT ’13), 2013,
+                                                                                                                        sity. He is an IEEE Fellow and an ACM Fellow. He received
+     pp. 201–212.
+                                                                                                                        B.S. degrees from MIT, and the M.S.E. and Ph.D. degrees
+                                                                                                                        from Princeton University. Homepage: http://www.engr.
+                                                                                                                        colostate.edu/_hj.
+
+
+
+                          Mark A. Oxley is a Ph.D. graduate from Colorado State Uni-
+                          versity in 2016. He received his B.S. degree in Computer
+                                                                                                                        Patrick J. Burns received his B.S. in Mechanical Engineer-
+                          Engineering from the University of Wyoming. His research
+                                                                                                                        ing at Tulane University and his M.S. and Ph.D. at the Uni-
+                          interests include energy-aware, thermal-aware, and ro-
+                                                                                                                        versity of California at Berkley in Mechanical Engineering
+                          bust resource management techniques. He is currently a
+                                                                                                                        with an emphasis of heat transfer and energy engineer-
+                          Research Scientist at Numerica Corporation in Fort Collins,
+                                                                                                                        ing. He is currently the Vice President for IT and Dean of
+                          CO.
+                                                                                                                        Libraries, and a professor of Mechanical Engineering. He is
+                                                                                                                        responsible for operations of the main and redundant data
+                                                                                                                        centers at Colorado State University.
+
+
+
+
+                          Eric Jonardi obtained his M.S. from Colorado State Uni-                                       Gregory A. Koenig is an R & D Staff member at Oak Ridge
+                          versity in 2015. He received his B.S degree in Electrical                                     National Laboratory where his work involves developing
+                          Engineering from Marquette University in 2013.                                                scalable system software and tools for ultrascale-class
+                                                                                                                        parallel computers. He holds three B.S. degrees (computer
+                                                                                                                        science, 1993; electrical engineering technology, 1995;
+                                                                                                                        mathematics, 1996) from Indiana University-Purdue Uni-
+                                                                                                                        versity Fort Wayne, as well as an M.S. (2003) and Ph.D.
+                                                                                                                        (2007) in computer science from the University of Illinois
+                                                                                                                        at Urbana–Champaign.
+
+
+
+
+Please cite this article in press as: M.A. Oxley, et al., Rate-based thermal, power, and co-location aware resource management for heterogeneous data centers, J. Parallel
+Distrib. Comput. (2017), http://dx.doi.org/10.1016/j.jpdc.2017.04.015.
+

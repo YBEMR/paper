@@ -1,0 +1,767 @@
+                                                       Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+                                                                  Contents lists available at ScienceDirect
+
+
+                                       Sustainable Computing: Informatics and Systems
+                                                         journal homepage: www.elsevier.com/locate/suscom
+
+
+
+
+Hardware and application aware performance, power and energy models for
+modern HPC servers with DVFS
+Georges Da Costa
+IRIT, Université de Toulouse, CNRS, Toulouse, France
+
+
+
+ARTICLE               INFO                                ABSTRACT
+
+Keywords:                                                 Energy usage and its ecological impact is now a major concern in High Performance Computing (HPC). To
+Performance                                               optimize supercomputers efficiency, researchers rely on models, as accessing actual platform is complex and
+Power                                                     costly. Changing DVFS (Dynamic Voltage and Frequency Scaling) is the most studied method, but it impacts
+Energy
+                                                          power, performance and energy in a complex way.
+Model
+                                                              We propose to bridge the gap between the theoretical and the practical approaches. We propose a
+HPC
+                                                          multi cluster, multi application model accurately describing from a theoretical point of view the power and
+                                                          performance of applications subject to DVFS. We show how to use it on a runtime system with a minimal
+                                                          overhead, using only a few hardware performance counters and RAPL (Running Average Power Limit).
+                                                              We validate our models using an extensive dataset, obtained using 18 different clusters and running 9
+                                                          benchmarks. We also show how such model can be used to optimize the energy-to-solution for HPC workload.
+
+
+
+1. Introduction                                                                              • Power, performance and energy theoretical models taking into
+                                                                                               account the heterogeneity of servers and applications, for theo-
+    Energy usage is now a major concern in High Performance Comput-                            retical and experimental usage;
+ing (HPC) due to the ecological impact of electricity production, but                        • Optimal frequency based on these models to minimize energy
+also to its cost. Still, HPC usage is increasing due to its importance for                     consumption for diverse servers and applications;
+addressing always increasing large scientific problems. The efficiency                       • Low overhead online practical models for power, performance
+of its usage becomes a major concern.                                                          and energy.
+    Multiple strategies exist to increase the energy efficiency of super-
+computers. Servers can be switched on and off, applications can be                           In Section 2 we will overview the existing literature. Then Section 3
+run on the optimal hardware on heterogeneous context, and they can                       will describe the proposed theoretical model, along with other existing
+be assigned the optimal number of resources when they are moldable.                      models. Section 4 will explain the evaluation methodology as one
+Finally one of the most efficient leverage is the capacity to change the                 important part of this work concerns the evaluation of multiple applica-
+DVFS (Dynamic Voltage and Frequency Scaling) of the processors, as                       tions on multiple servers. The models will be compared using multiple
+it impacts the server power. Such leverages allows to optimize energy                    metrics in Section 5. Finally, the low overhead usage of the models will
+efficiency but can also be used in case of need of power-capping.                        be presented and evaluated in Section 6 before the conclusion.
+    Reducing the processor frequency reduces the power, but at the cost
+of slowing down the applications. As both effects are contrary, this                     2. State of the art
+leverage is complex to use. Most research are either addressing this
+problem from a theoretical point of view, or are proposing runtime                           Several either practical [1] or theoretical [2] studies rely on power,
+framework to optimize one server.                                                        performance and energy model of HPC servers under DVFS. They use
+    In this article, we propose to bridge the gap between the theoretical                these models either to overall minimize task energy, achieve slack
+and the practical approaches. To do so we propose a multi cluster,                       reclamation, and many other uses.
+multi application model accurately describing from a theoretical point                       Most studies trying to model HPC applications performance un-
+of view the power and performance of applications subject to DVFS. We                    der Dynamic Voltage Frequency Scaling evaluate that the increase
+also show how to use it on a runtime system with a minimal overhead.                     in time is not proportional to the change in frequency and link this
+    The contributions are the following:
+
+
+
+     E-mail address: georges.da-costa@irit.fr.
+
+https://doi.org/10.1016/j.suscom.2025.101106
+Received 28 October 2024; Received in revised form 21 January 2025; Accepted 21 February 2025
+Available online 8 March 2025
+2210-5379/© 2025 The Author. Published by Elsevier Inc. This is an open access article under the CC BY license (http://creativecommons.org/licenses/by/4.0/).
+G. Da Costa                                                                                                Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+to non-CPU (processor) activities (memory and network ones). For                   Table 1
+                                                                                   Definition of the variables.
+example, [3] introduces the 𝛽 metric, later investigated in [4] that
+                                                                                    𝑃 𝑜𝑤𝑒𝑟                    Power consumption of a server in W
+investigates the application slowdown compared to the CPU slowdown:
+                                                                                    𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛                  Duration of an application in s
+𝑇 (𝑓 )∕𝑇 (𝑓 𝑚𝑎𝑥) = 𝛽 × 𝑓 𝑚𝑎𝑥∕𝑓 + 𝑐0 . Their approach works as a source-             𝐸𝑛𝑒𝑟𝑔𝑦                    Energy consumption of an application in J
+to-source method, with a profile-driven approach. It is validated using             𝐹 𝑚𝑎𝑥                     Maximum frequency of a server in Hz
+several benchmarks on a single computer. We generalize a similar idea               𝑃 𝑐𝑜𝑒𝑓                    Power coefficient of the frequency in formula (1)
+(the Fluid metric) with also proposing an actual online system based                𝑃 𝑠𝑡𝑎𝑡𝑖𝑐                  Static part of the power consumption of a server in W
+                                                                                    𝑃 𝑑𝑦𝑛                     Dynamic part of the power consumption of a server in W
+on system measures of the platform.
+                                                                                    𝑐                         Cluster id
+    In the survey [5], authors describe several other researches address-           𝑎                         Application id
+ing the problem of finding these models. Most of the existing work                  𝑓                         Frequency in Hz
+is focusing on single-server DVFS due to the problem of coordination
+between the servers. One of the existing work on multiple servers [6]
+focuses on NAS Parallel Benchmarks and uses DVFS to reduce the
+                                                                                       • All applications have different behaviors power-and performance-
+processors frequency when the network becomes a bottleneck. More
+                                                                                         wise in function of the hardware because of their resource usage;
+recently, in [7], authors evaluate the 𝛽 metric for several application,
+                                                                                       • Variation of the classical models can include this diversity;
+linking these values to the bottleneck of the particular application
+                                                                                       • Such modified model allows to precisely predict power and per-
+(cpu-bound, memory-bound, . . . ). Most of these research are limited
+                                                                                         formance;
+to a single type of hardware, contrary to our approach where we use
+                                                                                       • This model can be used to find the optimal frequency for reducing
+multiple type of servers to obtain more generic results.
+                                                                                         energy-to-solution;
+    Another approach is to use neural network architecture to learn
+                                                                                       • The constants in the model can be measured with a low overhead
+the optimal frequency in function of the several performance counters
+                                                                                         at run-time.
+values. In [8] authors uses their proposed online neural network on
+several application on a single server. Such type of approach leads to                 In the following we will describe different models, starting with the
+good results, but with a high overhead, and with a very limited theoret-           classical one, up to the model we propose.
+ical usage. Similarly, in [9] authors use a Particle Swarm Optimization
+(PSO) system to estimate the power consumption in function of the
+                                                                                   3.1. Classical model
+frequency on three different applications on one server. This reduced
+context allows to have only between 4 to 6 percent of average error on
+power estimation, but needs a large amount of data. In the following                   Existing classical models [14] express the link between processor
+we will show how our proposed method reacts when the amount of                     frequency and duration as linear, and between power and frequency
+data is limited.                                                                   derived from the underlying CMOS technology. They also assume that
+    Finally very specific work can be done when focusing on a particular           these models are only related to the hardware, not depending on the
+architecture (including a CPU and a GPU — Graphical Processor).                    particular application running. They usually model using equations like
+In [10], authors propose a very specific model for their particular                (1) for the power model, (2) for the duration and (3) for the energy
+application with multiple phases, leading to a very precise model,                 (which is the product of duration and power).
+taking into account the arithmetic pressure specific to the application.                                          (         )𝑃 𝑐𝑜𝑒𝑓
+                                                                                                                       𝑓
+The change for the optimal frequency for each of the phases is added               𝑃 𝑜𝑤𝑒𝑟𝑐𝑓 = 𝑃 𝑠𝑡𝑎𝑡𝑖𝑐 𝑐 + 𝑃 𝑑𝑦𝑛𝑐         𝑐
+                                                                                                                                                       (1)
+                                                                                                                    𝐹 𝑚𝑎𝑥
+at the beginning of the said phase in the source code. This method is
+                                                                                                                    𝐹 𝑚𝑎𝑥𝑐
+invasive and needs an access to the source code, while our approach                𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                           𝑓
+                                                                                               = 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                         𝐹 𝑚𝑎𝑥𝑐
+                                                                                                                                                                      (2)
+consider applications as black-boxes.                                                                                  𝑓
+    Concerning the choice of hardware performance counters to mon-
+                                                                                   𝐸𝑛𝑒𝑟𝑔𝑦𝑐,𝑎
+                                                                                         𝑓
+                                                                                             = 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                       𝑓
+                                                                                                           ∗ 𝑃 𝑜𝑤𝑒𝑟𝑐𝑓                                                 (3)
+itor, they usually are studied in the context of a particular hardware.
+For example, in [11], authors explore an 8-core AMD FX-8320. Instead                  The variables used in these equations are described in Table 1.
+in our study we evaluate 18 clusters built over 10 years.                             We always assume the frequency is one of the available frequency
+    Similarly, in [12] authors focus on the online execution linked                on the targeted cluster. The input data are in this case : 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎       𝑓 𝑚𝑎𝑥
+                                                                                                                                                                      ,
+with a fine-grained model of the micro-architecture. While precise, the            𝐹 𝑚𝑎𝑥𝑐 , 𝑃 𝑐𝑜𝑒𝑓 𝑐 , 𝑃 𝑠𝑡𝑎𝑡𝑖𝑐 𝑐 , 𝑃 𝑑𝑦𝑛𝑐 . Out of these characteristics, all except
+model is mostly tailored for online runtime, not theoretical work. It              one depends only on the hardware. If the performance is expressed
+allows to find the frequency reaching the lowest energy state.                     as a speed-up (using 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎          ∕𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎     ), then the model de-
+                                                                                                                         𝑓             𝐹 𝑚𝑎𝑥𝑐
+    Most studies zoom on a particular hardware and obtain the asso-                pends only on the hardware. To obtain these constants, the usual
+ciated constants after measurements. These values are linked to the                method consist in running an application at maximum frequency and at
+particular environment but allows to reach a very high accuracy.                   minimum frequency on each cluster, measuring the associated Power
+In [13], authors use a single benchmark on a single type of server.                consumption and solving the linear equation system to obtain 𝑃 𝑠𝑡𝑎𝑡𝑖𝑐 𝑐
+The obtained constants are linked to this particular system. With such             and 𝑃 𝑑𝑦𝑛𝑐 . Concerning 𝑃 𝑐𝑜𝑒𝑓 𝑐 , it is usually measured with at least one
+a specialized model, the accuracy on predicted energy is high, at 94%.             more measure (for a frequency between the maximum and minimum).
+                                                                                   Most publications use a value between 2 and 3. In the following we will
+3. Approach                                                                        use a constant of 2 in order to reduce the number of changing elements
+                                                                                   between the models.
+       At any point in time, any application is usually either idle or using          Fig. 1 shows that the main characteristic impacting the energy
+one of the server resource, such as the CPU, the memory, the network,              behavior of this model is the ratio between 𝑃 𝑠𝑡𝑎𝑡𝑖𝑐 and 𝑃 𝑑𝑦𝑛. The
+. . . In the following, we will only study processor-related DVFS. Similar         optimal frequency to reduce the total energy depends on this ratio.
+work could be done on the other elements supporting DVFS such as                      We will show in the following that this classical model has three
+GPU or memory.                                                                     limits:
+       The usage of DVFS impacts the application only when it uses the
+CPU.                                                                                   • Different applications consume different power even at maximum
+       We want to verify the following properties:                                       frequency;
+
+                                                                               2
+G. Da Costa                                                                                                         Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+
+
+Fig. 1. Power, duration and energy for the classical model. Different ratio 𝑃 𝑠𝑡𝑎𝑡𝑖𝑐∕𝑃 𝑑𝑦𝑛 are displayed for a constant power consumption and duration when frequency is at its
+maximum. Minimum frequency is 0.4 × 𝐹 𝑚𝑎𝑥 in this example as most hardware architecture cannot go below this frequency.
+
+
+
+
+Fig. 2. Measure (power, performance, energy) on the taurus cluster of Grid’5000 of several benchmarks (one color for each different benchmark). The 𝑥-axis represents the
+ratio 𝑓 ∕𝐹 𝑚𝑎𝑥. Duration for each benchmarks is normalized relatively to the value at maximum frequency, hence the name Unit of work. Energy is the product of power and the
+normalized time. Each point represent the mean value of 10 executions, along with the standard error bar. (For interpretation of the references to color in this figure legend, the
+reader is referred to the web version of this article.)
+
+
+
+
+   Fig. 3. Median power during the execution of each bench at maximum frequency of the servers. Slight jitter on the 𝑥 axis has been added to visually separate the points.
+
+
+    • Applications do not react totally to DVFS from a power and                             becomes:
+      duration point of view as they use other resources such as memory                                                            (            )𝑃 𝑐𝑜𝑒𝑓
+                                                                                                                                          𝑓
+      or I/Os;                                                                               𝑃 𝑜𝑤𝑒𝑟𝑐,𝑎
+                                                                                                   𝑓
+                                                                                                       = 𝑃 𝑠𝑡𝑎𝑡𝑖𝑐 𝑐,𝑎 + 𝑃 𝑑𝑦𝑛𝑐,𝑎                                               (4)
+                                                                                                                                       𝐹 𝑚𝑎𝑥𝑐
+    • The impact of DVFS on duration and power depends on the
+      application and on the underlying hardware.                                            3.3. Application related performance model
+
+3.2. Application related power model                                                             Similarly as for the power model, Fig. 2 shows that the performance
+                                                                                             model cannot be simplified as a slow down proportional to the ratio
+    Fig. 2 shows that contrary to the classical model depending only                         of frequency. Our hypothesis is that for a HPC code, a percentage of
+on the server characteristics, power and performance also depend on                          the executed code will be impacted by the DVFS while another will
+the particular application. The applications presented here are from                         not. We note 𝛼 𝑐,𝑎 the ratio of the code execution that is impacted
+the NAS Parallel Benchmark (bt, cg, ep, ft, is, lu, mg, sp) and                              by the DVFS relative to the execution at maximum frequency. We
+an application (rand) that only makes a loop of calls to rand(), one                         call 𝐹 𝑙𝑢𝑖𝑑 the duration that is impacted by DVFS and 𝑅𝑖𝑔𝑖𝑑 the part
+thread per core.                                                                             that is not. With 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                                         𝐹 𝑚𝑎𝑥𝑐
+                                                                                                                                = 𝑅𝑖𝑔𝑖𝑑 𝑐,𝑎 + 𝐹 𝑙𝑢𝑖𝑑 𝑐,𝑎 and with 𝛼 𝑐,𝑎 =
+                                                                                                   𝑐,𝑎          𝑐,𝑎
+    Fig. 3 shows that the power behavior depends on both the appli-                          𝐹 𝑙𝑢𝑖𝑑 ∕𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝐹 𝑚𝑎𝑥𝑐 , we have the following behavior:
+cation and the cluster. Depending on the cluster, the maximum power                                                                     𝐹 𝑚𝑎𝑥𝑐
+                                                                                             𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                     𝑓
+                                                                                                         = 𝑅𝑖𝑔𝑖𝑑 𝑐,𝑎 + 𝐹 𝑙𝑢𝑖𝑑 𝑐,𝑎 ×
+consuming benchmark changes. For example, cg consumes the most on                                                                          𝑓
+chetemi cluster while being in the middle on petitprince.                                       So Eq. (2) becomes:
+    To account for this, a possible model would be to associate one                                        (                           𝑐
+                                                                                                                                         )
+                                                                                                                             𝑐,𝑎 𝐹 𝑚𝑎𝑥
+specific model for each combination of applications and clusters. Eq. (1)                    𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                     𝑓
+                                                                                                         =  (1 − 𝛼 𝑐,𝑎
+                                                                                                                       ) + 𝛼               × 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                                                                     𝑓 𝑚𝑎𝑥
+                                                                                                                                                                               (5)
+                                                                                                                                    𝑓
+
+                                                                                         3
+G. Da Costa                                                                                           Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+                                                                               Table 2
+                                                                               MAPE for the different models. Mean measured Power over all servers is 229 W, with
+4. Evaluation methodology
+                                                                               a first quartile of 176 W to a third quartile of 280 W. For Duration these values are
+                                                                               1.2, 1.1 and 1.4 while for Energy they are 274J, 213 and 317.
+      We compare the following models                                           Name                            Power                Duration               Energy
+                                                                                Naive rand                      24.30                17.35                  28.82
+      • Naive rand: For reference purpose we use a classical model
+                                                                                Naive all app                   26.83                17.35                  35.13
+        that aggregate the data-centers as an average one (even the             Per Server rand                 13.62                14.53                  15.31
+        maximum frequency is averaged) and uses a single application            Per Server all app              15.40                14.53                  23.06
+        (rand, described below).                                                Per App                          8.23                14.53                  21.48
+                                                                                Fluid                            8.23                 2.05                   8.55
+      • Naive all app: Similarly to the Naive rand but with us-
+        ing all the applications (NAS Parallel Benchmark, rand) data
+        aggregated as an average one.
+      • Per Server rand: One classical model per server, using data            before and after their execution to match the system measures and the
+        from rand for determining the constants.                               power measures which are obtained on different servers with different
+      • Per Server all app: One classical model per server, using              latency. These peaks are removed before the analysis of the data.
+        averaged values for the applications.                                      This tool relies on external monitoring system for the system-level
+      • Per App: One classical model for each combination of servers           measures. For the measures on hardware performance counters, the
+        and applications.                                                      tool used is MojitO/S [17]. It is an Open Source System, Energy and
+      • Fluid: One model (using Eq. (5)) for each combination of servers       Network Monitoring Tools at the O/S level running on GNU/Linux. It
+        and applications. This performance model uses the fluid ratio 𝛼.       allows to monitor classical system metrics such as load, network, but
+                                                                               also memory layers, RAPL values and hardware performance counters.
+    The servers are from Grid’5000 [15] experimental platform: a large-        These counters inside the processor can be used to count the number
+scale and flexible testbed for experiment-driven research in all areas         of cache misses, instructions, arithmetic operations, among others.
+of computer science, with a focus on parallel and distributed com-                 For each model, the constants relative to the model have been
+puting including Cloud, HPC and Big Data and AI. Each cluster is               extracted from the measures. For example, 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝐹 𝑚𝑎𝑥 is obtained
+homogeneous. Different clusters are using different hardware and were          using the mean duration for all the applications on all the servers for
+built between 2013 and 2021. The servers are all being monitored by            the Naive model and thus is constant for all clusters and applications.
+wattmeters with an accuracy between .1 to 10 W and a time from 1 s             𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                        𝐹 𝑚𝑎𝑥𝑐
+                                                                                               for the Per-app model is obtained using the ten runs for
+up to 7 s between measures depending on the cluster.                           each configuration cluster (𝑐)/benchmark (𝑎), resulting on one value
+    The benchmarks used are the NAS parallel benchmark (NPB) with              for each of these couple.
+size tuned running with a duration of around one minute : is-D, cg-                The main metric for comparison is the MAPE (Mean Absolute Per-
+D, lu-C, ep-D, mg-D, ft-C, sp-C, bt-C. There is also a random                  centage Error) computed between the measured values and the one
+one (rand benchmark) which runs a constant number of calls to the              predicted from the model. Another metric will be the amount of data
+rand() function on each core. It is used to evaluate the quality of            needed to compute the constants associated with each model along
+a model obtained using measures on a simple benchmark compared                 with the number of these constants. Eq. (6) shows the calcul of MAPE
+to one based on more precise measures. The current models are only             between 𝑛 measured (𝑀𝑖 ) and estimated values (𝐸𝑖 ). This value is a
+evaluated for full single servers applications. For NPB it means using         percentage with a lower value, the better.
+the maximum possible number of cores for each benchmark. For rand
+                                                                                           1 ∑ || 𝑀𝑖 − 𝐸𝑖 ||
+                                                                                            𝑖=𝑛−1
+it means one thread running series of rand for each core. The network          𝑀𝐴𝑃 𝐸 =                       × 100                                               (6)
+                                                                                           𝑛 𝑖=0 || 𝑀𝑖 ||
+is thus not used by any of the applications.
+    Each benchmark was run on each cluster with each available fre-
+                                                                               5. Comparison of the models
+quency 10 times. In the following a run will refer to running one
+benchmark on one cluster at one of the available frequencies. Also, an
+                                                                               5.1. Reproducibility
+experiment will refer to a series of consecutive runs of one benchmark
+on a single server of a cluster at all frequencies. Each of these runs
+                                                                                   The whole dataset of power and system measures (approx 7Go)
+will be monitored independently, but it guarantees that this experiment
+                                                                               is publicly available [18]. All the script to redo the analysis, and to
+is done on the same computer for all these frequencies in the same
+                                                                               generate the models are available2
+environment. Different experiments on a single cluster might have run
+on different servers. Each run is started after an identical pattern is        5.2. Evaluation of the quality of the models
+executed on the server for two purposes: first it allows to match the
+external power measure with the system measures at a higher precision;             The comparison of the models are obtained using the overall MAPE
+second it guaranties that all run will start in similar temperature            value (Table 2 which uses the duration relatively to the duration at
+conditions.                                                                    maximum frequency), and more precisely the difference between their
+    Data are obtained using Expetator1 version 0.3.20. It is a tool            precision (Fig. 4). The normalization using the duration at maximum
+for running HPC benchmarks using several type of leverages (DVFS)              frequency is always computed after the model’s prediction, only for the
+and low-level monitoring (hardware performance counters, RAPL —                sake of simplification of the figures. With this, the mean duration at
+Running Average Power Limit) mostly on Grid5000. It packages bench-            maximum frequency of all benchmark is 1. It can be considered as a
+marks including the NAS Parallel Benchmarks and the random bench-              unit of work, a speed-up to ease the understanding.
+mark, a monitoring system including external power consumption and                 Table 2 shows the error between the Naives and the Per Server
+hardware performance counters, and a large number of leverages in-             power models are divided by two. Intuitively taking into account the
+cluding DVFS. Depending on the cluster, the external power measure is          heterogeneity of the hardware already allows to go from a MAPE of
+done either every second or every five seconds. Using the methodology          more than 24% to one just over 13%. Actually, taking into account the
+from [16], the applications are started with peak of CPU usage just
+
+                                                                                 2
+                                                                                    https://gitlab.irit.fr/sepia-pub/open-science/ppe-models-for-hpc-servers-
+  1
+      https://gitlab.irit.fr/sepia-pub/expetator.                              dvfs.
+
+
+                                                                           4
+G. Da Costa                                                                                                 Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+
+
+Fig. 4. Comparison of the models for estimated power, duration, and energy relatively to the measured values. The histograms use 50 bins of constant width. Per App and
+Fluid use the same power model, so their power histograms overlap perfectly.
+
+
+
+
+Fig. 5. Naive rand model (lines) using Eqs. (1) and (2) with measures (dots) on taurus cluster using only values from the rand benchmark to obtain the constants of the
+model. Idle power consumption of taurus servers is 92 W.
+
+
+
+
+                                      Fig. 6. Same as 5 but using data from all benchmarks to compute the constants of the model.
+
+
+difference of power profile from the different applications (the Per                       Figs. 7 and 8 show that using one power model per cluster is more
+App model) allows to increase the precision with a MAPE on power                       relevant. Using only the rand benchmark (Fig. 7) leads to a final model
+below 10%. It validates our hypotheses on the difference between the                   relevant for cpu-intensive applications, while using all applications
+power consumption of different applications. Even if each of these                     (Fig. 8) leads to a more average model. It is coherent with the error
+applications fully use the servers, their maximum power consumption                    shown in Table 2.
+and the impact of DVFS on their power consumption is different and                         Fig. 9 shows that using one power model per application allows to
+can be modeled. Finally, using a precise model for the duration (the                   precisely model their power. As shown in Table 2, the error on the
+Fluid model) allows to reduce the MAPE error on duration from more                     power estimation is reduced by 30%. For example, on the power part,
+than 14% down to 2%.                                                                   the differences between the dynamic of cg and ep are clearly visible.
+    Fig. 4 shows an histogram of the ratio between the measured values                     The Fluid model extends to the duration the concept of one model
+compared to the different models. As the Per App and the Fluid                         per application. Fig. 10 shows the same quality on the power model as
+model only differ on the duration model, their power histograms over-                  the previous one (they are using the same equations). It also shows that
+lap. On this figure a perfect model would only have values counted for                 using the proposed 𝛼 is a relevant way to model the differences between
+a ratio of one. This figure shows the same increase in quality as the                  the application behaviors. On this precise example, the dynamic of
+previous table, but also show that the deviation of the results follows                the benchmarks is well followed. Similarly the impact of DVFS on the
+the same improvement. We can also see that all the models are slightly                 performance of tasks is accurately modeled. Nevertheless, as the energy
+skewed toward an overestimation of the values.                                         is the product of power and time, the slight differences on both have
+    Figs. 5, 6, 7, 8, 9 and 10 shows the comparison between the values                 a larger impact on energy. Still, the overall dynamic such as respective
+of the different models and the actual measures on the taurus cluster.                 amount of energy, optimal frequency ratio to minimize energy, are well
+    Figs. 5 and 6 show that using an identical model for all clusters leads            modeled.
+to a power model which is not relevant. This case is comparable to
+use a single model in a highly heterogeneous system. In this particular                5.3. Heterogeneity of the error
+case, as the server is consuming relatively less energy than the other,
+this model overshoot the power. Also as the model does not depends                         As the measure quality depends on the particular cluster, the re-
+on the application, it only fits well cpu-intensive applications such as               sulting models precision is also linked to this quality. Fig. 11 shows
+rand and ep.                                                                           the error (MAPE) for power, duration, and energy for each cluster.
+
+                                                                                   5
+G. Da Costa                                                                                                     Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+
+
+         Fig. 7. Same as 5 but with one model per cluster and the data used to obtain the constants of the model come from monitoring only the rand benchmark.
+
+
+
+
+               Fig. 8. Same as 5 but with one model per cluster and the data used to obtain the constants of the model come from monitoring all benchmarks.
+
+
+
+
+Fig. 9. Same as 5 but with one model per combination of clusters and benchmarks. The monitored data of each benchmark on all clusters are individually used for each of these
+models following Eq. (4).
+
+
+
+
+                               Fig. 10. Evaluation of the Fluid model (lines) using Eqs. (4) and (5) with measures (dots) on taurus cluster.
+
+
+They have been sorted depending on the precision on the measures.                            • 𝑃 𝑜𝑤𝑒𝑟𝐹 𝑚𝑖𝑛 : similarly for the power consumption of the rand
+The precision has been estimated by using the standard deviation of                            benchmark at minimal frequency.
+the measures on each cluster. It shows that for all clusters the Fluid
+model is the most precise. It also shows that on the clusters with an                        Naive all app model: The constants are computed in the same
+higher precision of the measures, the model is more accurate.                             way as in the Naive rand model, except that the data used for
+                                                                                          𝑃 𝑜𝑤𝑒𝑟𝐹 𝑚𝑎𝑥 and 𝑃 𝑜𝑤𝑒𝑟𝐹 𝑚𝑖𝑛 comes from the average of the monitored
+5.4. Measurement needed for each model                                                    values from all benchmarks instead of coming only from the one
+                                                                                          monitored only from the rand benchmark.
+  Naive rand model: The values needed to compute the Naive                                   Per Server rand model: The values needed to compute the Per
+rand model constants are the following:                                                   Server rand model constants are only coming from the monitoring
+                                                                                          values from the rand benchmark but are dependent on the cluster:
+    • 𝐹 𝑚𝑎𝑥: the mean value of the maximum frequency across all
+      clusters;                                                                              • 𝐹 𝑚𝑎𝑥𝑐 , 𝐹 𝑚𝑖𝑛𝑐 , 𝑃 𝑜𝑤𝑒𝑟𝑐𝐹 𝑚𝑖𝑛 , 𝑃 𝑜𝑤𝑒𝑟𝑐𝐹 𝑚𝑎𝑥 : These values are computed
+    • 𝐹 𝑚𝑖𝑛: same methodology as 𝐹 𝑚𝑎𝑥 but for the minimum frequency                           in the same way as for the Naive rand model, but indepen-
+      of each cluster;                                                                         dently for each cluster. As an example, 𝐹 𝑚𝑎𝑥𝑐 is the maximum
+    • 𝑃 𝑜𝑤𝑒𝑟𝐹 𝑚𝑎𝑥 : the mean value of power consumption of the rand                            frequency of servers in the cluster 𝑐. As a reminder, we assume
+      benchmark at maximum frequency for all clusters;                                         that servers in the same cluster are homogeneous.
+
+                                                                                      6
+G. Da Costa                                                                                                     Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+
+
+Fig. 11. Error (MAPE) for the different models on each cluster. The clusters have been sorted from the one with the most precise measures (grimani) to the one with the lower
+quality measures.
+
+
+  Per Server all app model: Similarly as the difference between                              • 𝐹 𝑚𝑎𝑥𝑐 , 𝐹 𝑚𝑖𝑛𝑐 , 𝑃 𝑜𝑤𝑒𝑟𝑐,𝑎𝐹 𝑚𝑖𝑛
+                                                                                                                                , 𝑃 𝑜𝑤𝑒𝑟𝑐,𝑎
+                                                                                                                                        𝐹 𝑚𝑎𝑥
+                                                                                                                                              : are the same as in the
+Naive rand and Naive all app, the values 𝑃 𝑜𝑤𝑒𝑟𝑐𝐹 𝑚𝑖𝑛 , 𝑃 𝑜𝑤𝑒𝑟𝑐𝐹 𝑚𝑎𝑥                           previous model
+are computed by averaging monitored values from all benchmarks.                              • 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                        𝐹 𝑚𝑎𝑥
+                                                                                                               : is the duration at maximum frequency of executing
+    Per App model: There is one model instance for each combination                            application 𝑎 on cluster 𝑐.
+of clusters and benchmarks. Thus, the monitored values come from all                         • 𝐷𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑐,𝑎
+                                                                                                        𝐹 𝑚𝑖𝑛
+                                                                                                              : is the duration at minimum frequency of executing
+                                                                                               application 𝑎 on cluster 𝑐.
+benchmarks:
+                                                                                          5.5. Usage of the Fluid model
+    • 𝐹 𝑚𝑎𝑥𝑐 , 𝐹 𝑚𝑖𝑛𝑐 : are the same as in the previous model;
+    • 𝑃 𝑜𝑤𝑒𝑟𝑐,𝑎
+            𝐹 𝑚𝑖𝑛
+                  , 𝑃 𝑜𝑤𝑒𝑟𝑐,𝑎
+                           𝐹 𝑚𝑎𝑥
+                                 : are the same as in the previous model                     One way to use an energy model is to find the best frequency for a
+      except they are specific for each combination of clusters (𝑐) and                   particular benchmark on a particular cluster to minimize energy.
+      applications (𝑎).                                                                      By reusing Eqs. (4) and (5), we can use the fact that energy is the
+                                                                                          product of duration and power, and that the optimal energy is a local
+   Fluid model: The main difference between the Fluid model and                           minimum. Thus the optimal energy is obtained when the derivative of
+the Per App one concerns a more precise model of the performance                          energy is zero. This is equivalent to:
+impact of DVFS. To compute the rigid and fluid part of the duration,                                  (       )𝐶𝑜𝑒𝑓 +1              (       )𝐶𝑜𝑒𝑓
+                                                                                                1−𝛼       𝑓                             𝑓
+and thus the 𝛼 linked to a combination (cluster, application), the speed-                 𝐶𝑜𝑒𝑓                         + (𝐶𝑜𝑒𝑓 − 1)
+                                                                                                  𝛼     𝐹 𝑚𝑎𝑥                         𝐹 𝑚𝑎𝑥                  (7)
+up between minimum and maximum frequency is needed. Thus the
+                                                                                                                          𝑃 𝑠𝑡𝑎𝑡𝑖𝑐
+monitored values are:                                                                                                  −           =0
+                                                                                                                           𝑃 𝑑𝑦𝑛
+
+                                                                                      7
+G. Da Costa                                                                                                     Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+Table 3                                                                                      mg, sp or cg have overall lower 𝛼 values, consistent with their lower
+Difference (in percentage) of the optimal energy for each model compared to the energy
+                                                                                             usage of the CPU.
+consumed at maximum frequency. Each experiment (a run of one benchmark on a
+cluster for all frequencies) provides one value.                                                 Concerning the clusters, the one with similar processors have sim-
+ Cluster               Optimal          Per Server rand        Per App      Fluid            ilar values. For example, dahu and grvingt are both Intel Xeon
+                                                                                             Gold 6130, or orion and taurus are both Intel Xeon E5-2630.
+ All clusters           −6.16         −0.40                    −0.73         −1.79
+ chetemi                −2.53          0.00                     0.00         −0.27           Still, different hardware have different reaction to DVFS. For exam-
+ chifflet               −3.00          0.00                     0.00         −1.75           ple petitprince (using Intel Xeon E5-2630L from Q1’12) is quite
+ chifflot               −8.64          0.00                     0.00         −0.59           different from grvingt (using Intel Xeon Gold 6130 from Q3’17) or
+ dahu                  −19.78          1.68                    −4.63         −7.38
+                                                                                             montcalm (using Intel Xeon Silver 4314 from Q2’21).
+ graffiti               −2.40          0.00                     0.00         −0.03
+ graoully               −2.61          0.00                     0.00         −2.04
+ graphique              −0.98          0.00                     0.00         −0.30           6. Online detection of the constants
+ graphite               −0.31          0.00                     0.00          0.00
+ grappe                −19.08          0.00                     0.00         −0.53
+ grele                  −1.97          0.00                     0.00          0.01
+                                                                                                 While the Fluid model allows to correctly predict Power, Duration
+ grimani                −0.55          0.00                     0.00         −0.15           and Energy, it still needs to have a-priori information on the applica-
+ grimoire               −2.20          0.00                     0.00         −1.39           tion, particularly its behavior at minimum and maximum frequencies. If
+ grisou                 −3.76          0.00                     0.00         −1.65           used in a production system, it also actually needs to be able to know
+ grvingt               −22.40          0.05                    −4.02         −3.20
+                                                                                             which is the current running benchmark, which might be difficult as
+ montcalm              −16.70         −8.87                    −4.40        −10.18
+ orion                  −1.11          0.00                     0.00         −0.83           usually the system runs applications as black boxes. It also prevent man-
+ petitprince            −1.03          0.00                     0.00         −0.55           aging an application which has never been registered and monitored
+ taurus                 −1.90          0.00                     0.00         −1.41           before.
+                                                                                                 For online algorithms, finding the values for Eqs. (7), should be
+Table 4                                                                                      simpler. The values needed are either solely dependent on the hard-
+Values of 𝛼 for all clusters and benchmarks combinations.                                    ware (𝐹 𝑚𝑎𝑥, 𝑓 ), or of the combination of hardware and applications
+ Bench          bt        cg     ep        ft      is     lu      mg     rand   sp           (𝑃 𝑠𝑡𝑎𝑡𝑖𝑐 𝑐,𝑎 , 𝑃 𝑑𝑦𝑛𝑐,𝑎 , 𝛼 𝑐,𝑎 ).
+ cluster                                                                                         As the link with the application is actually a link to the resource
+ chetemi        0.73      0.26   1.02      0.68    0.64   0.75    0.28   1.05   0.25         consumption of the application, it is possible to model these values
+ chifflet       0.59      0.28   1.00      0.52    0.58   0.56    0.15   1.00   0.14         using online resource usage. As an example, we use several low level
+ chifflot       0.75      0.22   1.00      0.65    0.44   0.83    0.42   0.97   0.49
+                                                                                             Hardware Performance Counters available in most recent Linux sys-
+ dahu           0.81      0.28   0.99      0.66    0.40   0.81    0.12   1.00   0.36
+ graffiti       0.73      0.22   0.96      0.63    0.41   0.82    0.28   1.01   0.30         tems. In the current dataset, the following counters are available:
+ graoully       0.66      0.18   1.02      0.62    0.50   0.77    0.09   1.11   0.11         cache_misses, cache_references, instructions and
+ graphique      0.65      0.34   0.99      0.58    0.55   0.67    0.18   1.00   0.10         branch_instructions with a frequency of 10 Hz. These counters
+ graphite       0.83      0.67   0.98      0.79    0.75   0.89    0.62   0.96   0.47
+                                                                                             were selected to provide the most generic set. As hardware span
+ grappe         0.74      0.31   0.94      0.51    0.26   0.69    0.12   1.00   0.19
+ grele          0.76      0.32   0.99      0.66    0.68   0.71    0.34   1.04   0.36         from 2013 to 2021, the counters are the generic one of the Linux
+ grimani        0.67      0.29   1.02      0.61    0.44   0.72    0.20   1.00   0.13         Kernel which are available on all type of hardware, without the need
+ grimoire       0.66      0.18   0.99      0.62    0.50   0.76    0.09   0.95   0.11         of any specific library, ensuring reproducible results. The number of
+ grisou         0.67      0.20   0.91      0.64    0.50   0.76    0.09   0.96   0.10
+                                                                                             counters (four) comes from the classical number of hardware registers
+ grvingt        0.81      0.27   1.00      0.65    0.40   0.81    0.13   1.00   0.36
+ montcalm       0.67      0.24   1.13      0.43    0.24   0.59    0.03   1.00   0.16
+                                                                                             used to store these performance counters inside the processors. With
+ orion          0.81      0.61   1.04      0.77    0.76   0.84    0.65   1.01   0.47         more counters, the operating system starts multiplexing these counters,
+ petitprince    0.77      0.59   0.96      0.81    0.76   0.77    0.70   0.93   0.45         leading to a decreased precision and difficulties on older types of
+ taurus         0.80      0.61   1.01      0.77    0.75   0.84    0.65   0.97   0.48         hardware. These four counters span the different categories of the
+                                                                                             standards Linux counters. At the same frequency, we have access to
+                                                                                             RAPL [20] counters that give access to the energy consumption of
+    If 𝐶𝑜𝑒𝑓 is equal to 2 like in the experiments below, it becomes a                        the processor and memory. In the following the rapl counters will
+degree three equation in function of 𝑓 which can be solved analytically.                     be the sum of the power consumption of the processor and memory
+Otherwise, due to the low number of available frequencies, it is possible                    obtained through their regular energy monitoring. As the power, du-
+to test all of them and to choose the one optimizing the energy.                             ration and energy evaluation of the applications are done for a run of
+    In Table 3, we compare the energy using the frequency minimizing                         the application, we associate for each run one value for each hardware
+the frequency (Optimal), or the one using the models. Naive rand,                            performance counter. To reduce the impact of the application starting
+Naive all app, and Per Server all app are always 0 as they                                   and finishing phases, we associate one run with the median values of
+always returns the maximum frequency when optimizing the energy.                             the performance counters. For example, in the following, the use of
+The highest gain is for the cluster montcalm with a gain of 10% out                          cache_references is used for the median value of this hardware
+of the maximum reachable of 16%.                                                             performance counter during the whole execution of the application for
+                                                                                             one particular run in a cluster at a certain frequency.
+5.6. Analysis of the properties of alpha                                                         To minimize the impact of the online model detection, we only
+                                                                                             used linear regression using these 5 hardware performance counters for
+    Table 4 shows the measured values of 𝛼 𝑐,𝑎 for each clusters and                         each 𝑃 𝑠𝑡𝑎𝑡𝑖𝑐, 𝑃 𝑑𝑦𝑛 and 𝛼. We harness the hypothesis that these values
+applications using the duration measured at maximum and minimum                              depend on the resource usage, and that the hardware performance
+frequencies.                                                                                 counters provide a relevant evaluation of this resource usage.
+    Concerning the benchmarks, except for rand and ep which are                                  For each of the three values (𝑃 𝑠𝑡𝑎𝑡𝑖𝑐, 𝑃 𝑑𝑦𝑛, and 𝛼) there are 6
+almost identical, the values are quite different for the different bench-                    associated constants, five for the weight for each counter, and one for
+marks. First there is no global order between them. For example,                             the intercept.
+depending on the cluster, mg and sp respective rankings change. Still                            To obtain these values, following Eqs. (4) and (5), we only need
+there are tendencies for the 𝛼 related to the benchmarks. CPU intensive                      monitoring information from two out of all the frequencies. All the data
+benchmarks such as ep and rand are fully responsive to DVFS (value                           used to obtain the constants will come from monitoring the benchmarks
+of alpha equal to 1). Other memory intensive benchmarks [19] such as                         at the highest and lowest frequency on each cluster.
+
+                                                                                         8
+G. Da Costa                                                                                                       Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+
+
+                           Fig. 12. Power, duration and energy for the Online per cluster model compared to measures on the tauruscluster.
+
+
+
+
+              Fig. 13. Power, duration and energy for the Online generic (i.e., the same constants for all clusters) compared to measures on the tauruscluster.
+
+
+Table 5                                                                                          Figs. 12 and 13 show the prediction of these two models compared
+MAPE for the online methods compared to the references (Native Rand, Fluid)
+                                                                                              to the actual monitored values. As shown in Table 5, the cluster
+using all the data for learning. The error is evaluated on all runs (i.e. including all
+frequencies). For Online generic BT CG, only data from these two benchmarks are
+                                                                                              specific model is more precise than the generic one. Nevertheless, for
+used for learning.                                                                            a way smaller number of constants, both models are quite similar to
+ Name                             Power                Duration               Energy          the Fluid model with only hardware performance counter measures.
+ Naive rand                       24.30                17.35                  28.82
+                                                                                              There is also no need to know beforehand which benchmark is running.
+ Fluid                             8.23                 2.05                   8.55              Fig. 14 shows the histogram of values for these performance
+ Online per cluster                8.99                 3.32                   9.70           counter-based models.
+ Online generic                   11.34                 4.85                  12.91
+                                                                                              6.2. Heterogeneity of the error
+
+    Each of the experiments contains an execution of a benchmark for                              With the same method as on Fig. 11, Fig. 15 shows the error (MAPE)
+each frequency on a single computer of a cluster. In the following, for                       for power, duration, and energy for each cluster. Models Naive rand
+the training, we select some of these experiment, and keep only the data                      and Fluid are present for comparison purpose. The two online models
+related to the maximum and minimum frequency. So selecting 10% of                             show comparable models without a-priori knowledge on the applica-
+the runs would lead to use less than 2% of the total number of runs, on                       tion. The error Online per cluster is mostly comparable with
+average, the clusters have 12 frequencies.                                                    the Fluid model for Power and Duration. The Online generic
+    We will evaluate two models:                                                              model has a slightly lower quality but with a simpler model and while
+                                                                                              being largely more precise than the Naive rand model. The Online
+    • Online per cluster: The linear models for each values                                   generic BT CG is the online generic model where all the learning
+      (𝑃 𝑠𝑡𝑎𝑡𝑖𝑐, 𝑃 𝑑𝑦𝑛, and 𝛼) will be dependent on the cluster. As we                        data come from monitoring only BT and CG. It shows that the results
+      have 18 clusters, we will have 18 × 6 × 3 constants as there                            are also relevant for applications that have never have been used for
+      are 3 linear model, each with 6 constants, for each cluster. The                        the learning.
+      constants are obtained using a linear regression using for each
+      experiments the data from the runs limited to maximum and
+                                                                                              6.3. Obtaining the constants
+      minimum frequency.
+    • Online generic: The methodology is the same as previously,
+                                                                                                  Table 5 shows the MAPE for a best case, where all the data are avail-
+      but instead of having one equation set per cluster, there is only
+                                                                                              able to compute the constants with linear regression, before evaluating
+      one for all the clusters. The only difference is that the power
+                                                                                              the error on the same dataset. Thus it uses data from all experiments.
+      model is computed after removing the mean idle power con-
+                                                                                              In the remaining of this section, we will evaluate the impact of the
+      sumption of each cluster. In this case, there are only 6 × 3
+                                                                                              training dataset size.
+      constants.
+                                                                                                  Fig. 16(a) presents the MAPE of Power, Duration and Energy com-
+6.1. Accuracy of the online models                                                            pared to the Fluid model. The whole dataset is split between a
+                                                                                              training set of experiments (which ratio is in the 𝑥 axis) and a testing
+    A direct evaluation of the error is shown in Table 5. The evaluation                      set of experiments. The data presented are the comparison between the
+of the error is made with all data, even the ones with frequency not                          Fluid model using all data to compute its constants, and the Online
+used for learning (i.e. 𝐹 𝑚𝑎𝑥 and 𝐹 𝑚𝑖𝑛). So only a part (one twelves as                      per cluster model using only the training set. The comparison of
+there are on average 12 frequencies per clusters) of the data has been                        both models is only done on the remaining data, ie the testing set. As
+used during the linear regression.                                                            only data from runs at maximum and minimum frequencies are used
+    While being with a lower precision than the Fluid model, these                            for the linear regression of the online model, the training set keeps only
+models have error twice smaller than of the classical models such as                          data related to runs at minimum or maximum frequency. The testing
+Native Rand.                                                                                  set contains both the runs of the training experiments with frequencies
+
+                                                                                          9
+G. Da Costa                                                                                                     Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+
+
+Fig. 14. Comparison for estimated power, duration, and energy relatively to the measured values for the references (Naive rand, Fluid) and online methods using no
+application-related information.
+
+
+
+
+Fig. 15. Error for the different online models on each cluster. The clusters have been sorted from the one with the most precise measures (grimani) to the one with the lower
+quality measures.
+
+
+different from 𝐹 𝑚𝑎𝑥 and 𝐹 𝑚𝑖𝑛, along with all the experiments which                      1.6% of all the runs when keeping only the minimum and maximum
+are not selected for the training set. As only 2 frequencies out of the                   frequencies. Similarly, 90% of the experiments represents 14.7% of the
+average 12 are used, 10% of the experiments represent only 10%∕6 =                        total number of runs.
+
+                                                                                     10
+G. Da Costa                                                                                                   Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+
+
+Fig. 16. MAPE compared to the Fluid model (Table 5). The ratio represent the amount of data used of the learning part compared to the total available data. It corresponds
+to 10% up to 90% of experiments. For example in a, 10% of experiments means 2 × 10%∕12 = 1.6% of runs as for each experiment we use only the runs with minimum and
+maximum frequency out of the 12 availables frequencies in average.
+
+
+
+
+Fig. 17. Power, duration and energy for the Online generic model using only data from bt and cg for learning compared to measures on the taurus cluster. The training
+dataset represent 1% of the available data.
+
+
+    Fig. 16(a) shows that even with 10% of the data, the accuracy is                    7. Conclusion
+stable, representing an MAPE 25% (resp. 56% and 34%) higher than
+the Fluid model for the power estimation (resp. duration and energy).                       We proposed a simple yet precise Fluid model to account for DVFS
+    Fig. 16(b) shows the same method but using the Online generic                       impact in heterogeneous HPC systems. We validated this model using
+model. The main difference is that as the number of constant to                         an extensive amount of experiments using several benchmarks and
+compute of 18 times lower, the model accommodates better with a                         diverse computing hardware. We also showed that taking into account
+smaller dataset. With 10% of the data, its MAPE is 30% (resp. 32% and
+                                                                                        the application for the power and performance models is important. We
+45%) higher than the Fluid model. Results on the power and energy
+                                                                                        also showed how to use this model to obtain the optimal frequency.
+models are quite similar to the Online per server model while
+                                                                                        Finally we extended our model to the online case with a low overhead
+having a way lower complexity. The duration model still has higher
+                                                                                        approach and with only hardware performance counters monitoring.
+difference, but the Fluid model is actually very precise and Table 2
+                                                                                            Still, the findings are currently limited to a single-server approach.
+shows that the second best model has a duration MAPE 7 times higher
+than the Fluid model.                                                                   The overall approach can be extended to multi-servers applications, but
+    Fig. 16(c) shows the same method, for the Online generic                            the online detection method should be adapted to include the network
+model, but with restricting the benchmarks to only bt and cg. In actual                 monitoring values.
+data centers, all applications are not necessarily available for training                   Also more studies are needed to deduce the values used in the mod-
+the models. With 1% of the data, the MAPE is 78% (resp. 203% and                        els for one server using information related to their micro-architecture
+97%) higher than the Fluid model. Once again, with a very limited                       and memory structure.
+training dataset, using only two of the available frequencies, and two                      The next step would be to make use of these models in a production
+of the available benchmarks, the resulting model is quite precise. Fig.                 platform to change the frequency of the processor in real-time depend-
+17 shows that even if the values are not exactly the same, the dynamic                  ing on the monitored values of the hardware performance counters, and
+and the diversity of the behaviors is still present.                                    to evaluate the impact of the approach for applications having several
+                                                                                        phases.
+6.4. Overhead of the online method
+                                                                                        Declaration of competing interest
+   To evaluate the overhead of the online methods execution, we eval-
+uated the cost of accessing the four performance counters along with
+RAPL. On montcalm cluster, using mojitO/S, mean time cost for these                         The authors declare the following financial interests/personal rela-
+hardware performance counters including RAPL is 16 ms. This tool uses                   tionships which may be considered as potential competing interests:
+only one thread, so the cost is for a single core. Using the online method              Georges Da Costa reports financial support was provided by French
+with these hardware performance counters and RAPL could be used                         National Research Agency. If there are other authors, they declare
+during the execution of HPC applications with a negligible overhead as                  that they have no known competing financial interests or personal
+the remaining of the computation is the linear product of these values                  relationships that could have appeared to influence the work reported
+with the constants obtained during the learning phase.                                  in this paper.
+
+                                                                                   11
+G. Da Costa                                                                                                         Sustainable Computing: Informatics and Systems 46 (2025) 101106
+
+
+Acknowledgments                                                                               [7] Srinivasan Ramesh, Swann Perarnau, Sridutt Bhalachandra, Allen D Malony,
+                                                                                                  Pete Beckman, Understanding the impact of dynamic power capping on appli-
+                                                                                                  cation progress, in: 2019 IEEE International Parallel and Distributed Processing
+    The work presented in this paper has been funded by the ANR in
+                                                                                                  Symposium, IPDPS, IEEE, 2019, pp. 793–804.
+the context of the project ENERGUMEN, ANR-18-CE25-0008 and the                                [8] Mohak Chadha, Michael Gerndt, Modelling dvfs and ufs for region-based energy
+France 2030 NumPEx Exa-SofT (ANR-22-EXNU-0003) project managed                                    aware tuning of hpc applications, in: 2019 IEEE International Parallel and
+by the French National Research Agency (ANR) Experiments presented                                Distributed Processing Symposium, IPDPS, IEEE, 2019, pp. 805–814.
+in this paper were carried out using the Grid’5000 testbed, supported                         [9] Patricia Arroba, José L Risco-Martín, Marina Zapater, José M Moya, José L Ayala,
+                                                                                                  Katzalin Olcoz, Server power modeling for run-time energy optimization of cloud
+by a scientific interest group hosted by Inria and including CNRS,                                computing facilities, Energy Procedia 62 (2014) 401–410.
+RENATER and several Universities as well as other organizations (see                         [10] Enrico Calore, Alessandro Gabbana, Sebastiano Fabio Schifano, Raffaele Tripic-
+https://www.grid5000.fr).                                                                         cione, Evaluation of DVFS techniques on modern HPC processors and accelerators
+                                                                                                  for energy-aware applications, Concurr. Comput.: Pr. Exp. 29 (12) (2017) e4143.
+                                                                                             [11] Bo Su, Junli Gu, Li Shen, Wei Huang, Joseph L Greathouse, Zhiying Wang,
+Data availability
+                                                                                                  PPEP: Online performance, power, and energy prediction framework and DVFS
+                                                                                                  space exploration, in: 2014 47th Annual IEEE/ACM International Symposium on
+    A zenodo link is in the article. All data are available under an open                         Microarchitecture, IEEE, 2014, pp. 445–457.
+license.                                                                                     [12] Georgios Keramidas, Vasileios Spiliopoulos, Stefanos Kaxiras, Interval-based
+                                                                                                  models for run-time DVFS orchestration in superscalar processors, in: Proceedings
+                                                                                                  of the 7th ACM International Conference on Computing Frontiers, 2010, pp.
+References                                                                                        287–296.
+                                                                                             [13] Fabio Diniz Rossi, Mauro Storch, Israel de Oliveira, César AF De Rose, Modeling
+                                                                                                  power consumption for DVFS policies, in: 2015 IEEE International Symposium
+ [1] M. Etinski, J. Corbalan, J. Labarta, M. Valero, Understanding the future of
+                                                                                                  on Circuits and Systems, ISCAS, IEEE, 2015, pp. 1879–1882.
+     energy-performance trade-off via DVFS in HPC environments, J. Parallel Distrib.
+                                                                                             [14] Jason Mair, Zhiyi Huang, David Eyers, Leandro Cupertino, Georges Da Costa,
+     Comput. 72 (4) (2012) 579–590, URL https://www.sciencedirect.com/science/
+                                                                                                  Jean-Marc Pierson, Helmut Hlavacs, Power modeling, Large- Scale Distrib. Syst.
+     article/pii/S0743731512000172.
+                                                                                                  Energy Effic.: Holist. View (2015) 131–158.
+ [2] Anne Benoit, Louis-Claude Canon, Redouane Elghazi, Pierre-Cyrille Heam, List
+                                                                                             [15] Daniel Balouek, Alexandra Carpen Amarie, Ghislain Charrier, Frédéric De-
+     and shelf schedules for independent parallel tasks to minimize the energy
+                                                                                                  sprez, Emmanuel Jeannot, Emmanuel Jeanvoine, Adrien Lèbre, David Margery,
+     consumption with discrete or continuous speeds, J. Parallel Distrib. Comput. 174
+                                                                                                  Nicolas Niclausse, Lucas Nussbaum, Olivier Richard, Christian Pérez, Flavien
+     (2023) 100–117.
+                                                                                                  Quesnel, Cyril Rohr, Luc Sarzyniec, Adding virtualization capabilities to the
+ [3] Chung-Hsing Hsu, Ulrich Kremer, The design, implementation, and evaluation of
+                                                                                                  Grid’5000 testbed, in: Cloud Computing and Services Science, Vol. 367, Springer
+     a compiler algorithm for CPU energy reduction, in: Proceedings of the ACM SIG-
+                                                                                                  International Publishing, 2013, pp. 3–20.
+     PLAN 2003 Conference on Programming Language Design and Implementation,
+                                                                                             [16] Georges Da Costa, Jean-Marc Pierson, Leandro Fontoura-Cupertino, Mastering
+     2003, pp. 38–48.
+                                                                                                  system and power measures for servers in datacenter, Sustain. Comput.: Inform.
+ [4] Vincent W Freeh, David K Lowenthal, Feng Pan, Nandini Kappiah, Rob Springer,
+                                                                                                  Syst. 15 (2017) 28–38, URL https://www.sciencedirect.com/science/article/pii/
+     Barry L Rountree, Mark E Femal, Analyzing the energy-time trade-off in high-
+                                                                                                  S2210537917300318.
+     performance computing applications, IEEE Trans. Parallel Distrib. Syst. 18 (6)
+                                                                                             [17] Georges Da Costa, MojitO/S, 2021, URL https://hal.archives-ouvertes.fr/hal-
+     (2007) 835–848.
+                                                                                                  03453537, version 1.0, https://gitlab.irit.fr/sepia-pub/mojitos.
+ [5] Mario Bambagini, Mauro Marinoni, Hakan Aydin, Giorgio Buttazzo, Energy-
+                                                                                             [18] Georges Da Costa, Power, performance and system measures of HPC
+     aware scheduling for real-time systems: A survey, ACM Trans. Embed. Comput.
+                                                                                                  benchmarks on multiple hardware, 2024, http://dx.doi.org/10.5281/zenodo.
+     Syst. (TECS) 15 (1) (2016) 1–34.
+                                                                                                  10982238, Dataset on Zenodo.
+ [6] Georges Da Costa, Jean-Marc Pierson, DVFS governor for HPC: Higher,
+                                                                                             [19] Subhash Saini, Johnny Chang, Robert Hood, Haoqiang Jin, A scalability study
+     faster, greener, in: 2015 23rd Euromicro International Conference on Parallel,
+                                                                                                  of columbia using the nas parallel benchmarks, J. Comput. Methods Sci. Eng.
+     Distributed, and Network-Based Processing, IEEE, 2015, pp. 533–540.
+                                                                                                  (2006).
+                                                                                             [20] Intel, Intel-64 and ia-32 architectures software developer’s manual, Vol. 3: Syst.
+                                                                                                  Program. Guid. 3 (2015).
+
+
+
+
+                                                                                        12
+

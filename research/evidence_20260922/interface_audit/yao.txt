@@ -1,0 +1,910 @@
+1058                                                               IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 36, NO. 6, JUNE 2025
+
+
+
+
+       Workload-Aware Performance Model Based Soft
+           Preemptive Real-Time Scheduling for
+                 Neural Processing Units
+ Yuan Yao , Member, IEEE, Yujiao Hu , Yi Dang, Wei Tao, Kai Hu, Qiming Huang, Zhe Peng , Member, IEEE,
+                      Gang Yang , Member, IEEE, and Xingshe Zhou, Member, IEEE
+
+
+   Abstract—A neural processing unit (NPU) is a microprocessor                     processing, video processing, object detection and intelligent
+which is specially designed for various types of neural network                    decision, are deployed on the airborne embedded system [1].
+applications. Because of its high acceleration efficiency and lower                They often involve extensive data processing and algorithmic
+power consumption, the airborne embedded system has widely
+deployed NPU to replace GPU as the new accelerator. Unfortu-                       calculations. But traditional general-purpose processors cannot
+nately, the inherent scheduler of NPU does not consider real-time                  meet their requirements both on computing performance and
+scheduling. Therefore, it cannot meet real-time requirements of                    power efficiency. Neural processing unit(NPU) is a dedicated
+airborne embedded systems. At present, there is less research on                   accelerator for neural network computations. It provides high-
+the multi-task real-time scheduling of the NPU device. In this                     performance neural network computing capabilities through
+article, we first design an NPU resource management framework
+based on Kubernetes. Then, we propose WAMSPRES, a workload-                        hardware-level optimizations, such as specialized neural net-
+aware NPU performance model based soft preemptive real-time                        work instruction sets, efficient parallel computing capabilities,
+scheduling method. The proposed workload-aware NPU perfor-                         and memory optimizations. This satisfies the complex computa-
+mance model can accurately predict the remaining execution time                    tional demands of the airborne embedded system and enhances
+of the task when it runs with other tasks concurrently. The soft                   their perception and decision-making capabilities. Compared
+preemptive real-time scheduling algorithm can provide approx-
+imate preemption capability by dynamically adjusting the NPU                       with the traditional CPU+GPU architecture, NPU has higher
+computing resources of tasks. Finally, we implement a prototype                    energy efficiency which can meet the low-power requirements
+NPU scheduler of the airborne embedded system for the fixed-wing                   of the airborne embedded system. Moreover, compared with the
+UAV. The proposed models and algorithms are validated on both                      disadvantages of larger and heavier GPU devices, the small size
+the simulated and realistic task sets. Experimental results illus-                 and lightweight design of NPU make it easier to integrate into
+trate that WAMSPRES can achieve low prediction error and high
+scheduling success rate.                                                           airborne embedded systems. It is more suitable to deploy on the
+                                                                                   small aircraft, without imposing a significant burden on flight
+  Index Terms—Embedded system, soft preemptive scheduling,                         performance and stability.
+real-time scheduling, computing power, dynamic-quota, NPU
+performance model.
+                                                                                      Tasks running on airborne embedded systems require strict
+                                                                                   isolation from each other. Different types of tasks may involve
+                                                                                   various types of data, such as image data, sensor data, con-
+                            I. INTRODUCTION                                        trol commands, and more. These tasks need to utilize shared
+          ITH the rapid development of artificial intelligence tech-               hardware resources, including processors, memory, sensors,
+W         nology, more and more intelligent tasks, such as image                   and others. To address this issue, NPU hardware itself usually
+                                                                                   provides a certain level of parallel task isolation. NPU typically
+                                                                                   features multiple computing units, multiple storage units, and
+  Received 25 November 2023; revised 13 March 2025; accepted 17 March
+2025. Date of publication 28 March 2025; date of current version 18 April 2025.    various data pathways. This parallel architecture enables the
+This work was supported in part by the National Natural Science Foundation of      NPU to simultaneously execute multiple tasks and isolate the
+China under Grant 62032018, Grant 62372376, and Grant 92367104, in part            computation and data operations of each task, thereby achieving
+by the Hong Kong Research Grants Council General Research Fund under
+Grant 12202922 and Grant 15238724, and in part by the Shenzhen Science and         task isolation. Each task can be assigned to different comput-
+Technology Program under Grant JCYJ20230807140412025, and in part by the           ing or processing units and independently perform calculations
+Aeronautical Science Foundation of China under Grant XT-QC-202309-120150.          and data transfers to avoid interference and conflicts between
+Recommended for acceptance by M. Si. (Yuan Yao and Yujiao Hu are contributed
+equally to the work.) (Corresponding author: Yujiao Hu.)                           different tasks. However, the level of task isolation in NPU is
+  Yuan Yao, Yi Dang, Wei Tao, Kai Hu, Qiming Huang, Gang Yang, and Xing-           constrained by hardware design and software management. NPU
+she Zhou are with the School of Computer Science, Northwestern Polytechnical       does not provide a complete resource management mechanism.
+University, Xi’an 710072, China.
+  Yujiao Hu is with the Future Network Research Center, Purple Mountain            For example, Huawei Atlas 200 NPU provides a simple resource
+Laboratories, Nanjing 211111, China (e-mail: huyujiao@pmlabs.com.cn).              sharing and isolation mode that all tasks share NPU resources
+  Zhe Peng is with the Department of Industrial and Systems Engineering, The       equally. We test an object detection model on Atlas 200 platform.
+Hong Kong Polytechnic University, Hong Kong, and also with The Hong Kong
+Polytechnic University Shen zhen Research Institute, Shenzhen 518055, China.       From Fig. 1, we observe that the execution time of object
+  Digital Object Identifier 10.1109/TPDS.2025.3553922                              detection task increases rapidly with the number of co-executing
+      1045-9219 © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and similar technologies.
+Personal use is permitted, but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+
+
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+YAO et al.: WORKLOAD-AWARE PERFORMANCE MODEL BASED SOFT PREEMPTIVE REAL-TIME SCHEDULING FOR NEURAL PROCESSING UNITS                                     1059
+
+
+
+                                                                                       task arrives, the scheduler reduces the computing re-
+                                                                                       sources held by low-priority tasks to achieve an approxi-
+                                                                                       mation of preemptive scheduling.
+                                                                                   4) We implement a prototype of the airborne embedded
+                                                                                       system based on Huawei Atlas 200 NPU for a small
+                                                                                       fixed-wing UAV. The effectiveness of the proposed
+                                                                                       WAMSPRES is validated on both simulated and re-
+                                                                                       alistic task sets. Experimental results demonstrate that
+                                                                                       WAMSPRES can provide better real-time performance
+                                                                                       than the inherent NPU scheduler.
+                                                                                   The rest of this paper is organized as follows. Section II sum-
+                                                                                 marizes the current research status of NPU multi-task real-time
+Fig. 1.   The execution time changes with the number of co-executing tasks.
+                                                                                 scheduling. Section III introduces the complete architecture of
+                                                                                 WAMSPRES. Section IV describes the proposed NPU perfor-
+tasks. Assuming that the object detection is a high-priority                     mance model. Section V presents the soft preemptive real-time
+task, it would most probably miss the deadline if it is running                  scheduling algorithm based on the greedy strategy. Section VI
+concurrently with multiple low-priority tasks. (The execution                    validates the proposed models and algorithms on both simulation
+time of the object detection is greater than the relative deadline               and real embedded systems. Finally, Section VII draws the
+when it is running concurrently with two tasks.) Therefore, in                   conclusion.
+practical applications, to manage NPU resources effectively and
+achieve higher levels of task isolation, software-level resource                                           II. RELATED WORK
+management techniques are needed. Resource management in-
+terfaces and algorithms specific to NPU should be provided at                    A. AI Accelerator Virtualization
+the operating system or middleware level. Through appropriate                       Virtualizing AI accelerators is aimed at improving resource
+scheduling algorithm and allocation strategies, effective man-                   utilization, enhancing system flexibility and scalability, achiev-
+agement and utilization of NPU resources can be achieved.                        ing task isolation, and simplifying resource management and
+   In addition, there is a significant difference between cloud                  task deployment processes. Zeng et al. abstract multiple AI
+platforms and airborne embedded systems. Typically, the                          accelerator cores into a virtualized resource pool and dynam-
+scheduling goal of cloud platforms is to achieve high efficiency                 ically allocates accelerator cores to inference tasks at runtime
+and throughput. However, airborne embedded systems are typi-                     to achieve performance isolation for multi-task sharing of AI
+cal real-time systems with strict timing constraints for tasks. The              accelerators [2]. Ghodrati et al. propose a spatial-temporal mul-
+scheduling goal in such systems is to guarantee timeliness. How-                 tiplexing sharing approach based on dynamic computation unit
+ever, NPU hardware does not support preemptive scheduling and                    composition and partitioning for pulse array accelerators similar
+task prioritization. When a low-priority task requests the NPU,                  to Google TPUs. They group multiple computation units with a
+the inherent scheduler immediately processes it and allocates                    storage unit, enabling finer-grained allocation of computational
+the available NPU computing resources to the task as much as                     resources and data reuse [3]. Lee et al. further extend the work
+possible. At this point, if a high-priority task arrives, it will                of Ghodrati by directly constructing a complete pulse array
+be blocked by the low-priority task. Obviously, this scheduling                  instead of combining computation units with shared memory as
+mechanism cannot meet the real-time requirements of airborne                     sub-arrays. This approach further enhances the flexibility of spa-
+embedded systems. Therefore, it is necessary to improve the                      tial multiplexing architecture [4]. However, these solutions are
+existing NPU task scheduling strategies.                                         specific to particular hardware architectures and lack generality.
+   In this paper, we propose WAMSPRES, a Workload-Aware                          Zhang et al. improve the API redirection virtualization method
+performance Model based Soft Preemptive Real-time Schedul-                       for GPUs by using zero-copy transfer techniques to increase data
+ing strategy for the airborne embedded systems based on                          bandwidth [5]. Chen et al. design a virtual Hadoop framework
+workload-aware NPU performance model. The main contribu-                         using Docker containers to encapsulate heterogeneous comput-
+tions of this paper are in four aspects:                                         ing nodes such as GPUs [6]. Compared to the relatively mature
+   1) We design an NPU resource management framework                             research on GPU virtualization, research on NPU virtualization
+       based on Kubernetes and implement a specific Device                       is still relatively limited, and related technologies and solutions
+       Plugin for the Atlas 200 NPU. It provides a flexible compu-               are still being explored and developed.
+       tational resources management mode for the NPU device.
+   2) We propose a workload-aware NPU performance model
+       that consider both workload indicators and input sizes into               B. NPU/GPU Performance Model
+       account. It can accurately predict the remaining execution                  NPU/GPU performance model is aiming to estimate and
+       time for each task in multi-task concurrent scenarios.                    predict the execution time and performance of NPU/GPU tasks.
+   3) We design a soft preemptive scheduling method that dy-                     Baghsorkhi et al. introduce an abstract interpretation of a GPU
+       namically allocates computing resources for each task                     kernel, which they called work flow graph, to estimate the
+       according to priority and deadline. When a high-priority                  execution time of a GPU kernel [7]. Hong and Kim propose an
+
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+1060                                                            IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 36, NO. 6, JUNE 2025
+
+
+
+analytical model that estimates the number of parallel memory                  To solve this problem, Wu et al. [28] developed interfaces and
+requests. Based on the degree of memory warp parallelism, the                  algorithms that use signal handling and thread synchronization
+model estimates the cost of memory requests, thereby estimating                to achieve safe process quitting. This ensures that when one
+the overall execution time of a program [8]. Zhang et al. use                  GPU process exits, it does not interfere with or cause failures
+a microbenchmark-based approach to develop a throughput                        in other concurrent processes. Sometimes MPS may not han-
+model for three major components of GPU execution time: the                    dle workload variability and network traffic characteristics as
+instruction pipeline, shared memory access, and global memory                  efficiently, Dhakal et al. [29] employs self-learning schemes to
+access [9]. However, these analytical modeling approaches typ-                 adapt to these factors, ensuring low inference latencies and high
+ically rely on micro-architecture information, a minor change in               resource utilization.
+the architecture may require extensive work to adapt the model to                 Multi-Instance GPU (MIG) allows a single GPU to be parti-
+the new architecture. Dao et al. construct a sampling-based linear             tioned into multiple independent instances of varying sizes. MIG
+model to predict the runtime of an arbitrary OpenCL kernel.                    enables the dynamic division of a GPU into smaller instances,
+They also propose a model based on machine learning tech-                      each of which can be configured for different tasks. Compared
+niques to improve the proposed linear performance model [10].                  to the MPS, MIG ensures that tasks running on one slice do
+Lym et al. design a GPU performance model, DeLTA, specially                    not interfere with those on another, providing more reliable
+for the deep learning applications like CNNs. DeLTA accurately                 performance and security. Li et al. [30] introduced MISO, a
+models traffic across all memory hierarchy levels [11]. Choi                   method to dynamically allocate GPU resources among concur-
+et al. analyze the characteristics of neural network inference                 rent tasks, addressing the need for sustainable computing. MISO
+tasks running on Google TPUs and predicted their execution                     reduces the average job completion time by 49% compared to
+time [12]. Yao et al. propose a workload-aware GPU perfor-                     using an unpartitioned GPU. Expenshade et al. [31] conducted
+mance model, using lightweight self-organizing fuzzy neural                    an extensive evaluation of the MIG technology, and MIG was
+network to implement GPU performance model [13], [14].                         shown to generally improve energy efficiency and performance
+                                                                               across a range of models, with at least 15% energy savings and
+                                                                               maintained or higher throughput for medium-scale fine-tuning
+C. NPU/GPU Real-Time Scheduling                                                tasks. This study provides valuable insights into effectively
+   NPUs and GPUs are both designed to provide high comput-                     utilizing MIG technology to optimize deep learning workloads.
+ing power for applications that require intensive calculations.                Ohshima et al. [32] conducted a study on QR factorization of
+However, they lack preemptive scheduling, which is a critical                  block low-rank matrices using MIG. Their research demon-
+feature for real-time systems. Preemptive scheduling allows for                strated that leveraging MIG’s capabilities resulted in a 53.3%
+the interruption of low-priority tasks when high-priority tasks                performance improvement compared to CPU execution and a
+need to be executed. In the absence of preemptive scheduling,                  77.6% improvement compared to using a GPU without MIG.
+the inherent scheduler of the NPU or GPU may allocate com-                     These results underscore the effectiveness of MIG in low-rank
+puting resources to a low-priority application for an extended                 matrix computations.
+period, even when a high-priority application is waiting. This                    As GPU SIMT programming abstraction, the underlying GPU
+situation, known as priority inversion [15], can lead to delays                micro-architecture and task scheduling granularity dramatically
+and inefficiencies in executing high-priority tasks. GPUs em-                  differ from how NPUs are programmed and executed. It is
+ploy the SIMT (Single Instruction, Multiple Thread) execution                  challenging to apply the scheduling solution of CPUs or GPUs
+model, and thread scheduling is managed at the granularity                     directly to NPU architecture. Choi et al. introduce a dedicated
+of thread blocks. Previous research on GPU preemption solu-                    preemption module to the Google TPU to record and store infor-
+tions [16], [17] has primarily been built upon this foundation.                mation about each task. They proposed a multi-task scheduling
+Existing research on GPU scheduling can be roughly categorized                 method that utilizes a heuristic integral sorting approach. This
+into the following three types. Scheduling methods based on                    approach considers the priority, waiting time, and expected
+operating system kernels and device drivers [18], [19], [20].                  execution time of tasks in the queue to determine whether a
+Hardware-based preemption scheduling technology [16], [17],                    task in the queue should be executed at the current time point.
+[21]. Software-based methods which support kernel preemp-                      In addition, they employed a dynamic preemption method to
+tion, namely kernel slicing technology [22], [23], [24], [25],                 determine whether to preempt the current task and execute the
+[26], [27].                                                                    selected task or to wait for the current task to complete before
+   Multi-Process Service (MPS) is a technology introduced by                   executing the selected task [12]. Rhu et al. solve the problem of
+NVIDIA to enhance GPU utilization by reducing the overhead                     NPU local memory oversubscription by copying the overflow
+of context switches caused by multiple workloads sharing the                   data from local memory to CPU memory. During the runtime,
+same GPU. MPS allows different applications to run simul-                      when it is observed that NPU memory usage is near its limit,
+taneously on the same GPU without significant performance                      the DMA unit can migrate the checkpointed state from the NPU
+degradation. A CUDA application can receive a specified portion                to CPU memory while the inference is being serviced to hide
+of SM cores from the GPU. While this framework provides                        migration overhead. Unfortunately, the preemption scheduling
+an effective means to share GPU resources, it does not offer                   proposed by them requires an additional on-chip SRAM module
+complete isolation. As a result, if one workload fails, it can                 to store the context of the preemption task. In addition, it is
+potentially disrupt other workloads running on the same GPU.                   necessary to note that their research focuses on the low latency
+
+       Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+YAO et al.: WORKLOAD-AWARE PERFORMANCE MODEL BASED SOFT PREEMPTIVE REAL-TIME SCHEDULING FOR NEURAL PROCESSING UNITS                                     1061
+
+
+
+                                                                                       specify the base system image of the container and install
+                                                                                       NPU drivers and runtime libraries in it, while ensuring the
+                                                                                       proper configuration of environment variables within the
+                                                                                       container.
+                                                                                    4) vNPU Controller. vNPU Controller manages and main-
+                                                                                       tains a list of vNPU containers, while continuously mon-
+                                                                                       itoring the status of the containers. If it detects that a
+                                                                                       container is in a non-operational state or has terminated,
+                                                                                       the vNPU Controller takes appropriate action to remove
+                                                                                       the container from the list, thereby freeing up the vNPU
+                                                                                       resources for other containers to utilize.
+                                                                                    5) Task Manager. Task Manager is designed to sense the
+                                                                                       arrival of new tasks and the exit of old tasks in real time.
+                                                                                       When a new task arrives, it is first registered with the
+Fig. 2.   System architecture.                                                         Task Manager. Registered tasks are maintained by Task
+                                                                                       Manager, including the status and parameters of the task.
+                                                                                       An important part of the registration is the task priority,
+requirement of cloud server and does not consider the real-time
+                                                                                       which serves as the basis for task scheduling. It should
+nature of tasks [33].
+                                                                                       be emphasized that in our WAMSPRES system, the task
+                                                                                       identifier is the unique identifier used to recognize the
+                     III. SYSTEM ARCHITECTURE                                          presence of a task in the system. When a task exits, Task
+   We have implemented the complete architecture of                                    Manager clears all associated information of that task.
+WAMSPRES for airborne embedded systems, which is shown                              6) NPU Performance Predictor. NPU Performance Predictor
+in Fig. 2. The whole system consists of the following several                          predicts the remaining execution time of a task as a key
+modules.                                                                               indicator for task scheduling. It collects real-time work-
+   1) Kubelet. Kubernetes provides a mechanism called Device                           load indicators information of NPU devices and takes it as
+      Plugin to manage and schedule device resources on nodes                          input along with parameter information related to task ex-
+      within a cluster. Device plugin allows users to take specific                    ecution. Then, through the pre-trained NPU performance
+      types of devices (such as GPUs, FPGAs, NPUs, etc.) as                            model, NPU Performance Predictor obtains the remaining
+      schedulable resources, abstract and encapsulate them in                          execution time of the task as output.
+      Docker containers for use in Kubernetes clusters. Device                      7) NPU Scheduler. NPU Scheduler receives scheduling re-
+      plugin runs on NPU nodes in the form of gRPC server. On                          quests from NPU Manager and allocates computing re-
+      one hand, Kubelet establishes a ListAndWatch long-lived                          sources to each task. The NPU scheduler we designed
+      connection with the NPU Device Plugin to obtain real-time                        implement a soft preemptive scheduling strategy. It dy-
+      information about the device resources available on the                          namically adjusts the computing resources allocated to
+      node. On the other hand, Kubelet initiates an Allocate                           tasks based on their real-time demands. For a low-priority
+      request to the NPU Device Plugin to acquire specific NPU                         task, NPU Scheduler reduces the computing resources
+      resource information on the node. Based on this informa-                         allocated to it at the scheduling point instead of directly
+      tion, the Kubelet allocates NPU resources to containers.                         removing the task.
+   2) NPU Manager. NPU Manager is implemented using the                             Notations used in this paper are summarized in Table I.
+      Device Plugin mechanism to manage and provide access
+      to NPU hardware devices. Upon startup, the NPU Device                           IV. WORKLOAD-AWARE NPU PERFORMANCE MODEL
+      Plugin registers with the Device Plugin Manager within
+                                                                                    In this section, we detail our proposed Workload-Aware NPU
+      the Kubelet and initiates a gPRC request to communicate
+                                                                                 Performance Model. We will introduce them from the following
+      with Kubelet through a unix socket on the local path. Sub-
+                                                                                 three aspects. First, we analyze the relationship between task
+      sequently, the NPU Device Plugin starts a gRPC service,
+                                                                                 execution time and NPU computing resources assigned to the
+      maintains a ListAndWatch long-lived connection with the
+                                                                                 task, and describe the indicators we selected related to NPU
+      Kubelet and provides the service as a gRPC server for
+                                                                                 workloads. Second, we introduce the BPNN (Back Propagation
+      kubelet to access. NPU Device Plugin sends a list of NPU
+                                                                                 Neural Network) we adopted and analyze its network structure.
+      devices to Kubelet via ListAndWatch and notifies Kubelet
+                                                                                 Lastly, we demonstrate how we train the BPNN neural network
+      whenever the state of the devices on the node changes
+                                                                                 with a given set of tasks.
+      (such as a device failure).
+   3) vNPU. vNPU stands for virtual NPU. We use container-
+      ized approach to abstract NPU devices. Running neural                      A. NPU Workload-Related Indicators
+      network inference tasks on NPU devices requires the in-                       Concurrently executing multiple tasks on a single NPU de-
+      stallation of NPU drivers and runtime libraries. Therefore,                vice will result in resource competition and affect NPU perfor-
+      when creating the NPU container image, it is necessary to                  mance, which can lead to decreased efficiency in task execution.
+
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+1062                                                               IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 36, NO. 6, JUNE 2025
+
+
+
+                                 TABLE I                                          interface supports multi-thread or multi-process calls in concur-
+                        NOTATIONS USED IN THE PAPER
+                                                                                  rent scenarios. Through this interface, we can obtain the relevant
+                                                                                  indicators of the above NPU resources.
+                                                                                     1) AI Core. AI Core is the most critical computing unit
+                                                                                         of Ascend NPU, responsible for performing matrix,
+                                                                                         vector, and scalar computing intensive operator tasks.
+                                                                                         AI Core adopts Da Vinci architecture, including
+                                                                                         CUBE matrix arithmetic unit, Vector arithmetic unit and
+                                                                                         Scalar arithmetic unit, etc., in which different types of
+                                                                                         instructions can be executed in parallel with pipelines.
+                                                                                         We chose two indicators: ai_core_utilization_rate and
+                                                                                         ai_core_f requency. The ai_core_utilization_rate
+                                                                                         is the utilization rate of AI Core, which reflects the
+                                                                                         bustle of the AI Core in a past sampling period. The
+                                                                                         ai_core_f requency is the frequency of AI Core, which
+                                                                                         will directly affect the current running speed of the
+                                                                                         AI Core.
+                                                                                     2) AI CP U . AI CP U is responsible for non-matrix
+                                                                                         complex calculations, and these operator tasks
+                                                                                         are not suitable for running on AI Core. We
+                                                                                         chose an indicator, ai_cpu_utilization_rate. The
+                                                                                         ai_cpu_utilization_rate is the utilization rate of the
+                                                                                         AI CP U , its values reflect the busy degree of the
+                                                                                         AI CP U worked during the past sampling period.
+                                                                                     3) Ctrl CP U . Ctrl CP U s are dedicated to controlling
+                                                                                         the overall operation of the Ascend chip. It is mainly
+                                                                                         composed of system control module, instruction cache,
+Fig. 3.   Workload for T aski .                                                          scalar instruction processing queue, instruction trans-
+                                                                                         mission module and event synchronization module. The
+                               TABLE II                                                  significance of Ctrl CP U is to ensure the optimiza-
+                    THE WORKLOAD-RELATED INDICATORS                                      tion of resource performance on the entire chip. We
+                                                                                         chose two indicators: ctrl_cpu_utilization_rate and
+                                                                                         ctrl_cpu_f requency. The ctrl_cpu_utilization_rate
+                                                                                         is the utilization of Ctrl CP U , which reflects the
+                                                                                         bustle of Ctrl CP U in a past sampling period. The
+                                                                                         ctrl_cpu_f requency is the frequency of Ctrl CP U , and
+                                                                                         its value will directly affect the current operating speed of
+                                                                                         Ctrl CP U .
+                                                                                     4) M emory. There are multiple levels of memory within the
+                                                                                         Ascend SOC chip. The computing core is equipped with
+Moreover, different tasks have different requirements for NPU                            two-level buffer memory. L2 buffer memory provides
+resources, and the execution time of the same task also varies in                        high-bandwidth, low-latency storage access for AI
+different system states. Therefore, the remaining execution time                         Core and AI CP U . The Cache&Buf f er module is
+of each task in a multi-task concurrent environment is difficult                         used to ensure the normal operation of AI CP U and
+to predict. In order to ensure the real-time performance of the                          Ctrl CP U . In addition, the SOC integrates a LPDDR4x
+tasks in a multi-task concurrent environment, it is necessary to                         controller on-chip to provide larger DDR memory. We
+accurately predict the execution time of the executing task and                          select three indicators (memory_utilization_rate,
+make further scheduling decisions based on this.                                         memory_bw_utilization_rate,                              and
+   For a specific T aski , we define the workload as the other                           memory_f requency) for the primary storage unit,
+tasks concurrently executing with T aski as shown in Fig. 3. In                          which represent memory utilization, memory bandwidth
+this paper, we considers four workload-related NPU resources,                            utilization, and memory frequency, respectively.
+including AI Core, AI CP U , Ctrl CP U , and M emory. These                          In addition to the above indicators, the input variables we
+resources have significant impacts on the execution time of a                     specify also include the device_temperature. Due to the op-
+task. The workload-related indicators are detailed in Table II.                   erating environment of the processor, the busy degree of the
+The proposed NPU performance model takes these indicators                         processor, the continuous operation duration of the processor
+as input. The NPU devices we used is Huawei Atlas 200 with                        and other factors, the temperature of the device will change sig-
+Ascend AI processor, which provide DSMI (Device System                            nificantly. When the temperature reaches a certain threshold, the
+Manage Interface) to manage Ascend AI processors. The DSMI                        power of the device will change, which will affect the execution
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+YAO et al.: WORKLOAD-AWARE PERFORMANCE MODEL BASED SOFT PREEMPTIVE REAL-TIME SCHEDULING FOR NEURAL PROCESSING UNITS                                     1063
+
+
+
+
+                                                                                 Fig. 5.   BPNN training data sampling.
+Fig. 4.   The structure of BPNN.
+
+
+efficiency of the inference task on the board. In addition, the
+computational power quota assigned to the task is also one of                    advance. Therefore, we train our BPNN neural network based on
+the indicators (detailed in Section V), which reflects the usage                 a fixed task set Γ with N tasks {T ask1 , T ask2 , . . ., T askN },
+of computing resources for the task. It should be noted that this                using experimental data from the actual run of the task. We
+indicator is not acquired by DSMI, but is dynamically set by the                 implement a monitor thread to periodically collect the selected
+NPU scheduler.                                                                   workload-related indicators as input variables for the BPNN
+                                                                                 neural network. The monitor thread starts at the beginning of
+B. BPNN Based NPU Performance Model                                              a task and terminates at the end of a task. For each T aski
+                                                                                 in the task set Γ, a BPNN model needs to be trained for it.
+    We adopt a BPNN (Back Propagation Neural Network) to
+                                                                                 There are two points to node. One is that T aski needs to run
+predict the NPU performance with different workloads. BPNN
+                                                                                 in a variety of different workload environments to collect the
+possesses learning and approximation capabilities, allowing it to
+                                                                                 corresponding task execution time. It is therefore necessary to
+learn the mapping between inputs and outputs through training.
+                                                                                 randomly combine all tasks in the task set Γ except for T aski to
+It is capable of adjusting its internal parameters to optimize the
+                                                                                 traverse to each possible combination. Second, for T aski itself,
+prediction or classification of given data. BPNN is a multi-layer
+                                                                                 we need to assign it different NPU computing power quota to
+feedforward neural network based on the backpropagation al-
+                                                                                 make it execute at the same time with the workload. To make the
+gorithm. The structure of BPNN consists of multiple neurons
+                                                                                 acquired training data more comprehensive, we make a further
+organized in layers, including an input layer, hidden layers,
+                                                                                 refinement based on the combination of the workload tasks in
+and an output layer. Each neuron is connected to all neurons
+                                                                                 the task set Γ. For the workload task T askj (where j = i), we
+in the previous layer, and signals are propagated through these
+                                                                                 let it run under different computing power quota to obtain more
+connections with weighted values.
+                                                                                 comprehensive training data of T aski . Based on the analysis of
+    The training process of BPNN is achieved through the back-
+                                                                                 a large number of experimental data, we find that when the step
+propagation algorithm. First, input samples are fed into the
+                                                                                 size of the change of the computing power quota assigned to
+network, and the network’s output is computed through forward
+                                                                                 the task is less than a certain value, the effect on the remaining
+propagation. Then, the error between the output and the true
+                                                                                 execution time of the task is negligible. Therefore, we set the
+value is calculated, and the error is propagated back from the
+                                                                                 step size of the computing power quota to 10, which can not only
+output layer to the hidden layers. During the backpropagation
+                                                                                 significantly affect the remaining execution time of the task, but
+process, the connection weights are adjusted based on the mag-
+                                                                                 also reduce the overhead of the data sampling. The sampling of
+nitude of the error to minimize it. This process iterates until
+                                                                                 input and output variable of BPNN neural network is shown in
+the network’s output approaches the true value or the error falls
+                                                                                 Fig. 5.
+within an acceptable range.
+                                                                                    Under different workload conditions, the system status pa-
+    The structure of our BPNN for the NPU performance model
+                                                                                 rameters are recorded in real time, and the task execution time is
+is shown in Fig. 4.
+                                                                                 predicted by using the system status parameters and the comput-
+    It is a four-layer network. The first layer is the input layer
+                                                                                 ing power occupied by the task as input values. When training a
+that contains all workload-related indicators. Considering the
+                                                                                 task model, other tasks in the task set Γ are randomly combined
+impact of input size on the execution time of the NPU task,
+                                                                                 as workloads. Under a certain workload, it is necessary to ensure
+we take this parameter as a new input variable into account. The
+                                                                                 that the workload of the task is constant during execution. At
+second and the third layers are hidden layers with 13 nerve cells,
+                                                                                 the same time, the DSMI interface is called to obtain the system
+respectively. The last layer is the output layer.
+                                                                                 status parameters during this process. When T aski starts, the
+                                                                                 monitor thread samples all selected workload-related system
+C. Training Data
+                                                                                 state parameters every 100 ms as input vector X k . When T aski
+  Usually, airborne embedded systems have a fixed set of tasks,                  is completed, calculate the remaining execution time yi k of
+and the tasks performed on the NPU can be determined in                          T aski at each sampling timestamp, and its calculation formula
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+1064                                                            IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 36, NO. 6, JUNE 2025
+
+
+
+is as follows:
+                           y i k = te k − ti k                          (1)
+where te k represents the end time of T aski , ti k represents any
+timestamp sampled by the monitor thread during task execu-
+tion, and the remaining task execution time yi k of all sampled
+time stamps is recorded as vector Y k . In addition, the input
+parameters also include a vector F k , which consists of the task
+completion rate fi k at each sample point moment, which is
+calculated as follows:
+                                     tki − tks
+                            fi k =                                      (2)
+                                     tke − tks                                 Fig. 6.       The workload and execution time of T aski .
+
+where ts k represents the start time of T aski , te k represents the
+end time of T aski , and ti k represents any timestamp sampled by
+                                                                               where, periodvir is a fixed time slice. This period is not a clock
+the monitor thread during task execution. Given the computing
+                                                                               period, but a virtual time period.
+power quota δ of T aski , we obtain an input vector X k , F k , δ
+                                                                                 In this paper, we establish the task model as follows.
+of T aski , denoted as I k . Thus, we have an input-output pair
+I k , Y k , which represents the remaining execution time of                                                                             
+the T aski corresponding to the workload of each sampling                                           T aski = τiδ,L , γiδ,L , Fi,j , Di , Pi          (4)
+timestamp. Therefore, T aski performs completely once, ob-
+taining several sets of input-output pairs of data. Finally, we                    r τ δ,L is the actual execution time of T aski running with
+                                                                                         i
+can obtain different combinations of workloads under different                       computing power quota δ under the workload L;
+computational power quotas, thus obtaining enough samples to                      r γ δ,L is the predicted remaining execution time of T aski
+                                                                                      i
+train the BPNN neural network.                                                       running with computing power quota δ under the workload
+                                                                                     L;
+        V. SOFT PREEMPTIVE REAL-TIME SCHEDULING                                   r Fi,j is the completion rate of T aski at the end of the j th
+    Through the BPNN-based task remaining execution time                             workload changing;
+prediction model proposed in the previous section, we can
+                                                                                  r Di is the relative deadline of T aski . In this paper, we adopt
+accurately predict the remaining execution time of each task.                        the implicit deadline model that Di is equal to the period
+In this section, we introduce the proposed a soft preemptive                         of the T aski ;
+real-time task scheduling strategy in detail. First, we present an
+                                                                                  r Pi is the fixed priority of T aski .
+NPU task model and demonstrate how to calculate the remaining                     Here, we take an example to illustrate the actual execution
+execution time of a task when the workload changes. Then, the                  time and the predicted remaining execution time of an NPU
+soft preemptive scheduling strategy based on the latest deadline               task when the workload is changed. As shown in Fig. 6, the
+is introduced, and the greedy scheduling policy based on priority              workload for T aski usually changes when a new task is launched
+is described in detail.                                                        (time t0 and t1 ) or an existing task is finished (time t2 and t3 ).
+                                                                               Once the workload changes, the NPU performance predictor
+A. Deadline-Based Soft Preemptive Scheduling                                   will estimate the remaining execution time γiδ,L based on the
+                                                                               proposed BPNN model with workload-related indicators and
+   The inherent scheduler of NPU does not consider the pri-
+                                                                               input sizes of T aski .
+ority of tasks, and does not meet the real-time requirements
+                                                                                  As mentioned in the previous section, the input vector of
+of airborne embedded systems well. To solve this problem, we
+                                                                               the NPU performance model includes the task completion rate.
+propose a soft preemptive scheduling strategy. Consider an ex-
+                                                                               This indicator needs to be calculated in time when the NPU
+treme case where a high-priority task is co-executing with a low-
+                                                                               performance model is called. Different from the training process
+priority task. If the scheduler directly removes the low-priority
+                                                                               of the NPU performance model, during the actual execution of
+task from the NPU device, it introduces the extra scheduling
+                                                                               the task, the workload changes due to the arriving of new tasks or
+overhead by context switch. However, the WAMSPRES sched-
+                                                                               the exiting of existing tasks, which makes the calculation of task
+uler just adjusts the computing power quota δ of each task
+                                                                               completion rate complicated. If the last time task completion rate
+dynamically according to its deadline. If it assigns very small
+                                                                               (denoted by Fi,j−1 , Fi,0 is set to 0) is recorded, we can calculate
+computing resources to low-priority tasks, it can achieve the
+                                                                               the current task completion rate Fi,j according to Fi,j−1 , the
+approximate preemption scheduling. The minimal granularity                                                                 δ ,L
+of the NPU computing power unit is set to be σ which is defined                predicted remaining execution time γi i,j i,j , and the actual
+                                                                                                 δi,j ,Li,j
+as below. Thus, the computing power quota δ allocated to an                    execution time τi            , as follows.
+NPU task must be an integer multiple of σ.
+                                                                                                             δ      ,Li,j
+                                  1                                                                        τi i,j
+                           σ=                                           (3)                       Fi,j =     δ      ,Li,j
+                                                                                                                            (1 − Fi,j−1 ) + Fi,j−1   (5)
+                              periodvir                                                                    γi i,j
+
+       Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+YAO et al.: WORKLOAD-AWARE PERFORMANCE MODEL BASED SOFT PREEMPTIVE REAL-TIME SCHEDULING FOR NEURAL PROCESSING UNITS                                   1065
+
+
+
+   In this way, we do not need to track the changes of previous                 Algorithm 1: Priority-Based Greedy Scheduling Algorithm.
+workload, but only focus on the most recent load change. More                  Input: Γ: a task set, N : the number of Tasks, j: change times
+importantly, as one of the input parameters of the proposed                       of the workload, Fi,j : the completion rate of T aski when
+NPU performance model, the simpler the calculation process,                       the workload j th changes, Di : the relative deadline of
+the better.                                                                                                               δ ,L
+                                                                                  T aski , Pi : the priority of T aski , τi i,j i,j : the actual
+   Based on the above formula and the proposed NPU perfor-
+                                                                                  execution time of T aski with workload Li,j on computing
+mance model, for T aski , we can obtain a series different com-                                         δ ,L
+puting power δi,j during task running. When the k th workload                     power quota δi,j , γi i,j i,j : the predicted execution time of
+changes, the minimum computing power quota δi,k of T aski                         T aski with workload Li,j on computing power quota δi,j .
+should satisfy the following inequation.                                       Output: Δ[N ]: δ Array for All Tasks, The Element δi,j ∈ Δ
+                                                                                  is Computing Power Quota Allocated to T aski in The j th
+                                            k−1
+                                                                                 Workload Change.
+                   δ       ,Li,k                   δ       ,Li,j
+                  γi i,k           ≤ Di −         τi i,j               (6)       1: F ← 0, P ← 0, Y ← 0
+                                            j=0                                  2: for T aski ∈ Γ do
+         δ   ,L                                                                  3:     if T aski is active then
+where, γi i,k i,k is the predicted remaining execution time of                                            δ
+                                                                                                        τi i,j
+                                                                                                                 ,Li,j
+             δ ,L
+T aski and τi i,j i,j is the actual execution time of T aski when                 4:          Fi,j ←     δ    ,L         (1 − Fi,j−1 ) + Fi,j−1
+                                                                                                        γi i,j i,j
+the workload changes for the j th time.                                          5:           Y ← BP N N (δi,j , Fi,j , Li,j )
+                                                                                 6:           δi,j ← F IN DM IN DELT A(Y )
+B. Priority Based Greedy Scheduling Policy                                       7:           if Resource > δi,j then
+                                                                                 8:              T OT AL ← T OT AL − δi,j
+   The soft preemptive real-time scheduling strategy is devel-
+                                                                                 9:           end if
+oped based on greedy algorithm. All T aski ∈ Γ sorted in
+                                                                                10:      else
+descending order according to the task priority. The larger the
+                                                                                11:         returnΔ
+value of Pi for a task, the higher the priority of the task (Pi >
+                                                                                12:      end if
+Pi+1 , i = {1, 2, . . .N − 1}). This greedy policy will prioritize
+                                                                                13:    end for
+time constraints for high-priority tasks.
+                                                                                14:    for T aski ∈ Γ do
+   NPU Scheduler receives scheduling requests from NPU Man-
+                                                                                15:      if Resource > 0 then
+ager, dynamically adjusts the computing power quota assigned
+                                                                                16:         δi,j ← min(100 − δi,j , Resource)
+to the currently executing tasks, and feedback the scheduling re-                            δ ,L
+sults to NPU Manager. Whenever the system workload changes                      17:         γi i,j i,j ← Y [δi,j ]
+(new tasks arrive or old tasks exit), the scheduling is triggered.              18:         Resource ←
+The NPU Scheduler obtains the predicted remaining execution                                 Resource − min(100 − δi,j , Resource)
+time of the tasks through the NPU Performance Predictor based                   19:      else
+on the current system status, and the tasks beyond the established              20:         returnΔ
+deadline need to adjust the computing power distribution. The                   21:      end if
+real-time scheduling algorithm based on greedy policy is de-                    22:    end for
+scribed in Algorithm 1.                                                         23:    return Δ
+   In Algorithm 1, we check all tasks in Γ. If the T aski is
+inactive, its computing power quota is set to 0, which means
+no NPU computing resource is allocated to T aski . Otherwise,                     From Step 13 to Step 20, if there are available computing
+the amount of computing power allocated to T aski should be                    power quota, the system assigns the remaining computing power
+adjusted the when the workload changes.                                        quota to tasks in priority order. It should be noted that after a
+   In Step 5, the function BPNN is based on the proposed NPU                   large number of our experiments, a maximum of 100 computing
+performance model to predict the remaining execution time of                   power quota are allocated to one task, that is, an entire AI-CPU
+T aski with the current task completion rate Fi,j , the workload-              core. In this way, the computing resources of the system can be
+related indicators Li,j and the computing power quota δi,j to be               fully utilized.
+assigned to it. Where, Fi,j is obtained through Step 4 with an
+initial value of zero. It is worth noting that the function BPNN                                           VI. EVALUATION
+returns a list of predicted results, each of which is a numerical
+                                                                               A. Experimental Setup
+pair consisting of the computing power quota and the remaining
+execution time.                                                                   We implement a WAMSPRES prototype on the airborne
+   In Step 6, the function FINDMINDELTA is to find the                         embedded system of the small fixed-wing UAV. The main control
+minimum number of the computing power quota assigned to                        board of the system is designed based on two Huawei Atlas 200
+the task while meeting the real-time requirements.                             NPU devices, as shown in Fig. 7. The AI computing engine of
+   From Step 7 to Step 11, it is necessary to compare the sum of               Huawei Atlas 200 includes 2 AI Core and 4 AI CP U . AI Core
+the allocated computing power quota with the entire computing                  adopts the Da Vinci architecture, which realizes high throughput,
+power quota TOTAL.                                                             large computing power and low power consumption through
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+1066                                                               IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 36, NO. 6, JUNE 2025
+
+
+
+                                                                                                                  TABLE V
+                                                                                                              REALISTIC TASK SET
+
+
+
+
+Fig. 7.   Experiment platform.
+                                                                                  to accelerate computation speed. The details of each task in the
+                                  TABLE III                                       task set are shown in Table V.
+            THE PROCESSOR SPECIFICATIONS OF HUAWEI ATLAS 200
+
+                                                                                  B. Experimental Results of the Simulated Task Set
+                                                                                     1) Model Training: The training phase of T aski in the task
+                                                                                  set Γ is conducted as described in Section IV. The workload
+                                                                                  consists of other tasks under different computing power quotas,
+                                                                                  and the workload runs simultaneously with T aski until it is
+                                                                                  finished. In this paper, a monitor thread is implemented to collect
+                                                                                  the input parameter values of BPNN. The task executing time
+                                                                                  is calculated by system function, and all tasks keep running
+                                                                                  periodically.
+                                                                                     In this process, the monitor thread is sampled every 100
+                                 TABLE IV                                         milliseconds, so that the remaining execution time and the com-
+                             SIMULATED TASK SET                                   pletion rate of T aski can be calculated based on the timestamp
+                                                                                  and the actual completion time of the task. Then the sampled
+                                                                                  data of system status, the computing power quota assigned to
+                                                                                  the task and the calculated task completion rate are taken as
+                                                                                  the input of BPNN. The calculated remaining execution time of
+                                                                                  T aski is taken as the output of BPNN. For each T aski , we run
+                                                                                  it for 8000 times with different workload, and collect 600,000
+                                                                                  sample pairs I k , Y k . 500,000 samples are used to train the
+                                                                                  BPNN model of T aski , and the rest samples are used to test the
+                                                                                  accuracy of the NPU performance model.
+                                                                                     2) Overall Accuracy: We choose MAPE (Mean Absolute
+                                                                                  Percentage Error) as the accuracy metric which is defined as
+specially designed architectures and circuits. This architecture is               follows:
+especially suitable for handling common calculations necessary                                                  M  k           
+                                                                                                             1  S m    − Sek 
+for neural networks in deep learning, such as matrix multiplica-                               M AP E =                           × 100%          (7)
+tion. AI-CPU is a CPU of ARM architecture, each CPU core has                                                 M           Sek
+                                                                                                                   k=1
+independent L1 and L2 caches, and all cores share an on-chip                              k
+L3 cache. The processor specifications for the Huawei Atlas 200                   where Sm  is the measured execution time of task via the monitor
+are shown in Table III.                                                           thread, and Sek is the predicted remaining execution time of
+   We verify the proposed NPU performance model on both the                       task via the BPNN model. In the evaluation, the workload still
+simulated and the realistic task sets respectively. The simulated                 remains stable with the task being tested. From Fig. 8(a), the
+task set is selected from Huawei Official community [34], which                   proposed NPU performance model can achieve a low average
+contains 10 tasks listed in Table IV. In Table IV, for each task,                 MAPE which is less than 5%.
+we calculate the WCET (Worst Case Execution Time) that runs                          In addition, we monitor the predicted remaining execution
+individually without any workload on the entire NPU. For the                      time at task runtime and the actual remaining execution time of
+simulated task set, the period of a task can be selected from                     the task, and select the Error_Rate as a measure of the relation-
+a specific range in order to construct multiple task sets with                    ship between the prediction accuracy of the NPU performance
+different utilizations.                                                           model and the task running time, which is defined as follows:
+                                                                                                                  EST           
+   The realistic task set of the airborne embedded system con-                                                   rt     − rtACT 
+tains 6 tasks: Object Detection (OD), SAR Processing (SP),                                         ErrorRate =                                  (8)
+                                                                                                                       rtACT
+Image Color Matching (ICM), Path Planning (PP), Image Clas-
+sification (IC), and Visual Enhancement (VE). These tasks are                     where rtEST is the remaining execution time of the task predicted
+designed based on neural network model which require the NPU                      by the NPU performance model at time t, and rtACT is the
+
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+YAO et al.: WORKLOAD-AWARE PERFORMANCE MODEL BASED SOFT PREEMPTIVE REAL-TIME SCHEDULING FOR NEURAL PROCESSING UNITS                                      1067
+
+
+
+
+Fig. 8.    Experimental results of the simulated task set.
+
+
+
+
+Fig. 9.    Comparison of different models.
+
+
+
+
+                                                                                  Fig. 11.   MAPE of the realistic task set.
+
+
+                                                                                     Different from the hard preemptive scheduling method,
+                                                                                  WAMSPRES does not need the context switch. It can provide the
+                                                                                  approximate preemption by dynamically adjusting the comput-
+                                                                                  ing power quota of active tasks. Moreover, we use a lightweight
+                                                                                  BPNN to predict NPU performance. Thus, the WAMSPRES
+                                                                                  scheduler has a very low scheduling overhead which is just
+                                                                                  64.8 μs in a set with 10 tasks.
+                                                                                     4) Model Comparison: We compare the BPNN model with
+                                                                                  other popular models, including Deep Neural Network (DNN),
+Fig. 10.    Schedulability versus utilization.
+                                                                                  Long Short-Term Memory (LSTM) and eXtreme Gradient
+                                                                                  Boosting (XGBoost). The layers of the BPNN and DNN are
+actual remaining execution time of the task at time t. We let                     4 and 50 respectively. Fig. 9 shows the MAPE and the compu-
+the WW task run for 1200 ms, changed the workload 4 times.                        tational overhead of BPNN, DNN, LSTM and XGBosst models
+The Error_Rate is calculated at different moments, and the                        based on the simulated task set. We can observe that LSTM and
+results are shown in Fig. 8(b). It can be seen that as the task                   DNN has higher predict accuracy, but the computational time
+running time goes on, the NPU performance model becomes                           is too long. Although, the MAPE of BPNN is a little higher
+more and more accurate for predicting the remaining execution                     than DNN and LSTM, the computational overhead of BPNN
+time of the task.                                                                 is considerably lower than all other models. By comprehensive
+   3) Scheduling Overhead: The scheduling overhead incurred                       comparison, the lightweight BPNN is a proper model consider-
+by the WAMSPRES scheduler conducts a scheduling operation                         ing both accuracy and overhead.
+when workload changes. The number of the task set is from                            5) Schedulability: The experiments are conducted on differ-
+2 to 10, and the task is running periodically. We record each                     ent task sets generated by simulated tasks. We use the UUniSort
+scheduling overhead and the average value is shown in Fig. 8(c).                  algorithm [35] to set corresponding periods for tasks with a
+           Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+1068                                                                IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 36, NO. 6, JUNE 2025
+
+
+
+
+Fig. 12.    Task execution sequence diagram.
+
+
+
+
+Fig. 13.    Computing power quota sequence diagram (OD).
+
+
+desired overall utilization U . It is calculated by                                thread, as shown in Fig. 12. The overall utilization of the realistic
+                                                                                   task set is 2.34 obtained by Table V. The read part of the block
+                                 N
+                                   δ     ,L
+                                   τ f ull empty
+                                        i                                          represents that an execution cycle of the task misses the deadline.
+                          U=                                                (9)
+                                            Di                                     We made statistics on the execution of tasks scheduled by the
+                                 i=1
+                                                                                   WAMSPRES and the Ascend scheduler respectively for 2 hours.
+                                                         δ    ,L                   The results show that the schedulability ratio of the Ascend
+where N is the number of the task set, τi f ull empty is the
+measured WCET of T aski when it runs individually without any                      scheduler just 54.6%. The success rate of tasks OD and SP
+workload on full NPU computing resources, Di is the related                        are only 32.5% and 30.2% respectively. On the contrary, no
+deadline of the T aski .                                                           scheduling failure occurs under the WAMSPRES scheduler. On
+   Fig. 10 compares the schedulability ratio of the simulated                      four long test runs (30, 60, 90, and 120 minutes respectively),
+task set between the inherent Ascend scheduler and the pro-                        the schedulability ratio of the WAMSPRES scheduler has always
+posed WAMSPRES scheduler. Each point is the average ratio                          been 100%.
+calculated by 50 randomly generated task set. For the inherent                        Fig. 13 gives the computing power quota changing sequence
+Ascend scheduler, the scheduling failure has occurred when                         of task OD. Since the Ascend scheduler does not distinguish
+U > 0.8. Then, the schedulability ratio drops significantly. The                   priorities of tasks and allocates NPU resources equally to each
+proposed WAMSPRES scheduler maintains 100% success rate                            task. Thus, tasks with short periods will probably miss the dead-
+until U > 2.4. At most 48.7% more tasks are schedulable under                      line. The WAMSPRES scheduler adjusts the computing power
+the WAMSPRES scheduler.                                                            quota according to the deadline and priority of the task, which
+                                                                                   allocates more resources to high-priority or short-deadline tasks.
+C. Experimental Results of the Realistic Task Set
+   We collect more than 500,000 sample pairs to retrain BPNN                       D. Disscusion
+model for the realistic task set in this paper. From Fig. 11, we can                  WAMSPRES considers both workload indicators and input
+see that the MAPE of the realistic task set is less than 8%, which                 sizes for predicting remaining execution time for an NPU task
+decreases about 2.2% comparing to our previous work [36]. It                       when it is co-executing with other tasks. It provides a lightweight
+illustrates that the accuracy of the NPU performance model                         preemptive scheduling mechanism that dynamically allocates
+increases with the growth of training data, since more data                        computing resources for each task according to priority and
+can cover more combinations of co-executing tasks, which can                       deadline, which does not remove the low-priority tasks. The
+simulate more conditions of workload for a task. Thus, the NPU                     average scheduling overhead of WAMSPRES in a set of 10 tasks
+performance model can be continued to improve by collecting                        is just 64.8 μs without any memory copy operation.
+more training data.                                                                   However, there are still some limitations in the prototype
+   In order to analyze the schedulability of the WAMSPRES                          WAMSPRES scheduler. First, in order to balance scheduling
+scheduler under the realistic task set, we record the start time                   overhead and prediction accuracy, we adopt a simple 4-layer
+and completion time series of each task via the designed monitor                   BPNN model that each hidden layer contains 13 neurons. The
+
+           Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+YAO et al.: WORKLOAD-AWARE PERFORMANCE MODEL BASED SOFT PREEMPTIVE REAL-TIME SCHEDULING FOR NEURAL PROCESSING UNITS                                              1069
+
+
+
+simple structure can significantly reduce the scheduling over-                         [7] S. S. Baghsorkhi, M. Delahaye, S. J. Patel, W. D. Gropp, and W. W. Hwu,
+head, but the prediction accuracy may also decrease. Second,                               “An adaptive performance modeling tool for GPU architectures,” ACM
+                                                                                           SIGPLAN Notices, vol. 45, no. 5, pp. 105–114, 2010.
+WAMSPRES is specifically designed for the airborne embedded                            [8] S. Hong and H. Kim, “An analytical model for a GPU architecture with
+system which usually has a fixed task set. Thus, we can improve                            memory-level and thread-level parallelism awareness,” in Proc. ACM 36th
+the prediction accuracy by constantly training with sufficient                             Int. Symp. Comput. Archit., 2009, pp. 152–163.
+                                                                                       [9] Y. Zhang and J. D. Owens, “A quantitative performance analysis model for
+data. But, when the task set changes, it is likely to cause                                GPU architectures,” in Proc. 17th IEEE Int. Symp. High Perform. Comput.
+catastrophic forgetting after retaining the BPNN model. Third,                             Archit., 2011, pp. 382–393.
+the workload-related indicators require driver API provided by                        [10] T. T. Dao, J. Kim, S. Seo, B. Egger, and J. Lee, “A performance model
+                                                                                           for GPUs with caches,” IEEE Trans. Parallel Distrib. Syst., vol. 26, no. 7,
+device manufacturers. In this paper, we use DSMI interface for                             pp. 1800–1813, Jul. 2015.
+Huawei Atlas 200 AI device. The workload-related indicators                           [11] S. Lym, D. Lee, M. O’Connor, N. Chatterjee, and M. Erez, “DeLTA: GPU
+may need to be redesigned based on specific hardware. We will                              performance model for deep learning applications with in-depth memory
+                                                                                           system traffic analysis,” in Proc. IEEE Int. Symp. Perform. Anal. Syst.
+focus on addressing the aforementioned issues in our future                                Softw., 2019, pp. 293–303.
+work.                                                                                 [12] Y. Choi and M. Rhu, “PREMA: A predictive multi-task scheduling algo-
+                                                                                           rithm for preemptible neural processing units,” in Proc. IEEE Int. Symp.
+                                                                                           High Perform. Comput. Archit., 2020, pp. 220–233.
+                            VII. CONCLUSION                                           [13] Y. Yao et al., “WAMP2 2S: Workload-aware GPU performance model
+                                                                                           based pseudo-preemptive real-time scheduling for the airborne em-
+   In this paper, we implement a soft preemptive NPU real-                                 bedded system,” IEEE Trans. Parallel Distrib. Syst., vol. 33, no. 11,
+time scheduling mechanism, WAMSPRES, for the airborne                                      pp. 2767–2780, Nov. 2022.
+embedded system. First, to better manage NPU computational                            [14] Y. Yao et al., “Brief industry paper: Workload-aware GPU performance
+                                                                                           estimation in the airborne embedded system,” in Proc. 27th IEEE Real-
+resources, we design a resource sharing framework based on                                 Time Embedded Technol. Appl. Symp., 2021, pp. 417–420.
+Kubernetes that provides fine-grained NPU resource virtual-                           [15] G. A. Elliott and J. H. Anderson, “Real-world constraints of GPUs in
+ization and task isolation. Then, in order to accurately predict                           real-time systems,” in Proc. 17th IEEE Int. Conf. Embedded Real-Time
+                                                                                           Comput. Syst. Appl., 2011, pp. 48–54.
+the remaining execution time of tasks under co-execution cir-                         [16] I. Tanasic, I. Gelado, J. Cabezas, A. Ramirez, N. Navarro, and M. Valero,
+cumstance, we propose a workload-aware NPU performance                                     “Enabling preemptive multiprogramming on GPUs,” in Proc. 41st IEEE
+model based on a lightweight BPNN. Moreover, a soft pre-                                   Int. Symp. Comput. Archit., 2014, pp. 193–204.
+                                                                                      [17] J. J. K. Park, Y. Park, and S. Mahlke, “Chimera: Collaborative preemption
+emptive NPU scheduler is developed to deal with the real-time                              for multitasking on a shared GPU,” ACM SIGPLAN Notices, vol. 50, no. 4,
+scheduling in the embedded system. The soft preemptive sched-                              pp. 593–606, 2015.
+uler dynamically adjusts computing power quota assigned to                            [18] S. Kato, K. Lakshmanan, A. Kumar, M. Kelkar, Y. Ishikawa, and R.
+                                                                                           Rajkumar, “RGEM: A responsive GPGPU execution model for runtime
+the active tasks according to the priority and deadline. It can                            engines,” in Proc. IEEE Real-Time Syst. Symp., 2011, pp. 57–66.
+provide approximate preemption to high-priority tasks. Finally,                       [19] S. Kato, M. Mcthrow, C. Maltzahn, and S. Brandt, “Gdev: First-class GPU
+we implement a prototype of WAMSPRES based on Huawei                                       resource management in the operating system,” in Proc. USENIX Annu.
+                                                                                           Tech. Conf., 2012, pp. 401–412.
+Atlas 200 and evaluate the proposed model on both simulated                           [20] G. A. Elliott, B. C. Ward, and J. H. Anderson, “GPUSync: A framework for
+and realistic task sets. Experimental results illustrate that the                          real-time GPU management,” in Proc. 34th IEEE Real-Time Syst. Symp.,
+average MAPE values of WAMSPRES scheduler are less than                                    2013, pp. 33–44.
+                                                                                      [21] Z. Wang, J. Yang, R. Melhem, B. Childers, Y. Zhang, and M. Guo,
+5% and 8% respectively under the simulated and realistic task                              “Simultaneous multikernel GPU: Multi-tasking throughput processors via
+sets. In addition, it achieves at most 48.7% more scheduling                               fine-grained sharing,” in Proc. IEEE Int. Symp. High Perform. Comput.
+success ratio than the inherent Ascend scheduler. For a realistic                          Archit., 2016, pp. 358–369.
+                                                                                      [22] J. Zhong and B. He, “Kernelet: High-throughput GPU kernel executions
+task set in the airborne embedded system, the scheduling success                           with dynamic slicing and scheduling,” IEEE Trans. Parallel Distrib. Syst.,
+ratio of the WAMSPRES scheduler has always been 100% in                                    vol. 25, no. 6, pp. 1522–1532, Jun. 2014.
+four experiments with different durations.                                            [23] H. Zhou, G. Tong, and C. Liu, “GPES: A preemptive execution system for
+                                                                                           GPGPU computing,” in Proc. 21st IEEE Real-Time Embedded Technol.
+                                                                                           Appl. Symp., 2015, pp. 87–97.
+                                   REFERENCES                                         [24] G. Chen, Y. Zhao, X. Shen, and H. Zhou, “EffiSha: A software framework
+                                                                                           for enabling effficient preemptive scheduling of GPU,” in Proc. 22nd ACM
+ [1] Y. Hu et al., “Industrial Internet of Things intelligence empowering smart            SIGPLAN Symp., 2017, pp. 3–16.
+     manufacturing: A literature review,” IEEE Internet Things J., vol. 11,           [25] B. Wu, X. Liu, X. Zhou, and C. Jiang, “FLEP: Enabling flexible and
+     no. 11, pp. 19143–19167, Jun. 2024.                                                   efficient preemption on GPUs,” in Proc. Int. Conf. Architectural Support
+ [2] S. Zeng et al., “Enabling efficient and flexible FPGA virtualization for              Program. Lang. Oper. Syst., 2017, pp. 483–496.
+     deep learning in the cloud,” in Proc. 28th IEEE Int. Symp. Field- Program.       [26] C. Hartmann and U. Margull, “GPUart-An application-based limited pre-
+     Custom Comput. Machines, 2020, pp. 102–110.                                           emptive GPU real-time scheduler for embedded systems,” J. Syst. Archit.,
+ [3] S. Ghodrati et al., “Planaria: Dynamic architecture fission for spatial multi-        vol. 97, pp. 304–319, 2019.
+     tenant acceleration of deep neural networks,” in Proc. IEEE Int. Symp.           [27] H. Lee, H. Kim, C. Kim, H. Han, and E. Seo, “Idempotence-
+     Microarchitecture, 2020, pp. 681–697.                                                 based preemptive GPU kernel scheduling for embedded systems,”
+ [4] J. Lee, J. Choi, J. Kim, J. Lee, and Y. Kim, “Dataflow mirroring: Ar-                 IEEE Trans. Parallel Distrib. Syst., vol. 70, no. 3, pp. 332–346,
+     chitectural support for highly efficient fine-grained spatial multitasking            Mar. 2021.
+     on systolic-array NPUs,” in Proc. 58th ACM/IEEE Des. Automat. Conf.,             [28] H. Wu, W. Liu, Y. Gong, and J. Jin, “Safe process quitting for GPU multi-
+     2021, pp. 247–252.                                                                    process service (MPS),” in Proc. 40th IEEE Int. Conf. Distrib. Comput.
+ [5] Y. Zhang, B. Zhang, and Z. Zhou, “Zero-copy data transfer for an OpenCL               Syst., 2020, pp. 1169–1170.
+     API remoting system,” in Proc. IEEE Int. Conf. Cloud Comput. Big Data            [29] A. Dhakal, S. G. Kulkarni, and K. K. Ramakrishnan, “GSLICE: Controlled
+     Analytics, 2020, pp. 255–259.                                                         spatial sharing of GPUs for a scalable inference platform,” in Proc. 11th
+ [6] Y. W. Chen, S. H. Hung, C. H. Tu, and C. W. Yeh, “Virtual hadoop:                     ACM Symp. Cloud Comput., 2020, pp. 492–506.
+     MapReduce over docker containers with an auto-scaling mechanism for              [30] B. Li, T. Patel, S. Samsi, V. Gadepally, and D. Tiwari, “MISO: Exploiting
+     heterogeneous environments,” in Proc. ACM Int. Conf. Res. Adaptive                    multi-instance GPU capability on multi-tenant GPU clusters,” in Proc.
+     Convergent Syst., 2016, pp. 201–206.                                                  13th Symp. Cloud Comput., 2022, pp. 173–189.
+
+
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+1070                                                               IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 36, NO. 6, JUNE 2025
+
+
+
+[31] C. Espenshade et al., “Characterizing training performance and energy                                Kai Hu received the BE degree from Anhui Uni-
+     for foundation models and image classifiers on multi-instance GPUs,” in                              versity, in 2022. He is currently working toward the
+     Proc. 4th Workshop Mach. Learn. Syst., 2024, pp. 47–55.                                              master’s degree with the Department of Software
+[32] S. Ohshima, A. Ida, R. Yokota, and I. Yamazaki, “QR factorization of block                           Engineering, Northwestern Polytechnical University.
+     low-rank matrices on multi-instance GPU,” in Proc. Int. Conf. Parallel                               His research interests include NPU virtualization and
+     Distrib. Comput. Appl. Technol., 2022, pp. 359–369.                                                  resource management.
+[33] M. Rhu, N. Gimelshein, J. Clemons, A. Zulfiqar, and S. W. Keckler,
+     “vDNN: Virtualized deep neural networks for scalable, memory-efficient
+     neural network design,” in Proc. 49th IEEE/ACM Int. Symp. Microarchi-
+     tecture, 2016, pp. 1–13.
+[34] 2022. [Online]. Available: https://gitee.com/ascend/samples/tree/v0.6.0/
+[35] E. Bini and G. Buttazzo, “Measuring the performance of schedulability
+     tests,” Real-Time Syst., vol. 30, no. 1, pp. 129–154, 2005.
+[36] C. Liu et al., “WMDRS: Workload-aware performance model based multi-                                 Qiming Huang received the MS degree in software
+     task dynamic-quota real-time scheduling for neural processing units,” in                             engineering from UESTC, in 2020. He is currently
+     Proc. 28th IEEE Int. Conf. Parallel Distrib. Syst., 2022, pp. 435–442.                               working towards the doctor’s degree with the Depart-
+                                                                                                          ment of Computer Science, Northwestern Polytechni-
+                                                                                                          cal University. His research interests include real-time
+                                                                                                          scheduling, real-time locking protocal, virtualization
+                          Yuan Yao (Member, IEEE) received the BS, MS,                                    and cyber-physical systems.
+                          and PhD degrees in computer science from North-
+                          western Polytechnical University, Xi’an, China, in
+                          2007, 2009 and 2015, respectively. Currently, he is
+                          an associate professor with the School of Computer
+                          Science, Northwestern Polytechnical University. His
+                          research interests are in the area of real-time embed-
+                          ded system, distributed and parallel computing and
+                          system software.                                                                Zhe Peng (Member, IEEE) received the BS degree
+                                                                                                          from Northwestern Polytechnical University, the MS
+                                                                                                          degree from the University of Science and Tech-
+                                                                                                          nology of China, and the PhD degree from The
+                                                                                                          Hong Kong Polytechnic University. He was a vis-
+                          Yujiao Hu received the bachelor’s and PhD degrees                               iting scholar with the Department of Electrical and
+                          from the Department of Computer Science, North-                                 Computer Engineering, Stony Brook University. He
+                          western Polytechnical University, Xi’an, China, in                              is currently a research assistant professor with the De-
+                          2016 and 2021, respectively. From November 2018                                 partment of Industrial and Systems Engineering, The
+                          to March 2020, she was a visiting PhD student with                              Hong Kong Polytechnic University. His research in-
+                          the National University of Singapore. Currently, she                            terests include distributed computing, cyber-physical
+                          is a faculty member with Purple Mountain Laborato-                              systems, autonomous systems.
+                          ries. She focuses on deep learning, edge computing,
+                          multi-agent cooperation problems.
+
+                                                                                                          Gang Yang (Member, IEEE) received the BE de-
+                                                                                                          gree from the School of Automation, Second Ar-
+                                                                                                          tillery Engineering College of PLA, Xi’an, China,
+                          Yi Dang received the BE degree from Zhengzhou
+                                                                                                          in 1998, and the MS and PhD degrees in computer
+                          University, in 2021. She is currently working toward
+                                                                                                          science from Northwestern Polytechnical University,
+                          the master’s degree with the Department of Computer
+                                                                                                          Xi’an, in 2002 and 2006, respectively. He is currently
+                          Science, Northwestern Polytechnical University. Her                             a professor with the School of Computer Science,
+                          research interests include real-time embedded system
+                                                                                                          Northwestern Polytechnical University. His research
+                          and resource management.
+                                                                                                          interests include distributed computing systems, in-
+                                                                                                          telligent swarm systems and cyber-physical systems.
+
+
+
+
+                                                                                                          Xingshe Zhou (Member, IEEE) received the BS and
+                          Wei Tao received the bachelor of engineering degree                             MS degrees in computer science from Northwest-
+                          from Hainan University, in 2023. He is currently                                ern Polytechnical University, Xian, China, in 1980
+                          working toward the master’s degree with the Depart-                             and 1982, respectively. He is currently a professor
+                          ment of Computer Science, Northwestern Polytech-                                with the School of Computer Science, Northwestern
+                          nical University. His research interests focus on NPU                           Polytechnical University. His research interests in-
+                          virtualization and resource management.                                         clude distributed computing, embedded computing,
+                                                                                                          and sensor networks.
+
+
+
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 02:46:03 UTC from IEEE Xplore. Restrictions apply.
+

@@ -1,0 +1,391 @@
+    Robust non-preemptive hard real-time scheduling
+           for clustered multicore platforms
+                                     Michele Lombardi, Michela Milano, Luca Benini
+                                              DEIS - Università di Bologna
+                                  {michele.lombardi2,michela.milano,luca.benini}@unibo.it
+
+
+   Abstract—Scheduling task graphs under hard (end-to-end)            general-purpose CPU [5], [6]. Non-preemptive scheduling
+timing constraints is an extensively studied NP-hard problem of       known to be subject to anomalies1 when tasks have depen-
+critical importance for predictable software mapping on Multi-        dencies and variable execution times [8]. Traditional anomaly-
+processor System-on-chip (MPSoC) platforms. In this work we
+focus on an off-line (design-time) version of this problem, where     avoidance techniques [9] rely on either synchronizing task
+the target task graph is known before execution time. We address      switching on timer interrupts (which unfortunately implies
+the issue of scheduling robustness, i.e. providing hard guarantees    preemption), or on delaying inter-task communication (or
+that the schedule will meet the end-to-end deadline in presence of    equivalently stretching execution time).
+bounded variations of task execution times expressed as min-max          In our formulation, the target platform is described as a set
+intervals known at design time. We present a robust scheduling
+algorithm that proactively inserts sequencing constraints when        of resources, namely execution clusters (i.e one or more tightly
+they are needed to ensure that execution will have no inserted idle   coupled processors with shared memory) and communication
+times and will meet the deadline for any possible combination of      channels. An application is a set of dependent tasks that have
+task execution times within the specified intervals. The algorithm    to be periodically executed with a max-period constraint (i.e.
+is complete, i.e. it will return a feasible graph augmentation if     deadline equal to period), modeled as a task graph where task
+one exists. Moreover, we provide an optimization version of the
+algorithm that can compute the shortest deadline that can be          execution is characterized by known min-max intervals and
+met in a robust way.                                                  inter-task dependencies are associated with a known amount
+                                                                      of data communication.
+                       I. I NTRODUCTION                                  A preliminary heuristic allocation step assigns tasks to pro-
+   Multicore platforms have become widespread in embedded             cessor clusters targeting workload balancing and minimization
+computing. This trend is propelled by ever-growing compu-             of inter-cluster communication. Task migration among clusters
+tational demands of applications and by the increasing num-           is not allowed and partitioned scheduling is performed offline
+ber of transistors-per-unit-area, under continuously tightening       by our algorithm. The online (run-time) part of the scheduler
+energy budgets dictated by technology and cost constraints            is extremely simple: when a task completes execution on
+[1], [2], [3]. Effective multicore computing is however not           a cluster, one of the tasks for which all predecessors have
+only a technology issue, as we need to be able to make                completed execution is triggered.
+efficient usage of the large amount of computational resources           Our main contribution can be summarized as follows. We
+that can be integrated on a chip. This has a cross-cutting            developed a robust scheduling algorithm that proactively in-
+impact on architecture design, resource allocation strategies,        serts additional inter-task dependencies only when required to
+programming models.                                                   meet the deadline for any possible combination of task execu-
+   Scalable performance is only one facet of the problem:             tion times within the specified intervals. Our approach avoids
+predictability is another big challenge for embedded multicore        idle time insertion, hence it does not artificially lower platform
+platforms. Many embedded applications run under real-time             utilization, it does not need timers and related interrupts, nor a
+constraints, i.e. deadlines that have to be met for any possible      global timing reference. The algorithm is complete, i.e. it will
+execution. Predictability and computational efficiency are of-        return a feasible graph augmentation if one exists. We also
+ten conflicting objectives, as many performance enhancement           propose an iterative version of the algorithm for computing
+techniques aim at boosting expected execution time, with-             the tightest deadline that can be met in a robust way. Even
+out considering potentially adverse consequences on worst-            though worst-case runtime is exponential, the algorithms have
+case execution. Hence applications with strong predictability         affordable run times (i.e seconds to minutes) for task graphs
+requirements often tend to under-utilize hardware resources           with tens of tasks.
+[4] (e.g. forbidding or restricting the use of cache memories,
+limiting resource sharing, etc.)                                                               II. R ELATED WORK
+   The objective of our work is predictable and efficient non-          Non-preemptive real-time scheduling on multiprocessors
+preemptive scheduling of multi-task applications with inter-          has been studied extensively in the past. We focus here on
+task dependencies. We focus on non-preemptive scheduling
+because it is widely utilized to schedule tasks on clustered            1 execution traces where one or more tasks run faster than their worst-case
+domain-specific data-processors under the supervision of a            execution time but the overall application execution becomes slower
+
+
+   978-3-9810801-5-5/DATE09 © 2009 EDAA
+partitioned scheduling. We can cluster previously proposed
+approaches in two broad classes, namely: online and offline.
+Online techniques target systems where workloads become
+known only at run-time. In this case, allocation and scheduling
+decision must be taken upon arrival of tasks in the system, and
+allocation and scheduling algorithm must be extremely fast,
+typically constant time or low-degree polynomial time. Given
+that multiprocessor allocation and scheduling on bounded
+resources is NP-Hard [10], obviously, online approaches can-
+not guarantee optimality, but they focus on safe acceptance
+tests, i.e. a schedulable task set may be rejected but a non-                Fig. 1.   (A) Target Platform; (B) Architecture of the solver
+schedulable task set will never be accepted.
+   An excellent and comprehensive description of the online
+approach is given in [9]. It computes a fast, heuristic allocation   Constraint Posting (PCP) [18], [17], [21] devised for Resource
+and schedule and performs a polynomial-time schedulability           Constraint Project Scheduling problem (RCPS) to obtain a
+test verify that deadlines can be met. A given task graph            robust schedule by preventing resource conflicts with added
+can fail the schedulability test even if its execution would         precedence constraints. Compared to existing PCP approaches,
+actually meet the deadline. This is not only because the test        we directly exploit known time bounds on task durations
+is conservative, but also because several heuristic, potentially     and guarantee feasibility for every possible scenario; existing
+sub-optimal decisions have been taken before the test. Recent        approaches assume fixed durations and focus on adding some
+work has focused on techniques for improving allocation and          degree of flexibility to the schedule, without giving any
+reducing the likelihood of failing schedulability tests [11],        guarantee.
+[12].
+   Offline approaches, like the one proposed in this paper,                     III. P LATFORM & A PPLICATION M ODELS
+assume the knowledge of the task graph and its characteristics          A common template for embedded MPSoCs features an
+before execution starts. Hence, they can afford to spend signif-     advanced general-purpose CPU with memory hierarchy and
+icant computational effort in analyzing and optimizing alloca-       OS support and an array of programmable processors, also
+tion and scheduling. In this field, we distinguish two main sub-     called accelerators, for computationally intensive tasks. Ac-
+categories. One sub-category assumes a fixed, deterministic,         celerators have limited or no support for preemption and
+execution time for all tasks. Even though the allocation and         feature private memory subsystems [5], [6], [7]. Explicit com-
+scheduling problems remain NP-Hard, efficient complete (ex-          munication among accelerators is efficiently supported (e.g.
+act) algorithms are known (see for instance [13] and references      with specialized instructions or DMA support), but uniform
+therein) that work well in practice, and many incomplete             shared memory abstraction is either not supported or it implies
+(heuristic) approaches have been proposed as well for very           significant overheads 2 .
+large problems that exceed the capabilities of complete solvers         We model the heterogeneous MPSOC as shown in Figure
+[14]. These approaches can also be used in the case of variable      1A (a). All shaded blocks are resources that will be allocated
+execution times, but we need to force determinism: at run-           and scheduled. For the sake of clarity, all empty blocks
+time, task execution can be stretched artificially (e.g. using       are not modeled in the problem formulation. Accelerators
+timeouts or idle loops) to always complete as in the worst case.     (CL1, . . . , CLN ) are modeled as clusters of one or more
+This eliminates scheduling anomalies, but implies significant        execution engines. A cluster with C execution engines mod-
+platform under-utilization and unexploitable idleness [9]. Al-       els an accelerator with multiple execution pipelines (e.g. a
+ternatively, powerful formal analysis techniques can be used         clustered VLIW) or a multi-threaded processor with a fixed
+to test the absence of scheduling anomalies [15]. However,           number of hardware-supported threads. Note that the case
+if an anomaly is detected, its removal is left to the software       of C = 1 (single-instruction-stream accelerator) is handled
+designer. This can be a daunting task.                               without loss of generality. When two dependent tasks are
+   The second sub-category is robust scheduling. The main            allocated onto the same cluster, their communication is im-
+idea here is to build an a priori schedule with some degree of       plicitly handled via shared variables on local memory. On
+robusteness. This can be achived by modeling time variability        the contrary, communication between tasks allocated on two
+(for example by means of min-max intervals), and inserting           different clusters is explicitly modeled as an activity which
+redundant resources [22], redundant activities [23] or more          uses a known fraction bi,j of the total bandwidth3 available
+generally slack time to absorb disruptions; it is also common        at the output communication port (triangle marked with O) of
+to add time redundancy by stretching task durations [24]. A
+                                                                        2 it can be emulated in software by propagating via copy operations all
+different approach is based on building a backup schedule for
+the most likely disruptions [25]. Robust scheduling has been         private memory modifications onto external shared memory [5]
+                                                                        3 Note that a previous study [26] showed how modeling the communication
+extensively investigated in the process scheduling community         overhead as a fraction of the bandwidth has bounded impact on task durations
+[16]. In this paper we leverage a technique called Precedence        as long as less than 60% of the available bandwidth is used.
+the cluster hosting the source task and the input port (triangle      of additional precedence relations among tasks added to the
+marked with I) of the cluster hosting the destination task. The       task graph by the solver to ensure the capacity of all resources
+master CPU is left implicit as its function is mostly related to      is never exceeded, whatever are the actual task durations at
+orchestration.                                                        execution time. In the literature, this technique is referred
+   The Gantt chart in Figure 1A (b) shows a simple example of         to as Precedence Constraint Posting [18], [17] and it has
+a scheduled task graph. Activities, called tasks ti , i = 1 . . . 5   been developed for avoiding resource conflict in resource-
+do not have a fixed duration, but they are described by duration      constrained project scheduling problems by introducing prece-
+intervals [dmini , dmaxi ]. In the Figure, the shortest duration      dence constraints among conflicting activities. In our case the
+corresponds to the shaded part of the rectangles, while the           resources are the clusters (with capacity equal to the number of
+longest duration is represented by the empty part following the       processors) and the communication links (with capacity equal
+shaded part. Tasks t1 , t2 are scheduled on cluster CL1, while        to bandwidth).
+task t3 , t4 , t5 are allocated and scheduled on cluster CL2.            The solver architecture is depicted in figure 1B. It is
+Both clusters have two execution engines. Dependencies are            organized as two main components: (1) a Constraint Program-
+represented by arrows. Note that inter-cluster communication          ming (CP) scheduler, performing search by adding precedence
+is explicitly represented by activities ”executing” at the same       constraints (Precedence model), which are tranlated into task
+time on the input (I2) and output (O1) ports of the clusters          time bounds (Time model); (2) a Minimum Conflict Set (MCS)
+involved in the communication.                                        finder that exploits knowledge on resources as described later,
+   At run-time, a partitioned schedule is described simply by         whereas the scheduler has no direct notion of resource con-
+a set of tasks allocated on each processor and the triggering         straints; the reason is that usual CP algorithms connecting task
+guards of each task, which are identifiers of all predecessor         time bounds and resources are designed to check consistency
+tasks in the graph. The run-time semantic is straightforward:         for at least one duration value, rather than for all durations. A
+whenever a task terminates execution, a new task is started           MCS is a minimal set of tasks which would cause a resource
+among those with completely released triggering guards (any           over-usage in case they overlap; here minimal means that
+tie-breaker rule can be used, e.g. EDF). If no task has fully         by removing any task from the set the resource usage is no
+released guards, the processor remains idle until a guard             longer jeopardized. Due to its minimality, a MCS is resolved
+change triggered by a communication. Note that a single Gantt         by posting a single precedence constraint between two tasks
+chart like the one in Figure 1A corresponds to a huge set             belonging to the set. The search engine of the scheduler
+of actual executions, one for each combination of different           iteratively detects MCSs and solves them.
+durations for all the tasks.
+                                                                      A. Precedence and temporal model
+                  IV. ROBUST SCHEDULING                                  Precedence constraints are represented by means of a set of
+   Before scheduling, a heuristic allocation of the available         integer variables Pij , with i, j ∈ {0, . . . , n − 1} i < j, such
+resources (clusters) to tasks is computed by means of a               that:               
+                                                                                              1      if ti runs before tj
+multilevel graph partitioning algorithm [19]. Tasks in the graph
+                                                                                    Pij =     −1     if tj runs before ti
+are split in a number of sets equal to the number of clusters,
+                                                                                              0      if ti and tj overlap
+trying to balance the computational load and to minimize inter-
+cluster communication. In particular in order to measure the
+computation load of a task we consider the average execution          as one can see, the Pij variables are in fact equivalent to using
+time; therefore, if S be a set of tasks, its load is:                 an incidence matrix. The variables are used to represent both
+                             dmaxi − dmini                           existing (defined in the task graph) and added (for the MCS
+                weight(S) =                                           solution) precedence relations; transitive closure is maintained
+                                         2
+                              ti ∈S
+                                                                      via a set of constraints (not reported here for the sake of
+                                                                      simplicity).
+   The algorithm first attempts to force the difference be-              From a temporal perspective, for each task we introduce a
+tween the maximum and minimum workload to be within a                 start and an end variable Si , Ei ∈ 0, . . . , dl, where dl is the
+(small) specified bound, and then, as a secondary objective,          value of the deadline. Si and Ei must satisfy:
+minimizes the sum of the bandwidth requirements of arcs
+                                                                                   Ei − Si ≤ dmaxi ,     Ei − Si ≥ dmini
+connecting tasks in different sets. Note the method is designed
+for homogeneous computational resources, but generalizes to            where dmini , dmaxi are the minimum and maximum dura-
+heterogeneous ones with proper modifications.                         tions of task ti . Note that, in contrast to resource constraint
+   Core of the presented work is the scheduling approach and          project scheduling where a set of activity starting times
+model, ensuring feasibility for each possible composition of          is computed, we chose to provide a schedule as a set of
+task durations; on this purpose, we associate to each task two        precedence relations. Therefore, in our approach start and
+variables: one representing the starting time of the activity and     end variables are not assigned a fixed value during search;
+one representing its end time. In addition, we have precedence        instead, Si and Ei are introduced to check the satisfiability
+relations between pairs of activities that constrain their start      of deadline constraints. This has an important consequence
+and end variables. As task durations are not a priori known,          on scheduler implementation: start times do not need to be
+we chose to provide a robust and flexible schedule as a set           triggered on timers, but they can only be conditioned to
+completion of tasks, leading to an simple event-triggered                       two tasks ti and tj they cannot be both part of the same MCS:
+scheduler as opposed to a time-triggered one.                                   ∀ti , tj | ti ≺ tj ∨ tj ≺ ti : Ti × Tj = 0 the presence of
+  Precedence relations and time bounds depend on each other,                    such exclusion constraints makes the MCS finding problem
+being connected by the following constraints:                                   NP-hard. A list of mutually exclusive tasks is given to the
+            Pij = 1       ⇔      Si + dmaxi ≤ Ej − dmaxj                  (1)   MCS finder by the scheduling search engine at each step of
+           Pij = −1       ⇔      Sj + dmaxj ≤ Ei − dmaxj                  (2)   the solution process. The MCS finding problem is solved again
+                                                                                via tree search. Tasks are selected according to their resource
+ constraints (1) state that if Pij = 1 then the time bounds of ti               requirements, giving precedence to the most demanding ones:
+and tj must allow ti to execute before tj , whatever are their                  this biases the selection towards smaller MCS, and thus choice
+durations at execution time. Conversely, if such a condition on                 points with fewer branches; this often reduces the search effort
+the time bounds is met, a precedence relation between ti and tj                 to solve the scheduling problem.
+is detected (this explains the double implication). Constraints
+(2) is the equivalent statement for Pij = −1. Note that the
+precedence and temporal models have no notion of resources
+                                                                                C. Feasibility and optimality
+(processors and communication links): those are taken into
+account by the MCS finder to detect and solve conflict sets.                       The solver described so far solves the feasibility version of
+B. Search and MCS finder                                                        the problem. In fact, it finds a set of precedence constraints
+                                                                                that added to the original task graph ensure to meet deadline
+   The overall scheduling problem is solved via tree search. At
+                                                                                constraints in every run time scenario (i.e., for each combi-
+each step the search engine in the MCS finder detects a MCS.
+                                                                                nation of task durations). A simple optimality version of the
+It then selects a pair of tasks ti , tj ∈ M CS and opens a choice
+                                                                                solver can easily be defined by performing binary search on
+point, with three outgoing branches: on the first Pij is set to
+                                                                                the space of possible deadlines and iteratively calling the above
+1, on the second to -1 and on the third to 0 (if neither ti can
+                                                                                described solver.
+precede tj nor the opposite, it means that ti and tj overlap).
+If a precedence constraint is posted (1 and -1 branches), the                      Initially, an infeasible lower bound (e.g. 0) and a feasible
+MCS is removed and a new MCS is searched and so on, until                       upper bound (e.g. the sum of the durations) for the deadline are
+the graph contains no conflict sets. In case the 0 branch is                    computed; an optimal deadline is then computed by iteratively
+taken, a new pair of tasks in the same MCS is selected and a                    narrowing the interval ]lb, ub] by solving feasibility problems.
+new choice point is open; in case all pairs of tasks have been                  At each step a tentative bound tb is computed by picking
+considered the solver fails (the problem contains an unsolvable                 the value in the middle between lb and ub, then the problem
+MCS).                                                                           is solved using tb as deadline. If a solution is found, the tb
+   The MCS detection problem itself is stated as a Constraint                   is a valid upper bound for the optimal deadline; conversely,
+Satisfaction Problem, whose decision variables are Ti ∈ {0, 1}                  tb is a valid lower bound. The process stops when lb is
+and Ti = 1 is task ti is part of the selected MCS, Ti =                         equal to ub minus 1. The worst-case execution time of both
+0 otherwise. Let R be the set of problem resources, and let                     the feasibility solver and the optimality solver is clearly
+req(ti , rk ) be the quantity of a resource rk ∈ R requested
+by a task ti ; req(ti , rk ) = 0 is the tasks does not require the              exponential. However, search is very efficient in practice, as
+resource. The set of tasks in an MCS must exceed the usage                      discussed in details in the next section. An interesting feature
+of at least one resource:                                                       of the optimality version of the algorithm is that in case it
+                                                                              exceeds the time limit, it provides a lower and an upper bound
+                 
+                                req(ti , rk )Ti > cap(rk )                (3)   on feasible deadlines anyway. Experimental results will show
+                rk ∈R      ti                                                   that, for the considered instances, such bounds are tight even
+ where and cap(rk ) is the capacity of resource rk . At least                   for the largest task graphs.
+one of the inequalities between round brackets in expression
+3 must be true for the constraint to be satisfied. Moreover, the
+selected set must be minimal, in the sense that by removing                                 feasible        infeasible     total
+any task from the MCS, the resource over-usage no longer                         P   N    DL Ta /Tm        DL Ta /Tm       Ta /Tm        Nit Npr T L I/F FL
+                                                                                     20   1023 0.4/0.4     1022 0.2/0.1    4.9/5.1       11 13 0     1.00 31%
+occurs4 . More formally:                                                             30   1448 1.4/1.2     1447 10.5/0.2   39.4/17.3     12 22 0     1.00 35%
+                                                                                    40   1867 1.9/2.0     1866 0.3/0.5    34.3/32.3     12 23 1     1.00 34%
+   ∀rk ∈ R :           req(ti , rk )Ti − min {req(ti , rk )} ≤ cap(rk )          1
+                                                                                     50   1936 5.9/6.2     1890 8.3/1.0    119.5/94.8    11 23 2     0.98 32%
+                                         Ti =1                                       60   2124 10.7/8.6    2089 9.3/1.7    192.4/185.0   11 45 3     0.98 34%
+                  ti
+                                                                                     70   2390 19.7/19.7   2306 7.0/2.0    300.5/301.2   9   50 6    0.97 34%
+ that is, the capacity for all rk is not exceeded if we remove                       20   930 0.1/0.1      929 0.1/0.1     1.1/1.2       11 8    0   1.00 32%
+                                                                                     30   1360 0.2/0.2     1359 0.1/0.1    4.7/4.7       11 7    0   1.00 35%
+from the set the task with minimum requirement.                                      40   1751 0.3/0.3     1750 0.2/0.2    10.1/10.2     12 7    0   1.00 35%
+                                                                                 2
+   Finally, a MCS must contain tasks with an actual chance of                        50   1758 1.0/0.8     1757 0.4/0.4    24.5/22.7     12 15 0     1.00 33%
+                                                                                     60   1959 1.9/1.8     1914 0.6/0.6    41.2/37.8     10 25 2     0.98 34%
+overlapping: therefore if a precedence relation exists between                       70   2108 5.1/4.9     2107 1.0/1.0    89.3/84.9     13 41 0     1.00 33%
+
+  4 Indeed, we have experimentally observed that by relaxing the minimality                                    TABLE I
+                                                                                              F IRST GROUP OF INSTANCES ( VARIABLE SIZE )
+constraints does not affect the correctness of the solver, but speeds up the
+solution process.
+                                                                                   feasible       infeasible    total
+                 V. E XPERIMENTAL RESULTS                             P   N      DL Ta /Tm       DL Ta /Tm      Ta /Tm       Nit Npr T L I/F FL
+                                                                          2-4    1765 2.2/2.0    1764 0.4/0.5   33.5/32.0    12 17 0 1.00 32%
+   Both the scheduler and the MCS finder have been imple-                 3-5    1573 3.9/3.8    1572 0.8/0.6   53.8/54.6    12 36 0 1.00 32%
+                                                                      1   4-6    1551 59.4/5.4   1550 0.7/0.5   119.7/63.0   12 49 0 1.00 33%
+mented within the of the state-of-the-art ILOG Solver 6.3.                5-7    1406 5.6/4.9    1405 1.5/0.5   117.6/63.7   12 53 0 1.00 34%
+Preliminary heuristic allocation is performed using the METIS             6-8    1318 6.6/6.2    1295 0.4/0.3   75.2/68.0    10 60 3 0.98 33%
+                                                                          2-4    1643 0.4/0.3    1642 0.2/0.2   10.7/9.8     12 8    0 1.00 32%
+[20] graph partitioning package. We forced the difference                 3-5    1453 0.7/0.6    1452 0.2/0.2   15.0/14.5    12 14 0 1.00 33%
+between the maximum and minimum workload to be within                 2   4-6    1472 0.9/0.9    1471 0.2/0.2   16.5/15.9    12 21 0 1.00 33%
+                                                                          5-7    1305 1.1/0.9    1304 0.2/0.2   18.6/17.4    12 23 0 1.00 34%
+6%.                                                                       6-8    1223 1.3/1.4    1218 0.2/0.2   19.7/20.4    11 28 2 1.00 33%
+   We tested the system on groups of randomly generated task                                       TABLE II
+graphs designed to mimic the structure of real-world appli-                     S ECOND GROUP OF INSTANCES ( VARIABLE FAN - OUT )
+cations. In particular all groups contain so called structured
+graphs: they have a single starting task and a single terminating
+task, and feature branch nodes with variable fan out and a
+collector node for each branch; this reflects typical control/data   the completion time of the WCET schedule and min(CTP CP )
+flows arising with stuctured programming languages (such as          is the minimum possible completion time of the PCP schedule.
+C or C++). For all instances, the maximum task duration can          Note that time for the allocation step is negligible and is
+be up to twice the minimum durations; data transfers within          omitted in the results. Similarly, the running time for the
+the same clusters are assumed to be instantaneous, while inter-      WCET scheduler is omitted, but it is always much faster then
+cluster communications have finite duration (up to 1/4 of            the PCP approach.
+average task execution time) and use from 10% to 90% of the             Considering table I, clearly, the solution time and the
+port bandwidth. We consider two different platforms: the first       number of timed out instances grows as the number of tasks
+one has 16 single-instruction-stream accelerators connected          increases. The very high values for the deadline ratio show
+with the interconnect by ports with the same bandwidth, the          how tight bounds for the optimal deadline can be computed
+second contains 4 accelerators with 4 processors each. Inter-        even for timed out instances. This aspect is crucial for de-
+cluster communications employ ports with the same bandwidth          signing a heuristic method based on the optimal version of
+as in the first platform.                                            the algorithm proposed that provides deadline bounds at a
+   Furthermore, the approach was compared with a Worst Case          given time limit. Differences between the average and median
+Execution Time (WCET) scheduler, assuming the maximum                solution time can be used as an indicator of the stability of
+duration for each task; such method is much faster, but requires     the solution time; in particular very close average and median
+time triggered scheduling and idle time, hence achieving             values are reported for feasible deadlines, while a much less
+robustness at the cost of flexibility.                               stable behavior is observed for infeasible deadlines: detecting
+   The first group of experiments considers graphs with a            infeasibility seems to be often an easy task, but rare complexity
+fixed fan out (3 to 5 branches) and variable size (from 10           peaks do arise; this could be expected, being the problem
+to 70 tasks). In each experiment we ran the optimality solver        NP-hard. Mapping and scheduling the considered task graphs
+described in Section IV-C: this process requires to solve a          on the clustered platform appears to be an easier task. Not
+number feasibility problems in order to identify the lowest          only the solution time is lower, but the behavior of the solver
+feasible deadline and the highest infeasible deadline. All runs      is much more stable; this is probably due to the smaller
+were performed on an Intel Core 2 Duo, with 2GB or RAM;              number of inter-cluster communications, which are scheduled
+the solver was given a time limit of 15 minutes.                     as resource demanding tasks, and therefore increase the actual
+   Table I lists the results for the first group of experiments,     problem size and the number of conflict sets. The shorter
+related to platform type 1 and 2 (column “P”). Each row              deadlines are also due to the reduced number of inter-cluster
+reports results for groups of 10 instances, showing the average      communications.
+deadline for the lowest feasible and the highest infeasible             To investigate the solver sensitivity to graph parallelism,
+solution found (columns DL), the ratio between those two             in the second group of experiments we considered instances
+values (I/F) the number of added precedence relation in the          with a fixed number of tasks, but variable fan out (from 2-
+best solution (Npr ). Detailed information is given about the        to-4 to 6-to-8). The results for this second group of instances,
+solution time: the average and median time for the opti-             mapped respectively on platform 1 and 2, are reported in table
+mization process is reported in column total Ta /Tm ; column         II. Again, each row summarizes results for 10 experiments.
+T L shows the number of timed out instances (which are               Both for platform 1 and 2, increasing the fan out makes the
+not considered in the average and median computation); Nit           problem more difficult, since the higher parallelism translates
+contains the average number of iterations performed. To give         into a higher number of conflict sets. For the same reason also
+an evaluation of the feasibility version of the solver the           more precedence relations have to be added to prevent the
+solution time for the highest infeasible and lowest feasible         occurrence of resource over-usage. As for the previous group,
+deadlines is also given. Finally, the retained flexibility (FL)      mapping and scheduling on the clustered platforms easier and
+w.r.t. the WCET scheduler is shown: this is computed as              produces better optimal deadlines.
+(CTW CET − min(CTP CP ))/CTW CET , where CTW CET is                     The last group of instances contains an aggregation of small,
+            feasible       infeasible     total
+ P   N    DL Ta /Tm       DL Ta /Tm       Ta /Tm        Nit Npr T L I/F FL     Framework Programme, Contract FP7-ICT-216008.
+     20   929 0.1/0.1     928 0.1/0.1     1.4/1.5       11 5    0   1.00 34%
+     30   1319 0.3/0.3    1318 0.1/0.1    6.7/6.6       11 15 0     1.00 36%                                 R EFERENCES
+     40   1347 0.5/0.4    1346 0.2/0.3    14.2/14.5     12 23 0     1.00 34%
+ 1                                                                             [1] M. Muller, ”Embedded Processing at the Heart of Life and Style”, IEEE
+     50   1342 1.5/1.3    1341 1.6/0.4    37.8/32.4     12 44 0     1.00 32%
+     60   1378 7.3/2.7    1377 21.5/6.5   166.9/82.1    12 79 0     1.00 32%      ISSCC, pp. 32-37, 2008.
+     70   1851 16.8/4.6   1849 54.1/1.4   274.2/112.6   12 113 3    1.00 35%   [2] A. Jerraya, et al. “Roundtable: Envisioning the Future for Multiprocessor
+     20   871 0.1/0.1     870 0.1/0.1     0.5/0.5       11 1    0   1.00 33%      SoC” IEEE Design & Test of Computers, vol. 24, n. 2, pp. 174-183, 2007.
+     30   1238 0.1/0.1    1237 0.1/0.1    1.7/1.7       11 1    0   1.00 36%   [3] D. Yeh, et al., ”Roundtable: Thousand-Core Chips”, IEEE Design & Test
+     40   1259 0.1/0.1    1258 0.1/0.1    4.6/4.4       12 4    0   1.00 35%      of Computers, vol. 25, n. 3, pp. 272-278, 2008.
+ 2
+     50   1205 0.3/0.2    1204 0.2/0.2    9.4/9.0       12 15 0     1.00 31%
+     60   1217 0.6/0.6    1216 0.3/0.3    17.2/17.5     12 35 0     1.00 32%
+                                                                               [4] L. Thiele et al., ”Design for Timing Predictability”, Real-Time Systems,
+     70   1624 1.7/1.5    1623 0.5/0.5    34.2/35.2     12 47 0     1.00 34%      vol. 28 pp. 157-177, 2004.
+                                                                               [5] D. Pham, et al. ”Overview of the architecture, circuit design, and physical
+                              TABLE III                                           implementation of a first-generation cell processor”, IEEE Journal of Solid-
+          T HIRD GROUP OF INSTANCES ( VARIABLE # SUBGRAPHS )                      State Circuits, vol. 41, n. 1, pp. 179-196, 1996.
+                                                                               [6] M. Paganini, ”Nomadik: A Mobile Multimedia Application Processor
+                                                                                  Platform,” IEEE ASP-DAC, pp. 749-750, 2007.
+                                                                               [7] S. Bell et al., ”TILE64 Processor: A 64-Core SoC with Mesh Intercon-
+                                                                                  nect”’, ISSCC, pp. 88-598, 2008.
+independent structured task graphs with low fan out (2-3). This                [8] J. Reineke, et al. ”A definition and classification of timing anomalies,”
+case is of high interest as the result of the unrolling of a simple               International Workshop on worst-case execution time (WCET) analysis,
+                                                                                  2006.
+multirate system would likely look like this type of graphs.                   [9] J. Liu, Real-Time Systems, Pearson Education, 2000.
+We generate composite graphs with 1 to 7 subgraphs, 10 to                      [10] M. Garey, D. Johnson, Computers and Intractability: A Guide to the
+70 tasks. The results for platform 1 and 2 are reported in table                  Theory of Np-Completeness, Freeman 1979.
+                                                                               [11] N. Fisher et al., ”The Partitioned Multiprocessor Scheduling of Non-
+III, again by groups of 10 instances. The complexity of the                       preemptive Sporadic Task Systems”, RTNS, 2006.
+mapping and scheduling problem on platform 1 grows as the                      [12] N. Fisher et al., ”The Non-preemptive Scheduling of Periodic Tasks
+number of tasks increases. Note however how, despite the high                     upon Multiprocessors”, Journal of Real-Time Systems, vol. 32, n. 1-2, pp.
+                                                                                  9-20, 2006.
+parallelism calls for a large number of precedence relations,                  [13] M. Ruggiero et al., ”A fast and accurate technique for mapping parallel
+this kind of graphs seems to be easier to solve than those                        applications on stream-oriented MPSoC platforms with communication
+in the first group; this behavior requires a deeper analysis,                     awareness,” ACM International Journal of Parallel Programming, vol. 36,
+                                                                                  no. 1, pp. 3-36, 2008.
+which is subject of future work. Finally, note how mapping                     [14] E. Zitzler, et al. ”Performance Assessment of Multiobjective Optimizers:
+composite graphs on platform 2 is surprisingly easy: the nature                   An Analysis and Review”, IEEE Transactions on Evolutionary Computa-
+of those graph allows the allocator to almost completely                          tion, vol. 7, no. 2, pp. 117-132, 2003.
+                                                                               [15] A. Brekling, et. al., ”Models and Formal verification of multiprocessor
+allocate different subgraph on different clusters, effectively                    systems-on-chip”’, Journal of Logic and Algebraic Programming, vol. 77,
+reducing inter-cluster communications.                                            no 1-2, pp. 155-166, 2008.
+                                                                               [16] Z. Li, et al. ”Process scheduling under uncertainty: review and chal-
+            VI. C ONCLUSIONS AND F UTURE W ORK                                    lenges,” Computers & Chemical Engineering, vol. 32, pp. 715-727, 2008.
+                                                                               [17] P. Laborie, ”Complete MCS-Based Search: Application to Resource
+   In this paper we have presented a constructive algorithm                       Constrained Project Scheduling”, IJCAI, pp. 181-186, 2005.
+for computing robust schedules for real-time applications                      [18] P. Laborie et al., ”Planning with Sharable Resource Constraints”, IJCAI,
+                                                                                  1643-16, 1995.
+with variable-duration tasks. Scheduling anomalies are elim-                   [19] G. Karypis et al. ”A fast and high quality multilevel scheme for
+inated by inserting sequencing constraints between tasks in                       partitioning irregular graphs”, SIAM Journal on Scientific Computing, vol.
+a controlled way, i.e. only when needed to prevent resource                       20, no. 1, pp. 359 - 392, 1999
+                                                                               [20] http://glaros.dtc.umn.edu/gkhome/metis/
+conflicts which may appear for “unfortunate” combinations                      [21] N. Policella, A. Cesta, A. Oddi, S. F. Smith, “From precedence constraint
+of execution times. We developed a solver that solves both                        posting to partial order schedules: a csp approach to robust scheduling”,
+feasibility and optimality problems. Even though run-time is                      AI Commun. 2007, 20:3, 163-180
+                                                                               [22] S. Ghosh, “Guaranteeing fault tolerance through scheduling in real time
+worst-case exponential (as expected for complete methods                          systems”, PhD thesis, University of Pittsburg, 1996
+on NP-Hard problems), solution times in practice are very                      [23] S. Ghosh, R. Melhem, D. Mosse, “Enhancing real time schedules to
+promising: task graphs with several tens of tasks can be                          tolerate transient faults”. In RTSS, 1995
+                                                                               [24] W. Y. Chiang, M. S. Fox, “Protection against uncertainty in a determin-
+handled in a matter of minutes. This is competitive with state-                   istic schedule”, proc. of Expert Systems for Production and Operations
+of-the-art verification methods used to test the presence of                      Management, 1990
+anomalies [15]. Future work will focus on complete algorithms                  [25] M. Drummond, J. Bresina, K. Swanson, “Just in case scheduling”, AAAI
+                                                                                  94, 1098-1104
+for allocation and scheduling and on heuristic solvers which                   [26] L. Benini, D. Bertozzi, A. Guerri, M. Milano, “Allocation and Schedul-
+can handle extremely large task graphs. Introducing a proba-                      ing for MPSoCs via Decomposition and No-Good Generation”, CP2005,
+bility distribution on task durations is also subject of current                  107-121
+research: that would enable more complex objectives, such as
+minimization of the expected execution time, by exploiting
+probability theory results.
+                          ACKNOWLEDGEMENT
+  The work described in this publication was supported by the
+PREDATOR Project funded by the European Community’s 7th
+

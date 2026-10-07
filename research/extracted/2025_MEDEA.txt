@@ -1,0 +1,1377 @@
+                                         MEDEA: A Design-Time Multi-Objective Manager for
+                                         Energy-Efficient DNN Inference on Heterogeneous Ultra-Low
+                                         Power Platforms
+                                         HOSSEIN TAJI, Embedded Systems Laboratory (ESL), EPFL, Switzerland
+                                         JOSÉ MIRANDA, Industrial Electronics and Multimodal Systems Center (CEIMM), UPM, Spain
+                                         MIGUEL PEÓN-QUIRÓS, EcoCloud, EPFL, Switzerland
+                                         DAVID ATIENZA, Embedded Systems Laboratory (ESL), EPFL, Switzerland
+                                         The growing demand for on-device AI necessitates energy-efficient execution of DNN based applications on
+                                         resource-constrained ultra-low power (ULP) platforms. Heterogeneous architectures, combining specialized
+                                         processing elements (PEs), have emerged as a key solution for achieving the required performance and
+                                         energy efficiency. However, optimizing energy while executing applications on these platforms requires
+                                         efficiently managing platform resources like PEs, power features, and memory footprint, all while adhering
+arXiv:2506.19067v3 [cs.AR] 17 Aug 2026
+
+
+
+
+                                         to critical application deadlines. This paper presents MEDEA, a novel design-time multi-objective manager
+                                         for energy-efficient DNN inference on Heterogeneous ULP (HULP) platforms. MEDEA uniquely integrates:
+                                         kernel-level dynamic voltage and frequency scaling (DVFS) for dynamic energy adaptation; kernel-level
+                                         granularity scheduling, suitable for specialized accelerators; memory-aware adaptive tiling to navigate severe
+                                         memory constraints; and all within a timing constraint-based optimization strategy, which minimizes energy
+                                         based on application deadline. To showcase practical viability, we evaluate MEDEA on HEEPTimize, a
+                                         heterogeneous ULP platform (22 nm, FPGA-prototyped) featuring a RISC-V processor besides Near-Memory
+                                         Computing (NMC) and Coarse-Grained Reconfigurable Array (CGRA) accelerators. Experimental results,
+                                         using a biomedical seizure detection case study, demonstrate that MEDEA achieves overall energy reductions
+                                         of up to 38 % compared to representative state-of-the-art methods, while consistently meeting all timing and
+                                         memory requirements. This effectiveness is attributed to its integrated features, with our analysis showing
+                                         that kernel-level DVFS alone can be responsible for over 31 % of the energy savings in specific scenarios.
+
+                                         CCS Concepts: • Computer systems organization → Embedded systems; Real-time systems; Hetero-
+                                         geneous (hybrid) systems; • Hardware → Power and energy.
+
+                                         Additional Key Words and Phrases: Ultra-Low Power (ULP) systems, DNN Inference Scheduling, Heterogeneous
+                                         Multi-Accelerator Platforms, Runtime DVFS, Tiling, Energy Optimization.
+
+                                         ACM Reference Format:
+                                         Hossein Taji, José Miranda, Miguel Peón-Quirós, and David Atienza. 2026. MEDEA: A Design-Time Multi-
+                                         Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power Platforms. ACM
+                                         Trans. Embedd. Comput. Syst. 1, 1 (August 2026), 25 pages. https://doi.org/10.1145/nnnnnnn.nnnnnnn
+
+
+                                         Authors’ Contact Information: Hossein Taji, hossein.taji@epfl.ch, Embedded Systems Laboratory (ESL), EPFL, Lausanne,
+                                         Switzerland; José Miranda, jose.miranda@upm.es, Industrial Electronics and Multimodal Systems Center (CEIMM), UPM,
+                                         Madrid, Spain; Miguel Peón-Quirós, miguel.peon@epfl.ch, EcoCloud, EPFL, Lausanne, Switzerland; David Atienza, david.
+                                         atienza@epfl.ch, Embedded Systems Laboratory (ESL), EPFL, Lausanne, Switzerland.
+
+
+                                         Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee
+                                         provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the
+                                         full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be honored.
+                                         Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires
+                                         prior specific permission and/or a fee. Request permissions from permissions@acm.org.
+                                         © 2026 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+                                         ACM 1558-3465/2026/8-ART
+                                         https://doi.org/10.1145/nnnnnnn.nnnnnnn
+
+
+                                                                         ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+2                                                                                            Taji et al.
+
+
+1   Introduction
+The increasing prevalence of AI, particularly DNN, is driving a shift towards the deployment of AI
+processing at the edge, closer to the data source. This paradigm offers compelling advantages over
+traditional cloud-based AI, including reduced latency, enhanced data privacy, lower bandwidth
+consumption, and offline operations capabilities [26, 29, 32]. However, executing computationally
+demanding DNNs on resource-constrained edge devices presents significant challenges, especially
+with respect to power and memory. To address these, heterogeneous architectures have emerged
+as a key solution [21]. By combining heterogeneous PEs (e.g., CPUs, specialized accelerators),
+architectural specialization allows significant improvements in both performance and energy
+efficiency compared to traditional homogeneous systems [25].
+   However, merely incorporating heterogeneous PEs is insufficient; Realizing the performance and
+energy benefits of heterogeneity depends on effective resource management and scheduling [14]. This
+involves intelligently assigning DNN computational tasks to the most suitable PEs [6, 13, 14, 27],
+dynamically adjusting operating points (such as voltage and frequency) through DVFS [17, 39], and
+efficiently handling data movement [3, 12, 33], while adhering to the application timing requirements
+[14, 38] and the limitations of the platform resources [26, 29, 32]. The challenge of resource
+management and scheduling becomes particularly acute in the ULP domain, where platforms
+operate under exceptionally stringent constraints, often characterized by mW or µW power budgets
+and only KiB to MiB of available on-chip memory [26, 29, 32]. These severe limitations sharply
+distinguish ULP devices from the broader edge category, which includes significantly more capable
+platforms like mobile SoCs (e.g., [14, 15, 37]) or embedded systems such as the NVIDIA Jetson
+series (e.g., [2, 6, 13, 24]).
+   Particularly relevant to the ULP domain is the increasing adoption of the RISC-V Instruction Set
+Architecture (ISA), preferred for its open, modular, and extensible nature in resource-constrained
+embedded systems [21]. This trend has led to several heterogeneous ULP (HULP) platforms based
+on RISC-V explicitly designed for energy efficiency, such as DIANA [35], DARKSIDE [8], and HEEP-
+ocrates [20]. These platforms often integrate specialized hardware accelerators, crucial components
+of their heterogeneous design. Key paradigms include NMC units [4], which minimize costly data
+movement by computing near or within memory, and CGRAs [7], which offer a balance of hardware
+efficiency and software flexibility for diverse DNN kernels. These, among other specialized digital
+accelerators [8], are vital to efficiently execute demanding applications such as DNN-based ones on
+ULP platforms.
+   However, effective management and scheduling of DNNs on HULP platforms presents a unique
+confluence of challenges. Existing solutions [2, 3, 5, 6, 9, 11, 13–15, 18, 24, 27, 33, 36–38] often
+address certain aspects of edge deployment, but struggle to holistically tackle the combined demands
+inherent to the ULP domain. In fact, the main shortcomings, hindering optimal performance, include
+a lack of kernel-level DVFS, insufficient memory-aware adaptive tiling mechanisms for severe
+memory constraints, energy optimization frequently decoupled from strict application timing
+deadlines, coarse scheduling granularities are ill-suited for specialized accelerators, and often
+limited support beyond specific DNN architectures. To overcome these limitations, we propose
+MEDEA (Manager for Energy-efficient DNNs on hEterogeneous ULP Architectures), a novel
+design-time multi-objective manager specifically designed for HULP platforms. In this work,
+MEDEA targets the dominant HULP deployment contract of periodic, single-model inference: one
+sequentially ordered workload W = {𝑘 1, . . . , 𝑘 𝑁W } with a single application deadline 𝑇𝑑 . Kernels
+execute strictly in the compile-time list order—the optimizer selects PE, V–F level, and tiling per
+kernel. The ILP/MCKP formulation runs offline on a host during deployment preparation; no solver
+is invoked on the HULP at inference time. Figure 1 presents an overview of MEDEA, illustrating
+
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                      3
+
+how, based on DNN description, timing constraint, and platform characterization data, it generates
+per-kernel scheduling decisions determining the optimal PE, V-F setting, and tiling strategy for
+efficient execution on a HULP.
+
+
+                        Deadline                                      Per-Kernel:       HULP
+                                                                      (1)V-F Point
+                      DNN Struct.
+                                                                      (2) PE Selected
+                                                MEDEA                 (3) Tiling Mode
+                        Specific.
+                                                                          Memory
+                        Profiles                                          Hierarchy
+
+
+
+
+Fig. 1. Overview of the MEDEA design-time multi-objective manager, illustrating its kernel-level decisions on
+PE, V-F, and Tiling mode, used to orchestrate energy-efficient DNN inference on a HULP.
+
+
+    The main contributions of this paper are as follows:
+     • We introduce MEDEA, a novel design-time multi-objective manager tailored for HULPs. To
+       the best of our knowledge, it is the first to integrate the following four features within a
+       single, unified manager for HULPs: (1) kernel-level DVFS for dynamic energy adaptation; (2)
+       kernel-level scheduling granularity suitable for specialized accelerators; (3) memory-aware
+       adaptive tiling to navigate severe memory constraints; all within a (4) timing constraint-based
+       optimization strategy that minimizes energy based on application deadlines.
+     • We demonstrate the real-world applicability and effectiveness of MEDEA on periodic single-
+       model inference through a Transformer-based biomedical seizure detection application (TSD).
+       Our evaluation includes a study on the impact of varying application deadlines on energy
+       performance trade-offs and scheduling decisions made by MEDEA. This application study
+       shows that our approach achieves energy reductions of up to 38 % compared to relevant
+       baselines, while consistently meeting all timing requirements.
+     • We provide an in-depth analysis that isolates and quantifies the distinct energy savings
+       enabled by MEDEA’s core features. Our evaluations demonstrate that, depending on the
+       operational scenario and deadline, its kernel-level DVFS enables up to 31.3 % energy reduction,
+       memory-aware adaptive tiling up to 8.5 %, and kernel-level scheduling up to 2.8 %, highlighting
+       the individual importance of each integrated mechanism.
+   The remainder of this paper is organized as follows: Section 2 reviews state-of-the-art approaches
+on scheduling and energy optimization of DNN-based applications on heterogeneous platforms.
+Our proposed multi-objective manager, MEDEA, is detailed in Section 3. Section 4 describes the
+overall experimental setup. Section 5 presents and discusses the experimental results. Section 6
+states MEDEA’s scope, modeling assumptions, and future extensions. Finally, Section 7 summarizes
+the main conclusions of this work.
+
+2    Related Work
+The efficient management of DNNs on heterogeneous edge platforms is an active and multifaceted
+research area. This review analyzes a wide range of state-of-the-art approaches to resource man-
+agement to gain a comprehensive overview. It extends beyond end-to-end schedulers to include
+specialized optimization frameworks. We consider works focused primarily on ULP’s memory
+optimization through automated tiling (DORY [3], FDT [33]), and design-time compilation and
+
+                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+4                                                                                                                                Taji et al.
+
+
+Table 1. Comparative Analysis of State-of-the-Art DNN Deployment and Optimization Approaches for
+Heterogeneous Platforms.
+
+
+                                      DVFS-               Tiling-        Deadline-         Energy-          DNN- Kernel-level
+Approach
+                                      Aware               Aware           Aware             Aware          Agnostic Granul.
+MATCH [9]                               No                  Yes               No           Yes(Trd.)i          No               Yes
+RoaD-RuNNer [13]                        No                  No                No           Yes(Trd.)           No               No
+AdaKnife [18]                        Yes(App)               Noa               No              No               Yes              Nob
+Kang et al. [14]                     Yes(App)               No                Yes          Yes(Opt.)i          No               No
+DORY [3]                                No                  Yes               No              No               No               N/Af
+FDT [33]                                No                  Yes               No              No               No               N/Af
+ODIMO [27]                              No                  N/Sd              No           Yes(Trd.)           No               Yes
+Wang et al. [37]                        No                  No                No              No               No               No
+Vasiliadis et al. [36]                  No                  No                No           Yes(Trd.)           Yes              No
+AxoNN [6]                               No                  No                No           Yes(Trd.)           No               No
+Map-and-Conquer [2]                 Yes(Layer)              No                Yes          Yes(Opt.)           Yes              Nog
+TensorRT (Jeong) [11]                   No                  No                No              No               No               No
+DART [38]                               No                  No                Yes             No               No               No
+HaX-CoNN [5]                            No                  Noc               Yes          Yes(Trd.)           No               No
+OmniBoost [15]                          No                  No                No              No               No               No
+MaGNAS [24]                          Yes(App)               No                Yes          Yes(Opt.)           No               Noh
+MEDEA (Ours)                      Yes(Kernel) Yes(Adap.)                      Yes         Yes (Opt.)           Yes              Yese
+a Cannot tile kernels that individually exceed PE memory, although network partitioning respects PE limits.
+b Mixed granularity: Kernel/layer-level for CNNs; coarser (e.g., encoder block) for Transformers.
+c Manages shared memory contention/throughput, but not PE memory capacity limits.       d Memory management details not specified,
+despite hardware-aware PE selection. e Supports any DNN composed of supported kernels (e.g., Conv, MatMul, FFT, Add, Norm); evaluated
+on Transformers.       f Focuses only on tiling generation for specified DNN types, not full runtime execution management.
+g Partitions layers width-wise (e.g., CNN channels, Transformer heads) for mapping to CUs.        h Scheduling occurs at the GNN block level
+
+(e.g., Grapher, FFN), specific to GNNs.     i Trd.: Considers energy-speedup tradeoff. Opt.: Optimizes energy for a given deadline.
+
+
+
+
+training-time mapping for HULPs (MATCH [9], ODIMO [27]). Targetting edge, yet still resource-
+aware, platforms, we also examine runtime schedulers and partitioners targeting diverse objectives
+such as energy-latency tradeoffs (Kang et al. [14], AxoNN [6], Map-and-Conquer [2]), real-time
+guarantees (DART [38]), throughput maximization (TensorRT [11], OmniBoost [15], [37]), multi-
+DNN contention (HaX-CoNN [5]), and architecture-mapping co-design (MaGNAS [24]). Despite
+valuable contributions from these varied domains, our analysis reveals significant gaps in providing
+a holistic solution for HULPs, particularly concerning the integration of fine-grained, DVFS-, tiling-,
+and deadline-aware energy-optimized manager. Table 1 provides a comparative summary, and the
+following paragraphs will analyze these key features in detail.
+   Scheduling Granularity and DNN Architecture Support. The effectiveness of a DNN manager
+on HULPs is largely determined by its scheduling granularity, the fundamental unit of work it
+manages. We define scheduling granularity by the size of the computational unit managed: a layer
+(e.g., a complete convolutional layer or Transformer block) is a high-level structural component,
+whereas a kernel (or operator, e.g., matrix multiplication, 2D convolution, an activation function)
+is a fundamental mathematical operation within such layers. We argue that a fine, kernel-level
+granularity is paramount on HULPs, as it not only allows for precise resource control but also
+provides inherent support for diverse DNN architectures, a feature lacking in many specialized,
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                      5
+
+architecture-centric solutions. However, the one limitation of many existing approaches is their
+architecture-centric design. The majority of these frameworks are CNN-centric [5, 6, 9, 11, 13–
+15, 27, 37, 38], effectively making them specialized CNN managers rather than general DNN
+solutions. This specific focus is also apparent in other architecture-centric managers like MaGNAS
+[24] for GNNs. The other limitation is the coarse scheduling granularity of many existing approaches,
+often align with high-level structural components in comparison to individual kernels, such as
+entire inferences [36, 37] or a group of computations at different levels [2, 5, 6, 11, 14, 15, 18, 27, 38],
+for example, grouping such as width-wise splits of attention heads or channels [2, 27]. Thus, a
+significant gap remains for solutions that leverage deep kernel-level control to provide inherent
+unified support for diverse DNN architectures on HULP platforms.
+
+   DVFS and its Granularity. A key differentiator in energy-efficient resource management and
+scheduling is the utilization of DVFS, a fundamental power management technique that achieves
+significant energy savings by dynamically adjusting PE voltage and frequency to match the target
+workload, leveraging the quadratic power-voltage relationship (𝑃 ∝ 𝑉 2 𝑓 ) [17, 39]. While hardware
+platforms like Zero-riscy [23] and Raven [16] demonstrate its feasibility of runtime DVFS control
+in RISC-V based ULPs, our review reveals that existing approaches utilize this capability at varying
+levels of granularity, if at all. A significant majority of the analyzed related works do not incorporate
+any form of DVFS. This includes approaches focused on compilation (MATCH [9], DORY [3], FDT
+[33]), partitioning/offloading (RoaD-RuNNer [13]), training-time mapping (ODIMO [27]), runtime
+scheduling primarily for throughput or contention management (TensorRT-based [11], DART [38],
+HaX-CoNN [5], OmniBoost [15]), adaptive device selection [36], and energy-aware layer mapping
+[6]. Even works characterizing platform performance often neglect to detail DVFS utilization
+[37]. These approaches cannot dynamically adjust operating points to minimize energy based
+on the immediate needs of different DNN kernels, often defaulting to fixed performance settings.
+Several works consider DVFS, but typically at a coarse granularity throughout the application. For
+example, MaGNAS [24] selects a fixed V-F during its design-time search; Kang et al. [14] account
+for the effects of V-F in its profiling; and AdaKnife [18] explores static frequency adjustments. Map-
+and-Conquer [2] incorporates DVFS as an optimization parameter in its coarse-layer granularity
+scheduling. Related compiler work by Hayashi et al. [10] extends the OSCAR parallelizing compiler
+and API to heterogeneous multicores. Their framework starts from sequential C/Fortran programs
+with accelerator hints, decomposes the program into coarse-grain macro-tasks (basic blocks, loops,
+and function/subroutine calls), statically maps these macro-tasks to CPUs or accelerators while
+considering data-transfer overheads, and applies compiler-controlled DVFS and clock gating to
+satisfy real-time deadlines on the RP-X heterogeneous SoC. This is an important precedent for
+combining heterogeneous task scheduling with frequency selection. However, it targets automatic
+parallelization and code/API generation for general programs on a higher-performance multimedia
+SoC, whereas MEDEA targets design-time energy minimization for DNN inference on HULP
+platforms. In particular, MEDEA assumes a profiled DNN kernel list, schedules at kernel/operator
+granularity, jointly selects PE assignment, per-kernel V–F point, and memory-aware adaptive tiling,
+and solves the resulting deadline-constrained MCKP/ILP under tight PE-local memory constraints.
+This general absence of dynamic, fine-grained, kernel-level DVFS in the literature indicates a
+significant missed opportunity for energy savings on HULPs.
+
+   Tiling-Awareness for Constrained Memory. A few approaches, despite lacking other features, such
+as kernel-level DVFS scheduling or strict deadline-driven optimization, provide effective solutions
+specifically for tiling and memory management. For instance, DORY [3] uses constraint program-
+ming to optimize tiling for limited SRAM on PULP devices. FDT [33] introduces a specialized
+
+                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+6                                                                                           Taji et al.
+
+
+depthwise tiling method specifically for TinyML memory optimization. The MATCH [9] compila-
+tion framework employs Design Space Exploration (DSE) to determine effective tiling strategies
+based on HW models. However, many other approaches lack comprehensive memory awareness of
+individual PE capacity limits. Although some consider related aspects such as memory contention
+between concurrent DNNs (HaX-CoNN [5]), data transfer overheads ([2, 6, 14, 24, 36, 37]), or aim for
+reduced memory usage (AdaKnife [18]), they do not implement tiling specifically to fit operations
+exceeding PE memory capacity. Several other frameworks do not appear to incorporate PE memory
+constraints or tiling mechanisms at all (e.g., [11, 13, 15, 38]). With the exception of works mainly
+focused on tiling strategies or memory-centric compilation, many existing approaches do not
+deeply integrate robust, memory-aware tiling based on PE capacity into their core decision-making
+processes, representing a critical gap for practical deployment.
+
+
+   Deadline-Awareness and Energy Optimization. Effective resource management and scheduling
+for HULPs require simultaneously considering application time constraints (deadlines) and opti-
+mizing energy efficiency, often involving an explicit energy performance trade-off. Several works
+incorporate these aspects to varying degrees, though often with limitations in other critical areas
+like granularity or dynamic power management. Some approaches explicitly target both: Kang et
+al. [14] employ a GA-based scheduler that considers deadlines (via penalty) and allows users to
+select energy-latency trade-off points. Map-and-Conquer [2] includes target latency constraints
+and energy modeling. MaGNAS [24] co-optimizes GNN architecture and mapping under latency
+constraints while considering energy tradeoffs. HaX-CoNN [5] implicitly addresses timing via QoS
+requirements while considering PE power consumption. Other works prioritize meeting deadlines
+without deep energy optimization, such as DART [38] for real-time tasks. In contrast, several frame-
+works explore energy vs. performance trade-offs or specific energy targets but without strictly
+adhering to application deadlines. For instance, AxoNN [6] minimizes time under an energy budget,
+RoaD-RuNNer [13] finds Pareto optimal energy/latency points, and ODIMO [27] balances accuracy
+and efficiency. Frameworks like Vasiliadis et al. [36], MATCH [9], and the TensorRT-based approach
+[11] offer options to minimize energy or latency but lack a mechanism to enforce a strict timing
+constraint during optimization. Frameworks centered on memory optimization through tiling (e.g.,
+DORY [3], FDT [33]), throughput maximization (e.g., OmniBoost [15]), or partitioning/offloading
+latency (e.g., AdaKnife [18]) often lack explicit mechanisms for managing energy consumption
+within a specific timing budget. Even works characterizing platform performance [37] typically do
+not go into deadline-driven scheduling.
+
+
+   Summary of Gaps and Proposed Approach. In summary, our review (Table 1) highlights several
+significant gaps in current resource management and scheduling approaches when applied to HULPs.
+These include a prevalent lack of kernel-level DVFS, insufficient memory-aware tiling, limited focus
+on optimizing energy under strict timing constraints, and coarse scheduling granularities unsuitable
+for specialized accelerators and restricted DNN architecture support. Collectively, these limitations
+hinder the ability to fully utilize the potential of HULP platforms for energy-efficient execution of
+DNN-based applications. Although individual works may address some of these aspects, a holistic
+solution that effectively integrates all these demanding requirements for the ULP domain has been
+notably absent. To address this confluence of challenges, this paper proposes MEDEA, a novel
+design-time multi-objective manager that integrates kernel-level scheduling, kernel-level DVFS,
+memory-aware adaptive tiling within a flexible, timing-constrained energy optimization strategy
+explicitly tailored for HULPs.
+
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                      7
+
+3     MEDEA, Our Proposed Design-Time Multi-Objective Manager
+This section details MEDEA, our proposed design-time multi-objective manager designed for
+energy-efficient, latency-constrained DNN inference on HULPs. Figure 2 provides a high-level
+overview of the MEDEA manager, illustrating its key inputs (application representation, platform
+characteristics, timing constraints), the control knobs it manipulates (PE assignment, V-F settings,
+tiling modes), and its core management and optimization algorithm. Each of these aspects will be
+described in detail in the following subsections.
+
+
+            Inputs                                                                 MEDEA     Outputs/Knobs
+          DNN Struc.
+                                                                                                V-F Point
+            Deadline                                   Kernel                Optimiz.
+                                    Timing                                                     PE Selected
+                                                       Configs
+         HULP Specific.
+                                                                                               Tiling Mode
+         HULP Profiles
+
+
+
+
+Fig. 2. Overview of the MEDEA design-time multi-objective manager, illustrating its inputs, output/knobs,
+and core management and optimization.
+
+
+
+3.1    MEDEA Input Requirements
+As illustrated in Figure 2, MEDEA relies on a set of inputs: (1) the DNN-based application structure
+to be scheduled, (2) its associated timing constraint, (3) HULP’s specifications, and (4) HULP’s
+performance profiles derived from characterization. The following subsections detail these required
+inputs.
+3.1.1 Application Structure and Timing Constraint. MEDEA requires the workload structure and
+its timing constraint. First, the target DNN-based application structure is presented as a sequential
+workload W, which is an ordered list of 𝑁 W computational kernels:
+                                             W = {𝑘 1, 𝑘 2, . . . , 𝑘 𝑁W }                                        (1)
+Each kernel 𝑘𝑖 within this workload is defined by a tuple (𝜏𝑖 , 𝑠𝑖 , 𝛿𝑖 ), where 𝜏𝑖 ∈ T𝑜𝑝𝑠 denotes the
+type of kernel, e.g., T𝑜𝑝𝑠 = {matmul, conv2d, norm, add, . . . }; 𝑠𝑖 represents its operational size or
+dimensions (e.g., matrix dimensions for matmul); and 𝛿𝑖 specifies the datawidth (e.g., int8, int16).
+This kernel-level representation is fundamental to the fine-grained optimization performed by
+MEDEA. Helper utilities are provided to help generate W from higher-level descriptions (e.g. DNN
+model layers). The list order of W encodes a valid topological execution order of the underlying DNN
+computation graph: kernel 𝑘𝑖 appears only after all operators whose outputs it consumes. MEDEA
+does not reorder kernels; it assumes sequential execution—𝑘𝑖 completes before 𝑘𝑖+1 begins—which
+matches the orchestration model on severely memory-constrained HULPs (Sec. 4.1). Coarser-
+grained scheduling approaches, considered for comparison, typically group consecutive kernels
+from W into larger blocks. The second input is the overall application timing constraint, or deadline
+𝑇𝑑 . This deadline dictates the maximum allowable active execution time for the entire workload
+W and serves as the trade-off point for the energy optimization performed across the sequence
+of kernels. For the HULP deployment class targeted in this work, the intended application input
+is one workload W with one deadline 𝑇𝑑 : MEDEA optimizes a single, latency-constrained DNN
+inference at design time (Sec. 6).
+
+                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+8                                                                                              Taji et al.
+
+
+3.1.2   HULP’s Specifications. This begins with defining the set P of 𝑁 P distinct PEs:
+                                               P = {𝑝 1, 𝑝 2, . . . , 𝑝 𝑁 P }.                        (2)
+Thus, P typically includes one or more general-purpose CPUs (e.g., 𝑝𝑐𝑝𝑢 ) and various specialized
+accelerators (e.g., 𝑝𝑎𝑐𝑐1 ). The platform operates across a discrete set V of 𝑁 V voltage levels, with
+available V-F operating points forming a set 𝑆 𝑣𝑓 :
+                                    𝑆 𝑣𝑓 = {(𝑣𝑙 , 𝑓𝑙 ) | 𝑣𝑙 ∈ V, 𝑙 = 1, . . . , 𝑁 V },                (3)
+where, consistent with common practice in works like [34], the system is usually operating at the
+maximum supported frequency, 𝑓𝑙 = 𝐹𝑚𝑎𝑥 (𝑣𝑙 ), at voltage 𝑣𝑙 .
+   The platform’s memory hierarchy is also important to know where data is available to be
+processed and how moving data between different levels should be handled. Beyond off-chip flash
+for global DNN weights, this can include a shared memory resource (e.g., L2 cache or main on-chip
+memory) with capacity 𝐶𝑀 , and/or private local memories (LMs) for each PE 𝑝 𝑗 ∈ P. PEs are
+assumed to operate primarily on data residing in their respective LMs. The set of all LM capacities
+is given by:
+                                   C𝐿𝑀 = {(𝑝 𝑗 , 𝐶𝐿𝑀 𝑗 ) | 𝑝 𝑗 ∈ P}.                            (4)
+Furthermore, MEDEA considers kernel-PE operational constraints, where each PE 𝑝 𝑗 may impose
+limitations on specific kernel types 𝜏𝑖 (e.g., maximum supported matrix dimensions for a matmul
+kernel). These specific constraint values are denoted as 𝜆𝑝 𝑗 ,𝜏𝑖 , forming the set Λ𝑜𝑝 :
+                                   Λ𝑜𝑝 = {(𝑝 𝑗 , 𝜏𝑖 , 𝜆𝑝 𝑗 ,𝜏𝑖 ) | 𝑝 𝑗 ∈ P, 𝜏𝑖 ∈ T𝑜𝑝𝑠 }.              (5)
+These specifications define the fixed capabilities and limitations of the hardware that MEDEA must
+operate within.
+3.1.3 HULP’s Performance Profiles. Additionally MEDEA utilizes dynamic performance profiles
+derived from representative kernel executions on the target platform. These profiles provide the
+performance metrics that form the basis for MEDEA’s optimization process. First, Timing Profiles
+(𝑆𝑐 ) detail measured cycle counts for representive kernels 𝑘𝑖 (based on its operational size 𝑠𝑖 and
+data width 𝛿𝑖 ) on each relevant PE 𝑝 𝑗 . These profiles contain processing-only cycles and data
+movement characteristics that MEDEA utilizes alongside Λ𝑜𝑝 and 𝐶𝐿𝑀 𝑗 to estimate cycle counts for
+the different tiled execution modes (Sec. 3.2). Second, Power Profiles (𝑆𝑃 ) supply characterized power
+information for each kernel 𝑘𝑖 executing on PE 𝑝 𝑗 across different voltage levels 𝑣𝑙 . This includes
+separated static (𝑃𝑠𝑡𝑎𝑡 ) and dynamic (𝑃𝑑 𝑦𝑛_𝑏𝑎𝑠𝑒 at a reference frequency 𝑓𝑏𝑎𝑠𝑒 ) power components.
+A common technique to decouple these components involves measuring at least in two different
+frequencies for a given voltage [21]. Lastly, the global idle / sleep power of the platform, 𝑃𝑠𝑙𝑝 , must
+also be profiled and provided.
+
+3.2     MEDEA Outputs/Knobs
+Figure 2 illustrates the outputs or control knobs that MEDEA manipulates to generate an energy-
+efficient, per-kernel decisions (A) for any kernel in the given DNN workload (W) on the target
+HULP. Firstly, MEDEA performs PE Assignment, selecting the specific PE 𝑝 𝑗 ∈ P for the execution
+of each kernel 𝑘𝑖 . This decision leverages the platform’s heterogeneity by matching kernel charac-
+teristics to PE strengths. Secondly, for each kernel 𝑘𝑖 on the assigned PE, MEDEA determines the
+efficient V-F Setting (𝑣𝑙 , 𝑓𝑙 ) from the set 𝑆 𝑣𝑓 , enabling kernel-level DVFS.
+   Thirdly, MEDEA chooses the Tiling Mode, critical for managing limited local PE memory (𝐶𝐿𝑀 𝑗 )
+and adhering to kernel-PE operational constraints (𝜆𝑝 𝑗 ,𝜏𝑖 from Λ𝑜𝑝 ). Typically, for the execution
+of 𝑘𝑖 on a PE 𝑝 𝑗 , operands are transferred from a shared memory tier (e.g., L2 cache) to 𝑝 𝑗 ’s Local
+Memory (LM). This movement often necessitates tiling when a kernel’s data requirements exceed
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                      9
+
+either the LM capacity or other kernel-PE operational limits. Tiling decomposes 𝑘𝑖 into smaller,
+manageable chunks (tiles) whose data footprint adheres to both 𝐶𝐿𝑀 𝑗 and specific constraints 𝜆𝑝 𝑗 ,𝜏𝑖 .
+   when implementing tiling, MEDEA’s role is to decide how to overlap data movement with com-
+putation efficiently. It considers two tiling modes, Single-Buffer Tiling (𝑡𝑠𝑏 ) and Double-Buffer Tiling
+(𝑡𝑑𝑏 ). 𝑡𝑑𝑏 aims to hide data movement latency by overlapping the computation of the current tile
+with the data transfer of the next/previous tile, typically using roughly half of 𝐶𝐿𝑀 𝑗 for computation
+buffers. In contrast, 𝑡𝑠𝑏 maximizes the tile size based on constraints (𝐶𝐿𝑀 𝑗 , 𝜆𝑝 𝑗 ,𝜏𝑖 ). Consequently, it
+has zero overlap between data movement and computation, processing tiles sequentially. MEDEA
+selects the most efficient mode for each kernel on its assigned PE.
+
+3.3   MEDEA Management and Optimization Algorithm
+The primary objective of MEDEA is to generate a schedule that minimizes the total energy con-
+sumption, 𝐸𝑡 , for executing a given DNN-based application workload W (defined in Eq. (1)) within
+a specified timing constraint, deadline 𝑇𝑑 . This total energy, 𝐸𝑡 , comprises the energy consumed
+during active DNN execution, 𝐸𝑡,𝑎 , and the energy consumed during any subsequent idle/sleep
+period, 𝐸𝑡,𝑠 , until the next operational cycle.
+                                                𝐸𝑡 = 𝐸𝑡,𝑎 + 𝐸𝑡,𝑠 .                                                (6)
+Taking into account idle power 𝑃𝑠𝑙𝑝 and active execution time 𝑇𝑡,𝑎 (≤ 𝑇𝑑 ), the total energy to be
+minimized is:
+                                    𝐸𝑡 = 𝐸𝑡,𝑎 + 𝑃𝑠𝑙𝑝 × max(0,𝑇𝑑 − 𝑇𝑡,𝑎 ).                                         (7)
+   Timing and Power. To make its decisions, MEDEA leverages characterized timing (𝑆𝑐 ) and power
+(𝑆𝑃 ) information. A timing model, G𝑇 (·), is employed to estimate execution times. This model
+utilizes measured cycle counts (𝑆𝑐 ) for computation, which are obtained for each kernel 𝑘𝑖 on a
+specific PE 𝑝 𝑗 . The model first estimates the total cycle count for a given kernel and a chosen tiling
+mode 𝑡𝑚 ∈ {𝑡𝑠𝑏 , 𝑡𝑑𝑏 }. It includes both directly profiled processing-only cycles, extrapolated values
+for non-profiled kernel sizes, as well as data movement cycles determined by the chosen tiling
+mode (𝑡𝑚 ) and platform constraints (𝐶𝐿𝑀 𝑗 , Λ𝑜𝑝 ). Subsequently, this total cycle count is converted
+to actual execution time by dividing by the operational frequency 𝑓𝑙 , which is derived from the
+selected voltage level 𝑣𝑙 and the platform’s frequency-voltage mapping 𝑆 𝑣𝑓 . Thus, G𝑇 (·) provides
+the estimated execution time of a kernel 𝑘𝑖 on a specific PE 𝑝 𝑗 at a voltage level 𝑣𝑙 and using a tiling
+mode 𝑡𝑚 . For power, the model directly uses the characterized power profiles (𝑆𝑃 ). It is assumed
+that the power consumption for a given kernel type 𝜏𝑖 on PE 𝑝 𝑗 at voltage 𝑣𝑙 is independent of the
+kernel’s operational size 𝑠𝑖 .
+   Kernel Execution Configurations. The total active energy, 𝐸𝑡,𝑎 , is the sum of the energies con-
+sumed by individual kernels 𝑘𝑖 ∈ W. For each kernel 𝑘𝑖 , MEDEA controls several knobs: the PE
+assignment 𝑝𝑖 ∈ P, the voltage 𝑣𝑖 (which determines 𝑓𝑖 from 𝑆 𝑣𝑓 ), and the execution/tiling mode
+𝑐𝑖 ∈ {𝑡𝑠𝑏 , 𝑡𝑑𝑏 } (as detailed in Section 3.2). A specific combination of these choices for kernel 𝑘𝑖 forms
+an execution configuration, denoted as 𝜔𝑖 𝑗 = (𝑝𝑖 𝑗 , 𝑣𝑖 𝑗 , 𝑐𝑖 𝑗 ), where 𝑗 is an index over the possible
+valid configurations for kernel 𝑖. Let Ω𝑖 be the set of all such valid configurations for kernel 𝑘𝑖 . A
+configuration is deemed valid if its execution time G𝑇 (𝜔𝑖 𝑗 ) can be successfully estimated (e.g., it is
+not an invalid mapping due to the PE capability or constraints). The active time and active energy
+for kernel 𝑘𝑖 executed with a configuration 𝜔𝑖 𝑗 are:
+                                        𝑇𝑎 (𝜔𝑖 𝑗 ) = G𝑇 (𝜔𝑖 𝑗 ),                                                  (8)
+                                       𝐸𝑎 (𝜔𝑖 𝑗 ) = G𝑃 (𝜔𝑖 𝑗 ) × 𝑇𝑎 (𝜔𝑖 𝑗 ).                                      (9)
+
+                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+10                                                                                                Taji et al.
+
+
+   Optimization Objective Rationale. The overall goal is to minimize the total energy 𝐸𝑡 (Eq. (7))
+while ensuring the total active time 𝑇𝑡,𝑎 respects the deadline 𝑇𝑑 . This comprehensive objective can
+be simplified. Consider any valid schedule that meets the deadline with an active time 𝑇𝑡,𝑎 and active
+energy 𝐸𝑡,𝑎 . Any alternative schedule that executes faster (𝑇𝑡,𝑎 ′ < 𝑇 ) would necessarily require
+                                                                        𝑡,𝑎
+higher V-F settings for some kernels, resulting in a higher active energy consumption (𝐸𝑡,𝑎  ′ > 𝐸 ).
+                                                                                                   𝑡,𝑎
+Furthermore, if the idle power 𝑃𝑠𝑙𝑝 is greater than zero, this faster schedule would also incur a
+longer subsequent idle period (𝑇𝑑 − 𝑇𝑡,𝑎′ ), leading to a higher idle energy consumption (𝐸 ′ > 𝐸 ).
+                                                                                             𝑡,𝑠   𝑡,𝑠
+Since executing faster increases both the active and (for 𝑃𝑠𝑙𝑝 > 0) idle energy components, there
+is no benefit to finishing earlier than necessary. The optimal strategy is therefore to find the
+schedule that utilizes the available time up to the deadline 𝑇𝑑 with the lowest possible active energy.
+Consequently, the optimization problem simplifies to minimizing the total active energy 𝐸𝑡,𝑎 subject
+to the constraint 𝑇𝑡,𝑎 ≤ 𝑇𝑑 .
+    Optimization Formulation and Solution. The optimization problem involves selecting one con-
+figuration 𝜔𝑖 𝑗 from Ω𝑖 for each kernel 𝑘𝑖 . Before generating the full set Ω𝑖 , for each kernel 𝑘𝑖 and
+each potential PE and V-F pair (𝑝𝑖 𝑗 , 𝑣𝑖 𝑗 ), MEDEA, utilizing G𝑇 (·), pre-selects the execution mode
+𝑐𝑖 𝑗 (from {𝑡𝑠𝑏 , 𝑡𝑑𝑏 }) that yields the minimum execution cycles (and thus minimum 𝑇𝑎 (𝜔𝑖 𝑗 ) for that
+(𝑝𝑖 𝑗 , 𝑣𝑖 𝑗 )). This step effectively reduces the dimensionality of the choices before the main optimiza-
+tion. We also define binary decision variables 𝑥𝑖 𝑗 , where 𝑥𝑖 𝑗 = 1 if the 𝑗-th configuration 𝜔𝑖 𝑗 ∈ Ω𝑖 is
+selected for kernel 𝑘𝑖 , and 0 otherwise. Because execution order is fixed by W, the formulation does
+not introduce explicit inter-kernel precedence constraints: the ILP/MCKP selects one execution
+configuration per kernel, and total active time 𝑇𝑡,𝑎 is the sum of per-kernel durations under the
+assumption of non-overlapping kernel execution. The optimization problem is to minimize total
+active energy 𝐸𝑡,𝑎 :
+                                                 𝑁 W ∑︁
+                                                 ∑︁
+                                          𝐸𝑡,𝑎 =          𝐸𝑎 (𝜔𝑖 𝑗 ) × 𝑥𝑖 𝑗                            (10)
+                                                   𝑖=1 𝜔𝑖 𝑗 ∈Ω𝑖
+
+Subject to:
+     (1) Timing Constraint: Let 𝑇𝑡,𝑎 =               𝜔𝑖 𝑗 ∈Ω𝑖 𝑇𝑎 (𝜔𝑖 𝑗 ) × 𝑥𝑖 𝑗 . Then,
+                                           Í𝑁 W Í
+                                             𝑖=1
+
+                                                       𝑇𝑡,𝑎 ≤ 𝑇𝑑                                       (11)
+     (2) Unique Assignment: Each kernel must be assigned exactly one configuration:
+                                   ∑︁
+                                        𝑥𝑖 𝑗 = 1 ∀𝑖 ∈ {1, . . . , 𝑁 W }                                (12)
+                                       𝜔𝑖 𝑗 ∈Ω𝑖
+
+     (3) Binary Decision: Decision variables are binary:
+                                  𝑥𝑖 𝑗 ∈ {0, 1}    ∀𝑖 ∈ {1, . . . , 𝑁 W }, ∀𝜔𝑖 𝑗 ∈ Ω𝑖                  (13)
+This optimization problem is then assigned and solved as a Multiple Choice Knapsack Problem
+(MCKP). In this mapping, each kernel 𝑘𝑖 corresponds to an item group, and its valid configurations
+𝜔𝑖 𝑗 ∈ Ω𝑖 represent the items to choose from within that group. The active energy 𝐸𝑎 (𝜔𝑖 𝑗 ) (Eq. (9))
+is the value or cost associated with selecting item 𝜔𝑖 𝑗 (to be minimized), its execution time 𝑇𝑎 (𝜔𝑖 𝑗 )
+(Eq. (8)) is its weight, and the application deadline 𝑇𝑑 serves as the knapsack’s capacity. MEDEA
+solves this MCKP formulation using an Integer Linear Programming (ILP) solver via the PuLP
+library in Python with its default CBC (Coin-or Branch and Cut) backend. This solver runs once
+on a host during deployment preparation and is never invoked on the HULP during inference;
+on-device optimization overhead is therefore zero.
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     11
+
+   Schedule Extraction. The ILP solver yields the optimal set of 𝑥𝑖 𝑗 values. MEDEA then extracts the
+chosen configuration 𝜔𝑖∗ (which encapsulates the selected 𝑝𝑖∗, 𝑣𝑖∗, and pre-optimized 𝑐𝑖∗ ) for each
+kernel 𝑘𝑖 for which 𝑥𝑖 𝑗 = 1. This sequence of configurations, A = {𝜔 1∗, 𝜔 2∗, . . . , 𝜔 𝑁∗ W }, constitutes the
+final, kernel-level, energy-efficient schedule generated by the manager. At runtime, the host CPU
+executes A strictly in list order—kernel 𝑘𝑖 completes before 𝑘𝑖+1 begins—matching the sequential
+orchestration model on HEEPTimize (Sec. 4.1). The overall MEDEA scheduling process is depicted
+in Figure 2.
+
+4     Experimental Setup
+This section details the experimental methodology for evaluating MEDEA. In particular, it covers the
+evaluation platform including its architecture, implementation and characterization; the software
+toolchain; the application case study with its experimental conditions; and the baseline approaches
+used for comparison.
+
+4.1    Evaluation Platform: HEEPTimize
+To evaluate MEDEA in a HULP environment, we use the X-HEEP platform [31], which is a config-
+urable and extensible open source platform designed specifically for accelerator prototyping for
+edgeAI applications. We use its eXtendible Accelerator InterFace (XAIF) to integrate the accelerators
+tested with MEDEA. We name the resulting prototyping platform, which has been synthesized for
+prototyping on a Xilinx Zynq UScale+ FPGA and for power characterization using an ASIC flow,
+HEEPTimize (Figure 3).
+
+
+
+                CPU                  Debug           Peripherals                Instr and Cache Memory
+
+                                     DMA      INTR CTL         GPIO
+                                                                               SRAM    SRAM         SRAM
+                                    SoC CTL      Timer         UART
+
+
+                                                         BUS
+
+
+           CGRA                    OpenEdgeCGRA                        Carus
+                                                         CTL                                      CTL
+               Local Memory                                                Local Memory
+                                    Reconfigurable
+            SRAM         SRAM           Cells         Context          SRAM           SRAM        Vector
+                                                      Memory                                    Processing
+
+
+
+
+                               Fig. 3. High-level block diagram of HEEPTimize.
+
+
+4.1.1 Architecture. HEEPTimize integrates a low-power RISC-V processor with two types of
+specialized accelerators: an CGRA and an NMC. These three PEs correspond to the set P, Eq. (2),
+considered by MEDEA. This selection stems from their demonstrated potential for high energy
+efficiency and computational flexibility in ULP applications [4, 28].
+   The main controller is the CV32E40P [30], an open-source, 32-bit, 4-stage, in-order RISC-V core
+(RV32IMC ISA) optimized for low power. It handles general-purpose tasks, orchestrates accelerator
+operations, and executes kernels that are not efficiently supported by the specialized units. While
+
+                              ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+12                                                                                          Taji et al.
+
+
+OpenEdgeCGRA and Carus excel at some common arithmetically intensive DNN kernels (e.g.,
+matmul, conv2d, add, norm), they are less optimized for complex nonlinear functions or floating-
+point arithmetic. Consequently, operations such as Softmax, the standard GeLU activation, and
+floating-point calculations like the logarithm of an FFT’s amplitude are typically offloaded to the
+host CPU, motivating the hardware-aware model optimizations detailed in Section 4.3. The first
+accelerator is OpenEdgeCGRA [28], a flexible CGRA. Its architecture comprises a four-by-four
+mesh of identical reconfigurable cells (RCs) in a torus topology, each equipped with a 32-bit ALU,
+registers, and private program memory. These RCs operate in a time-multiplexed fashion based on
+column program counters. Via XAIF, OpenEdgeCGRA utilizes four 32-bit master ports for data
+memory access and two 32-bit slave ports for its configuration and instruction memory. The second
+accelerator is Carus [4], an NMC unit optimized for vector operations. It integrates a programmable
+RISC-V eCPU controller with a scalable Vector Processing Unit (VPU), executing custom xvnmc ISA
+vector operations directly on its Vector Register File (VRF), configured with four SRAM banks. The
+eCPU manages VPU operations using kernel code loaded by the host into a dedicated eMEM, and
+Carus natively supports 8-bit, 16-bit, and 32-bit fixed-point data. Reflecting its NMC design, Carus
+connects via a single XAIF slave port for eMEM programming and control, which lacks external
+master ports. The completion of the computation for both OpenEdgeCGRA and Carus is signaled
+to the host CPU via XAIF-routed interrupt lines to the interrupt controller.
+   The memory hierarchy is designed to support these PEs. Carus operates on its internal 64 KiB
+LM (or VRF). For operational similarity and fair comparison, OpenEdgeCGRA is provided with a
+dedicated 64 KiB LM. These LM capacities correspond to 𝐶𝐿𝑀 𝑗 values in C𝐿𝑀 (Eq. (4)). A shared
+128 KiB L2 cache acts as an intermediate data buffer between these accelerator LMs and the off-chip
+NAND flash memory, where application data such as model parameters are stored. DMA controllers
+manage data transfers between flash and the L2 cache, and subsequently between the L2 cache and
+the respective accelerator LMs. This L2 cache also facilitates double buffering techniques during
+processing.
+4.1.2 Implementation and Characterization. Characterization of HEEPTimize, in the absence of
+fabricated silicon, was based on a combination of FPGA prototyping for timing validation and an
+ASIC implementation flow for power and area analysis. While FPGA prototyping yields accurate
+cycle counts for kernel execution, precise power estimation requires simulation using industry-
+standard Electronic Design Automation (EDA) tools.
+  FPGA Prototyping. To facilitate functional verification and obtain realistic kernel execution cycle
+counts, the HEEPTimize architecture was implemented and prototyped on a Xilinx ZCU104 Ultra-
+scale+ FPGA development board. The cycle counts measured from the execution of representative
+DNN kernels on each PE on the FPGA serve as input for the timing profiles used by MEDEA (as
+detailed in Section 3.1.3).
+   ASIC Implementation (GF 22 nm FDX). For accurate power and area analysis, HEEPTimize was
+designed using a standard cell ASIC flow targeting the GlobalFoundries (GF) 22 nm Fully Depleted
+Silicon-on-Insulator (FDX) technology node, chosen for its suitability for low-power applications.
+Logic synthesis for the entire design was performed using Synopsys Design Compiler (DC), targeting
+the worst-case Slow-Slow Global (SSG) process corner to ensure robust timing closure across process
+variations. On-chip memories (L2 cache, instruction memory, and local memories) were generated
+using the GF 22 nm FDX S1DU SRAM compiler, selected for its ULP characteristics.
+  Timing Analysis (Max Frequency). Static Timing Analysis (STA), performed using Synopsys
+PrimePower, determined the maximum operating frequency (𝑓𝑚𝑎𝑥 ) achievable at each supported
+voltage level (0.5 V, 0.65 V, 0.8 V, and 0.9 V). These characterized maximum frequencies form the
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     13
+
+basis of the 𝑆 𝑣𝑓 set (Eq. (3)) and are crucial for the DVFS model in MEDEA. The results are presented
+in Table 2.
+
+            Table 2. HEEPTimize Maximum Operating Frequencies vs. Voltage (GF 22 nm FDX)
+
+
+                               Voltage (V)             0.50    0.65    0.80    0.90
+                               Max Freq. (MHz)         122     347     578     690
+
+
+
+   Power Analysis. System-level post-synthesis simulations were performed using Siemens Ques-
+taSim on the synthesized netlist to capture realistic operational behavior during the execution
+of representative DNN kernels. Detailed switching activity information from these simulations
+was logged into Value Change Dump (VCD) files. The synthesized netlist and the generated VCD
+files were then input into Synopsys PrimePower for dynamic power analysis, conducted under
+typical-typical (TT) operating conditions. This tool calculates power consumption based on the
+standard cell library’s power models and the captured switching activity, providing a breakdown
+into Static (Leakage) Power (𝑃𝑠𝑡𝑎𝑡 ) and Dynamic Power (𝑃𝑑𝑦𝑛_𝑏 at the simulation frequency, 𝑓𝑏 ). To
+obtain power profiles across different voltages (𝑣𝑙 ∈ V), this analysis was repeated using standard
+cell libraries characterized for each supported voltage level (0.5 V, 0.65 V, 0.8 V, and 0.9 V).
+  Area Results. The breakdown of the post-synthesis area for HEEPTimize, which details the
+contribution of various parts of the memory, processor and accelerators, and peripherals, was
+obtained after synthesis with Synopsys DC (SSG corner), is reported in Table 3.
+
+           Table 3. Post-Synthesis Area Breakdown of HEEPTimize (GF 22 nm FDX, SSG Corner)
+
+
+                              Component                                Area (mm2 )
+                              CPU Subsystem                                    0.021
+                              Carus (NMC, incl. 64 KiB VRF)                    0.110
+                              OpenEdgeCGRA (Logic)                             0.085
+                              CGRA Local Memory (64 KiB)                       0.091
+                              L2 Cache (128 KiB)                               0.181
+                              Instruction Memory (64 KiB)                      0.091
+                              Peripherals                                      0.053
+                              Total Area                                      ≈0.632
+
+
+
+4.2   Software Toolchain and Compilation
+All software components, including DNN kernels executed on the CPU and accelerator control code,
+were compiled using the GNU RISC-V GCC compiler, version 11.1.0 applying the -O2 optimization
+level. Kernels targeted for the main RISC-V CPU (CV32E40PX) were compiled for the standard
+RV32IMC instruction set. Kernels designated for the NMC accelerator (Carus) were developed in C
+and RISC-V assembly, leveraging the custom xvnmc vector ISA extension. These were compiled
+using an extended version of the GNU RISC-V GCC toolchain incorporating assembler support for
+xvnmc and loaded into Carus’s local instruction memory (eMEM) by the host CPU at runtime.
+
+                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+14                                                                                                                     Taji et al.
+
+
+4.3   Application Case Study and Experimental Condition
+   TSD Model Description. We evaluated MEDEA using the Transformer for Seizure Detection (TSD)
+model [1, 22]. This model was chosen for its relevance to ULP biomedical applications and exempli-
+fies the trend of employing transformer architectures for complex signal processing tasks on these
+platforms. The TSD model is based on a Vision Transformer (ViT) architecture specifically designed
+for epileptic seizure detection using EEG data. It comprises four transformer encoder blocks, each
+containing a multi-head self-attention (MHSA) layer and a feed-forward network (FFN). Figure 4
+shows the detailed model architecture, illustrating its decomposition into processing kernels. The
+model was trained and tested using the publicly available Temple University Hospital EEG Seizure
+Corpus (TUSZ)-v2.0.0 [22]. We intentionally use TSD as a stress test of the four mechanisms MEDEA
+integrates on HEEPTimize: (i) a heterogeneous kernel mix beyond homogeneous CNN stacks (Fig. 4),
+including preprocessing, matmul/norm/add blocks, and CPU-resident nonlinearities; (ii) memory
+pressure that forces nontrivial adaptive tiling given 64 KiB accelerator local memories; (iii) three
+deadline regimes (𝑇𝑑 ∈ {50 ms, 200 ms, 1000 ms}) that expose qualitatively different scheduling
+trade-offs; and (iv) a real always-on biomedical deployment mode of continuous periodic inference
+on wearables.
+
+
+                      Embedding                        Encoder (x4)                              Classifier
+
+
+          N     MM      A     CC      A          N     MHA     A       N        FF       A            N       MM   A
+
+
+                                   H(x4)   T     MM       A                MM        A       G      MM        A
+
+
+                      MM      A     MM      A     MM       A       T   MM            S   SM        MM
+
+
+
+Fig. 4. TSD model architecture, illustrating the decomposition into processing kernels (where G=GeLU,
+SM=SoftMax, T=Transpose, S=Scale, N=Norm, MM=MatMul, A=Add, CC=ClassConcat, MHA=Multi-Head
+Attention, FF=FeedForward, and H=Head).
+
+
+   TSD Model Modifications. These changes are upstream model–platform mapping decisions
+applied before MEDEA is invoked: they determine operator implementations for accelerator com-
+patibility, analogously to hardware-aware adaptations in embedded transformer deployments [12].
+MEDEA consumes the resulting ordered kernel workload W and optimizes per-kernel PE assign-
+ment, voltage–frequency settings, and tiling under 𝑇𝑑 ; it does not perform operator lowering or
+select among mathematically equivalent Softmax, GeLU, or FFT post-processing implementations.
+The kernels that were not compatible with the HEEPTimize’s accelerators were optimized in SW
+using reasonable effort to facilitate that the application can be executed in an ULP.
+   Key modifications include: replacing the original floating-point Softmax layer with a constant
+Softmax approximation using a 3-coefficient Taylor expansion (following the approach in [19]);
+direct use of the magnitude of the fast Fourier transform (FFT) results instead of the logarithm of the
+FFT amplitude used in the original work [1, 22]; and implementation of the GeLU activation function
+via a piecewise linear (PWL) approximation, replacing its standard floating-point computation. These
+modifications significantly reduce computational complexity, particularly for components not
+easily accelerated on HEEPTimize’s specialized hardware, making the original application more
+suitable for execution on ULP devices. As shown in Table 4, the CPU cycle counts for these specific
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     15
+
+operations were drastically reduced. While retraining showed minimal impact on the F1-score for
+the Softmax and GeLU changes (66.0 % vs. 66.6 %), using the FFT magnitude instead of log-amplitude
+resulted in a final F1-score of 60.3 %, deemed an acceptable exchange for the significant reduction
+of 98 % achieved in execution cycles on these kernels.
+
+                      Table 4. CPU Cycles Reduction from TSD Model Modifications
+
+                  Operation                 Original Cycles (M)         Modified Cycles (M)
+                  Log-Amplitude FFT                            ∼182                      ∼11.00
+                  Softmax                                      ∼647                       ∼5.00
+                  GeLU                                           ∼8                       ∼0.03
+
+  Experimental Conditions. To comprehensively evaluate MEDEA’s adaptability and performance,
+particularly for applications with stringent or varying real-time demands such as continuous infer-
+ence in biomedical scenarios, the TSD model (specifically its transformer core for most comparative
+analyses) is evaluated under three distinct timing constraints (𝑇𝑑 ): 50 ms (stringent), 200 ms (mod-
+erate), and 1000 ms (relaxed). These varying deadlines allow us to assess how MEDEA manages the
+energy-performance tradeoff when dealing with different application timing requirements.
+
+4.4   Comparison Baselines
+To quantify the benefits of MEDEA, its performance is compared against several baseline scheduling
+and management strategies adapted from principles observed in the literature. A necessary step for
+evaluation on memory-constrained platforms like HEEPTimize was the incorporation of memory
+management. As many related works (e.g., [2, 13, 24]) do not inherently include the required
+memory-aware tiling, we consistently applied tiling using the double buffering (𝑡𝑑𝑏 ) strategy
+(Section 3.2) across all evaluated methods, ensuring feasibility and comparability on our hardware.
+All baselines below are evaluated on the identical modified TSD kernel list produced by the mapping
+choices in Sec. 4.3, isolating scheduling and energy-management decisions (PE selection, kernel-
+level DVFS, adaptive tiling) rather than operator implementation. We evaluate and compare against
+the following baselines, representing increasing levels of optimization sophistication:
+    • CPU (MaxVF): A non-DVFS, homogeneous approach running the workload entirely on the
+       CPU at its maximum V-F setting.
+    • StaticAccel (MaxVF): selects a priori the single most energy-efficient accelerator for the TSD
+      workload and runs it at maximum V-F, offloading unsupported kernels to the CPU; this is
+       conceptually similar to static accelerator selection in works like [36, 37].
+    • StaticAccel (AppDVFS): Applies application-level DVFS to the StaticAccel (MaxVF) configura-
+       tion by selecting a single optimal V-F setting for the entire execution of the chosen accelerator,
+       similar to strategies proposed in [14, 18, 24].
+    • CoarseGrain (AppDVFS): Represents approaches that schedule larger functional blocks by
+       selecting the most energy-efficient PE for predefined groups of kernels and applying a single
+       application-level DVFS setting. For the TSD model, we define these groups based on the
+       logical components of the transformer architecture: The initial input embedding forms one
+       group; within each encoder layer, the normalization, each multi-head attention head, the
+       feed-forward network, and the residual connection are each treated as separate groups; and
+       a final group is formed for the classification block. This grouping strategy reflects works
+       that schedule larger blocks (e.g., [2]) while incorporating basic energy-aware PE selection
+      (conceptually similar to [9, 27]).
+
+                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+16                                                                                                                Taji et al.
+
+
+5         Results and Analysis
+This section presents the experimental results, conducted on HEEPTimize (Section 4.1). We first
+analyze MEDEA’s performance for running TSD model under varying timing constraints (Sec-
+tion 4.3) and compare it against the defined baselines (Section 4.4), and then examine its adaptive
+scheduling decisions. Subsequently, we dissect the contributions of isolated MEDEA’s key features
+to its overall energy efficiency.
+
+5.1           MEDEA Performance Evaluation
+Figure 5 presents the total energy consumption (𝐸𝑡 ) and active execution time (𝑇𝑡,𝑎 ) for the inference
+decisions generated by MEDEA and the evaluated baselines (Section 4.4) across the three defined
+timing constraints for the TSD transformer core. Note that 𝐸𝑡 for each scenario in Figure 5 represents
+the energy consumed over one complete inference window, with the duration of this window being
+defined by its corresponding deadline (𝑇𝑑 ). Table 5 further details the energy and time breakdown
+specifically for MEDEA’s decisions, highlighting the interplay between active and idle components.
+With relaxed timing constraints (e.g., 𝑇𝑑 = 1000 ms), a significant portion of the deadline window is
+spent idle (𝑇𝑡,𝑠 ), making idle energy (𝐸𝑡,𝑠 ) prominent. This underscores the importance of platform
+idle power (𝑃𝑠𝑙𝑝 ), especially when timing constraints are not demanding, as also noted in [34].
+
+                    4019               Td = 50 ms    4033             Td = 200 ms        4136            Td = 1000 ms
+          4000
+          3000
+Et (µJ)
+
+
+
+
+          2000              1777                            1796                                1900
+                                   1112 1104 946
+          1000                                                     653 634 395                         537 503 468
+                0
+              250                                                                                      235.4 246.9 223.4
+              200                                                              200.0
+ Tt, a (ms)
+
+
+
+
+              150
+              100   94.9                             94.9          82.8 85.6             94.9
+               50           41.6 49.7 49.5 50.0             41.6                                41.6
+                0
+                    CPU StatAcc StatAcc CG MEDEA     CPU StatAcc StatAcc CG MEDEA        CPU StatAcc StatAcc CG MEDEA
+                                AppDVF AppDVF                    AppDVF AppDVF                       AppDVF AppDVF
+
+
+Fig. 5. Total energy and active execution time of one window while running the TSD model using MEDEA
+versus baseline schedulers under timing constraints of 50 ms, 200 ms, and 1000 ms.
+
+
+
+Table 5. End-to-End Time and Energy Breakdown for the TSD workload using MEDEA (Sleep power 𝑃𝑠𝑙𝑝 =
+129 µW).
+
+
+                           Deadline Active Time Sleep Time Active Energy Sleep Energy
+                               (ms)         (ms)       (ms)          (µJ)         (µJ)
+                                 50             50              0                  946                   0
+                                200            200              0                  395                   0
+                               1000            223            777                  368                 100
+
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     17
+
+   As depicted in Figure 5, executing the TSD model solely on the CPU consumes excessive energy
+and fails to meet the 50 ms deadline, confirming the need for hardware acceleration. The StaticAccel
+baseline, while meeting deadlines, incurs high energy costs due to its lack of DVFS and inflexibility
+in leveraging platform heterogeneity. Introducing application-level DVFS via StaticAccel-AppDVF
+reduces energy compared to the non-DVFS version but still underutilizes platform heterogeneity.
+Leveraging heterogeneity with CoarseGrain(CG)-AppDVF, while an improvement over single-
+accelerator strategies, sees its efficiency limited by coarse granularity, a simple DVFS scheme, and
+the absence of explicit timing constraint-based optimization during its PE selection and AppDVFS
+determination.
+   In contrast, MEDEA consistently optimizes energy consumption to achieve an energy-efficient
+solution while meeting the deadline across all evaluated scenarios. For instance, when compared to
+the CoarseGrain (AppDVFS) baseline, MEDEA achieves energy savings of approximately 14 % for the
+50 ms deadline, 38 % for the 200 ms deadline, and 7 % for the 1000 ms deadline, always outperforming
+the baselines while successfully meeting all timing constraints. This superior performance is a
+direct result of the integrated features of MEDEA.
+
+5.2     MEDEA Optimized Decisions
+As established in Section 3.3, MEDEA achieves the energy savings demonstrated above by solving an
+optimization problem that seeks to minimize active energy (𝐸𝑡,𝑎 ) under the given timing constraint
+(𝑇𝑑 ). The core decisions from this optimization involve selecting the PE and V-F setting for each
+kernel, with the tiling mode being a pre-determined choice for each PE-VF pair. To visualize these
+decisions in action, Figure 6 provides a snapshot of MEDEA’s generated decisions for an illustrative
+sequence of kernels from the TSD transformer model under the three evaluated timing constraints.
+The figure clearly illustrates that as the timing constraint becomes more stringent (e.g., tightening
+from 1000 ms down to 50 ms), MEDEA strategically utilizes higher V-F settings to ensure timeliness,
+a direct application of kernel-level DVFS. Under the relaxed 1000 ms deadline, MEDEA operates
+PEs at the lowest available V-F setting (e.g., 0.5 V), as this is sufficient to meet the deadline. In
+such scenarios where the kernel-level DVFS knob offers limited room for further optimization, the
+marginal energy improvement becomes less pronounced.
+
+                               Td = 50 ms             Td = 200 ms                         Td = 1000 ms
+                                                                            578                                0.80
+       cpu
+                                                          Frequency (MHz)
+
+
+
+
+                                                                                                                  Voltage (V)
+
+
+
+
+      cgra
+PE
+
+
+
+
+                                                                            347                                0.65
+
+
+      carus
+                                                                            122                                0.50
+              0    2       4         6        8                                   0   2        4     6   8
+                                                  Kernel Step Index
+
+Fig. 6. Snapshot of MEDEA scheduling decisions (PE allocation and V-F level per kernel) for a portion of the
+TSD transformer workload under timing constraint of 1000 ms, 200 ms, and 50 ms.
+
+  More interestingly, Figure 6 reveals that the optimal choice of PE for a given kernel can also change
+with the deadline. While V-F adaptation is an expected strategy, this dynamic PE re-assignment
+
+                               ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+18                                                                                                     Taji et al.
+
+
+highlights a more complex tradeoff. This occurs because the relative energy efficiency of the PEs
+(e.g., CGRA vs. Carus) is itself dependent on the operating V-F point. To demonstrate this effect
+explicitly, we executed a representative TSD matmul subset (executable on both accelerators) on
+Carus and the CGRA individually across HEEPTimize’s V-F range (0.5 V to 0.9 V). Figure 7, which
+presents the ratio of key performance and energy metrics (CGRA/Carus), shows that the relative
+average power consumption of the CGRA (to Carus) decreases significantly at lower V-F points.
+Given a constant operational cycle count ratio, this directly shifts their relative energy efficiency:
+the CGRA becomes comparatively more energy-efficient at lower voltages, while Carus tends to be
+more efficient at higher V-F settings. This observed efficiency crossover is characteristic of HULPs
+that integrate accelerators with disparate power profiles, such as the logic-dominant CGRA versus
+the more memory-influenced NMC where power scales differently with voltage. This behavior
+creates a complex optimization space and underscores the necessity for MEDEA to dynamically
+co-optimize PE selection and V-F settings.
+
+
+                         1.2
+          CGRA / CARUS
+
+
+
+
+                         1.0
+
+                         0.8                                                           Energy Ratio
+                                                                                       Time Ratio
+                         0.6                                                           Power Ratio
+                               0.50              0.65                      0.80                 0.90
+                                                         Voltage (V)
+
+Fig. 7. TSD matmul subset: Ratio of CGRA performance and energy metrics (Energy, Power, Time) over Carus
+metrics versus V-F setting.
+
+
+5.3   Impact Analysis of Core MEDEA Features
+To dissect the energy savings achieved by MEDEA and to quantify the independent contribution of
+its core optimization strategies, we conducted a detailed feature impact analysis. This evaluates
+the energy savings of MEDEA while disabling one key feature at a time during the optimization
+process, while keeping all other mechanisms active. This also helps illustrate the potential energy
+inefficiencies in related works that lack these capabilities. The core features analyzed are: (1)
+kernel-level runtime DVFS, (2) kernel-level scheduling, and (3) memory-aware adaptive tiling.
+   Table 6 presents the absolute total energy consumption (𝐸𝑡 ) for these configurations in the
+three timing constraints (𝑇𝑑 ) for the TSD model. To better visualize the impact, Figure 8 shows the
+corresponding percentage energy reduction achieved by each feature. This percentage of savings
+is calculated as (𝐸 w/oFeat − 𝐸 Full )/𝐸 w/oFeat × 100, where 𝐸 w/oFeat is the energy consumed with that
+specific feature disabled.
+5.3.1 Impact of Kernel-level DVFS. First, we analyze the impact of kernel-level DVFS. We compare
+the full MEDEA against a configuration where all other features are active, but a single application-
+level DVFS (AppDVFS) setting is used. This AppDVFS setting is the lowest V-F point that allows
+the schedule to meet the deadline. Figure 8 shows that enabling kernel-level DVFS (i.e., using
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     19
+
+                    Table 6. Energy consumption (µJ) for MEDEA feature analysis under different timing constraints.
+
+
+                                                   Sched. Setup             Deadline (ms)
+                                                                             50     200    1000
+                                                   Full MEDEA              946 395          468
+                                                     w/o KerDVFS          1002 576          468
+                                                     w/o AdapTile         1030 432          492
+                                                     w/o KerSched          974 404          473
+
+
+                    35
+                                      31.3                                                                          Td = 50 ms
+                    30                                                                                              Td = 200 ms
+                                                                                                                    Td = 1000 ms
+Energy Saving (%)
+
+
+
+
+                    25
+                    20
+                    15
+                    10                                                                               8.1      8.5
+                              5.6                                                                                       4.8
+                     5                                            2.8      2.2       1.0
+                     0
+                     5
+                                    KerDVFS                              KerSched                           AdapTile
+
+
+Fig. 8. Energy saving when selectively disabling core MEDEA features for the TSD model under different
+timing constraints.
+
+
+AppDVFS) yields no additional energy savings for the 1000 ms deadline. This is expected, as under
+such a relaxed constraint, MEDEA already uses the lowest V-F setting for all kernels, making
+kernel-level DVFS adjustments redundant. However, for the 200 ms deadline, enabling kernel-level
+DVFS provides a significant 31.3 % energy saving. For the 50 ms deadline, the saving is 5.6 %. This
+demonstrates that kernel-level DVFS is most impactful when the deadline allows for a diverse range
+of V-F settings across kernels; for very tight deadlines (such as 50 ms), most kernels are forced to
+higher V-F settings, reducing the scope for differential benefits of DVFS compared to an optimized
+AppDVFS.
+5.3.2 Impact of Kernel-level Scheduling. Although kernel-level DVFS and scheduling are inter-
+twined, we isolate the impact of scheduling granularity. Here, we compare the full MEDEA approach
+against a configuration that uses coarse-grained scheduling (grouping kernels as defined in Sec-
+tion 5.1 for the CoarseGrain-AppDVFS baseline) but still applies group-level DVFS and all other
+optimizations. As seen in Figure 8, moving to fine-grained, per-kernel scheduling provides an
+energy saving between 1.0 % to 2.8 % across the deadlines. Although modest, this indicates that
+even with per-group DVFS, forcing a single PE/V-F choice for a diverse group of kernels can lead
+to suboptimal energy assignments for individual kernels within that group compared to per-kernel
+decision-making.
+5.3.3 Impact of Adaptive Tiling. Finally, we assess the contribution of MEDEA’s memory-aware
+adaptive tiling by comparing it against a configuration with a fixed, non-adaptive tiling strategy
+(always defaulting to double-buffering, 𝑡𝑑𝑏 , regardless of kernel size or memory pressure) while
+keeping all other features active. Enabling adaptive tiling, as shown in Figure 8, results in energy
+
+                                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+20                                                                                                  Taji et al.
+
+
+savings of 8.1 % (50 ms), 8.5 % (200 ms), and 4.8 % (1000 ms). The consistent savings highlight the
+importance of dynamically selecting the best tiling mode (𝑡𝑠𝑏 vs. 𝑡𝑑𝑏 ) based on kernel characteristics
+to optimize data movement and memory utilization. The slightly lower impact at 1000 ms might be
+influenced by longer idle times, which could mask smaller differences in active energy due to tiling
+choices.
+
+5.4   Design-Time Optimization Cost
+While the preceding results concern runtime inference on HEEPTimize, MEDEA’s MCKP/ILP solver
+runs once on a host during deployment preparation and is never invoked on the device during
+inference (Sec. 3.3). The design-time problem size is therefore the relevant scalability metric: it is
+bounded by the number of kernels 𝑁 W , processing elements 𝑁 P , and V–F points |𝑆 𝑣𝑓 |, not by the
+number of DNN weight parameters or tensor elements. Before the ILP is built, MEDEA evaluates
+each candidate configuration 𝜔𝑖 𝑗 = (𝑝𝑖 𝑗 , 𝑣𝑖 𝑗 , 𝑐𝑖 𝑗 ) and records its precomputed active time and energy;
+tiling modes are resolved beforehand, so they do not multiply the decision space (Sec. 3.3). Table 7
+reports the resulting problem size and wall-clock breakdown for the TSD workload; Sec. 6 discusses
+why this offline cost is acceptable for HULP deployment.
+
+Table 7. Design-time ILP/MCKP cost for the TSD workload on HEEPTimize (Intel Core i7-1068NG7 @
+2.30 GHz, 32 GiB RAM, macOS 26.2).
+
+                               Quantity                                           Value
+                               Kernels 𝑁 W                                           233
+                               PEs 𝑁 P / V–F points |𝑆 𝑣𝑓 |                         3/4
+                               Avg. configs per kernel |Ω𝑖 | (min–max)        8.4 (4–12)
+                               Binary variables 𝑖 |Ω𝑖 |                             1968
+                                                Í
+                               Constraints (𝑁 W + 1)                                 234
+
+                         Deadline 𝑇𝑑      Ω enum.     ILP build    CBC solve      End-to-end
+                                               (s)          (s)           (s)             (s)
+                         50 ms               0.017        0.073           0.29              0.38
+                         200 ms              0.017        0.057           1.45              1.53
+                         1000 ms             0.017        0.038           0.08              0.13
+
+
+   CPU-only kernels (e.g., Softmax, GeLU) contribute only |𝑆 𝑣𝑓 | configurations each. Configuration
+enumeration and ILP construction together account for less than 0.1 s in all cases; CBC dominates
+only under moderately tight deadlines. CBC time peaks at 𝑇𝑑 = 200 ms because the optimal schedule
+is near-binding (𝑇𝑡,𝑎 ≈ 𝑇𝑑 ), leaving many competing low-energy configurations for branch-and-
+bound to discriminate; at 50 ms most kernels are forced to high V–F (a narrower feasible set), and
+at 1000 ms ample slack (𝑇𝑡,𝑎 ≈ 223 ms) simplifies the search. The worst-case solver time (1.45 s at
+𝑇𝑑 = 200 ms) remains below the enforced inference windows.
+   Table 8 synthetically grows the TSD workload by increasing the number of transformer encoder
+blocks (kernel shapes and HEEPTimize profiles are otherwise unchanged), at a fixed relaxed
+deadline 𝑇𝑑 = 1000 ms. 𝑁 W and binary variables increase approximately linearly (540 → 3872 for
+1–8 layers); Ω enumeration, ILP construction, and CBC solve time grow accordingly. The four-layer
+row matches the 1000 ms entry in Table 7; tighter-deadline CBC times for the evaluated model
+appear in the same table.
+
+
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     21
+
+Table 8. Scaling sweep at 𝑇𝑑 = 1000 ms: varying transformer encoder depth (same HEEPTimize platform).
+
+           Encoder layers    𝑁W      Binary variables     Ω enum. (s)     ILP build (s)    CBC solve (s)
+                         1     65                  540           0.003            0.010              0.03
+                         2    121                 1016           0.006            0.019              0.04
+                         4    233                 1968           0.017            0.038              0.08
+                         6    345                 2920           0.018            0.061              0.12
+                         8    457                 3872           0.023            0.078              0.15
+
+
+6   Limitations and Future Work
+MEDEA is a design-time manager for a single latency-constrained DNN inference: one sequential
+kernel workload W with one deadline 𝑇𝑑 (Eqs. (1)–(11)). The MCKP/ILP solver runs once on a host
+during deployment preparation, and the device executes the resulting fixed per-kernel schedule at
+runtime without invoking the optimizer (Secs. 3.3, 1). Although optimization is offline, the deployed
+schedule still applies per-kernel V–F settings during inference; what is not re-optimized at runtime
+is PE assignment, tiling mode, or operating point when workload structure or resource availabil-
+ity changes unexpectedly. The formulation targets serialized, statically characterized pipelines:
+concurrent multi-DNN co-execution, shared-resource contention under overlapping traffic, mixed
+non-DNN background tasks, dynamic control flow, and burst task arrivals are outside the current
+model. Timing and power costs are drawn from profiled, deterministic characterization (𝑆𝑐 , 𝑆𝑃 ).
+Operator lowering and model–platform mapping are upstream of scheduling. MEDEA optimizes PE
+assignment, V–F level, and tiling over a given W; it does not select among mathematically equiva-
+lent operator implementations (e.g., native vs. approximated Softmax/GeLU). In our evaluation, such
+mapping choices are applied uniformly to all baselines on the same kernel list (Sec. 4.3), so reported
+gains isolate scheduling and energy-management decisions rather than operator substitution.
+   The workload is modeled as a static, sequentially ordered kernel list W (Eq. (1)): list index
+encodes data-dependency order for feed-forward inference pipelines, and kernels execute strictly
+one after another at runtime. MEDEA does not optimize execution order or model fork–join
+parallelism within a single inference. Highly branched or dynamically controlled graphs (e.g.,
+early exit, mixture-of-experts routing) require a DAG workload representation or per-path offline
+schedules and are left for future work. The evaluation focuses on the feed-forward Transformer-
+based TSD workload (Sec. 4.3). At the framework level, MEDEA is DNN-architecture agnostic:
+any network that lowers to typed kernels in T𝑜𝑝𝑠 with characterized profiles can, in principle, be
+scheduled once platform data 𝑆𝑐 and 𝑆𝑃 exist (Sec. 3.1.1). We evaluate on a transformer because
+its heterogeneous operator mix is structurally richer than the CNN-centric workloads common in
+prior HULP mappers [3, 9, 33], not because MEDEA is attention-specific. We do not empirically
+demonstrate generalization across network topologies: the experimental validation is intentionally
+centered on one deep case study—the sequential TSD transformer pipeline under three deadlines—
+rather than a broad multi-architecture sweep; this depth-first focus is typical when per-platform
+characterization is costly [3, 9, 33] (Sec. 4.3).
+   MEDEA’s platform model is not an idealized zero-overhead memory abstraction: it captures a
+realistic HULP memory hierarchy—off-chip flash for weights, a shared L2 buffer, and private PE local
+memories—with operands reaching accelerators only after explicit flash→L2 and L2→LM transfers,
+reflecting that PEs such as Carus (NMC) operate on private local memory rather than shared L2 [4]
+(Secs. 3.1.2, 4.1). Timing profiles 𝑆𝑐 measured on HEEPTimize FPGA prototypes include end-to-end
+kernel cycles with tiled execution and DMA traffic, not compute-only idealizations; the timing
+model G𝑇 (·) further accounts for data-movement cycles according to the selected tiling mode (𝑡𝑠𝑏
+
+                             ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+22                                                                                                 Taji et al.
+
+
+vs. 𝑡𝑑𝑏 ). The formulation does not model dynamic bus bandwidth contention or L2 interference
+among concurrent bus masters; this omission is consistent with our sequential single-pipeline
+execution scope, in which measured per-kernel profiles reflect isolated DMA costs rather than
+multi-master arbitration under concurrent multi-application traffic.
+   Active times and energies in the current evaluation use steady-state profiled values at each
+selected voltage–frequency point via G𝑇 (·) and G𝑃 (·) (Eqs. (8)–(11)); they do not add the extra
+delay or energy incurred when the supply voltage changes between consecutive kernels. Off-chip
+voltage regulators typically introduce transition latencies on the order of tens to hundreds of
+microseconds, whereas integrated on-chip regulators can reduce this to nanoseconds [16, 39]—a
+concern when scheduled units are very short. The MCKP structure already supports pair-dependent
+transition penalties without changing decision variables: for configuration 𝜔𝑖 𝑗 selected at kernel 𝑘𝑖 ,
+            𝑇𝑎′ (𝜔𝑖 𝑗 ) = G𝑇 (𝜔𝑖 𝑗 ) + 𝛿 𝑣𝑖 −1, 𝑣𝑖 𝑗 , 𝐸𝑎′ (𝜔𝑖 𝑗 ) = G𝑃 (𝜔𝑖 𝑗 ) G𝑇 (𝜔𝑖 𝑗 ) + 𝜀 𝑣𝑖 −1, 𝑣𝑖 𝑗 ,
+                                                                                                         
+
+where 𝛿 (·) and 𝜀 (·) are obtained from platform PMU/regulator characterization. Platform-specific
+measurement of the HEEPTimize power-delivery path and a transition-aware re-evaluation of the
+TSD schedules are identified as future work.
+    MEDEA’s ILP/MCKP solver incurs zero on-device optimization overhead: compilation-time cost
+is paid once per (W,𝑇𝑑 , platform) tuple on a host and does not affect inference deadlines on the
+HULP. Problem size scales with the number of kernels 𝑁 W , processing elements 𝑁 P , and V–F
+points |𝑆 𝑣𝑓 |—not with DNN weight count or tensor element cardinality. Operational sizes 𝑠𝑖 enter
+only as inputs to pre-characterized timing and power profiles; tiling modes are resolved before the
+ILP, so they do not multiply the decision space (Sec. 3.3). With fixed kernel order, the formulation is
+a compact multiple-choice knapsack (|variables| = 𝑖 |Ω𝑖 | ≤ 𝑁 W 𝑁 P |𝑆 𝑣𝑓 |, |constraints| = 𝑁 W + 1),
+                                                      Í
+structurally lighter than graph-level ILP schedulers that search over parallel DAG embeddings with
+precedence, communication, and memory-coupling constraints.
+    Sec. 5.4 quantifies design-time cost for the TSD workload on HEEPTimize: Table 7 reports problem
+size and per-deadline wall-clock breakdown; Table 8 sweeps encoder depth at fixed 𝑇𝑑 . Worst-case
+CBC solve time is acceptable for offline deployment preparation (on-device exact optimization over
+joint kernel–DVFS–tiling decisions remains prohibitive on milliwatt-class edge nodes).
+    Natural extensions include: (i) multi-DNN and multi-application scheduling with shared-resource
+contention models and per-application deadlines or priorities; (ii) mixed non-DNN workloads via
+reserved time or bandwidth budgets; (iii) runtime elasticity—profile-drift detection, burst-aware
+re-optimization, and lightweight on-device re-scheduling when workload structure changes; the
+compact MCKP structure could serve as a warm-started design-time re-optimizer triggered on drift
+or task arrival, keeping heavy optimization off the inference critical path; (iv) finer interconnect
+and bus contention modeling for concurrent DMA masters and accelerator traffic; (v) branched
+and DAG workloads (early exit, mixture-of-experts, fork–join parallelism) via path-dependent
+offline schedules or runtime path selection; (vi) hierarchical deployment in which MEDEA produces
+per-model schedules coupled with an outer runtime allocator; (vii) automated platform profiling to
+reduce manual characterization effort; (viii) tighter integration with compilation and mapping front-
+ends (e.g., ConSmax, MATCH-style lowering) that determine operator implementations upstream
+of scheduling; (ix) transition-aware DVFS re-evaluation on HEEPTimize using measured 𝛿 (·) and
+𝜀 (·) weights.
+
+7    Conclusion
+This paper has addressed the critical challenge of achieving energy-efficient DNN inference on
+resource-constrained HULPs. We introduced MEDEA, a novel design-time multi-objective manager
+that uniquely integrates kernel-level scheduling, kernel-level runtime DVFS, and memory-aware
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     23
+
+adaptive tiling, all driven by a timing-constrained energy optimization strategy. Through a compre-
+hensive evaluation on HEEPTimize, a custom HULP, MEDEA demonstrated its ability to deliver
+significant energy efficiency, achieving energy reductions of up to 38 % compared to the relevant
+adapted baselines while consistently meeting strict application deadlines. Our in-depth analyses
+further quantified the significant individual contributions of MEDEA’s core features. Overall, this
+work has proposed a robust and adaptive manager essential for realizing the full potential of HULP
+systems for complex AI workloads, paving the way for more sophisticated intelligent applications
+on severely constrained devices. A concise account of MEDEA’s scope, modeling assumptions, and
+future extensions is given in Sec. 6.
+
+Acknowledgments
+The authors would like to thank María José Belda for her help in providing the kernels for CGRA,
+Michele Caon for his help in providing the evaluated DNN kernels for NMC, and Simone Machetti,
+Davide Schiavone and Luigi Giuffrida for their support on the platform setup part. We thank Jan
+Tomasz Juraszek for his help during a semester project on verifying that our TSD optimizations
+maintained acceptable model performance. This research is carried out in the frame of the “Ur-
+banTwin: An urban digital twin for climate action: Assessing policies and solutions for energy,
+water and infrastructure” project with the financial support of the ETH-Domain Joint Initiative
+program in the Strategic Area Energy, Climate and Sustainable Environment. Also, this work was
+supported in part by the Swiss State Secretariat for Education, Research, and Innovation (SERI)
+through the SwissChips research project; and partially supported by Grant PID2024-158251NA-C33
+funded by MICIU/AEI/10.13039/501100011033 and by FEDER, UE.
+
+References
+ [1] Alireza Amirshahi, Maedeh H Toosi, Siamak Mohammadi, Stefano Albini, Pasquale Davide Schiavone, Giovanni
+     Ansaloni, Amir Aminifar, and David Atienza. 2024. MetaWearS: A Shortcut in Wearable Systems Lifecycle with Only a
+     Few Shots. arXiv preprint arXiv:2408.01988 (2024).
+ [2] Halima Bouzidi, Mohanad Odema, Hamza Ouarnoughi, Smail Niar, and Mohammad Abdullah Al Faruque. 2023.
+     Map-and-conquer: Energy-efficient mapping of dynamic neural nets onto heterogeneous MPSoCs. In DAC. IEEE, 1–6.
+ [3] Alessio Burrello, Angelo Garofalo, Nazareno Bruschi, Giuseppe Tagliavini, Davide Rossi, and Francesco Conti. 2021.
+     DORY: Automatic end-to-end deployment of real-world DNNs on low-cost IoT MCUs. IEEE Trans. Comput. 70, 8 (2021),
+     1253–1268.
+ [4] Michele Caon, Clément Choné, Pasquale Davide Schiavone, Alexandre Levisse, Guido Masera, Maurizio Martina, and
+     David Atienza. 2025. Scalable and RISC-V Programmable Near-Memory Computing Architectures for Edge Nodes.
+     IEEE Transactions on Emerging Topics in Computing (2025).
+ [5] Ismet Dagli and Mehmet E Belviranli. 2024. Shared memory-contention-aware concurrent DNN execution for diversely
+     heterogeneous system-on-chips. In ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel Programming.
+     243–256.
+ [6] Ismet Dagli, Alexander Cieslewicz, Jedidiah McClurg, and Mehmet E Belviranli. 2022. Axonn: Energy-aware execution
+     of neural network inference on multi-accelerator heterogeneous SoCs. In DAC. 1069–1074.
+ [7] Benoît Walter Denkinger, Miguel Peón-Quirós, Mario Konijnenburg, David Atienza, and Francky Catthoor. 2023.
+     Acceleration of control intensive applications on coarse-grained reconfigurable arrays for embedded systems. IEEE
+     Trans. Comput. 72, 9 (2023), 2548–2560.
+ [8] Angelo Garofalo, Yvan Tortorella, Matteo Perotti, Luca Valente, Alessandro Nadalini, Luca Benini, Davide Rossi, and
+     Francesco Conti. 2022. DARKSIDE: A heterogeneous RISC-V compute cluster for extreme-edge on-chip DNN inference
+     and training. IEEE Open Journal of the Solid-State Circuits Society 2 (2022), 231–243.
+ [9] Mohamed Amine Hamdi, Francesco Daghero, Giuseppe Maria Sarda, Josse Van Delm, Arne Symons, Luca Benini,
+     Marian Verhelst, Daniele Jahier Pagliari, and Alessio Burrello. 2025. MATCH: Model-Aware TVM-based Compilation
+     for Heterogeneous Edge Devices. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems
+     (2025).
+[10] Akihiro Hayashi, Yasutaka Wada, Takeshi Watanabe, Takeshi Sekiguchi, Masayoshi Mase, Jun Shirako, Keiji Kimura, and
+     Hironori Kasahara. 2011. Parallelizing Compiler Framework and API for Power Reduction and Software Productivity
+
+
+                               ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+24                                                                                                              Taji et al.
+
+
+     of Real-Time Heterogeneous Multicores. In Languages and Compilers for Parallel Computing (LCPC 2010) (Lecture Notes
+     in Computer Science, Vol. 6548). Springer, 184–198. doi:10.1007/978-3-642-19595-2_13
+[11] EunJin Jeong, Jangryul Kim, Samnieng Tan, Jaeseong Lee, and Soonhoi Ha. 2021. Deep learning inference parallelization
+     on heterogeneous processors with TensorRT. IEEE Embedded Systems Letters 14, 1 (2021), 15–18.
+[12] Victor JB Jung, Alessio Burrello, Moritz Scherer, Francesco Conti, and Luca Benini. 2024. Optimizing the deployment
+     of tiny transformers on low-power MCUs. IEEE Trans. Comput. (2024).
+[13] Andreas Kosmas Kakolyris, Manolis Katsaragakis, Dimosthenis Masouros, and Dimitrios Soudris. 2023. RoaD-RuNNer:
+     Collaborative DNN partitioning and offloading on heterogeneous edge systems. In DATE. IEEE, 1–6.
+[14] Duseok Kang, Jinwoo Oh, Jongwoo Choi, Youngmin Yi, and Soonhoi Ha. 2020. Scheduling of deep learning applications
+     onto heterogeneous processors in an embedded device. IEEE Access 8 (2020), 43980–43991.
+[15] Andreas Karatzas and Iraklis Anagnostopoulos. 2023. OmniBoost: Boosting throughput of heterogeneous embedded
+     devices under multi-DNN workload. In DAC. IEEE, 1–6.
+[16] Ben Keller, Martin Cochet, Brian Zimmer, Jaehwa Kwak, Alberto Puggelli, Yunsup Lee, Milovan Blagojević, Stevo
+     Bailey, Pi-Feng Chiu, Palmer Dabbelt, et al. 2017. A RISC-V processor SoC with integrated power management at
+     submicrosecond timescales in 28 nm FD-SOI. IEEE Journal of Solid-State Circuits 52, 7 (2017), 1863–1875.
+[17] Siqin Liu and Avinash Karanth. 2021. Dynamic voltage and frequency scaling to improve energy-efficiency of hardware
+     accelerators. In IEEE HiPC. IEEE, 232–241.
+[18] Sicong Liu, Hao Luo, XiaoChen Li, Yao Li, Bin Guo, Zhiwen Yu, YuZhan Wang, Ke Ma, YaSan Ding, and Yuan Yao. 2024.
+     AdaKnife: Flexible DNN offloading for inference acceleration on heterogeneous mobile devices. IEEE Transactions on
+     Mobile Computing (2024).
+[19] Shiwei Liu, Guanchen Tao, Yifei Zou, Derek Chow, Zichen Fan, Kauna Lei, Bangfei Pan, Dennis Sylvester, Gregory
+     Kielian, and Mehdi Saligane. 2024. Consmax: Hardware-friendly alternative softmax with learnable parameters. arXiv
+     preprint arXiv:2402.10930 (2024).
+[20] Simone Machetti, Pasquale Davide Schiavone, Christoph Thomas Müller, Alexandre Sébastien Julien Levisse, Miguel
+     Peón-Quirós, and David Atienza. 2024. HEEPocrates: An ultra-low-power RISC-V microcontroller for edge-computing
+     healthcare applications. (2024).
+[21] Simone Machetti, Pasquale Davide Schiavone, Thomas Christoph Müller, Miguel Peón-Quirós, and David Atienza. 2024.
+     X-HEEP: An open-source, configurable and extendible RISC-V microcontroller for the exploration of ultra-low-power
+     edge accelerators. arXiv preprint arXiv:2401.05548 (2024).
+[22] Taraneh Aminosharieh Najafi, Jose Miranda, Jérôme Thevenot, Benjamin Duc, Stefano Albini, Alireza Amirshahi,
+     Hossein Taji, María José Belda, Antonio Affanni, and David Atienza. 2024. VersaSens: An Extendable Multimodal
+     Platform for Next-Generation Edge-AI Wearables. IEEE Transactions on Circuits and Systems for Artificial Intelligence
+     (2024).
+[23] Ricardo Núñez-Prieto, David Castells-Rufas, and Lluís Terés-Terés. 2023. RisCO2: Implementation and Performance
+     Evaluation of RISC-V Processors for Low-Power CO2 Concentration Sensing. Micromachines 14, 7 (2023), 1371.
+[24] Mohanad Odema, Halima Bouzidi, Hamza Ouarnoughi, Smail Niar, and Mohammad Abdullah Al Faruque. 2023.
+     Magnas: A mapping-aware graph neural architecture search framework for heterogeneous MPSoC deployment. ACM
+     Transactions on Embedded Computing Systems 22, 5s (2023), 1–26.
+[25] Flavio Ponzina, Simone Machetti, Marco Rios, Benoît Walter Denkinger, Alexandre Levisse, Giovanni Ansaloni, Miguel
+     Peón-Quirós, and David Atienza. 2022. A hardware/software co-design vision for deep learning at the edge. IEEE
+     Micro 42, 6 (2022), 48–54.
+[26] Partha Pratim Ray. 2022. A review on TinyML: State-of-the-art and prospects. Journal of King Saud University-Computer
+     and Information Sciences 34, 4 (2022), 1595–1623.
+[27] Matteo Risso, Alessio Burrello, and Daniele Jahier Pagliari. 2025. Optimizing DNN Inference on Multi-Accelerator
+     SoCs at Training-time. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems (2025).
+[28] Rubén Rodríguez Álvarez, Benoît Denkinger, Juan Sapriza, José Miranda, Giovanni Ansaloni, and David Atienza.
+     2023. An open-hardware coarse-grained reconfigurable array for edge computing. In ACM International Conference on
+     Computing Frontiers. 391–392.
+[29] Moritz Scherer. 2024. Hardware-Software Co-Design for Energy-Efficient Neural Network Inference at the Extreme Edge.
+     Ph. D. Dissertation. ETH Zurich.
+[30] Pasquale Davide Schiavone, Francesco Conti, Davide Rossi, Michael Gautschi, Antonio Pullini, Eric Flamand, and Luca
+     Benini. 2017. Slow and steady wins the race? A comparison of ultra-low-power RISC-V cores for Internet-of-Things
+     applications. In PATMOS. IEEE, 1–8.
+[31] Pasquale Davide Schiavone, Simone Machetti, Miguel Peón-Quirós, Jose Miranda, Benoît Denkinger, Thomas Christoph
+     Müller, Rubén Rodríguez Álvarez, Saverio Nasturzio, and David Atienza. 2023. X-HEEP: An Open-Source, Configurable
+     and Extendible RISC-V Microcontroller. In ACM International Conference on Computing Frontiers. 379–380.
+
+
+
+ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power
+Platforms                                                                                                     25
+
+[32] Nikolaos Schizas, Aristeidis Karras, Christos Karras, and Spyros Sioutas. 2022. TinyML for ultra-low power AI and
+     large scale IoT deployments: A systematic review. Future Internet 14, 12 (2022), 363.
+[33] Rafael Stahl, Daniel Mueller-Gritschneder, and Ulf Schlichtmann. 2023. Fused depthwise tiling for memory optimization
+     in tinyML deep neural network inference. arXiv preprint arXiv:2303.17878 (2023).
+[34] Hossein Taji, José Miranda, Miguel Peón-Quirós, and David Atienza. 2024. Energy-Efficient Frequency Selection
+     Method for Bio-Signal Acquisition in AI/ML Wearables. In ACM/IEEE ISLPED. 1–6.
+[35] Kodai Ueyoshi, Ioannis A Papistas, Pouya Houshmand, Giuseppe M Sarda, Vikram Jain, Man Shi, Qilin Zheng, Sebastian
+     Giraldo, Peter Vrancx, Jonas Doevenspeck, et al. 2022. DIANA: An end-to-end energy-efficient digital and ANAlog
+     hybrid neural network SoC. In ISSCC, Vol. 65. IEEE, 1–3.
+[36] Giorgos Vasiliadis, Rafail Tsirbas, and Sotiris Ioannidis. 2022. The best of many worlds: Scheduling machine learning
+     inference on CPU-GPU integrated architectures. In IEEE IPDPSW. IEEE, 55–64.
+[37] Siqi Wang, Anuj Pathania, and Tulika Mitra. 2020. Neural network inference on mobile SoCs. IEEE Design & Test 37, 5
+     (2020), 50–57.
+[38] Yecheng Xiang and Hyoseung Kim. 2019. Pipelined data-parallel CPU/GPU scheduling for multi-DNN real-time
+     inference. In IEEE RTSS. IEEE, 392–405.
+[39] Josip Zidar, Tomislav Matić, Ivan Aleksi, and Željko Hocenski. 2024. Dynamic voltage and frequency scaling as a
+     method for reducing energy consumption in ultra-low-power embedded systems. Electronics 13, 5 (2024), 826.
+
+
+
+
+                               ACM Trans. Embedd. Comput. Syst., Vol. 1, No. 1, Article . Publication date: August 2026.
+

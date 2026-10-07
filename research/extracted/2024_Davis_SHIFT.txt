@@ -1,0 +1,426 @@
+                                              Context-aware Multi-Model Object Detection for
+                                                Diversely Heterogeneous Compute Systems
+                                                                           Justin Davis                                        Mehmet E. Belviranli
+                                                                       Computer Science                                         Computer Science
+                                                                    Colorado School of Mines                                 Colorado School of Mines
+                                                                       jcdavis@mines.edu                                       belviranli@mines.edu
+
+                                            Abstract—In recent years, deep neural networks (DNNs) have
+                                         gained widespread adoption for continuous mobile object detec-
+                                         tion (OD) tasks, particularly in autonomous systems. However,
+                                         a prevalent issue in their deployment is the one-size-fits-all ap-
+                                         proach, where a single DNN is used, resulting in inefficient utiliza-
+                                         tion of computational resources. This inefficiency is particularly
+arXiv:2402.07415v1 [cs.LG] 12 Feb 2024
+
+
+
+
+                                         detrimental in energy-constrained systems, as it degrades overall
+                                         system efficiency. We identify that, the contextual information
+                                         embedded in the input data stream (e.g., the frames in the camera
+                                         feed that the OD models are run on) could be exploited to allow
+                                         a more efficient multi-model-based OD process. In this paper,
+                                         we propose SHIFT which continuously selects from a variety of           Fig. 1: Comparison of (a) single-model with multiple parameter sizes
+                                         DNN-based OD models depending on the dynamically changing               on the left against (b) multi-model object detection architectures on
+                                         contextual information and computational constraints. During this       the right. The larger the value along each axis the better: a perfect
+                                         selection, SHIFT uniquely considers multi-accelerator execution         model would be largest triangle across all axes.
+                                         to better optimize the energy-efficiency while satisfying the latency      Modern SoCs often embed neural network (NN) accelerators
+                                         constraints. Our proposed methodology results in improvements
+                                         of up to 7.5x in energy usage and 2.8x in latency compared to           alongside with GPUs to perform low-power DNN inference.
+                                         state-of-the-art GPU-based single model OD approaches.                  For example, the Nvidia DLA in the Jetson Xavier series allows
+                                            Index Terms—accelerator, autonomous, context-aware, object           DNN inference with up to 2.5x energy savings compared to the
+                                         detection, gpu, heterogeneous                                           GPU in the same SoC, at the cost of 2x slower latency. Another
+                                                                                                                 accelerator, the RCV2 on the OAK-D from Luxonis, provides
+                                                                I. I NTRODUCTION                                 4 TOPs of computation at 5 Watts, surpassing GPU energy effi-
+                                                                                                                 ciency. Having different types of DNN accelerators in the sys-
+                                            Modern autonomous systems employ deep neural networks                tem enables a tunable trade-off between latency and energy [7].
+                                         (DNN) for various tasks and all-in-one system-on-chips                     A common approach to save energy and reduce computa-
+                                         (SoC) to enable decision making on-the-go without human                 tional demands in the OD process is to quantize a given object
+                                         intervention. Typically, such autonomous systems are equipped           detection model (ODM) and create less accurate but more
+                                         with SoCs featuring graphical processing units (GPU) for                energy and performance efficient versions of the same model
+                                         the execution of DNNs. A common and critical autonomous                 [8]. While this method allows for the execution of state-of-the-
+                                         task is object detection (OD) which identifies objects of               art models on performance-limited SoCs, efficiency-related op-
+                                         interest in the environment, captured by the stream of images           timizations are constrained due to the entire OD process being
+                                         obtained by the camera. A common practice employed by                   confined to a single DNN model. A more comprehensive and
+                                         system developers is to select and configure a single DNN,
+                                         such as YoloV7 [1], and map it to the fastest processor in the
+                                         SoC, which is typically a GPU. In this conventional setup,
+                                         there is limited room for improving the latency and/or energy
+                                         usage of the autonomous system, as the model and the target
+                                         processing unit is fixed. In response, several studies [2], [3]
+                                         propose offloading the computation to a remote server, while
+                                         others [4]–[6] attempt to reduce the computational demand
+                                         by modifying the underlying model or using a subset of the
+                                         data stream. However, offloading is not a viable option due to
+                                         the latency overhead associated with remote processing. On
+                                         the other hand, modifying models or selectively skipping data
+                                         often results in a significant compromise in accuracy. Instead,         Fig. 2: Single model object detection efficiency on GPU for commonly
+                                         in this work, we explore optimizing the system performance              used DNNs and their variations on a test set for continuous detection
+                                         by employing a context-aware multi-model execution and                  and tracking of an aerial drone. Efficiency is quantified by intersection
+                                         leveraging different type of accelerators available in SoCs.            over union (IoU) per Joule of energy (see Sec. IV for details).
+                                                                                                                                             RoaD-RuNNer [9]
+Model        IoU     Inference (s) Power (W) Energy (J)
+
+
+
+
+                                                                                                                    MARLIN [5]
+
+
+
+
+                                                                                                                                                               Fast UQ [10]
+                                                                                                      Glimpse [2]
+
+
+
+
+                                                                                                                                                                              Herald [11]
+
+                                                                                                                                                                                            AxoNN [7]
+                                                                                                                                 AdaVP [4]
+                   CPU GPU DLA CPU GPU DLA CPU GPU DLA
+
+
+
+
+                                                                                                                                                                                                        SHIFT
+                                                                                       Related Work
+YoloV7      0.62 1.65 0.13 0.12 7.60 15.1 15.1 20.5 1.97 1.78
+YoloV7Tiny 0.53 0.38 0.03 0.02 7.20 11.2 11.2 4.19 0.28 0.27                 Feature
+MobilenetV1 0.45 -    0.09 0.09   -  16.2 6.10  -   1.52 0.56
+                                                                             Context Awareness          ✗             ✓            ✓            ✓                 ✗             ✗             ✗          ✓
+TABLE I: Average statistics for two architectures of object detection        Multi-Accelerator          ✗             ✗            ✗            ✗                 ✗             ✓             ✓          ✓
+models and their performance on CPU, GPU, and GPU/DLA.                       Multi-DNN                  ✗             ✗            ✗            ✗                 ✓             ✗             ✗          ✓
+                                                                             Energy-Aware               ✗             ✓            ✓            ✓                 ✗             ✓             ✓          ✓
+flexible way to further increase energy savings is to dynamically            No-Offloading              ✗             ✓            ✓            ✗                 ✓             ✓             ✓          ✓
+                                                                             Continuous                 ✓             ✓            ✗            ✓                 ✗             ✗             ✗          ✓
+switch to simpler, less compute demanding ODMs if their de-
+tection accuracy is sufficient for the changing (i.e., contextual)          TABLE II: Comparison of the features offered by related works.
+characteristics of the captured frames. For example, if the target          facilitates switching between ODMs when necessary.
+object being detected is in front of a solid, contrasted back-          •   We evaluate the utility and efficiency of SHIFT on three
+ground within a close distance, then both simple and advanced               unique off-the-shelf accelerators designed for autonomous
+models perform equally well. Fig. 2 demonstrates this contex-               systems. We show that our proposed methodology results in
+tual change by depicting the timeline of varying accuracies that            improvements of up to 7.5x in energy usage and 2.8x in la-
+different ODMs exhibit on one of our test sets (see Sec. V for              tency compared to GPU-based single model OD approaches.
+details). Through optimal utilization of all available heteroge-                              II. R ELATED W ORK
+neous models, we observed enhancements in accuracy by 3%,                  The related work could be categorized as follows:
+latency by 5.2x, and energy usage by 13.6x, or a combination               Continous Detection: Glimpse [2], RoaD-RuNNer [9], and
+thereof. We illustrate the three-way energy-accuracy-latency (e-        FlexPatch [3] propose using an edge-server computational setup
+a-l) relationship between the standard YOLOv7 model [1] and             to decrease latency and reduce energy by using techniques such
+other simpler model families in Fig. 1. While smaller variations        as edge level object tracking, edge/server model partitioning
+of YOLOv7 (Fig. 1.a) result in a monotonic decrease of energy           and selective tracking, respecitvely. However, such approaches
+and latency; the use of different type of ODMs (Fig. 1.b)               rely on stable connections to servers, and none of them
+exhibits a non-monotonically changing relationship between              consider the use of multiple accelerators or multiple DNN
+the three metrics. Detailed statistics on the e-a-l trade-off for       models. Marlin [5], and AvaVP [4] are studies which aim to
+different accelerators and the CPU could be found in Table I.           reduce the energy usage onboard a mobile device doing OD.
+   By leveraging the optimization potential offered by multi-           Marlin [5] proposes an approach where, instead of running the
+accelerator systems and multi-model object detection, there             DNN every frame, the system alternates between a tracking
+exists an opportunity to enhance accuracy, reduce latency, and          algorithm and DNN. AvaVP [4] extends Marlin [5] by varying
+conserve energy in real-time operations within autonomous               the input size of the DNN and skipping frames to adjust the e-
+systems. However, creating such an OD scheme presents several           a-l trade-off during runtime.better latency per frame compared
+challenges: (i) Models need to be characterized in advance              to other onboard-only schemes. Neither considers the benefit
+to determine their performance and energy characteristics. (ii)         of employing multiple DNN models or utilizing accelerators
+Since the accuracy of each model depends on the dynamic                 other than a GPU.
+context, predicting accuracies without running them for every              DNN Inference on Multi-Accelerator Systems: Inference
+encountered frame is not trivial. (iii) Not all models considered       on multi-accelerator systems is an active research area with sev-
+by the system can be simultaneously loaded into memory due              eral recent studies being published [7], [11]–[16]. Herald [11]
+to limitations in available resources.                                  and AxoNN [7] generate optimized schedules for performing
+   In this paper, we present SHIFT to enable energy and latency         inference with a single DNN on a system using a layer-by-
+efficient multi-model and multi-accelerator object detection for        layer mapping scheme. NeuLens [12] and Band [13] reduce
+autonomous systems. This approach takes into consideration the          DNN inference time by splitting a DNN into subgraphs for
+changing contextual features of the input frames, accelerators in       processing. Deepmon [14] and CoDL [15] optimize latency on
+the system, and ODMs with different execution characteristics.          mobile execution by scheduling layers on both CPU and GPU.
+Our contributions are as follows:                                       While these solutions consider latency and energy constraints,
+• We build a unique graph-based mechanism, named confi-                 neither of them considers using multiple, different types of
+  dence graphs, that is used to rapidly predict the changing            DNN models for OD in a context-aware manner.
+  accuracy of different ODMs during runtime.                               Multi Model Detection: Fast UQ [10] uses different types of
+• We create a novel scheduler that can adapt to specific system         DNN architectures to extract more accurate poses in 3D space.
+  constraints by targeting model accuracy, latency, or energy           They identify that combining multiple DNNs with domain spe-
+  consumption, based on real-time contextual information de-            cific metrics could lead to significant accuracy improvements.
+  rived from the input stream of frames. This scheduler decides            A feature comparison between the most relevant related work
+  the ODM and accelerator to run such that system objectives            and our approach can be found in Table II. SHIFT is uniquely
+  are achieved under given constraints.                                 able to handle context-aware, continuous multi-model (i.e.,
+• We deploy a dynamic model loading mechanism that is ca-               multi-DNN) OD across multiple accelerators while satisfying
+  pable of managing memory resources for each ODM and                   energy, latency and accuracy constraints.
+                      III. M ETHODOLOGY                              YoloV7-(0.5-0.6), to represent YoloV7’s performance in
+   SHIFT is composed of three primary components: (a) We             the confidence score range of 0.5 to 0.6).
+first characterize the target set of ODMs by determining their          2) To find edges, we run each ODM on a testing/validation
+core traits for each available accelerator and build a confidence    dataset. For each image in the dataset, we locate the nodes for
+graph to enable fast accuracy prediction at runtime. (b) Then,       each ODM’s confidence score range on that image and create
+our multi-model, multi-accelerator scheduler is responsible for      edges between them. For example, for a given image, if YoloV7
+determining the current best ODM to run, for each incoming           resulted in a conf. score of 0.53 and MobileNet results in
+frame. The scheduler uses the traits identified in the characteri-   0.42, we create an edge between the two corresponding nodes:
+zation process and the confidence graph, and selects the model       YoloV7-(0.5-0.6) and MobileNet-(0.4-0.5). If an
+for the next frame that most effectively meets accuracy, energy      edge already exists, we increment its weight by 1.
+and latency constraints. (c) Finally, our scheduler employs a           3) We then normalize all edges to have a weight w between
+dynamic model loader that utilizes characterization data and         0 and 1 and invert weights so that two highly connected nodes
+runtime memory footprint measurements to determine where to          will have a lower cost when traversed. The normalization is
+allocate models and, if necessary, which models to deallocate.       performed within the edges directly connecting a single node,
+A. Object Detection Model Characterization                           such that global maximums will not take over.
+   The latency, energy consumption, and detection accuracy              4) Next we run a breadth first search starting at all nodes
+of OD in an autonomous system depend on traits varying by            in the graph, to get the set of neighbor nodes which have a
+the ODM, frame-context, and target accelerators. To select the       distance less than or equal to a given distance threshold.
+best model for each frame encountered at runtime, we need               5) Since a given set of neighbors can contain multiple nodes
+to continously predict the accuracy of the ODMs at hand.             representing the same model, said nodes are consolidated by
+However, this is not trivial unless each ODM is run everytime        taking a weighted average of each node’s expected accuracy
+the frame-context changes, which is a very costly approach.          by the distance to traverse to said node.
+To address this problem, we build a two-step approach where             6) We then store all results from the CG in a map where
+we first (1) perform an offline characterization of ODMs             each node is a key to the accuracy predictions of its neighbors.
+into a discrete set of traits and then, (2) using these traits,         In summary, our proposed CG structure generates a map that
+we construct a confidence graph which will later be used by          transforms the confidence score of a single ODM into accuracy
+the runtime to predict the accuracy of a model. Notably, our         predictions for all ODMs. Instead of relying on costly classi-
+approach for model characterization and graph construction           fiers, an ensemble, or less expensive predictors employed by
+is generic in nature. It relies solely on a testing or validation    similar works [4], [5], we can execute a map lookup at runtime.
+subset of the dataset used for training the models.
+                                                                     B. SHIFT Scheduler
+   ODM Trait Identification: For each ODM, we collect the
+                                                                        The SHIFT scheduler is designed to perform the decision-
+following traits: (i) Accuracy is characterized by running the
+                                                                     making process at runtime, leveraging contextual information
+ODM on the testing data set and, for each frame, computing
+                                                                     from both model runtime behavior and the input data stream
+the intersection over union (IoU) between the bounding boxes
+                                                                     (i.e., frames). Our scheduler can make fast decisions with
+of the detected object and labeled ground truth. (ii) Confidence
+                                                                     minimal computational overhead by utilizing the CG and the
+score represents an internal accuracy assessment of the
+                                                                     analysis of frames using computationally efficient metrics. As
+underlying DNN and can be used for quickly acquiring a per-
+                                                                     a result, the scheduler maintains an overhead of less than 2
+formance estimate. However, these scores can be influenced by
+                                                                     milliseconds per frame. The scheduler operation can be delin-
+over-fitting and sometimes they are ‘over-confident’; therefore,
+                                                                     eated into two fundamental components: context detection, and
+they are not consistent across different ODM architectures.
+                                                                     a heuristic algorithm for selecting appropriate models.
+(iii) Latency of an ODM is found by measuring the execution
+                                                                        Context Detection: SHIFT scheduler relies on input frames
+time of the model on each target accelerator. (iv) Energy is
+                                                                     to detect the changes in the context, so that the proper ODM
+characterized by measuring the time × power draw across all
+                                                                     could be employed. While the CG lets us rapidly predict the
+power rails during execution with a given model. (v) Model
+                                                                     accuracy of an ODM by deriving information from confidence
+loading cost needs to be accounted for as part of multi-model
+                                                                     scores reported by DNNs, these scores are intrinsically linked
+execution overhead. This cost includes the memory footprint,
+                                                                     to model error [17] and may not be reliable when the input data
+time to load the model, and energy draw during this time.
+                                                                     is further outside the scope of the training data than the testing
+   Confidence Graph Creation: For a given frame, the confi-
+                                                                     set. The frame context also plays a crucial role in predicting
+dence scores reported from multiple types of ODMs vary, while
+                                                                     the accuracy of an ODM [18]. Extracting a comprehensive
+versions of the same ODM produce similar scores. Correlating
+                                                                     range of context from these images is computationally expen-
+the scores between different types is essential for accurate pre-
+                                                                     sive and not viable for real-time processing on edge devices.
+dictions, since we cannot run each model type on each frame
+                                                                     Instead, the SHIFT scheduler assesses frame similarity using
+due to energy, latency, and memory constraints.
+                                                                     the normalized cross-correlation (NCC) between consecutive
+   To quickly predict the accuracy of ODMs on the fly, we
+                                                                     bounding box results and image frames:
+construct a novel confidence graph (CG) as follows:                                   P
+   1) Each node represents a discrete confidence score range                             (p − mean(p))(c − mean(c))
+                                                                      NCC(p, c) = qP                  qP                  (1)
+of an ODM and its expected accuracy (e.g., we create a node,                      (  (c − mean(c))2 ×      (p − mean(p))2
+where p and c are grayscale images of the same size repre-         Algorithm 1 Model Scheduling
+senting the previous and current frames in an input stream.
+By employing NCC, the scheduler can identify when the input         1: procedure SHIFT S CHEDULE(m, c, i, b)
+                                                                    2:    s = min(NCC(lastImage, i), NCC(lastBbox, b))
+stream has changed significantly, prompting re-scheduling of        3:    if s × c ≥ accuracyT hreshold then
+the current ODM. This can aid in identifying when the current       4:         return m
+ODM may incorrectly continue to report high confidence scores       5:    end if
+despite objects not being present or easily detectable.             6:    E = scheduler.energy                  ▷ 0 → 1 model energy
+   Scheduling Heuristic: Algorithm 1 describes the SHIFT            7:    L = scheduler.latency                ▷ 0 → 1 model latency
+                                                                    8:    W = scheduler.weights                         ▷ Tuned knobs
+scheduler which utilizes a heuristic to assign weights to           9:    C = graphPredict(m, c)             ▷ set of (name, acc, dist)
+schedulable models. The scheduler takes the current ODM m,         10:    R, scores = map(), map()
+conf. score c, input frame i and bounding box b as input and       11:    for (n, a, d) ∈ C do
+returns the highest scoring model as output. The energy and        12:         a.Buffer.append(a)
+latency characteristics of available models are pre-determined,    13:         R[n] = average(a.Buffer)
+                                                                   14:    end for
+normalized to a 0 to 1 range, and inverted for bigger-is-better    15:    V = { n | n ∈ R, n ≥ accuracyT hreshold }
+performance indication (lines 6, 7). At runtime, the scheduler     16:    if length(V ) == 0 then
+invokes the confidence graph to estimate model accuracies          17:         V =R
+for the most recent frame (line 9). The scheduler averages         18:    end if
+accuracy predictions for all models and aggregates those           19:    for n ∈ R.keys() do
+                                                                   20:         s = R[n] ∗ W [0] + E[n] ∗ W [1] + L[n] ∗ W [2]
+meeting the desired accuracy threshold (lines 11-15). In the       21:         scores[n] = s
+absence of models meeting the threshold, all available models      22:    end for
+are considered valid (lines 16-17). Post model selection,          23:    return max(scores)
+weights are assigned based on user-defined parameters, and the     24: end procedure
+best model is outputted (lines 19-24). As energy and latency
+are converted to bigger-is-better metrics, maximum search of       The platform includes a CPU, GPU, 2 DLAs, and an OAK-
+candidate models suffices for optimal selection.                   D for DNN execution. Due to model layer incompatibility,
+   The image similarity score is computed as the minimum of        limitations on model size, and support constraints in libraries,
+the NCC between the last two images and the NCC across             the DLA and OAK-D do not support some layers and models
+the last two bounding box detections. This score determines        we use in our experiments.
+whether the scheduler should initiate the selection of a new          Dataset: We train the ODMs with a dataset focused on
+model/accelerator pair. The metric is then multiplied by the       the detection of unmanned autonomous vehicles (UAVs) [19],
+current model confidence to facilitate scheduling during periods   which comprises a training set of 50,000 images and a valida-
+when the existing ODM may exhibit unstable detections. By          tion set of 2,500 images. Each image contains at most a single
+reserving the scheduling of new models for instances charac-       UAV, hence all implementation and evaluation are within the
+terized by rapid changes in the overall image context, bound-      context of a single-class, single-object detection problem.
+ing box, or a reduction in model confidence, the overall cost         Model Training: YoloV7 [1] based models were trained
+incurred by model swapping can be minimized.                       using the training scripts and pipelines provided by the authors.
+                                                                   All YoloV7 models use an IoU threshold of 0.5 and a con-
+C. Dynamic Model Loader
+                                                                   fidence threshold of 0.35 in non-maximum-suppression. Mo-
+   Every model which can be executed has profiling information
+                                                                   bileNetV1 , MobileNetV2 , and Resnet50 were trained with the
+available about the process of loading the model into memory.
+                                                                   single-shot detector methodology. These models were trained
+When there is a scheduling decision and a new model is re-
+                                                                   using the Tensorflow object detection API. All models use an
+quested to be loaded into memory, the dynamic model loader
+                                                                   input size of 640x640 unless otherwise stated.
+(DML) will query the system’s available memory. The DML
+                                                                      Method Evaluation & Comparison: Comprehensive as-
+will attempt to occupy the entire memory with ODMs, if it is
+                                                                   sessments were conducted across various standalone ODMs,
+able to. This reduces the costly switching between ODMs and
+                                                                   considering their compatibility with distinct accelerators. Our
+improves the performance by enabling quicker model swap-
+                                                                   analysis includes a comparative analysis with Marlin [5], rec-
+ping. The DML is able to differentiate between accelerators
+                                                                   ognized for its energy-efficient executions on mobile devices.
+and will allocate to them separately. When replacing models
+                                                                      To test all methods’ ability to handle real-life challenges we
+the DML will replace the model which was least recently
+                                                                   created a custom evaluation dataset consisting of six scenarios
+requested. Since accelerators do not all share the same mem-
+                                                                   as a set of videos, each comprising between 500 to 2,500
+ory, the DML needs to have the knowledge about whether an
+                                                                   frames. The videos have two indoor and four outdoor scenar-
+accelerator can execute a specific ODM.
+                                                                   ios where the targeted UAV is at different distances from the
+                 IV. E XPERIMENTAL S ETUP                          camera with varying backgrounds and positioning in the frame.
+   Hardware and Accelerators: We performed our                        All models on the GPU/DLA were executed using TensorRT.
+experiments on Nvidia Xavier NX SoC, a commonly used               OpenVINO was used to compile models for the OAK-D. All
+platform for aerial autonomous vehicles, and a Luxonis OAK-        GPU layers for models were executed in FP32 due to severe
+D Lite, a stereo camera with DNN execution capability.             accuracy degradation during quantization with TensorRT for
+Fig. 3: Scenario 1: Drone navigates across multiple backgrounds at   Fig. 4: Scenario 2: Drone navigates across multiple backgrounds at a
+varying distances from the camera.                                   fixed distance.
+
+YoloV7 models. To establish a performance ceiling, an Oracle         inputs contributes to its superiority over solutions like Marlin.
+methodology was created. This Oracle identifies all models           Importantly, SHIFT can conservatively allocate resources dur-
+surpassing a 0.5 intersection-over-union (IoU) threshold, sub-       ing periods without valid detections.
+sequently selecting the one that optimizes the targeted metric.         In the second scenario given in Figure 4, the UAV moves hor-
+In cases where no models meet the IoU criterion, selection is        izontally across simpler backgrounds while gradually moving
+solely based on metric optimization. Since the Oracle methods        across the camera’s perspective. Analogous to the first scenario,
+represents a maximum performance, it assumes that all models         we observe abrupt drops in ODM accuracy, and thus efficiency,
+are loaded into memory and thus have no cost to switch. The          when the UAV is between backgrounds. Notably, SHIFT suc-
+choice of a 0.5 IoU threshold aligns with the common practice        cessfully identifies when the UAV enters the camera view,
+of using a 0.5 threshold as the minimum when evaluating object       prompting model swaps to enhance efficiency. The discernable
+detection models [1]. Additionally, we define the metric success     delay in SHIFT’s response compared to Marlin and the Oracles
+rate as the percentage of frames which have an IoU ≥ 0.5.            is attributed to its reactionary model swapping. It is noted that
+Since the testing videos contain a single UAV, the average IoU       SHIFT did not detect the UAV beyond frame ∼ 450 due to
+effectively captures all relevant accuracy information.              confidence scores of the current ODM indicating no UAV.
+                         V. E VALUATION                                 From Table III, SHIFT utilizes fewer ODM-accelerator pairs
+A. Main results                                                      than the Oracle methods while still maintaining higher effi-
+   The detailed traits from the characterization of all ODMs we      ciency than previous state-of-the-art Marlin [5]. Despite higher
+employ are given in Table IV. Table III presents the overall         utilization of heterogeneous resources compared to the Oracles,
+results of our experiments, by giving a comparison between           SHIFT loads less models into memory and uses fewer swaps
+average accuracy, latency and energy obtained by Marlin [5],         between ODMs or accelerators. For scenario 1 (pictured in
+SHIFT and Oracle executions. Additionally, Figures 3 and 4 il-       Figure 3), SHIFT only loaded ODMs which were smaller than
+lustrate the accompanying timelines and frame context changes        YoloV7; hence showcasing SHIFT’s preference for efficient
+for two of the videos contributing to Table III.                     inference via the tunable weights.
+   Overall averages given in Table III show that SHIFT con-
+sistently achieves a success rate surpassing all single-model           Overall, we observe that SHIFT is able to successfully opti-
+executions except the top-performing YoloV7 model. Uniquely,         mize across energy and latency while swapping ODMs during
+SHIFT manages to uphold energy and latency efficiency su-            runtime based on contextual information from the input stream
+perior to Marlin and all single-model runs while consistently        in all real-world scenarios evaluated.
+maintaining desired accuracy ranges. Notably, SHIFT outper-
+                                                                     Methodology IoU       Time    Energy Success Non-       Model   Pairs
+forms the state-of-the-art method Marlin irrespective of the                               (s)     (J)    Rate    GPU        Swaps   Used
+underlying ODM which Marlin utilizes.
+                                                                     Marlin        0.614   0.132   1.201    74.0%   0%       0       1
+   In the first scenario, which is given in Figure 3, the UAV        Marlin Tiny   0.529   0.036   0.33     64.0%   0%       0       1
+executes maneuvers across intricate backgrounds distant from         SHIFT         0.598   0.047   0.262    72.2%   68.7%    42      4.3
+the camera before returning. A proficient dynamic system must        Oracle E      0.535   0.025   0.144    76.0%   31.5%    94      6.7
+                                                                     Oracle A      0.657   0.108   1.423    76.0%   44.9%    409     12.3
+adeptly identify crucial context changes, as evidenced by sharp      Oracle L      0.522   0.025   0.169    76.0%   11.3%    112     6.8
+fluctuations in model efficiency values. SHIFT successfully rec-
+ognizes all context changes, implementing transitions to more        TABLE III: Average runtime performance of continuous object detec-
+                                                                     tion with SHIFT. SHIFT parameters: goal accuracy 0.25, momentum
+resource-intensive ODMs at frame markers ∼ 500 and ∼ 1100.           30, distance threshold 0.5, knobs: accuracy 1.0, and energy/latency 0.5.
+Simultaneously, it strategically conserves resources by transi-      Goal accuracy reduced from 0.5, based on observation from Figure 5.
+tioning at frames ∼ 50 and ∼ 1650. The unique capability of          Pairs are model accelerator pairs, a total of 18 combinations were
+SHIFT to augment resource usage during challenging or simple         possible. Includes overhead for SHIFT and Marlin methods.
+Model Name                        Accuracy                   Avg. Time (s)             Avg. Energy (Joules)              Avg. Power Draw (W)
+                           Avg. IoU Success Rate     GPU     GPU/DLA OAK-D          GPU   GPU/DLA OAK-D                GPU   GPU/DLA OAK-D
+YoloV7-E6E                   0.564        65.8%      0.255     0.221        -       3.947       1.228         -        15.48       5.56          -
+YoloV7-X                     0.593        71.1%      0.222     0.195        -       3.586       1.088         -        16.15       5.57          -
+YoloV7                       0.618        74.1%      0.130     0.118      0.894     1.968       0.656       1.391      15.14       5.56        1.56
+YoloV7-Tiny                  0.533        64.0%      0.025     0.024      0.107     0.280       0.134       0.206       11.2       5.58        1.93
+SSD Resnet50                 0.480        58.9%      0.151     0.138        -       2.504       0.816         -        16.58       5.91          -
+SSD MobilenetV1              0.452        55.4%      0.094     0.092        -       1.519       0.561         -        16.16       6.10          -
+SSD MobilenetV2              0.401        51.3%      0.023     0.058        -       0.248       0.307         -        10.78       5.29          -
+SSD MobilenetV2 320x320      0.304        36.2%      0.009     0.023        -       0.046       0.100         -         5.11       4.35          -
+
+                                     TABLE IV: Collected accuracy and performance traits of all models.
+B. Sensitivity analysis                                                 tably, SHIFT maintains performance without inter-frame object
+   We performed a sensitivity analysis on SHIFT to ascertain            tracking or skipping input frames.
+the robustness of system performance against variations in in-                               ACKNOWLEDGEMENTS
+put parameters. A total of 1860 parameter configurations were             This material is based upon work supported by the National
+tested. The outcomes of this analysis are depicted in Figure 5.         Science Foundation (NSF) under Grants No. CCF-2124010 and
+The analysis indicates that the system’s performance conforms           CHE-2235143. Any opinions, findings, or recommendations
+to expectations with respect to all knob parameters. By in-             expressed in this material are those of the authors and do not
+creasing the value of the energy or latency knob, we observe            necessarily reflect the views of NSF.
+a negative correlation with the actual ODM’s energy and la-
+                                                                                                       R EFERENCES
+tency as expected. Conversely, the accuracy knob has a positive
+                                                                         [1] C.-Y. Wang, A. Bochkovskiy, and H.-Y. M. Liao, “Yolov7: Trainable
+correlation since more expensive ODMs are more accurate.                     bag-of-freebies sets new state-of-the-art for real-time object detectors,”
+The accuracy threshold parameter inversely affects all primary               in CVPR’23.
+metrics; this is because when SHIFT fails to find any models             [2] T. Y.-H. Chen, L. Ravindranath, S. Deng, and et al., “Glimpse: Continu-
+                                                                             ous, real-time object recognition on mobile devices,” in SenSys’15.
+meeting the goal accuracy it defaults to optimization based              [3] K. Yang, J. Yi, K. Lee, and Y. Lee, “Flexpatch: Fast and accurate object
+on the knob settings alone. We observe that ODM accuracy                     detection for on-device high-resolution live video analytics,” in INFO-
+is underestimated and lowering the accuracy goal for runtime                 COM’22.
+                                                                         [4] M. Liu, X. Ding, and W. Du, “Continuous, real-time object detection on
+improves efficiency. The momentum parameter, indicative of                   mobile devices without offloading,” in ICDCS’20.
+the number of frames over which to average the predicted                 [5] K. Apicharttrisorn, X. Ran, J. Chen, and et al., “Frugal following: Power
+accuracy of a given ODM, exhibits minor correlation with the                 thrifty object detection and tracking for mobile augmented reality,” in
+                                                                             SenSys’19.
+performance metrics, suggesting that frame-to-frame results are          [6] M. Adnan Arefeen, S. Tabassum Nimi, and M. Yusuf Sarwar Uddin,
+inherently stable. Additionally, the distance threshold parame-              “Framehopper: Selective processing of video frames in detection-driven
+ter has a distinct correlation with reducing the average ODM                 real-time video analytics,” in DCOSS’22.
+                                                                         [7] I. Dagli, A. Cieslewicz, J. McClurg, and M. E. Belviranli, “Axonn:
+latency, due to more ODMs being considered at runtime.                       Energy-aware execution of neural network inference on multi-accelerator
+                                                                             heterogeneous socs,” in DAC’22.
+                        VI. C ONCLUSION                                  [8] A. Gholami, S. Kim, Z. Dong, and et al., “A survey of quantization
+                                                                             methods for efficient neural network inference,” Low-Power Computer
+   We introduce SHIFT, capable of dynamically switching be-                  Vision, 2021.
+                                                                         [9] A. K. Kakolyris, M. Katsaragakis, D. Masouros, and D. Soudris, “Road-
+tween heterogeneous DNNs and target hardware based on                        runner: Collaborative dnn partitioning and offloading on heterogeneous
+continuous input stream context. SHIFT facilitates multi-                    edge systems,” in DATE’23.
+model swaps for accuracy, energy, and latency trade-offs,               [10] G. Shi, Y. Zhu, J. Tremblay, and et al., “Fast uncertainty quantification
+                                                                             for deep object pose estimation,” in ICRA’21.
+leveraging multiple accelerators. Experimental results demon-           [11] H. Kwon, L. Lai, M. Pellauer, and et al., “Heterogeneous dataflow accel-
+strate SHIFT’s effectiveness, showing significant improve-                   erators for multi-dnn workloads,” in HPCA’21.
+ments. Compared to a state-of-the-art ODM on GPU, SHIFT                 [12] X. Hou, Y. Guan, and T. Han, “Neulens: Spatial-based dynamic acceler-
+                                                                             ation of convolutional neural networks on edge,” in MobiCom ’22.
+achieves up to a 2.8x reduction in latency and a 7.5x decrease          [13] J. S. Jeong, J. Lee, D. Kim, C. Jeon, C. Jeong, Y. Lee, and B.-G.
+in energy consumption, with only a modest 0.97x reduction                    Chun, “Band: Coordinated multi-dnn inference on heterogeneous mobile
+in successful frames and 0.97x reduction in average IoU. No-                 processors,” in MobiSys’22.
+                                                                        [14] L. N. Huynh, Y. Lee, and R. K. Balan, “Deepmon: Mobile gpu-based deep
+                                                                             learning framework for continuous vision applications,” in MobiSys’17.
+                                                                        [15] F. Jia, D. Zhang, T. Cao, S. Jiang, Y. Liu, J. Ren, and Y. Zhang, “Codl:
+                                                                             Efficient cpu-gpu co-execution for deep learning inference on mobile
+                                                                             devices,” in MobiSys ’22.
+                                                                        [16] B. Fang, X. Zeng, and M. Zhang, “Nestdnn: Resource-aware multi-tenant
+                                                                             on-device deep learning for continuous mobile vision,” in MobiCom’18.
+                                                                        [17] A. Loquercio, M. Segu, and D. Scaramuzza, “A general framework for
+                                                                             uncertainty estimation in deep learning,” IEEE Robotics and Automation
+                                                                             Letters, 2020.
+                                                                        [18] M. Raghu, K. Blumer, R. Sayres, Z. Obermeyer, R. Kleinberg, S. Mul-
+                                                                             lainathan, and J. Kleinberg, “Direct uncertainty prediction for medical
+Fig. 5: Sensitivity analysis of the SHIFT parameters against the mean        second opinions,” in ICML’19.
+accuracy, energy, and latency values.                                   [19] M. L. Pawelczyk and M. Wojtyra, “Real world object detection dataset
+                                                                             for quadcopter unmanned aerial vehicle detection,” IEEE Access, 2020.
+

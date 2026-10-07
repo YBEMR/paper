@@ -1,0 +1,1299 @@
+[PDF page 1]
+90
+Thermal-Aware Scheduling for Integrated
+CPUs–GPU Platforms
+YOUNGMOON LEE and KANG G. SHIN,University of Michigan, Ann Arbor
+HOON SUNG CHWA,DGIST, South Korea
+As modern embedded systems like cars need high-power integrated CPUs–GPU SoCs for various real-time
+applicationssuchaslaneorpedestriandetection,theyfacegreaterthermalproblemsthanbefore,whichmay,
+in turn, incur higher failure rate and cooling cost. We demonstrate, via experimentation on a representative
+CPUs–GPU platform, the importance of accounting for two distinct thermal characteristics—theplatform’s
+temperatureimbalance anddifferentpowerdissipationsofdifferenttasks —inreal-timeschedulingtoavoidany
+burst of power dissipations while guaranteeing all timing constraints. To achieve this goal, we propose a
+new Real-Time Thermal-Aware Scheduling (RT-TAS) framework. We first capture different CPU cores’ tem-
+peratures caused by different GPU power dissipations (i.e.,CPUs–GPU thermal coupling) with core-specific
+thermal coupling coefficients. We then developthermally-balanced task-to-core assignment andCPUs–GPU
+co-scheduling.Theformeraddressestheplatform’stemperatureimbalancebyefficientlydistributingthether-
+mal load across cores while preserving scheduling feasibility. Building on the thermally-balanced task as-
+signment, the lattercooperatively schedules CPU and GPU computations to avoid simultaneous peak power
+dissipations on both CPUs and GPU, thus mitigating excessive temperature rises while meeting task dead-
+lines. We have implemented and evaluated RT-TAS on an automotive embedded platform to demonstrate its
+effectivenessinreducingthemaximumtemperatureby6 −12.2◦C overexistingapproacheswithoutviolating
+any task deadline.
+CCS Concepts: •Computer systems organization→ Embedded hardware; Embedded software;
+Additional Key Words and Phrases: Thermal management, embedded systems, GPU, real-time systems
+ACM Reference format:
+YoungmoonLee,KangG.Shin,andHoonSungChwa.2019.Thermal-AwareSchedulingforIntegratedCPUs–
+GPU Platforms.ACM Trans. Embed. Comput. Syst.18, 5s, Article 90 (October 2019), 25 pages.
+https://doi.org/10.1145/3358235
+1 INTRODUCTION
+As modern embedded systems like cars increasingly use integrated CPUs–GPU system-on-chips
+(SoCs) with growing power dissipations, thermal challenges therein have become critical. Hard-
+ware cooling solutions like fans have been used to lower chip temperature, but the cooling cost
+This article appears as part of the ESWEEK-TECS special issue and was presented at the International Conference on
+Embedded Software (EMSOFT) 2019.
+Authors’addresses:Y.LeeandK.G.Shin(correspondingauthor),UniversityofMichigan,AnnArbor,2260HaywardSt.Ann
+Arbor, MI, 48109-2121; emails: {ymoonlee, kgshin}@umich.edu; H. S. Chwa (corresponding author), DGIST, South Korea,
+333, Techno Jungang Daero, Hyeonpung-Myeon, Dalseong-Gun, Daegu, South Korea, 42988; email: chwahs@dgist.ac.kr.
+Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee
+provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and
+the full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be
+honored.Abstractingwithcreditispermitted.Tocopyotherwise,orrepublish,topostonserversortoredistributetolists,
+requires prior specific permission and/or a fee. Request permissions frompermissions@acm.org.
+© 2019 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+1539-9087/2019/10-ART90 $15.00
+https://doi.org/10.1145/3358235
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 2]
+90:2 Y. Lee et al.
+has been increasing rapidly, which is estimated to be $3 per watt of heat dissipation [26]. Chip
+overheating not only incurs higher cooling cost but also degrades its reliability [27], which may,
+in turn, risk physical safety. Thus, reducing on-chip temperature while meeting the application
+timing constraints has become a key system design objective.
+There are two key thermal characteristics to consider for integrated CPUs–GPU platforms: (1)
+theplatform’stemperatureimbalanceand(2)differentCPUandGPUpowerdissipationsbydiffer-
+ent tasks. Our experimentation on a representative CPUs–GPU SoC has shown the GPU’s power
+dissipation to raise CPUs’ temperatures (i.e.,CPUs–GPU thermal coupling) at different rates, cre-
+ating a large temperature imbalance among CPU cores (up to a 10◦C difference); some (hot)C PU
+cores show higher temperatures than others due to the heat conduction from GPU. Besides this
+platform’stemperatureimbalance,ourexperimentationwithautomotivevisiontaskshasdemon-
+strated an up to 1.35× difference of CPU’s power dissipations and an up to 2.68× difference of
+GPU power dissipations by different tasks; some (hot) tasks dissipate more power than others
+when executed on a CPU/GPU.
+These distinct thermal features for integrated CPUs–GPU systems pose significant challenges
+inpartitionedfixed-priorityschedulingofreal-timetasks.OurCPU–GPUstresstestdemonstrates
+thatthe concurrentexecutionofhottasksonbothCPUandGPUgeneratesa24 ◦C higherCPUtem-
+peraturethanCPUexecutionalone.Moreover,assigninga hottasktoa hotcoreraisestemperature
+5.6◦C higherthanassigningittoacoldcore,significantlyincreasingcoolingcostsand/orseverely
+degradingappperformancebydrastichardwarethrottling(tobedetailedinSection 3.2,Section 7).
+This calls for thermal-aware task assignment and scheduling tailored to integrated CPUs–GPU
+platforms; a task-to-core assignment must distribute workloads to cores in athermally-balanced
+manner by taking into account both the platform’s temperature imbalance and different power
+dissipations of tasks, and a scheduling decision on CPUs and GPU must be madecooperatively to
+avoidanyburstofpowerdissipationsonaCPUs–GPUplatformwhileguaranteeingallapptiming
+constraints.
+Numerous thermal-aware scheduling schemes have been proposed for real-time uni-processor
+systems [14, 16] and multiprocessor systems [2, 6, 15]. They usually employ idle-time schedul-
+ing[14],DVFSscheduling[ 15],orthermal-isolationserver [ 2]toregulatethechiptemperatureat
+runtime. Although these prior studies have made many contributions to thermal-aware real-time
+scheduling,theyarenotdirectlyapplicabletointegratedCPUs–GPUplatformsbecausetheydidn’t
+consider the thermal effect of GPU workloads on CPUs, i.e., CPUs–GPU thermal coupling. GPU
+thermal management has also been studied for non-real-time systems [10, 21, 24, 25]. Prior stud-
+ies recognized thermally-efficient cores [24] and demonstrated the platform’s thermal imbalance
+throughinfraredimaging[ 10].However,theyarenotsuitableforsafety/time-criticalsystemslike
+in-vehicle vision systems. To the best of our knowledge, there is no prior work on thermal-aware
+task assignment and scheduling of real-time tasks on CPUs–GPU platforms while accounting for
+the platform’s temperature imbalance.
+Inthispaper,weproposeanew Real-TimeThermal-AwareScheduling(RT-TAS)frameworkthat
+accounts for not only the platform’s temperature imbalance but also diverse power dissipations
+ofapptasksrunningonintegratedCPUs–GPUplatforms.RT-TASgeneratesathermally-balanced
+task-to-coreassignmentandco-scheduleCPUsandGPUtoreducethemaximumchiptemperature
+while meeting task/job deadlines.
+WefirstcapturethedifferentCPUs’temperaturescausedbyGPU’spowerdissipationwithcore-
+specificGPUthermalcouplingcoefficients.Weanalyzetheeffectofexecutingindividualtaskson
+CPUs and GPU temperatures by taking the thermal coupling into account and validate such a
+thermal coupling effect on a representative CPUs–GPU platform with automotive vision work-
+loads. Second, we introduce the notion ofthermally-balanced task-to-core assignment to gauge
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 3]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:3
+the heat distribution across cores on a CPUs–GPU platform and derive a sufficient condition for
+anassignmenttobethermally-balancedwhileconsideringCPUs–GPUthermalcoupling.Wethen
+develop a thermally-balanced task-to-core assignment, called T-WFD, that equilibrates the plat-
+form’s thermal imbalance by considering different power dissipations of tasks while preserving
+schedule feasibility. Third, building on a thermally-balanced assignment, we develop an online
+scheduling policy, calledCPU–GPU co-scheduling, for CPUs and GPU. It determines which tasks
+to schedule on CPUs by considering the task running on its counterpart (GPU), and vice versa, so
+astoavoidsimultaneousexecutionsofhottasksonbothCPUsandGPU,thusmitigatingexcessive
+temperatureincreasewithoutmissinganytaskdeadline.Finally,wehaveimplementedRT-TASon
+arepresentativeCPUs–GPUplatform[ 1]andevaluateditwithautomotivevisionworkloads[ 22],
+demonstrating its effectiveness in reducing the maximum temperature by 6−12.2◦C compared to
+existing approaches without violating timing constraints, thus providing a reliable response time
+under a given chip temperature limit. This 6◦C reduction translates to a 1.52× improvement of
+chip lifetime reliability [27] or savings of cooling cost by $15.6 per chip [17,26].
+This paper makes the following contributions:
+•Demonstration of the importance of co-scheduling CPUs and GPU while accounting for
+their thermal coupling (Section3.2);
+•Empirically capturing CPUs–GPU thermal coupling effect and temperature differences
+among CPU cores (Section5);
+•Development of thermally-balanced task-to-core assignment and CPUs–GPU co-
+scheduling (Section6);
+•ImplementationandevaluationofRT-TASonapopularCPUs–GPUplatformwithautomo-
+tive vision workloads (Section7).
+2 RELATED WORK
+Prior research in the field of real-time systems focused on thermal-aware task and DVFS sched-
+uling while meeting timing constraints for uni-processor [14, 16], multiprocessor platforms [2,
+6, 15]. Kumar et al. [14] proposed a thermal shaper to regulate the runtime chip temperature by
+inserting idle periods. Lampka et al. [15] proposed a history-aware dynamic voltage/frequency
+scaling (DVFS) scheme that raises core frequency only in case of potential timing violations. A
+thermal-isolationserver[ 2]wasproposedtoavoidthethermalinterferencebetweentasksintem-
+poral and spatial domains with thermal composability. However, these solutions did not consider
+the thermal effect of GPU workloads on CPUs, i.e., CPUs–GPU thermal coupling, and thus they
+are not directly applicable to integrated CPUs–GPU platforms.
+There exist studies on GPU thermal management for non-real-time systems [10, 21, 24, 25].
+Singlaetal.provideathermalmodelingmethodologyviasystemidentificationonaCPUandGPU
+mobile platform and present a proactive DTM policy to prevent thermal violations [25]. Prakash
+etal.proposedCPU–GPUcooperativefrequencyscalingforamobilegamingapp[ 21].Thenotion
+of thermally-efficient core was proposed in [24], where the CPU core less impacted by GPU heat
+dissipation was identified in offline and tasks were assigned in the order of thermally-efficient
+cores.TheinfraredimagingcharacterizedtheCPUs–GPUthermalcoupling,introducingschedul-
+ing challenges [10]. Although all of these studies made valuable contributions, they did not deal
+with the timing constraint when applying DVFS or scheduling tasks, rendering them infeasible
+for time-critical embedded systems.
+To the best of our knowledge, there is no prior work that addresses the challenges of thermal-
+aware assignments and scheduling of real-time tasks on CPUs–GPU platforms while accounting
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 4]
+90:4 Y. Lee et al.
+Fig. 1. CPUs surrounded by the GPU cluster on a SoC (Tegra X1) where GPU’s power dissipation affects
+CPUs’ temperatures, creating temperature imbalance across CPUs.
+for the platform’s temperature imbalance. Unlike state-of-the-art, RT-TAS captures both CPUs–
+GPU thermal coupling and power-dissipation variations of tasks to lower the maximum temper-
+ature of thermally-unbalanced CPUs–GPU platforms while meeting the app timing constraint.
+We have implemented and evaluated RT-TAS, demonstrating its effectiveness on a representative
+CPUs–GPU platform with automotive vision workloads.
+3 MOTIVATION
+We first present a case study to demonstrate the distinct thermal characteristics of integrated
+CPUs–GPU systems and describe the challenges faced therein.
+3.1 Target System
+Weconsideranautomotivevisionsystem—aprototypicalreal-timeCPUs–GPUsystem—composed
+ofmultipleCPUcoresandoneGPUcorerunningvariousreal-timevisiontasks.Typicalvisionapps
+include feature detector, object tracker, and motion estimator [22]. The feature detector captures
+features to detect various objects, such as cars, road signs, pedestrians, etc. The object tracker
+maps and tracks moving/standing objects in consecutive input frames. The motion estimator de-
+terminesthemotion/movementbetweenconsecutiveframestopredictobjects’motions.Real-time
+processing of these tasks relies on a GPU that supplements the computing capabilities of the pri-
+maryCPUs.EachvisiontaskconsistsofCPUandGPUsectionsofcomputation.TouseGPU,CPU
+transfers data to GPU memory and calls GPU functions. GPU then performs the required com-
+putation and returns the result back to the CPU. See [11] for GPU operation details for real-time
+apps.
+3.2 Thermal Characteristics of CPUs–GPU Platforms
+To understand the thermal characteristics of CPUs–GPU platforms, we conducted experiments
+on Nvidia Tegra X1 [1] equipped with 4 CPUs and a GPU with representative vision workloads
+[22].Wehighlighttwokeyfindingsfromthisexperimentation.First,GPUpowerdissipationraises
+CPUs’temperaturessignificantlyatdifferentrates,creatingalargetemperatureimbalanceonthe
+platform cores. Second, different tasks dissipate different amounts of power on CPU and GPU
+cores, i.e., some tasks are GPU-intensive and others are CPU-intensive.
+Temperatureimbalance. Intypicalembeddedvisionplatforms,unlikeindesktops/servers,CPU
+and GPU cores are integrated on a single SoC (Figure1(a)) for cost/power/communication effi-
+ciency [27]. CPU cores are usually surrounded by the GPU cluster [10], and hence the GPU’s
+powerdissipationgreatlyaffectsCPUcores’temperaturesbecauseofheattransfer.Tounderstand
+the GPU’s thermal impact on CPU cores, we measured the temperatures of CPU and GPU cores
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 5]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:5
+Fig. 2. Average power dissipations of (a) CPU and (b) GPU vary greatly by application tasks.
+with and without GPU workload.1 Figure 1(b) corroborates CPUs–GPU thermal coupling where
+the GPU workload raises CPU cores’ temperatures from 50◦C to 77◦C on average without any
+CPU workload. More importantly, we observed a significant temperature difference across CPU
+cores up to 10◦C (CPU2 vs. CPU3) in the presence of GPU workload. This imbalance is due to
+CPU3’scloseproximitytotheGPUcluster,andthusthesignificantimpactofGPUpowerdissipa-
+tion (Figure1(a)). We refer to CPU cores with higher (lower) temperature than the average in the
+presence of GPU workload ashot (cold) cores. For example, in this example, CPU1/CPU3 are hot
+and CPU2/CPU4 are cold.
+We conducted the same experiments on other SoCs—Snapdragon 810 and Exynos 5420—with
+different chip layouts and observed similar trends of temperature imbalance (see AppendixA for
+the experimental results). Existing studies also reported large temperature imbalances in various
+integrated CPUs–GPU platforms, such as MD A10-5700 [10] and Trinity APU [19].
+Powerdissipationsofapptasks. Besidestheunderlyingplatform’stemperatureimbalance,dif-
+ferenttasksincursignificantlydifferentamountsofpowerdissipationsonCPUsandGPU.Figure 2
+plotstheaveragepowerdissipationson(a)CPUand(b)GPUofsamplevisionworkloads.Werefer
+totaskswithpowerdissipationshigher(lower)thantheaverageas hot(cold)tasks(a hot/coldtask
+is defined formally in Section6.2). On CPU, the image stabilizer is the hottest, dissipating 1.35×
+more power than the coldest, the object tracker. On GPU, the motion estimator is the hottest,
+dissipating 2.68×more power than the coldest, the object tracker.
+3.3 Why Thermal-aware Task Scheduling?
+Wenowdemonstratehowtheabove-mentionedfeaturescanadverselyaffectsystemperformance
+and reliability if they are not figured in task scheduling on integrated CPUs–GPU platforms. For
+a motivational purpose, we ran high-power CPU and GPU workloads2 on our testbed for 10 min-
+utes and measured the maximum CPU temperature for the following three cases: i) simultaneous
+execution of both CPU and GPU workloads; ii) execution of CPU workload alone; and iii) no exe-
+cution (idling). For cases i), ii), and iii), the maximum temperature was recored at 79.6◦C,5 5.6◦C,
+and50 .3◦C,respectively.SimultaneousCPUandGPUexecutionsmaketheCPUtemperature24 ◦C
+higherthanthecaseofCPUexecutionalone.Moreover,assigningtheCPUworkloadtoa hotcore
+results in 85.2◦C, a CPU temperature increase by 5.6◦C over the case of assigning it to acold
+core.Suchanexcessivetemperatureincrease/imbalancemayresultini)highcoolingcost,ii)poor
+1Note that in this motivational experiment, we used the GPU thermal benchmark [9], i.e., CPU remains idle, to minimize
+the impact of each CPU’s own power dissipation.
+2WechosetheCPUandGPUworkloadsfromthethermalbenchmark[ 9,23]designedforCPU/GPUstresstestswithhigh
+power dissipations of 4.67W and 9.89W, respectively.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 6]
+90:6 Y. Lee et al.
+reliability, and/or iii) performance degradation due to thermal throttling,3 making it likely to ex-
+tend the response time of tasks beyond their deadlines.
+To avoid this, we need a new thermal-aware task assignment and scheduling framework that
+captures not only the platform’s thermal imbalance but also task power-dissipation variations to
+mitigate excessive temperature rises. So, assigninghot tasks tohot cores without capturing the
+underlying temperature gap can raise the maximum temperature significantly. Traditional load-
+balancing schemes that evenly distribute workloads to CPU cores can bethermally-unbalancedas
+theydonotconsiderdistinctthermalcharacteristicsofindividualcores.Wemust,therefore,accu-
+rately capture the platform’s temperature imbalance and distribute tasks in athermally-balanced
+manner to lower the maximum temperature.
+Besides the platform’s temperature imbalance, tasks’ different CPU/GPU power-dissipation
+variations make the scheduling of app tasks on CPUs and GPU important. Scheduling CPUs and
+GPU independently may adversely affect the peak temperature if both CPUs and GPU simultane-
+ouslyrun hottasks,bothdissipatingalargeamountofheat.So,weneedto cooperativelyschedule
+CPUandGPUcomputationstoavoidtheburstofpowerdissipationsontheCPUs–GPUplatform,
+while meeting all timing constraints.
+4 PROBLEM STATEMENT AND SOLUTION OVERVIEW
+We want to solve the following thermal-aware scheduling problem for real-time CPUs–GPU sys-
+tems. Letπ={π1,..., πm ,πд} be the set ofm CPU cores and a shared GPU, and let their temper-
+atures at timet beTπx (t),πx ∈π.
+Definition4.1. Givenataskset τrunningonaCPUs–GPUplatform π,determine(i)task-to-core
+assignment, (ii) schedule of jobs to be executed on CPU and GPU cores such that
+G1. the maximum chip temperature, maxπx∈πTπx (t), is minimized; and
+G2. all the jobs ofτi ∈τmeet their deadlines for all possible legitimate job arrival sequences
+(timing constraints).
+For a schedule, we need to determine not only the core state (active or idle) but also the order of
+executing jobs in the active state.
+Weconsiderthepartitionedfixed-prioritypreemptiveschedulingpolicy,whichiswidelyusedin
+various real-time systems. We develop a Real-Time Thermal-Aware Scheduling (RT-TAS) frame-
+work that accounts for the platform’s temperature imbalance and diverse power dissipations of
+tasksonCPUsandGPU.Themainchallengesare:(C1)howtocapturetheplatform’stemperature
+imbalance and power dissipation variations of tasks; (C2) efficiently map tasks to CPU cores; and
+(C3)scheduletask/jobexecutionsonCPUandGPUcorestoreducethemaximumchiptemperature
+while meeting timing constraints.
+ToaddressC1,wedevelopaCPUs–GPUthermalcouplingmodelthatcancapturedifferentrates
+oftemperatureincreaseofCPUsduetothepowerdissipationonGPUbyusingcore-levelthermal
+coefficients(inSection 3.2).Basedonthisthermalcouplingmodel,weanalyzedifferentthermalef-
+fectsofdifferenttaskswithdistinctpowerdissipationsonCPUsandGPU.Weempiricallyidentify
+the thermal parameters and validate the CPUs–GPU thermal coupling model on a representative
+embedded platform for automotive vision apps.
+To address C2, we propose the concept ofthermally-balanced assignment to gauge the heat
+distribution across cores on the CPUs–GPU platform. We then develop a new thermal-aware
+3Thermal throttling is a hardware technique that can lower the processor’s frequency on-the-fly to reduce the amount of
+heat generated by the chip.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 7]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:7
+task-to-core assignment, called T-WFD, by considering the platform’s temperature imbalance
+and different power dissipations of tasks (in Section6.1). We prove that T-WFD always yields
+a thermally-balanced assignment that efficiently reduces the temperature difference across cores.
+Notethatatask-to-coreassignmentdictatestheheatdistributionacrossCPUcores,which,inturn,
+affects their steady-state temperatures. Therefore, it is important to find a mapping from tasks to
+cores such that the maximum steady-state temperature is minimized.
+ToaddressC3,buildingonthethermally-balancedtask-to-coreassignmentderivedbyaddress-
+ingC2,wedevelopanonlineCPU–GPUco-schedulingalgorithm(inSection 6.2).Whileweassign
+tasks to cores in a thermally-balanced manner in terms of the steady-state temperature, an actual
+schedule of jobs on CPU and GPU cores may affect thetransient temperature, potentially over-
+heating the chip before reaching its steady-state temperature. Since the transient temperature is
+increased by both CPU and GPU power dissipations by currently running tasks, scheduling hot
+tasks on both CPU and GPU at the same time causes the transient temperature to rise. To avoid
+this, we need to schedule a cold task or insert an idle-time on CPU when a hot task is running on
+GPU, and vice versa. We thus develop a thermal-aware CPU–GPU co-scheduling algorithm that
+finds candidate tasks whose executions do not violate timing constraints at each scheduling in-
+stant of a CPU and then determines which task to schedule by considering the currently running
+task on its counterpart (GPU), and vice versa, to achieve the desired thermal behavior.
+Specifically, at each CPU/GPU scheduling time instant, the scheduler selects a job so that the
+difference between the steady-state and the transient temperatures due to the execution of the
+selected job and the currently running job on CPU and GPU is minimized without compromis-
+ing timing constraints. This way, our co-scheduling algorithm effectively mitigates any excessive
+transient temperature rise without violating any timing constraint.
+5 CPUs–GPU SYSTEM MODEL
+Thissectionpresentstaskexecutionandpowermodels,analyzeshowpowerdissipationsoftasks
+areconvertedtochiptemperaturesbytakingthethermalcouplingintoaccount,andvalidatesthe
+model on a CPUs–GPU platform running various vision workloads.
+5.1 Task Execution Model
+Eachindependent4 taskτi ∈τcanberepresentedas( pi ,di ,ηi ,eC
+i,j ,eG
+i,j),where pi isthetaskperiod,
+di is its relative deadline equal topi, ηi is the number of GPU sections of computation that are
+enclosed byηi +1 CPU sections of computation, andeC
+i,j and eG
+i,k are the worst-case execution
+times (WCETs)of thej-th CPU sectionand thek-th GPU section,respectively.LeteC
+i = ∑ηi +1
+j=1 eC
+i,j
+be the total WCET of all the CPU sections, andeG
+i = ∑ηi
+k=1eG
+i,k be the total WCET of all the GPU
+sections.FortaskswithoutGPUsection, ηi =eG
+i = 0.WealsodefinetheCPUandGPUutilizations
+ofτi asuC
+i =
+eC
+i
+pi
+anduG
+i =
+eG
+i
+pi
+, respectively, and define the total utilization ofτi asui =uC
+i +uG
+i .
+Under partitioned fixed-priority preemptive scheduling, each taskτi is statically assigned to a
+CPU with a unique priority and letp(πc) be the set of tasks assigned toπc ∈{π1,..., πm}.L e t
+hp(τi) (lp(τi)) be the set of all tasks with a priority higher (lower) thanτi. Likewise, Lethpp(τi)
+(lpp(τi))bethesetofhigher(lower)-prioritytasksassignedtothesameCPUas τi.GPUisashared
+resource among tasks, and it is modeled as a critical section protected by a suspension-based
+mutually-exclusive lock (mutex) because most contemporary GPUs perform their assigned com-
+putation non-preemptively. The GPU access is then made with the MPCP protocol, well-known
+4Assuming “independent” tasks does not lowerthe generalapplicabilityof our approach,since one can use shared buffers
+to eliminate inter-task dependencies as shown in [13].
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 8]
+90:8 Y. Lee et al.
+locking-based GPU access scheme [12,18]. Under this protocol, a task requesting access to a lock
+held by a different task is suspended and inserted into a priority queue. During that time, other
+ready tasks may use the CPU. When the lock is released, a task in the priority queue is woken
+up and granted access to GPU. At a time instant, a task is either i) executing its CPU section, ii)
+executing its GPU section, or iii) idle.
+Response time analysis.Under partitioned fixed-priority scheduling with the MPCP protocol,
+the worst-case response time (WCRT),wi,o fτi can be calculated iteratively in the following
+expression:
+wa+1
+i =eC
+i +eG
+i +Ia
+i +Ba
+i , (1)
+whereIa
+i isτi’spreemptiondelaycausedbyhigher-prioritytasksand Ba
+i istheblockingtimefor τi
+toacquiretheGPUlock[ 18].Notethattheinitialvalue w0
+i issetto eC
+i +eG
+i ,andtheiterationhalts
+whenwa+1
+i > di (unschedulable)or wa+1
+i =wa
+i (theresponsetimenolargerthan wa
+i ).Toderive Ia
+i
+and Ba
+i , we use the job-driven response time and blocking time analyses in [18]. A taskτi can be
+preemptedbyhigher-prioritytasks τh runningonthesameCPU,i.e., hpp(τi).Thenumberofjobs
+ofτh released during the execution of a single job ofτi is at most⌈
+wi +wh−eC
+h
+ph
+⌉.T h e n ,Ia
+i is derived
+as
+Ia
+i =
+∑
+τh∈hpp(τi)
+⎡⎢⎢⎢⎢⎢
+wi +wh−eC
+h
+ph
+⎤⎥⎥⎥⎥⎥
+·eC
+h . (2)
+The blocking time forτi to acquire the GPU lock under the MPCP protocol can be divided into
+i) direct blocking (Bdr
+i ), which occurs when there is a task usingτi’s requested resource, and ii)
+prioritizedblocking( Bpr
+i ),whichoccurswhenlower-prioritytasksexecutingwithpriorityceilings
+preempt the execution ofτi. Using the blocking time analysis in [18],Ba
+i is derived as
+Ba
+i = Bdr
+i +Bpr
+i , (3)
+where
+Bdr
+i =ηi· max
+τl∈lp(τi)
+eG
+l,j +
+∑
+τh∈hp(τi)
+⎡⎢⎢⎢⎢⎢
+wi +wh−eC
+h
+Th
+⎤⎥⎥⎥⎥⎥
+·eG
+h,j ,
+Bpr
+i =
+∑
+τh∈lpp (τi)
+⎡⎢⎢⎢⎢⎢
+wi +dl−eC
+l
+Tl
+⎤⎥⎥⎥⎥⎥
+·eG
+l .
+A detailed proof of this can be found in [18]. Then, we can check the schedulability of a task set
+as presented in the following lemma:
+Lemma 5.1.[18] A task setτis schedulable if
+∀τi ∈τ, wi ≤di . (4)
+5.2 CPU and GPU Power-dissipation Model
+AsshowninFigure 2,CPUandGPUpowerdissipationsarefoundtovarysignificantlywiththeex-
+ecutingtask.SinceindividualtasksrealizedistinctvisionalgorithmswithdifferentCPUandGPU
+sections that incur different CPU and GPU power dissipations. Thus, we model different power
+dissipations during CPU execution (PC
+i ) and GPU execution (PG
+i )o fτi. Since everyτi generates
+a sequence of CPU jobs, each with execution timeeC
+i , at the interval ofpi time units, the aver-
+age CPU power dissipation byτi is PC
+i ·uC
+i . Likewise, the average GPU power dissipation ofτi
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 9]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:9
+is PG
+i ·uG
+i . Given a task setτand a task-to-core assignmentΛ, the average CPU and GPU power
+dissipations can be calculated as:
+Pπc (Λ)=
+∑
+τi∈p(πc)
+PC
+i ·uC
+i , Pπд(Λ)=
+∑
+τi∈τ
+PG
+i ·uG
+i , (5)
+whereπc denote a CPU core among the set of CPUs (i.e.,πc ∈{π1,..., πm}).
+5.3 Platform’s Thermal Model
+To translate power dissipations of tasks to chip temperature together with the consideration of
+CPUs–GPU thermal coupling, we adopt a core-level thermal circuit model5:
+Tπ(t) =TA +R·Pπ(t) +R·C· dTπ(t)
+dt (6)
+where Tπ(t) = [Tπ1 (t),..., Tπm (t),Tπд(t)]i sa nm +1e l e m e n tv e c t o ro fC P U sa n dG P Ut e m -
+peratures at time t, TA is also an (m +1)-element vector of ambient temperature, Pπ(t) =
+[Pπ1 (t),..., Pπm (t),Pπд(t)]i sa n(m +1)-element vector of powerdissipatedbyeach CPU or GPU
+at timet, R represents an(m +1)× (m +1) matrix of thermal resistances between each compo-
+nentdescribingtheheatingimpactofeachcomponentoneachothercomponent,and C isdiagonal
+matrixwiththethermalcapacitanceofeachcomponent.Withthethermalcircuitmodelshownin
+Equation (6), if the average power of a processor isPπ(t) over a time periodt, then thetransient
+temperatureTπ(t) at the end of this period is:
+Tπ(t) =e(R·C)−1·t ·Tπ(0) + (1−e(R·C)−1·t)· (TA +R·Pπ(t)) . (7)
+whereTπ(0) is the initial temperature of the processor. One can observe from Equation (7)t h a t
+the temperature will increase/decrease towards and eventually reachTA +R·Pπ(t) in the steady
+state. We define thesteady-statetemperatureTπof a processor as
+Tπ=TA +R·Pπ. (8)
+Thesteady-statetemperatureof πx foragiventask-to-coreassignment Λ(denotedby Tπx (Λ))can
+be computed as:
+Tπx (Λ)=TA +Rx ·Pπx (Λ)+
+∑
+πy∈π\πx
+Rx,y·Pπy(Λ) (9)
+whereRx representstheheatingimpactof πx byitself, Rx,yrepresentstheheatingimpactofother
+CPUandGPUcores πyonπx duetothethermalcouplings.Notethatthermalcouplingcoefficients
+Rx,д,1 ≤x≤m, capture the different impact of GPU heat dissipation on other cores depending
+onthethermalpropertiesandchiplayout,e.g.,howcoresaregeometricallypositionedw.r.t.GPU.
+5.4 Parameter Identification and Validation
+Parameter identification.The thermal resistanceR and capacitanceC are SoC-specific param-
+eters in the platform’s thermal model in Equation (6). While considering the CPUs–GPU thermal
+coupling, we identify these SoC-specific parameters using a typical thermal parameter identifica-
+tion process [7] as follows. We run a GPU benchmark [9] on GPU with CPU cores kept idle, and
+measure the power dissipation of GPU and the steady-state temperatures of CPU and GPU cores.
+Wethendetermineeachcore’sthermalcoefficientw.r.t.GPUheatingimpactbyusingEquation( 8).
+Likewise, we run a CPU benchmark [23] on each CPU core, one at a time, and determine each
+5Note that this thermal model has been shown to be reasonably accurate [16,25].
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 10]
+90:10 Y. Lee et al.
+Table 1. Thermal Coupling Coefficients for Tegra X1 (◦C/W)
+R =
+⎡⎢⎢⎢⎢⎢⎢⎢⎢⎢⎢⎣
+R1 R1,2 R1,3 R1,4 R1,д
+R2,1 R2 R2,3 R2,4 R2,д
+R3,1 R3,2 R3 R3,4 R3,д
+R4,1 R4,2 R4,3 R4 R4,д
+Rд,1 Rд,2 Rд,3 Rд,4 Rд
+⎤⎥⎥⎥⎥⎥⎥⎥⎥⎥⎥⎦
+=
+⎡⎢⎢⎢⎢⎢⎢⎢⎢⎢⎢⎣
+2.54 1 .66 1 .68 1 .68 2 .20
+1.66 2 .37 1 .71 1 .73 1 .43
+1.68 1 .71 2 .93 1 .72 2 .27
+1.68 1 .73 1 .72 2 .62 1 .76
+1.50 1 .71 1 .60 1 .71 1 .87
+⎤⎥⎥⎥⎥⎥⎥⎥⎥⎥⎥⎦
+Fig.3. (a)CPUtemperaturesresultingfromvariedGPUpowerdissipationsand(b)maximumCPUtemper-
+ature resulting from varied CPU and GPU power dissipations.
+core’s thermal coefficient w.r.t. CPU heating impact. From these results, we identify the thermal-
+coupling coefficients by usingRx,y= ΔTπx /Pπy as in Table1. Note that the thermal coefficient
+values shown in Table1 are for Nvidia Tegra X1. By taking the above parameter identification
+processforotherSoCs,wecandirectlyapplyourthermalmodelandtheproposedthermal-aware
+scheduling framework to other CPUs–GPU SoCs.
+Model validation.To confirm that the CPUs–GPU thermal coupling model correctly represents
+the platform’s thermal behavior, we measured the maximum temperature of CPUs and GPU, and
+compareditwiththemodel’sestimationundervarioussettings.Wevalidatedourmodelbyvarying
+(i) GPU power settings and (ii) both CPU and GPU power dissipations with vision workloads as
+shown in Figure3.
+Figure3(a) plots the measured CPU temperatures resulting from the varied GPU’s power dissi-
+pation.CPUtemperatureslinearlyincreasewithGPU’spowerdissipationatdifferentratesthatis
+captured by core-level thermal coupling coefficients As GPU’s power dissipation increases from
+2.2W to 8.2W, the temperature of CPU3 increases at most by 14.3◦C while that of CPU2 increases
+by 9.4◦C. Figure3(b) plots the maximum chip temperature while varying CPU and GPU power
+dissipations. The result shows that the maximum chip temperature linearly increases with both
+CPU and GPU power dissipations as in Equation (9).
+6 THERMAL-AWARE SCHEDULING
+To achieve both G1 and G2 in integrated CPUs–GPU platforms, we propose RT-TAS which takes
+both the platform’s temperature imbalance and different power dissipations of tasks into ac-
+count for the assignment and scheduling of real-time tasks. To this end, we first introduce a suf-
+ficient condition for a task-to-core assignment to be thermally-balanced in the presence of the
+underlying platform’s thermal imbalance among CPU cores and present a thermally-balanced as-
+signment, called T-WFD, that equilibrates the platform’s thermal imbalance by considering dif-
+ferent power dissipations of tasks while preserving feasibility (Section6.1). Building upon the
+thermally-balanced assignment, we then present an online CPU–GPU co-scheduling policy that
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 11]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:11
+cooperativelyschedulesjobstoavoidsimultaneousexecutionsofhottasksonbothCPUandGPU
+andthuseffectivelyreducesthepeakchiptemperaturewhilemeetingtaskdeadlines(Section 6.2).
+While our task-to-core assignment algorithm minimizes the maximum steady-state temperature
+ofCPUcores,ourco-schedulingpolicyregulatesCPUs’andGPU’spowerdissipationstomitigate
+the increase of transient temperature.
+6.1 Thermally-balanced Assignment
+We now formally state thetask-to-core assignmentproblem.
+Definition6.1 (Task-to-coreAssignment). Givenataskset τandaCPUs–GPUplatform π,finda
+mapping from the tasks ofτto the CPU cores inπ(i.e., task-to-core assignmentΛ) such that the
+maximum steady-state temperature of the cores is minimized while all tasks mapped onto each
+core meet their deadlines under fixed-priority scheduling with MPCP.
+Thetask-to-coreassignmentproblemisNP-hard,sincefindingafeasiblemappingisequivalent
+to the bin-packing problem which is known to be NP-hard in the strong sense [3]. Thus, we need
+tolookforheuristics.Focusingonfeasibility,atypicaltask-to-coreassignmentistoapplyvariants
+of well-known bin-packing algorithms, including First-Fit Decreasing (FFD), Best-Fit Decreasing
+(BFD), and Worst-Fit Decreasing (WFD) [8]. These algorithms process tasks one-by-one in the
+orderofnon-increasingutilization,assigningeachtasktoacoreaccordingtotheheuristicfunction
+that determines how to break ties if there are multiple cores that can accommodate the new task.
+Whether a core can accommodate each task or not is determined by the schedulability test in
+Lemma 5.1.
+Example6.2. LetusconsiderasetoffourvisiontasksshowninFigure 2andaplatformconsist-
+ing of two CPU cores and a single GPU. The CPU utilizations of individual tasks, i.e.,uC
+i =eC
+i /pi,
+areuC
+1 = 0.2,uC
+2 = 0.1,uC
+3 = 0.05,and uC
+4 = 0.05.TheCPU’spowerdissipationsbyindividualtasks
+are PC
+1 = 1.8W, PC
+2 = 1.8W, PC
+3 = 2.0W,a n dPC
+4 = 2.5W.I nt h i se x a m p l e ,w ec o n s i d e rC PU 1a n d
+CPU2 in Figure1(b) where CPU1 heats up faster than CPU2 due to the CPUs–GPU thermal cou-
+pling. We consider four possible task-to-core assignment algorithms as shown in Figure4:( a )
+FFD and BFD, (b) WFD, and (c) a thermally-optimal assignment. In FFD, each task is assigned to
+the first CPU on which it fits. In BFD and WFD, each task is assigned to the minimum remaining
+capacity exceeding its own CPU utilization and the maximum remaining capacity, respectively.
+Afterassignment,underFFDandBFD,thetemperaturesofCPU1andCPU2areincreasedby22 ◦C
+and 9◦C,6 respectively, while, under WFD, the temperature increases are 17◦C and 13◦C, respec-
+tively. Although WFD shows lower maximum steady-state temperature than FFD/BFD, it is not
+thermally-optimal. In fact, there exists a thermally-optimal assignment shown in Figure4(c).
+NotethatFFDandBFDtrytopackasmanytasksaspossibleononecorewhilekeepingtheother
+coresemptytoaccommodate otherunassignedtasks.On theotherhand,WFDtendsto distribute
+theworkloadsevenlyacrossallcores.Ingeneral,FFDandBFDhaveshownbetterfeasibilitythan
+WFD[4].However,theymayresultinhighertemperaturesthanWFDsincetheworkloadsareallo-
+cated(heavily)toonecoreinmanycases.AlthoughWFDmaydecreasethemaximumsteady-state
+temperature by evenly distributing the workloads across all cores, it does not consider different
+power dissipations of tasks and CPUs–GPU thermal coupling, resulting inthermally-unbalanced
+assignments as shown in Figure4(b). As shown in Figure4(c), a thermally-optimal assignment
+in this example turns out to be the one that assigns slightly more CPU workloads to CPU2 than
+6Note that the temperature rise of CPU2 in Figure4(a) is due to the indirect effect of the execution of workloads on GPU,
+i.e., CPUs–GPU thermal coupling.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 12]
+90:12 Y. Lee et al.
+Fig. 4. Task-to-core assignment algorithms and their corresponding temperature increases.
+CPU1. This is because CPU2 provides a more thermally-efficient operation than CPU1 due to the
+CPUs–GPU thermal coupling.
+Considering the thermal coupling between GPU and CPU cores, we present the concept
+of thermally-balanced assignment to gauge the heat distribution across cores in a multi-core
+platform.
+Definition 6.3 (Thermally-balanced Assignment). A task-to-core assignment Λis said to be
+thermally-unbalanced if the maximum steady-state temperature among cores can be lowered by
+moving one task from a core to another without losing feasibility. Otherwise, it is said to be
+thermally-balanced.
+Clearly, the optimal task-to-core assignment that achieves both G1 and G2 must be thermally-
+balanced, since by definition, its maximum steady-state temperature among cores cannot be low-
+ered.Wenowderiveasufficientconditionforatask-to-coreassignmenttobethermally-balanced.
+Note that, based on the thermal coefficient values in Table1, in task-to-core assignment, we as-
+sume that the difference in thermal conduction rate from one CPU to other CPUs is negligible
+(Rc1,c2≃ Rc2,c1≃ Rc1,c3 where∀1≤c1,c2,c3≤m).7
+Lemma 6.4. A task-to-core assignment Λis thermally-balanced if for every pair(πp ,πq) s.t.
+πp ,πq ∈{π1, ...,πm} and every taskτi ∈p(πp) satisfy
+Tπp (Λ)−Tπq (Λ)≤Rp·PC
+i ·uC
+i . (10)
+Proof. Supposethatatask-to-coreassignment ΛsatisfiesEquation( 10).Withoutlossofgener-
+ality, we consider a pair (πp ,πq) that satisfies (a)Tπp (Λ)−Tπq (Λ)≤Rp·PC
+i ·uC
+i (by assumption).
+Consider a new assignmentΛ′ obtained fromΛby transferring a taskτi from πp to πq. We will
+prove that the maximum steady-state temperature among cores cannot be lowered by movingτi
+fromπp toπq. There are two possibilities: i)Tπp (Λ)>Tπq (Λ), and ii)Tπp (Λ)≤Tπq (Λ).
+7Note that we still consider a different thermal coefficient value for other elements in Table1,s u c ha sRc, Rд, Rд,c,a n d
+Rc,д.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 13]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:13
+ALGORITHM 1:T-WFD (τ,π)
+1: forπc ∈{π1,..., πm} do
+2: Λπc ←∅
+3: end for
+4: τ′←Sort(τby non-increasingPC
+i ·uC
+i )
+5: forτi ∈τ′ do
+6: π′←{πc : feasible-assignment(Λπc ∪τi)}
+7: if π′ =∅then
+8: return Failed to assign
+9: end if
+10: πk ←argminπc∈π′ Tπc (Λπc ∪τi)
+11: Λπk ←Λπk ∪τi
+12: end for
+13: return Λ
+Case i): according to Equations (5) and (9), Tπp (Λ′) =Tπp (Λ)−Rp·PC
+i ·uC
+i and Tπq (Λ′) =
+Tπq (Λ)+Rq·PC
+i ·uC
+i . Then, we have
+Tπq (Λ′)−Tπp (Λ′) =Tπq (Λ)−Tπp (Λ)+Rp·PC
+i ·uC
+i +Rq·PC
+i ·uC
+i
+≥−Rp·PC
+i ·uC
+i +Rp·PC
+i ·uC
+i +Rq·PC
+i ·uC
+i (by (a))
+= Rq·PC
+i ·uC
+i .
+Thatis,(b) Tπq (Λ′)−Tπp (Λ′)≥Rq·PC
+i ·uC
+i .By(a)and(b),wehave Tπq (Λ′)−Tπp (Λ′)≥Tπp (Λ)−
+Tπq (Λ)foranypair( πp ,πq).Hence,thenewassignment Λ′ isunbalancedbecausethetemperature
+differencebetween πp andπq onlyincreasescomparedwiththeoriginalassignment Λ.Therefore,
+returning to the original assignmentΛ(by moving backτi to πp) always lower the maximum
+steady-state temperature.
+Caseii):thatis,wearemovingatask τi fromalowtemperaturecoretoahightemperaturecore.
+The resulting assignmentΛ′ can be easily seen to be unbalanced and just like Case i). Therefore,
+we should be able to further lower the maximum steady-state temperature by returning to the
+original assignmentΛ. □
+To achieve a thermally-balanced assignment, we propose a new thermal-aware task-to-core
+assignment,calledT-WFD,aspresentedinAlgorithm 1.Unlikethepreviousalgorithmspresented
+in Example6.2, tasks are sorted in non-increasing order of theiraverage CPU power dissipations
+(Line 4). T-WFD then assigns each task to the core with thelowest temperatureon which it fits
+(Lines 5–12).
+Note that T-WFD considers feasibility and thermal issues together in task-to-core assignment.
+Inparticular,tasksaresortedaccordingtotheiraveragepowerdissipationbyconsideringdifferent
+powerdissipationsoftasksandeffectsonCPUtemperature.Coresarearrangedinincreasingorder
+of their temperature taking the CPUs–GPU coupling into account. Then, T-WFD allocates each
+task to the core with lowest temperature on which the allocation can preserve feasibility by the
+schedulability test in Lemma5.1. This way, it is possible to find a thermally-balanced assignment.
+WenowprovethatT-WFDneverproducesathermally-unbalancedassignmentinthefollowing
+theorem.
+Theorem6.5. TheT-WFDschemealwaysgeneratesathermally-balancedtask-to-coreassignment.
+Proof. Consider a setτofn periodic tasks (indexed according to non-increasing average CPU
+powerdissipations)thataretobeassignedon mCPUcores.Wewillprovethestatementbyinduc-
+tion.Clearly,afterassigningthefirsttask τ1 tothecorewiththelowesttemperatureonwhichitfits,
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 14]
+90:14 Y. Lee et al.
+ALGORITHM 2:CPU-GPU co-scheduling
+1: QCPU : CPU ready queue
+2: Upon job release/completion or no remaining inversion budget:
+3: forτi ∈QCPU do
+4: if∀τh∈hpp(τi) satisfiesvh−eC
+i,cur ≥0then
+5: Putτi in the candidate setΓ.
+6: end if
+7: end for
+8: if Γis not emptythen
+9: τCPU = minτi∈Γπc |¯Ptot −(PC
+i + ∑
+π\πc PCcur +PGcur )|
+10: ScheduleτCPU
+11: else
+12: Schedule a task with the highest priority inQCPU .
+13: end if
+theassignmentisbalanced.Supposethatthestatementholdsafterassigning τ1,..., τk (1≤k < n)
+to the cores according to T-WFD. Let us defineΛ(k) to be the assignment after allocating thek-th
+task. Let us also defineπc to be the core with the lowest temperature on whichτk fits inΛ(k).
+T-WFD choosesπc to allocateτk+1. Any pair(πp ,πq) such thatπp /nequalπc and πq /nequalπc cannot be
+thesourceofathermally-unbalancedassignment,becausetheirworkloaddidnotchangeand Λ(k)
+issupposedtobebalancedbytheinductivehypothesis.Therefore,weneedtofocusonlyonpairs
+(πc ,πp)w h e r e1≤p≤m,a n dp /nequalc. There are two possible cases: after assignment ofτk+1 to πc,
+i)πc becomes the highest temperature core, and ii) otherwise.
+Casei):considerapair( πc,πp)suchthat Tπc (Λ(k +1)) >Tπp (Λ(k +1)),where Tπp (Λ(k +1)) is
+the temperature ofπp inΛ(k +1).N o t et h a tTπc (Λ(k))≤Tπp (Λ(k)) in Λ(k) by T-WFD. Thus,
+Tπc (Λ(k)) =Tπc (Λ(k +1))−Rc·PC
+k+1·uC
+k+1≤Tπp (Λ(k))≤Tπp (Λ(k +1))
+⇔Tπc (Λ(k +1))−Tπp (Λ(k +1))≤Rc·PC
+k+1·uC
+k+1.
+Duetothepre-orderingoftasksaccordingtoaveragepowerdissipations, PC
+k+1·uC
+k+1≤PC
+x ·uC
+x for
+anytask τx allocatedto πc (x≤k +1).Therefore, Tπc (Λ(k +1))−Tπp (Λ(k +1))≤Rc·PC
+x ·uC
+x for
+any taskτx allocated toπc (x≤k +1). Then, according to Lemma6.4, the pair (πc,πp) cannot be
+unbalanced.
+Case ii): after assignment ofτk+1 to πc,l e tπq is the highest temperature core and consider a
+pair (πc ,πq). The new assignmentΛ(k +1) cannot make the pair (πc ,πq) thermally-unbalanced,
+because if it were, then the same pair would be thermally-unbalanced inΛ(k) as well (∵ Λ(k +
+1) only reduced the temperature difference betweenπc and πq). This contradicts the inductive
+hypothesis. □
+Runtime Complexity.Algorithm 1 first sorts the tasks withO(n·loдn) complexity, wheren is
+thenumberoftasks.Then,thealgorithmallocateseachtasktoafeasiblecorebystartingfromthe
+corewiththelowesttemperaturewith O(n·m) complexitywhere m isthenumberofcores.Thus,
+the total complexity isO(max(n·loдn,n·m)).
+6.2 CPU–GPU Co-scheduling
+So far, we have discussed the task assignment to handle the platform’s temperature imbalance.
+Buildingonthethermally-balancedassignment,wenowshowhowtoscheduletask/jobexecutions
+on CPU and GPU cores to mitigate the peak temperature. Specifically, we want to address the
+followingschedule-generation problem.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 15]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:15
+Definition6.6(schedule-generation). Giventhetask-to-coreassignment, determineascheduleof
+jobexecutionsandidle-timesonbothCPUandGPUsuchthatthemaximumtransienttemperature
+across CPU and GPU cores is minimized while all the jobs of all tasksτi ∈τmeet their deadlines.
+Addressing peak temperature.According to our proposed task-to-core assignment, tasks are
+allocatedinathermally-balancedmannerintermsofthe steady-statetemperaturewhilepreserving
+feasibility under fixed-priority scheduling with MPCP [18]. However, a job schedule on CPU and
+GPU cores may affect thetransient temperature, potentially leading to chip overheating before
+reaching the steady-state temperature, due to the following two key issues: 1) different power
+dissipations of tasks on CPU and GPU cores, and 2) CPUs–GPU thermal coupling. Specifically,
+due to the different power dissipations by different tasks (as shown in Figure2), the temperatures
+ofCPUandGPUvarygreatlydependingonthetaskscurrentlyrunningontheircores.Weobserve
+fromEquations( 7)and( 9)that(i)if PC
+i > Pπc (Λ)(i.e.,thepowerdissipationduringCPUexecution
+ofτi is greater than the average power dissipation onπc), the temperature ofπc increases above
+the steady-state temperatureTπc (Λ), and (ii) ifPC
+i ≤Pπc (Λ)then the temperature ofπc decreases
+belowTπc (Λ). The same holds for the GPU case. A taskτi is said to behot if PC
+i > Pπc (Λ)(PG
+i >
+Pπд(Λ)),or coldotherwise.Dependingon PC
+i andPG
+i ,τi canbecomehotorcoldonCPUandGPU.In
+addition,becauseofheatconductionbyCPUs–GPUthermalcoupling,thetasksscheduledonGPU
+couldaffectthetemperatureofitsneighboringCPUcores,andviceversa.Forexample,scheduling
+a hot task on CPU (GPU) in the presence ofhot GPU (CPU) workloads tends to cause a rapid rise
+in the temperature of CPU and GPU together. One may slow down the temperature increase by
+suspending the execution of a hot task and scheduling a cold task or idle-time on CPU/GPU, but
+suchanactionmayalsoleadtoadeadlinemissofthehottask.Thiscallsforcooperativescheduling
+of CPU and GPU computations, i.e., scheduling CPU job while considering GPU schedules, and
+vice versa, to effectively mitigate excessive temperature rise without missing any task deadline.
+Wedevelopathermal-awareCPU–GPUco-schedulingmechanismthatdetermineswhichtasks
+to run on CPU and GPU in a cooperative manner. Basically, at each scheduling instant, our
+mechanism is based upon partitioned fixed-priority scheduling and restrictively allowspriority
+inversions—executing cold/idle tasks with lower-priorities ahead of a hot task with the highest-
+priority on CPU when its counterpart (GPU) is running a hot task, and vice versa—subject to
+schedulabilityconstraints.Suchamechanismavoidssimultaneousexecutionsofhottasksonboth
+CPUandGPUandthusreducesthepeaktemperaturewhileensuringthatalltasksstillmeettheir
+deadlines. Algorithm28 presents our thermal-aware CPU–GPU co-scheduling which consists of
+twosteps:(i) candidateselection and(ii) jobselection.Wheneveraschedulingdecisionistobemade
+onCPUandGPU,thealgorithmfirstconstructsalistofcandidatejobsthatareallowedtoexecute
+withoutmissinganyothers’deadline(lines3–7)andthenselectsonejobfromthelistbytakingthe
+current job on its counterpart into consideration so that the difference between the steady-state
+temperature and the transient temperature caused by the execution of the selected and current
+jobs on CPU and GPU is minimized (lines 8–10).
+Findingcandidatejobs. Topreventanydeadlinemissduetothepriorityinversions,wecalculate
+the worst-case maximum inversion budgetVi for each taskτi allowed for lower-priority tasks to
+executewhile τi waits.Vi iscalculatedusingtheWCRTanalysisshowninLemma 5.1withasimilar
+approach proposed in [28]. Note that, in the presence of priority inversions,τi can experience
+more interference from higher-priority tasks than when no priority inversion is allowed, due to
+the additional interference by the deferred executions (also known as back-to-back hit) [28]. To
+8Algorithm 2 describes CPU scheduling, and GPU scheduling is also performed similarly. RT-TAS uses GPU lock and
+priority queue to schedule GPU, and the implementation is presented in Section7.1.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 16]
+90:16 Y. Lee et al.
+taking into account such deferred executions when calculatingVi, we derive a pessimistic upper-
+bound on the worst-case response timew∗
+i by using the WCRT analysis under the assumption
+that the worst-case busy interval ofτi is equal todi, instead of the iterative increment of the busy
+interval ofτi until it no longer increases. Using the pessimistic upper-bound onw∗
+i , we define the
+worst-case maximum inversion budgetVi as
+Vi =di−w∗
+i . (11)
+We then only allow bounded priority inversions usingVi to guarantee that deadlines are met.
+To enforce these budgets at run-time, our mechanism maintains aremaining inversion budgetvi
+where 0≤vi ≤Vi. This indicates the time budget left for lower-priority tasks thanτi to execute
+in a priority inversion mode whileτi has an unfinished job. The budgetvi is replenished toVi
+when a new job ofτi is released. It is decreased as the CPU/GPU execution ofτi is blocked by a
+lower-priority job. When the budget becomes 0, no lower-priority task is allowed to run untilτi
+finishes its current job.
+The scheduler is invoked upon (i) release of a new job, (ii) completion of a job, or (iii) no re-
+maininginversionbudgetofajob.Uponeachinvocation,ourschedulingalgorithmfindcandidate
+jobs that are allowed to execute on CPU/GPU based on the following lemmas. For each taskτi in
+the CPU run queue, leteC
+i,cur denote the remaining CPU section execution time at timetcur .
+Lemma 6.7. For a taskτi,i f∀τh ∈hpp(τi) satisfies vh−eC
+i,cur ≥0 or τi is the highest-priority
+task,τi can be a candidate for CPU execution without missing any deadlines of higher-priority tasks
+hpp(τi).
+Proof. Abusyintervalof τh ∈hpp(τi)iscomposedofitsCPUandGPUexecutions,preemption
+delay of CPU execution byhpp(τh), blocking time to acquire a GPU access, and further delay of
+CPU execution due to priority inversions by our co-scheduling policy. Suppose that at timetcur ,
+our co-scheduling policy decides to executeτi which is lower priority thanτh at timet. Then, the
+worst-case busy interval ofτh is bounded by
+eC
+h +eG
+h +Ih +Bh +eC
+i,cur ≤w∗
+h +eC
+i,cur ≤w∗
+h +vh =dh ,
+becausevh−eC
+i,cur ≥0.TheexecutionoftheremainingCPUsectionof τi willnotmissthedeadline
+ofτh ∈hpp(τi).S o ,τi can be a candidate for CPU execution at timetcur . □
+For each taskτi in the GPU run queue, leteG
+i,cur denote the remaining GPU section execution
+time at timetcur .
+Lemma 6.8.If∀τh ∈hp(τi) satisfiesvh−eG
+i,cur ≥0orτi is the highest-priority task,τi is a candi-
+date for GPU execution.
+Proof. This lemma can be proved similarly to Lemma6.7. □
+Note that we also include an idle CPU task, which is a special cold task that allows idling CPU
+during hot task execution on GPU.
+Select a job among candidates.For CPU scheduling, we select one job to execute onπc from
+the candidate setΓπc by considering the current job on its counterpart (GPU). The total average
+power dissipation¯Ptot for the entire task set is calculated as
+¯Ptot =
+∑
+i
+/parenlefttpA
+/parenleftbtA
+PC
+i · eC
+i
+pi
++PG
+i · eG
+i
+pi
+/parenrighttpA
+/parenrightbtA
+. (12)
+Let PC
+cur and PG
+cur denote the power dissipation by the current running job on CPU and GPU,
+respectively. Then, we pick a taskτs in Γπc such that the difference between the total average
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 17]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:17
+powerdissipation ¯Ptot andtheexpectedpowerdissipation( PC
+s + ∑
+π\πcPCcur +PG
+cur )bytheselected
+and currently running jobs on CPU and GPU is minimized, that is,
+min
+τs∈Γπc
+/barex/barex/barex/barex/barex/barex/barex
+¯Ptot −/parenlefttpA/parenleftexA
+/parenleftbtA
+PC
+s +
+∑
+π\πc
+PC
+cur +PG
+cur
+/parenrighttpA/parenrightexA
+/parenrightbtA
+/barex/barex/barex/barex/barex/barex/barex
+. (13)
+This way, we co-schedule CPU and GPU cores such that the total transient power dissipation
+on CPU and GPU cores keeps the total average power dissipation (¯Ptot ) for a task set as close
+as possible so as to reduce the transient temperature. Such a job selection process can be done
+similarly for GPU scheduling. We pick a taskτs in Γπдsuch that
+min
+τs∈Γπд
+/barex/barex/barex/barex/barex/barex/barex
+¯Ptot −/parenlefttpA/parenleftexA
+/parenleftbtA
+∑
+πc
+PC
+cur +PG
+s
+/parenrighttpA/parenrightexA
+/parenrightbtA
+/barex/barex/barex/barex/barex/barex/barex
+. (14)
+WiththeproposedCPU–GPUco-schedulingalgorithm,wecanreducethevariationinthesteady-
+state and transient temperatures, thus effectively mitigating any excessive rise in transient tem-
+perature while guaranteeing all deadlines to be met.
+Runtime Complexity.Upon each invocation (either job release/completion or no remaining in-
+version budget), our scheduling algorithm checks/updates the remaining inversion budget and
+finds candidate jobs by Algorithm2 withO(n) complexity, wheren is the number of tasks. Then,
+our algorithm selects a task based on Equations (13)–(14) withO(1) complexity. Thus, the total
+complexity isO(n).
+7 EVALUATION
+WehaveimplementedandevaluatedRT-TASonarepresentativeCPUs–GPUplatformwithauto-
+motive vision workloads, and the key results are:
+•Maximum temperature is reduced by 6◦C and 12.2◦C w.r.t. the state-of-the-art [24] and a
+default OS scheduler, respectively.
+•Ourthermally-balancedassignmentreducesthemaximumtemperatureby3 .9◦C andCPU–
+GPU co-scheduling reduces it further by 2.1◦C w.r.t. the state-of-the-art.
+•Maximumtemperatureisreducedbyupto8 .3◦C (5.0◦C onaverage)acrossvarioustasksets
+w.r.t. WFD (Figure4(b)).
+7.1 Methodology
+Our experimental platform is Nvidia Tegra X1 equipped with 4 CPU cores and a shared GPU [1]
+rated at the maximum power dissipation of 15W. To avoid chip overheating, each CPU/GPU is
+equipped with a thermal sensor. The built-in hardware temperature management kicks in when
+one of its cores reaches the temperature threshold, and lowers CPU frequency to cool down the
+temperature. According to the thermal specification [1], chip thermal resistance is 1.15◦C/W.
+To evaluate the benefit of RT-TAS under a realistic setup, we have implemented a real-time vi-
+sion system running representative vision workloads [22]: (i) feature detector, (ii) object tracker,
+(iii) motion estimator, and (iv) image stabilizer. An in-vehicle camera video is given to these tasks
+as input. Specifically, we have implemented RT-TAS on top of Linux kernel as an user-level appli-
+cation that executes a set of tasks each running one of the above vision workloads periodically.
+The implementation details are summarized as follows:
+•Assigning tasks to CPU cores by usingsched_setaffinity and CPU_SET;
+•Priority-based scheduling usingsched_setschedulerunder theSCHED_FIFO;a n d
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 18]
+90:18 Y. Lee et al.
+Table 2. Vision Tasks Used in Experiments
+Task PC
+i (W) PG
+i (W) eC
+i (ms) eG
+i (ms) pi(ms)
+Feature detector 1.8 3.7 14 25 400
+Object tracker 1.8 2.8 34 17 400
+Motion estimator 2.0 5.7 63 105 400
+Video stabilizer 2.5 3.6 35 65 400
+•Implementing a GPU lock usingpthread_mutex, and the highest priority task waiting for
+the lock will grab the lock.
+Throughout the evaluation, we compare following approaches:
+•BASE: default OS scheduler (completely fair scheduling) [20];
+•TEA: thermally-efficient allocation [24] assigning tasks from the most thermally-efficient
+core first9;
+•RT-TAS: the proposed thermally-balanced assignment (Section6.1)a n dC P U – G P Uc o -
+scheduling (Section6.2).
+Toavoidexternalinfluences,theexternalfanisturnedoff.Unlessotherwisespecified,thetem-
+peraturethresholdissetto65 ◦C,andCPUandGPUcoresarerunningatthemaximumfrequency.
+During our experiments, the WCET of each job is recorded to check if the job deadlines are met.
+The CPU/GPU execution time, power dissipation, and period of tasks are provided in Table2.
+7.2 Effectiveness in Reducing Temperature
+WefirstdemonstrateRT-TAS’seffectivereductionofthemaximumchiptemperature,thusachiev-
+ing reliable performance of a real-time vision system. Figure5 plots the maximum transient tem-
+perature among cores, CPU frequency, and task response time for different schemes. With BASE
+(Figure 5(a)), temperature exceeds the threshold at around 200s and hardware thermal throttling
+wastriggeredtoreducetheprocessorfrequencyfrom1 .7GHz to0 .5GHz.Asaresult,themaximum
+response time increases from 309ms to 493ms violating the deadline (400ms). However, the chip
+temperatureincreasesfurther,reachingupto73 ◦C.WithTEA(Figure 5(b)),themaximumtemper-
+atureincreaseslessrapidlythanwithBASE,buttemperatureexceedsthethresholdataround800 s,
+andexperiencesthermalthrottlingthereafter.WithRT-TAS(Figure 5(c)),temperatureremainsbe-
+low the threshold maintaining the maximum CPU frequency and reliable response time. RT-TAS
+achieves this by addressing the temperature imbalance on its underlying platform.
+Figure 6 compares the CPUs’ and GPU’s peak temperatures, demonstrating how RT-TAS miti-
+gates the temperature imbalance. With BASE, tasks were assigned without considering the tem-
+perature imbalance, which leads to the max-min temperature difference of 7.5◦C. Consequently,
+the CPU temperatures increased unevenly causing the highest maximum temperature of 72.9◦C.
+With TEA, tasks were assigned to the thermally-efficient core first, distributing workloads better
+across CPU cores than BASE. However, tasks are assigned to hot CPU cores (i.e., CPU1, CPU3),
+resultinginthemaximumtemperatureof66 .7◦C withamax-mintemperaturedifferenceof5 .7◦C.
+RT-TAS assigns tasks to the core in a thermally-balanced manner by capturing the core-level dif-
+ferent GPU heating impact and power variations of tasks. Therefore, RT-TAS reduces the max-
+min difference to 1◦C, and the maximum temperatureto 60.7◦C.Figure 7compares the maximum
+9TEA identifies thermally-efficient cores depending on the CPU power dissipation offline and then sequentially bind the
+task with the highest CPU usage to the next most thermally-efficient core.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 19]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:19
+Fig.5. RT-TASbyreducingmaximumtemperatureavoidsthermalthrottling,thusachievingreliableresponse
+time.
+Fig.6. Core-levelpeaktemperatureunderdifferent
+scheduling policies.
+Fig.7. MaximumtemperatureCDFunderdifferent
+scheduling policies.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 20]
+90:20 Y. Lee et al.
+Fig. 8. Transient temperatures w/o and w/ CPU–GPU co-scheduling.
+Fig. 9. Job schedule (a) w/o and (b) w/ co-scheduling.
+temperature dynamics over time for different schemes. RT-TAS can reduce the peak temperature
+(at 100% percentile) by up to 6◦C and 12.2◦C compared to TEA and BASE, respectively.
+We analyzed the impact of co-scheduling by running the same experiment without and with
+co-scheduling.Figure 8comparesthetransienttemperaturevariationovertimewithoutandwith
+co-scheduling. The peak temperature under CPU–GPU co-scheduling was 61.5◦C at 217 seconds
+while that under no co-scheduling was 63.6◦C. Figure9 shows the actual schedule of jobs in a
+specific time interval without and with co-scheduling. Without co-scheduling, tasks were sched-
+uledinfixed-priorityorderonCPUandGPUindependently(Figure 9(a)).Insuchacase,CPUand
+GPU may simultaneously perform peak computations (running hot tasks), thus incurring a peak
+total power dissipation. With co-scheduling CPU and GPU together, RT-TAS avoids the overlap
+of simultaneous peak computations on CPU and GPU to reduce the peak power dissipation (Fig-
+ure9(b)).Asaresult,co-schedulingeffectivelymitigatesanyexcessiveriseintransienttemperature
+by avoiding bursts of peak power dissipation. We also analyzed the effectiveness of task assign-
+mentandco-schedulinginreducingthepeaktemperature,respectively.SeeAppendix Bforresults.
+Overall, the thermally-balanced assignment and CPU–GPU co-scheduling reduce the maximum
+temperature by 3.9◦C and 2.1◦C, respectively, resulting in a total temperature reduction of 6◦C
+over TEA. This 6◦C reduced maximum temperature translates to the 1.52× longer chip lifetime10
+[27] and cooling cost savings of $15.6 per chip11 [1,26].
+7.3 Evaluation with Different Task Sets
+Next, we evaluate RT-TAS with different task sets by using the parameters measured via the ex-
+periments.ThebaseparametersinTable 3areacquiredfromtheaboveplatformandsamplevision
+tasks.Werandomlygenerate1,000tasksets,andtaskexecutionparameters( ηi ,eC
+i ,eG
+i ,PG
+i )areset
+tobeuniformlydistributedwithintheirmaximumbounds.Next,thetaskutilizationisdetermined
+according to the UUniFast algorithm [5], and the task period is set topi = (eC
+i +eG
+i )/ui.W ea l s o
+10Chip lifetime is typically estimated by mean-time-to-failureMTTF ∝mean ( kT (t)
+exp (−Ea /k·T(t)) ) where k, Ea are the
+Boltzmann and activation energy constant [27]. We evaluate MTTF using the above equation and temperature traces.
+11Cooling power and chip temperature is modeled byPcoolinд =
+ΔTchip
+Rchip
+wherePcoolinд is the heat extracted,Rchip is
+the chip thermal resistance,ΔTchip is the temperature reduction. To reduce 6◦C for the chip with the thermal resistance
+of 1.15◦C /W, the cooling solution needs to extract6
+1.15 = 5.2W of thermal dissipation. The cooling cost is estimated by
+3$/W[26] and the saving is 5.2×3 = 15.6$.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 21]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:21
+Table 3. Task-set Generation Parameters
+Number of CPUs (M) 4
+Number of tasks (n) 8
+Maximum number of GPU sections (ηi) 2
+Maximum CPU execution time (eC
+i ) 100ms
+Maximum CPU power dissipation (PC
+i ) 2.5W
+Maximum GPU execution time (eG
+i ) 100ms
+Maximum GPU power dissipation (PG
+i ) 6W
+Utilization per CPU (∑
+τi ui /M) 0.3
+Fig. 10. Maximum temperature CDF for different task sets.
+used the identified platform thermal parameters in Table1and the thermal model in Equation (6)
+to estimate the chip temperature. We compare RT-TAS against two baseline algorithms, FFD and
+WFD in Section6.1.
+Figure10plotsthemaximumtemperaturedynamicsfordifferenttasksetswithbaseparameters.
+The maximum temperature reduction by RT-TAS is up to 8.3◦C and 5.0◦C on average. From the
+base task set parameters, we vary i) utilization ii) GPU execution time, and iii) task-level power
+variation for each experiment setting. We highlight three observations. The maximum temper-
+ature reduction by RT-TAS becomes more pronounced for i) lower overall utilization, ii) higher
+maximumGPUexecutiontime,andiii)largervariationoftask-levelpowerdissipations.Thetem-
+perature decrease by RT-TAS diminishes as the utilization increases, because a task assignment
+can no longer avoid assigning tasks to hot CPU cores. As the utilization per CPU increases from
+0.3 to 0.6, the maximum temperature reduction by RT-TAS decreases from 5.0◦C to 2.1◦C on av-
+erage. As the GPU execution time increases, the temperaturereduction byRT-TAS becomes more
+pronounced due to the increasing temperature imbalance across CPU cores and the overlap be-
+tween GPU and CPU executions. When the ratio of GPU execution time to CPU execution time
+increasesfrom0.1to1,maximumtemperaturereductionbyRT-TASincreasesfrom1 .1◦C to4 .6◦C
+on average.
+When the variation on task-level power dissipation is large, temperature decrease by RT-TAS
+becomesmorepronounced.Whenthemaximumdifferencebetweentask-levelpowerdissipations
+increases from 10W to 15W, maximum temperature reduction by RT-TAS increases from 5.6◦C
+to 11.5◦C on average. Such an improvement can be interpreted as the benefit of taking task-level
+differentpowerdissipationsandtheplatform’stemperatureimbalanceintoaccountintask-to-core
+assignment and scheduling. See AppendixC for the detailed results.
+We finally discuss RT-TAS’s impact on schedulability. Figure11 plots the schedulability as the
+percentage of the schedulable task sets out of 1,000 task sets with varied (a) utilization per CPU,
+(b)ratioofGPUexecutiontimetoCPUexecutiontime.WhileFFDgeneratedthelargestnumberof
+feasible assignments across different task set configurations, T-WFD could achieve schedulability
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 22]
+90:22 Y. Lee et al.
+Fig. 11. Schedulability for varied utilization and GPU execution time.
+comparable to FFD. Across various configurations, T-WFD yielded only 3.6% less schedulable sets
+than FFD on average.
+8 CONCLUSION
+Embeddedreal-timesystemsrunningonintegratedCPUs–GPUplatformsshouldconsiderCPUs–
+GPU thermal coupling and different CPU and GPU power dissipations of tasks in making their
+scheduling decisions. To address this problem, we have developed RT-TAS, a new thermal-aware
+scheduling framework, by proposing athermally-balanced task assignment algorithm while con-
+sidering platform-level temperature imbalance and aCPU–GPU co-schedulingpolicy to prevent
+CPUsandGPUfromgeneratinglotsofheatatthesametimewhilemeetingalltimingconstraints.
+Our evaluation on a typical embedded platform with automotive vision workloads has demon-
+strated the effectiveness of RT-TAS in reducing the maximum chip temperature, thus improving
+reliability and saving cooling cost.
+In this paper, we have considered partitioned fixed-priority scheduling with the MPCP proto-
+col as a baseline. In future, we would like to extend our task-to-core assignment and CPU–GPU
+co-scheduling to other baseline scheduling algorithms and GPU access protocols, and identify
+which scheduling algorithm with which GPU access protocol is effective in thermal-aware task
+schedulingon integratedCPUs–GPUplatforms.We alsoplanto extendtheproposedapproachto
+multi-GPU platforms.
+APPENDIX
+A TEMPERATURE IMBALANCE ON OTHER SOCS
+We conducted the same experiments as in Figure1on other SoCs—Snapdragon 810 (Figure12(a))
+and Exynos 5420 (Figure13(a))—with different chip layouts. Figures12(b) and13(b) plot the max-
+imum temperature of CPU and GPU cores with and without GPU workloads. We found the tem-
+perature difference among CPU cores with GPU workload can be up to 10◦C for Snapdragon 810
+and 7◦C for Exynos 5422.
+B IMPACT OF TASK ASSIGNMENT AND SCHEDULING
+We also analyze the impact of thermally-balanced task-to-core assignment and CPU-GPU co-
+scheduling in detail. We measure the temperature characteristics while applying task-to-core as-
+signmentalone,thenwithco-schedulingtogether.Figure 14showCPUandGPUcores’peaktem-
+peraturehighlightingtheeffectinmitigatingthetemperatureimbalance,andFigure 15showsthe
+maximumtemperaturecharacteristics.Thermally-balancedtaskassignmentassignsthermalloads
+on the lowest temperature core, thus reducing the maximum temperature from 66.7◦C to 62.8◦C
+and the max-min temperature difference from 5.7◦C to 3.3◦C compared to TEA. Furthermore, co-
+schedulingalgorithmreducesthepeaktemperatureto60 .7◦Cbycooperativelyschedulinghot/cold
+CPU and GPU sections.
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 23]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:23
+Fig. 12. Snapdragon 810 layout and thermal imbalance.
+Fig. 13. Exynos 5422 layout and thermal imbalance.
+Fig. 14. Core-level peak temperature under
+task assignment and scheduling.
+Fig. 15. Temperature reduction by RT-TAS’s task assign-
+ment and scheduling.
+Fig. 16. Temperature reduction by RT-TAS for varied utilization, GPU execution time and task-level power
+variations.
+C EVALUATION WITH DIFFERENT TASK SETS
+Weconductedfurtherexperimentswithdifferenttaskssetswithdifferentcharacteristics.Fromthe
+basetasksetparametersinTable 3,wevaryi)utilizationii)GPUexecutiontime,andiii)task-level
+power variation for each experiment setting. The RT-TAS’s temperature reduction diminishes as
+the utilization increases (Figure16(a)), because a task assignment can no longer avoid assigning
+tasks to hot CPU cores and the number of candidates decrease due to the reduced slack time for
+co-scheduling. As the utilization per CPU increased from 0.3 to 0.6, the maximum temperature
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 24]
+90:24 Y. Lee et al.
+reduction by RT-TAS decreased from 5.0◦C to 2.1◦C on average. As the GPU execution time in-
+creases (Figure16(b)), the temperature reduction by RT-TAS becomes more pronounced because
+temperature imbalance across CPU cores increases and the overlap between GPU and CPU exe-
+cutions. When the ratio of GPU execution time to CPU execution time increased from 0.1 to 1,
+maximumtemperaturereductionbyRT-TASincreasedfrom1 .1◦C to4 .6◦C onaverage.Whenthe
+variationontask-levelpowerdissipationislarge,temperaturereductionbyRT-TASbecomesmore
+pronounced.Whenthemaximumdifferencebetweentask-levelpowerdissipationsincreasedfrom
+10W to 15W (Figure 16(c)), maximum temperature reduction by RT-TAS increased from 5.6◦C to
+11.5◦C on average. Such an improvement can be interpreted as the benefit of taking task-level
+different power dissipations and platform’s temperature imbalance into account in task-to-core
+assignment and scheduling.
+ACKNOWLEDGMENTS
+This work was supported in part by the US Office of Naval Research (ONR) under Grant
+No. N00014-18-1-2141, as well as the Bio & Medical Technology Development Program of
+the National Research Foundation (NRF) funded by the Korean government (MSIT) (No.
+2017M3A9G8084463)and in part bythe DGIST Start-up FundProgram of the Ministryof Science,
+ICT and Future Planning (2019010064).
+REFERENCES
+[1] 2018. Tegra X1 Thermal Design Guide. Technical Report TDG-08214-001. Nvidia.
+[2] Rehan Ahmed, Pengcheng Huang, Max Millen, and Lothar Thiele. 2017. On the design and application of thermal
+isolation servers.ACM Transactions on Embedded Computing Systems (TECS)16 (2017).
+[3] Tarek A AlEnawy and Hakan Aydin. 2005. Energy-aware task allocation for rate monotonic scheduling. InRTAS.
+[4] Hakan Aydin and Qi Yang. 2003. Energy-aware partitioning for multiprocessor real-time systems. InParallel and
+Distributed Processing Symposium.
+[5] Enrico Bini and Giorgio C. Buttazzo. 2005. Measuring the performance of schedulability tests.Real-Time Systems30,
+1–2 (2005).
+[6] ThidapatChantem,X.SharonHu,andRobertP.Dick.2011.Temperature-awareschedulingandassignmentforhard
+real-time applications on MPSoCs.IEEE Transactions on Very Large Scale Integration Systems19, 10 (2011).
+[7] Minki Cho, William Song, Sudhakar Yalamanchili, and Saibal Mukhopadhyay. 2012. Thermal system identification
+(TSI):Amethodologyforpost-siliconcharacterizationandpredictionofthetransientthermalfieldinmulticorechips.
+InSEMI-THERM.
+[8] Edward G. Coffman, Gabor Galambos, Silvano Martello, and Daniele Vigo. 1999. Bin packing approximation algo-
+rithms: Combinatorial analysis. InHandbook of Combinatorial Optimization. 151–207.
+[9] David Defour and Eric Petit. 2013. GPUburn: A system to test and mitigate GPU hardware failures. InInternational
+Conference on Embedded Computer Systems: Architectures, Modeling, and Simulation (SAMOS).
+[10] Kapil Dev and Sherief Reda. 2016. Scheduling challenges and opportunities in integrated cpu+ gpu processors. In
+ESTIMedia.
+[11] Glenn A. Elliott, Bryan C. Ward, and James H. Anderson. 2013. GPUSync: A framework for real-time GPU manage-
+ment. InRTSS.
+[12] PaoloGai,MarcoDiNatale,GiuseppeLipari,AlbertoFerrari,ClaudioGabellini,andPaoloMarceca.2003.Acompar-
+ison of MPCP and MSRP when sharing resources in the Janus multiple-processor on a chip platform. InRTAS.
+[13] Sharath Kodase, Shige Wang, Zonghua Gu, and Kang G. Shin. 2003. Improving scalability of task allocation and
+scheduling in large distributed real-time systems using shared buffers. InRTAS.
+[14] PratyushKumarandLotharThiele.2011.Coolshapers:Shapingreal-timetasksforimprovedthermalguarantees.In
+DAC.
+[15] Kai Lampka and Bjorn Forsberg. 2016. Keep it slow and in time : Online DVFS with hard real-time workloads. In
+DATE.
+[16] Youngmoon Lee, Hoon Sung Chwa, Kang G. Shin, and Shige Wang. 2018. Thermal-aware resource management for
+embedded real-time systems.IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems37, 11
+(2018).
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.
+
+
+[PDF page 25]
+Thermal-Aware Scheduling for Integrated CPUs–GPU Platforms 90:25
+[17] Sheng-ChihLinandKaustavBanerjee.2008.Coolchips:Opportunitiesandimplicationsforpowerandthermalman-
+agement.IEEE Trans. Dev.55, 1 (2008).
+[18] Pratyush Patel, Iljoo Baek, Hyoseung Kim, and Ragunathan Rajkumar. 2018. Analytical enhancements and practical
+insights for MPCP with self-suspensions. InRTAS.
+[19] IndraniPaul,SrilathaManne,ManishArora,W.LloydBircher,andSudhakarYalamanchili.2013.Cooperativeboost-
+ing: Needy versus greedy power management. InISCA.
+[20] Nick Piggin. [n.d.]. “Linux CFS Scheduler”. https://www.kernel.org/doc/Documentation/scheduler/sched-
+design-CFS.txt.
+[21] AlokPrakash,HussamAmrouch,MuhammadShafique,TulikaMitra,andJörgHenkel.2016.Improvingmobilegam-
+ing performance through cooperative CPU-GPU thermal management. InDAC.
+[22] Danil Prokhorov. 2008.Computational Intelligence in Automotive Applications. Vol. 132. Springer.
+[23] Robert Redelmeier. [n.d.]. cpuburn.https://patrickmn.com/projects/cpuburn/.
+[24] Onur Sahin, Lothar Thiele, and Ayse K. Coskun. 2018. MAESTRO: Autonomous QoS management for mobile appli-
+cations under thermal constraints.IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems
+(2018).
+[25] Gaurav Singla, Gurinderjit Kaur, Ali Unver, and Umit Ogras. 2015. Predictive dynamic thermal and power manage-
+ment for heterogeneous mobile platforms. InDATE.
+[26] Kevin Skadron, Mircea Stan, Wei Huang, Sivakumar Velusamy, Karthik Sankaranarayanan, and David Tarjan. 2003.
+Temperature-aware microarchitecture. InISCA.
+[27] LiangWang,XiaohangWang,andTerrenceMak.2016.Adaptiveroutingalgorithmsforlifetimereliabilityoptimiza-
+tion in network-on-chip.IEEE Trans. Comput.65, 9 (2016).
+[28] Man-Ki Yoon, Sibin Mohan, Chien-Ying Chen, and Lui Sha. 2016. TaskShuffler: A schedule randomization protocol
+for obfuscation against timing inference attacks in real-time systems. InRTAS.
+Received April 2019; revised June 2019; accepted July 2019
+ACM Transactions on Embedded Computing Systems, Vol. 18, No. 5s, Article 90. Publication date: October 2019.

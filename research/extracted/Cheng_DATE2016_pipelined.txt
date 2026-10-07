@@ -1,0 +1,617 @@
+                      Minimizing Peak Temperature for
+                      Pipelined Hard Real-time Systems
+                          Long Cheng† , Kai Huang∗† , Gang Chen† , Biao Hu† , and Alois Knoll†
+                        †Chair of Robotics and Embedded Systems, Technical University Munich, Germany
+                                 ∗School of Mobile Information Engineering, Sun Yat-Sen University
+                      Email: †{chengl, huangk, cheng, hub, knoll}@in.tum.de ∗huangk36@mail.sysu.edu.cn
+    Abstract—This paper addresses the problem of minimizing         quadratic programming problem formulation in [1] cannot be
+the peak temperature for pipelined multi-core systems under         reused, since calculating temperature is based on convolution
+hard end-to-end deadline constraints by adversely using the Pay-    while computing the total power consumption is based on
+Burst-Only-Once principle. The Periodic Thermal Management          integral. Therefore, the problem of temperature minimizing
+is adopted to control the temperature and every core is             demands new analysis and approach, which are the main
+periodically switched between two power modes. With the peak
+temperature representation, we ﬁrst formulate the problem of        contributions of this paper:
+ﬁnding the thermal optimal periodic schemes which satisﬁes              • Based on the well-known HotSpot model, a peak
+deadline constraints and then present a fast heuristic algorithm to          temperature representation for a multi-core processor
+solve it. Adopting real life processor platforms and applications,           under Periodic Thermal Management PTM is given,
+our simulation demonstrates that our approach reduces the                    where the heat flow between cores and the leakage
+                                 ◦
+peak temperature by up to 15 C on the 4-stage ARM platform
+compared to sub-deadline partition approach. Moreover, our                   current dependency on temperature (LDT) are con-
+algorithm is shown to be scalable w.r.t. the number of pipelined             sidered.
+stages and its effectiveness is validated by the brutally searching     • By reversely using the Pay-Burst-Only-Once principle,
+approach.                                                                    the optimization problem is transformed into a set
+                                                                             of sub-problems. We formulate the sub-problem and
+                                                                             solve it by a fast heuristic algorithm whose computing
+                       I. I NTRODUCTION                                      time grows (approximated) logarithmically with the
+    With the increasing demand of computational performance,                 number of stages.
+multi-core architectures are now widely adopted for products.           • Based on two real life platforms: a homogeneous
+To date, processors having 64 or more cores are available in the             ARM multi-processor and the Intel Single-chip Cloud
+market. The architecture with such a high degree of parallelism              Computer (SCC), we evaluate the effectiveness and
+poses designers a challenge: how to extract parallelism from                 efficiency of our approach by comparing it with two
+applications and exploit them efficiently.                                   brutally searching approaches, one with PBOO and
+                                                                             one without PBOO.
+    Pipelined computing, which can reduce the latency of                The rest of this paper is organized as follows: Section II
+a stream application, is a promising paradigm for real-time         gives a brief introduction of related works. Our system
+systems. The pipelined computing connects a set of processing       models are introduced in Section III and Section IV shows
+units in series and executes the sub-tasks of the application on    a motivation example and presents the problem statement. We
+the pipelined processing system. In this way, the sub-tasks         analyze the peak temperature in Section V and discuss our
+can be executed simultaneously, that is, parallel processing        approach in Section VI. Section VII details the case studies
+is performed. Therefore, pipelined computing can efficiently        and Section VIII concludes.
+exploit the hardware performance advantage of multi-core
+processors and decrease the latency.
+                                                                                         II. R ELATED WORKS
+    For hard real-time pipelined systems, bounding the latency          In this section, we briefly overview previous works on
+is crucial for the correctness of the system. However, as power     thermal-aware system scheduling policies and categorize them
+density is increasing exponentially with Moore’s Law, the peak      according if pipelined computing is considered.
+temperature on modern processors is rapidly elevated, which
+seriously threats the reliability and performance of the system.        Pipelined Computing           Chen and et al. [1] utilized
+Since reducing the temperature usually requires decreasing          PBOO principle and presented an approach to optimize the
+power consumption, which means lower performance and                power consumption of a pipelined system under the deadline
+larger latency, the trade-off between performance and tem-          constraint. An quadratic programming formulation of the
+perature constraints should be made carefully. Therefore, it’s      problem is proposed and two methods are studied to solve
+an important and challenging task that designing a scheduling       the problem. As we stated above, the power optimal approach
+policy to optimize the peak temperature under the end-to-end        may not be thermal optimal. Therefore, a new approach is
+deadline constraint for a pipelined real-time system on a multi-    needed for the problem of peak temperature minimizing. There
+core processor .                                                    have already been several thermal management approaches
+                                                                    for pipelined systems. However, previous works on this topic
+    This paper focuses on this issue and addresses the              either don’t consider the hard deadline constraints [4, 5] or just
+optimization problem by reversely using the Pay-Burst-Only-         reduces the deadline misses percentage into a lower range [6].
+Once (PBOO) principle. Our work is inspired by the work of          Our approach considers the deadline constraint and gives hard
+Chen et al. [1], which minimizes the total power consumption        real-time guarantee.
+for pipelined stage systems. However, their work cannot be
+directly transplanted to temperature optimization, due to the           Multi-core Processors         Aiming to minimize the chip
+reasons: (1) although temperature is a strong function of power,    peak temperature while satisfying the hard real-time con-
+power management techniques that are effective for energy           straints of an MPSOC, Thidapat and et al. [7] addressed
+saving may not be suitable for temperature managing [2],            the problem of assigning and scheduling tasks on the
+which has already been theoretically proved by [3]. (2) The         MPSOC. Due to the thermal analysis difficulties, this approach
+
+
+
+978-3-9815370-6-2/DATE16/ 2016
+                          c     EDAA                            1090
+                                                                                                                                                        P
+examines only steady-state temperatures without considering
+the transient behavior. In this paper, we provide a peak tem-                                                                                      silicon
+                                                                                                                                                 die layer
+perature formulation which considers the transient temperature.                                     P1                           P2
+                                                                                              C11                                     K11
+Yong and et al. [8] presented a feedback thermal control                                             T1 G12 = G21 T2                               thermal
+framework named Real-Time Multicore Thermal Control                                                                                         interface layer
+
+
+
+
+                                                                                                                    23
+which dynamically enforces both the desired temperature                                       K11
+
+
+
+
+                                                                                                    G1
+
+
+
+
+                                                                                                                   G
+                                                                                                                                      C11
+and the CPU utilization bounds for multicore real-time
+
+
+
+
+                                                                                                                    =
+                                                                                                      3
+                                                                                                                                                      heat
+
+
+
+
+                                                                                                         =
+
+
+                                                                                                                 32
+systems, through DVFS. Buyoung [9] addressed the problem                                                                   K11              spreader layer
+
+
+
+
+                                                                                                          G3
+
+                                                                                                                G
+of avoiding thermal hotspot on a multi-core chip by employing
+
+
+
+
+                                                                                                            1
+                                                                                                                   T3
+a runtime thermal aware scheduler (TAS) using job-migration                                                                C11
+                                                                                                                                                      heat
+                                                                                                                                                sink layer
+and power-gating techniques. In [10], Pradeep extended the                                                            P3
+
+concept of Thermal-Resiliency to multi-core architecture and                                                                                 environment
+then adopted a control-theoretic framework to ensure hard-
+                                                                                                                (a)                                     (b)
+real-time deadlines in a dynamic thermal environment while
+maintaining the thermal constraints. Above works all assumed                          Fig. 1. (a) The equivalent RC circuit of the silicon layer for a floorplan with
+                                                                                      three processing components and (b) The vertical layout model.
+simple task models, i.e., either periodic tasks or sporadic task
+model. In this paper, the task streams are modeled by a more
+general concept, arrival curve, therefore we can preserve more                        say a system with service curve β̄(Δ) satisfies the worst-case
+information such as the non-determinism of the event arrivals                         deadline D for a streaming application modeled by α(Δ) if the
+in the model.                                                                         following condition holds:
+                                                                                                                 β̄l (Δ) ≥ αu (Δ − D), ∀Δ ≥ 0                    (2)
+                          III.    SYSTEM MODEL
+
+   Notation: All matrices and vectors are denoted by bold                                 Thermal Model         The well established thermal model
+characters.                                                                           HotSpot is employed to model the multi-core processor [15].
+                                                                                      The vertical layout of the processor is modeled by four layers,
+    Hardware Model In this paper, a multi-core processor                              which are the heat sink, heat spreader, thermal interface and
+which can handle partitioned applications is considered. The                          silicon die layers [16]. Each layer is divided into a number
+sub-tasks of a partitioned application can be mapped and                              of blocks according to the processing components on the
+executed on different cores which communicate with each                               die. Moreover, the blocks are ordered in a way that all
+other via FIFOs. Each core has two power dissipation modes,                           the processing components occupy the beginning part of the
+namely ‘active’ and ‘sleep’ mode. In ‘active’ mode, the core                          order list. To predict the temperature evolution, we take the
+works with higher power consumption and tackles input events                          advantage of the well-known electro-thermal analogy [7, 10,
+in a fixed frequency. We also consider the mode-switching                             15, 16, 17, 18, 19, 20], i.e., the RC thermal network. Every
+overhead. To switch the core i from ‘active’ mode to ‘sleep’                          thermal block is mapped onto a node of the thermal circuit.
+mode and back, tswo    i                 i
+                             f f and tswon time units are required,                   An example of the model can be found in Fig. 1. Finally, the
+respectively. During mode-switching, the power consumption                            temperature vector T(t) can be determined by a set of first-
+equals that in ‘active’ mode. Moreover, no coming event can                           order differential equations [16]:
+be handled in mode-switching or ‘sleep’ mode. Due to time
+overhead in mode-switching, the time lengths for which a                                          dT (t)
+                                                                                                C·       = (P(t) + K · Tamb) − (G + K) · T(t)          (3)
+core is switched to ‘active’ and ’sleep’ mode must be larger                                        dt
+than tswon and tswo f f , respectively: to f f > tswo f f , ton > tswon .             where C is the thermal capacitance matrix, P is the power
+For brevity, we define tswoff = (tswo       1
+                                              f f ,tswo f f , · · · ,tswo f f ) and
+                                                    2                 n
+                                                                                      dissipation vector, K is the thermal ground conductance matrix,
+tswon = (tswon
+          1    ,tswon
+                 2    , · · · ,tswon
+                                n    ) for a n-core processor.                        G is the thermal conductance matrix and Tamb is the ambient
+                                                                                      temperature vector which is defined as Tamb = T amb ·[1, · · · , 1] ,
+     Task Model We study the streaming applications which                             where T amb is the ambient temperature.
+can be split into several sub-tasks. To model general task
+arrivals, the concept of arrival curve [11, 12, 13] ᾱ(Δ) =                               We assume the power vector P is the sum of the power
+[ᾱu (Δ), ᾱl (Δ)] is introduced in this paper. The upper arrival                     Pd due to dynamic current and the power Pl due to leakage
+curve ᾱu (Δ) and the lower arrival curve ᾱl (Δ) are the upper                       current [18, 21]. In ‘active’ and ‘sleep’ state Pd is assumed
+and lower bound of R(t):                                                              to be constant, i.e., Pa and Pi , respectively. The dependency
+                                                                                      relationship between the leakage power and the temperature
+              ᾱl (Δ) ≤ R(t) − R(s) ≤ ᾱu (Δ), ∀t − s = Δ                      (1)    can be closely approximated by a linear function of the
+where R(t) is the cumulative workload and represents the                              processor temperature [16, 17, 18, 22, 23]: Pl = W · T(t) + V,
+number of tasks arriving in time interval [0,t). On the same                          where W is a diagonal matrix with constant coefficients and
+way, the service curve β(Δ) is employed to model available                            V is a vector with constant coefficients. Therefore, P can
+resources in any time interval Δ. β(Δ) provides the upper and                         be represented as P(t) = W · T(t) + Va if in active mode
+lower bound of another cumulative function C(t), which is the                         or P(t) = W · T(t) + Vi otherwise, where Va = V + Pa and
+amount of total time slots that the processor provides to handle                      Vi = V + Pi . Rewriting (3) with the power formulation, we can
+the tasks in time interval [0,t).                                                     obtain the state space representation of the thermal model:
+    It’s worth noting that arrive curve is event-based and                                                        dT(t)
+                                                                                                                        = A · T(t) + B · u(t)                    (4)
+specifies the number of input events in any time interval Δ                                                        dt
+while service curve describes the amount of available execution
+time. Therefore service curve β(Δ) should be transformed to                           where u(t) is the input vector, A = −C−1 · (G + K − W) and
+a event-based service curve β̄(Δ), which can be accomplished                          B = C−1 . If component j is in active mode, u j (t) = V ja +
+by β̄u (Δ) = βu (Δ)/c and β̄l (Δ) = βl (Δ)/c [14], where c is the                     K j j · T amb , otherwise u j (t) = V ji + K j j · T amb . Since A and B
+worst-case execution time (WCET). With these definitions, we                          are constant, the thermal model is a first order linear time
+
+
+
+                             2016 Design, Automation & Test in Europe Conference & Exhibition (DATE)                                                          1091
+                                                                                                   β/mst1 = 3.3 ρ = 0.4 ρ = 0.225
+                                                                                               4        on       1       2
+invariant system (LTI) and the closed-form representation of                                                                               β2 = α̂(Δ − 25)
+                                                                                                         α̂
+the temperature is:                                                                            3
+                                         ∞                                                            α
+                                                                                               2                          β1                                 SDP
+                T(t) = eA·t · T0 +            H(ξ) · u(t − ξ)dξ                 (5)                    t1of f
+                                         −∞                                                    1
+                                                                                                         5
+where H(t) = eA·t · B is the matrix describing the impulse                                                                                         Δ/ms
+                                                                                               0
+response between any two nodes. The self-impulse response                                          0         4      8   12 16 20 24 28 32 36 40 44 48
+Hii (t) is a non-negative decreasing function [16]. Regarding                                             t2of f = 13         t2on = 3.7
+Hi j (t) where i = j, we adopt the conjecture proposed in [16]                                     β/ms
+that Hi j (t) is a non-negative unimodal function. Let Tinit (t) =                            3
+                                                                                                                 btot = 20                 ρtot = 0.15
+                                                           t
+                                                   j (t) = 0 Hi j (ξ) ·
+eA·t · T0 , Hi j (t) = ui (t) = 0 for t ≤ 0, and Ticonv                                                α
+                                                                                               2                 t1on = 0.9                                  PBOO
+u j (t − ξ)dξ, the temperature of node i yields:
+                                                                                               1       t1of f                             βtot = α(Δ − 35)
+                                               N                                                         5                                           Δ/ms
+                      Ti (t) = Tiinit (t) + ∑ Ticonv
+                                                j (t).                          (6)            0
+                                                                                                   0         4      8   12 16 20 24 28 32 36 40 44 48
+                                              j=1
+                                                                                                          t2of f = 13         t2on = 2.3
+                                                                                        Fig. 2. An example of calculating PTM schemes by methods SDP and
+    To deduce the difficulties of calculating the peak tempera-                         PBOO. For any time interval whose length is Δms (X axis), Y axis indicates
+ture, we examine the model closely and make two observations                            the least number of time slots that the processor should provide for handling
+                                                                                        the workload to meet the deadline constraint.
+that scale down the temporal and spatial exploring spaces.
+                                                                                                                                                ton               1
+    1)      For any i, j and a sufficient large t, we have                              first stage as ρ1 = (2 − 0)/(10 − 5) = 0.4 and then t 1 +t 1                         =
+                                                                                                                                                             on       of f
+            Hi j (t) = 0 and Tiinit (t) = 0. The reason is our system                   c1 ∗ ρ1 = 0.4, which indicates ton 1 = 3.3ms. To derive the service
+            is BIBO stable [24, 25], which is assured if and                           demand for the second stage, the output arrive curve α̂ from
+                       ∞
+            only if −∞    |H(t)|dt < ∞ [25]. Considering Hi j (t) is                    the first stage is needed. From [11], α̂ = α βsrv1 = 0.15Δ+ 2.7,
+            a non-negative function, one can prove that Hi j (t)                        where βsrv1 is the service curve of first stage and is a TDMA
+            will approaches zero as t approaches infinity. Since                                                        1 . On the same way, we have the
+                                                                                        curve specified by to1 f f and ton
+                                           j (t) also has this property.
+            Tinit (t) = H(t) · C · T0 , Tiinit                                          slope of the BDF in second stage as ρ2 = 0.225 and finally
+    2)      The peak temperature can only occur on the process-                          2 = 3.7ms.
+                                                                                        ton
+            ing component nodes. The intuition is that according
+            to Second law of thermodynamics, in our thermal                                  Now, the PBOO method is utilized to get ton . Unlike
+            model, heat can only flow from a hotter node to                             the procedure in approach SDP, the total service demand is
+            a colder one. Since heat are generated from the                             first obtained as βtot = α(Δ − 35) and then a BDF bd ftot =
+            processing components, the temperature on them will                         max [0, ρ(Δ − b)] should be determined such that the deadline
+            be higher.                                                                  constraint can be met as long as βsrv
+                                                                                                                          1 ⊗ β2 ≥ bd ftot . From (13),
+                                                                                                                               srv
+
+                                                                                        we can set btot as its minimum btot = to1 f f + to2 f f + c1 + c2 =
+                      IV.     P ROBLEM STATEMENT                                        20ms, then the slope in bd ftot can be determined to calculate
+     In this paper, we deploy Periodic Thermal Managemen-                               ton : ρtot = 0.15, which is much smaller than ρ1 and ρ2 ,
+                                                                                                                       1 = 0.9ms and t 2 = 2.3ms.
+                                                                                        therefore, results in smaller ton
+t [26] to manage the temperature of the chip by periodically                                                                           on
+switching every stage between two power consumption states                                  The pessimism in the SDP method comes from paying
+with an individual pair of (ton ,to f f ). Therefore, two vectors,                      an additional burst and delay when α̂ is calculated for
+                                                        1 ,t 2 , · · · ,t n ), should
+toff = (to1 f f ,to2 f f , · · · ,ton f f ) and ton = (ton  on           on             the second stage, as pay-burst-only-once principle points
+be determined offline to specify the PTMs deployed on the                               out [11]. Moreover, as the stage number increases, this effect
+system. For the details of PTM, we refer to [26]. Now,                                  is accumulated and then causes more pessimistic results. On
+we present a motivation example to illustrate the advantages                            the other hand, PBOO directly calculates the total service
+of applying Pay Burst Only Once (PBOO) for thermal                                      demand and then retrieves ton for every stage, which pays the
+optimization. For comparison, the PTM schemes are derived                               burst only once and gets better results. Since lower partition
+from two approaches: the PBOO based approach (PBOO)                                     of ton means lower temperature of the processor, we can see
+and the one which partitions the end-to-end deadline into sub-                          that employing PBOO will achieve lower peak temperature
+stage deadlines for each stage, namely SDP (Sub-Deadline                                than using SDP. Therefore, by reversely using pay-burst-only-
+Partition).                                                                             once, we can avoid paying the burst repeatedly therefore better
+                                                                                        optimize the peak temperature for pipelined systems, especially
+    Motivation example        In the example, an event stream                           for scenarios of many stages.
+with arrival curve α = 0.15Δ+ 2 and deadline D = 35ms passes
+through a two-stage pipelined system. The WCETs are set as
+c1 = c2 = 1ms, respectively. In this case, We set toff = (5, 13)ms                          Problem Statement Now we define our problem as:
+and then compare the ton s generated by the two methods. Fig. 2                         Given a n-stage pipelined platform specified by the above
+graphically illustrates the derivation process corresponding to                         hardware and thermal models, an event stream with arrival
+the two methods.                                                                        curve α and end-to-end deadline D, and the WCETs
+                                                                                        c = (c1 , c2 , · · · , cn ), our goal is to find the PTM schemes
+    Let’s first examine the strategy of SDP. We divide the                              characterized by toff and ton such that the peak temperature
+deadline D into two sub-deadlines, D1 = 10ms and D2 = 25ms,                             is minimized while the deadline constraint is satisfied.
+in this case. For simplicity, we adopt the bounded-delay
+function (BDF) [26] to calculate ton . A BDF is defined as
+bd f (Δ) = max [0, ρ(Δ − b)]. For the first stage, given deadline                                                V.     P EAK TEMPERATURE ANALYSIS
+D1 = 10ms, the service demand should be β1 = α(Δ − 10).                                    In this section, we formulate the peak temperature of a
+Since to1 f f = 5ms, we obtain the slope of the BDF in the                              multi-core processor which adopts PTM. Based on the first
+
+
+
+1092                                 2016 Design, Automation & Test in Europe Conference & Exhibition (DATE)
+observation of the thermal model, some notations are defined.           The right hand side of the inequality can be upper-bounded
+Let (1) ticonv
+           j   denote the certain time point after which Hi j (t)       by a set of minimum bounded-delay functions bd fmin (Δ) =
+can be considered as zero, (2) tkinit denote the similar time           max [0, ρ(Δ − b)]. It’s worth noting that b can vary in a feasible
+point for Tkinit (t), and (3) m and N indicate the numbers of           region [bmin , bmax ], which is obtained from [26]. For a given
+total processing components and blocks in thermal model,                b, the corresponding ρ is calculated from:
+respectively. Now some basic lemmas are shown for further                       ρ(b) = inf{ρ : ρ(Δ − b) ≥ αu (Δ − D), ∀Δ ≥ 0}                 (10)
+analysis.
+    Lem. 1: For any i ≤ N and j ≤ m, when t ≥ ticonv
+                                                 j , Ti j (t)
+                                                       conv                For every individual bd fmin (Δ) ≥ αu (Δ − D), the deadline
+is a periodic function in the domain of t.                              D is satisfied when the following inequity holds:
+                                                                                     n             n
+     Lem. 2: When t ≥ tiend , Ti (t) is a periodic function, where                       Ki
+                                                                                 min (      )[Δ − ∑ (toi f f + ci )] ≥ bd fmin (Δ, ρ, b)      (11)
+                  conv , · · · ,t conv ].
+ti = max[tiinit ,ti1
+ end
+                                 im
+                                                                                 i=1     ci       i=1
+     Lem. 3: For node i, the peak temperature Ti equals the            which can be transformed to:
+maximal local peak temperature which is reached after tiend .                       n    Ki                        n
+
+     The proofs of above lemmas are omitted due to space limit.
+                                                                                   min ( ) ≥ ρ &
+                                                                                   i=1 ci
+                                                                                                                  ∑ (toi f f + ci) ≤ b        (12)
+                                                                                                                 i=1
+     Lem. 4: The peak temperature of node i is:                         Then, from the peak temperature formulation, the sub-problem
+                           N                                            can be formulated for every individual pair of b and ρ.
+            Ti = max{ ∑ [Ticonv
+                            j (t)|ti
+                                   end
+                                       ≤ t ≤ tiend + t plcm ]}.   (7)   minimize         T  (K, toff ) = max {T1 , T2 , · · · , Tm }
+                          j=1                                                             n    Ki
+                                                                        subject to       min ( ) ≥ ρ
+                                                                                         i=1 ci
+     Proof: From Lem. 3, we can know that Ti can be obtained                             n
+by finding the maximum of Ti (t) for t ≥ tiend . According to
+Lem. 2, when t ≥ tiend , Ti is a periodic function and its
+                                                                                         ∑ (toi f f + ci ) ≤ b
+                                                                                         i=1
+period is t plcm . Therefore the the maximum of Ti (t) is the local                                      N
+maximum in every period and can be formulated as (7).                                    Ti = max{ ∑ [Ticonv
+                                                                                                         j (t)|ti
+                                                                                                                end
+                                                                                                                    ≤ t ≤ tiend + t plcm ]}
+                                                                                                        j=1
+   Based on above lemmas and definition, we present our first                                           t
+important result in the following theory.
+                                                                                             j (t) =
+                                                                                         Ticonv                Hi j (ξ) · u j (t − ξ)dξ            (13)
+    Thm. 1: For a multi-core processor with hardware and                                              0
+                                                                                                                                   if active or in
+thermal models described above, when the PTM schemes                                                    V ja + K j j · T amb mode-switching
+characterized by toff and ton are applied, the peak temperature                          u j (t) =
+of the processor can be formulated as:                                                                  V ji + K j j · T amb       otherwise
+                                                                                         0 ≤ Ki ≤ 1, i = 1, 2, · · · , n
+                        T  = max {T1 , T2 , · · · , Tm }      (8)
+                                                                                         toi f f ≥ tswo
+                                                                                                    i
+                                                                                                        f f , i = 1, 2, · · · , n
+
+     Proof: Based on the second observation of thermal model,
+                                                                                          i
+                                                                                         ton ≥ tswon
+                                                                                                i
+                                                                                                     , i = 1, 2, · · · , n
+the peak temperature of the processor must be the peak
+temperature of the processing component nodes, which are                    With this formulation, Algo. 1 provides the pseudo-code
+the first m nodes in the model. Therefore, we have T  =                of our approach.
+max {T1 , T2 , · · · , Tm }.
+                                                                        Algorithm 1 Peak Temperature Optimization
+                            VI.     A LGORITHMS                         Input: Thermal model, α, D, n, c, tswon , tswoff , ε
+    In this section, we first transform our optimization problem        Output: K, toff
+into a set of sub-problems, which can be formulated as below,            1: calculate [bmin , bmax ].
+                                                                               ← ∞, K ← 0, t
+then provide a fast heuristic to solve the sub-problem.                  2: Tmin                   off ← 0
+                                                                         3: for b = bmin to bmax with step ε do
+                                                                         4:     get ρ from (10)
+A. Real-time analysis and formulation                                    5:     solve sub-problem (13) and get T  , K , toff
+       Before giving the formulation, we first present the timing        6:                then
+                                                                                if T  < Tmin
+property analysis to ensure that all tasks are finished before           7:            
+                                                                                    Tmin ← T  , K ← K , toff ← toff
+their deadlines. For a n-stage pipelined processor that employs          8:     end if
+PTM schemes characterized by toff and ton , we define Ki =               9: end for
+     i
+    ton
+t i +t i
+           and K = {K1 , · · · , Kn }. Then, suppose an application
+on   of f
+with arrival curve α is processed by the n pipelined stages,            B. Solving sub-problem
+the deadline D can be satisfied if the following condition
+holds [1]1 :                                                               Now we present a fast algorithm which is inspired by the
+                                 n
+                                                                        gradient descent method to solve problem (13).
+                n      Ki
+               min (      )[Δ − ∑ (toi f f + ci )] ≥ αu (Δ − D)   (9)       Lem. 5: For problem (13), Ki can be obtained safely by
+               i=1     ci       i=1                                     the following equation:
+  1 See Thm.1 in [1]                                                                                      Ki = ci ρ                           (14)
+
+
+
+
+                                2016 Design, Automation & Test in Europe Conference & Exhibition (DATE)                                         1093
+                                                          i =
+      Proof: From the definition of Ki , one can derive ton                                      VII.   C ASE S TUDIES
+                              i
+                            dton
+  Ki i
+1−Ki to f f . Then, we have dKi > 0, which means a larger Ki                     We evaluate the effectiveness and feasibility of our
+                                    i                                        proposed approach in this section. Three approaches are
+results in a higher partition of ton  , that is, a higher peak
+temperature. Therefore Ki should equal its lower bound ci ρ                  compared: (1) our Gradient Descent based PBOO algorithm
+such that the peak temperature won’t be elevated unnecessarily.              (GD), (2) Brutally Searching based PBOO algorithm (BS), and
+                                                                             (3) the brutally searching Sub-Deadline Partitions algorithm
+                                                                             introduced in section IV (SDP). SDP brutally examines all the
+    Now, toff remains to be determined. Intuitively, one can                 possible sub-deadline partitions and returns the one yielding
+brutally search the whole exploring space to find the optimal                the lowest peak temperature.
+solution. However, as the stage number n increases, the
+exploring space expends (approximated) exponentially and this
+approach will finally be infeasible. For example, if n = 8 and               A. Setup
+every to f f has 50 candidates in the exploring space, there will                We implement the approaches on two simulation platforms:
+be 508 = 3.90625 × 1013 combinations in total. The brutally                  (1) a homogeneous multi-processor ARM platform with eight
+searching algorithm needs more than 120 years to finish                      cores (ARM), (2) the Single-Chip Cloud Computer (SCC),
+if the computer can check 10000 combinations per second.                     a processor created by Intel that has 48 distinct physical
+Therefore, a more clever algorithm is needed to solve sub-                   cores [27]. The power and thermal parameters of the two
+problem (13). Inspired by the gradient descent algorithm, we                 platforms come from [16, 28] and parameter calibration. The
+present a fast algorithm to find the optimal toff .                          thermal matrices G, C and K are obtained from the HotSpot
+                                                                             toolbox. All the simulations are performed on a computer
+Algorithm 2 Sub-optimization with given b and ρ                              with an Intel i7-4770 processor and 16GB memory. Regarding
+                                                                             determining the layout of activated cores, we select and
+Input: Thermal model, n, b, ρ, c, tswon , tswoff , ξ                         activate the n cores whose locations are close to core #1.
+Output: K, toff
+ 1: e1 = (1, 0, · · · , 0), e2 = (0, 1, · · · , 0), en = (0, 0, · · · , 1)       Our simulation runs the peak temperature optimization
+ 2: K ← ρ · c, toff ← tswoff , go← 1, Tlast       ← T  (K, t )             for three partitioned applications: (1) the H.263 decoder
+                                                                 off
+ 3: while go do                                                              application modeled by four tasks [29], (2) the MP3 decoder
+ 4:     if ∑i=1 (toi f f + ci ) + ξ ≤ b then
+             n                                                               application which can be split into five tasks [29], and (3)
+ 5:         for i = 1 to n with step 1 do                                    the MADplayer application that consists of five tasks [30].
+ 6:              g(i) = T  (K, toff + ξei ) − Tlast                        Their worst-case execution times are determined and scaled
+ 7:         end for                                                          from [29] and [30], respectively. All the mode-switching
+ 8:         if min g(i) ≥ 0 then                                             overheads are tswoff = tswon = (1, · · · , 1)ms. The activation
+ 9:              go = 0                                                      periods of the three applications are set as 50ms, 60ms and
+10:         else                                                             50ms, respectively. The relative deadline D is determined by
+11:              find i where g(i) == min g(i)                               deadline factor δ: D = δ × p, where p is the activation period.
+12:                                       ← T  + g(i)
+                 toff = toff + ξei , Tlast          last
+13:         end if                                                           B. Results
+14:     else                                                                     The three applications are executed with deadline factor
+15:         for every pair of i, j that 1 ≤ i, j ≤ n do                      δ = 0.9 and the peak temperatures on different platforms are
+16:              G(i, j) = T  (K, toff + ξei − ξej ) − Tlast   
+                                                                             examined for three- and four- stage scenarios. Fig. 3 provides
+17:         end for                                                          results on ARM platform while Fig. 4 shows those from SCC
+18:         if min G(i, j) ≥ 0 then                                          platform. From the figures we can see that: (1) In all the
+19:              go = 0                                                      cases, the peak temperatures obtained from BS and GD are
+20:         else                                                             identical in value, which proves the effectiveness of our fast
+21:              find i and j where G(i, j) == min G(i, j)                   heuristic method. (2) For the two platforms, the temperature
+22:              toff = toff + ξei − ξej , Tlast   ← T  + G(i, j)
+                                                          last               difference between our PBOO based algorithms and algorithm
+23:         end if                                                           SDP gets bigger when stage number increases. This is due
+24:     end if                                                               to that SDP pays burst for more times when stage number
+25: end while
+                                                                             increases and therefore returns higher peak temperatures. (3)
+                                                                             Compared to ARM, the peak temperature and the gap between
+     Algo. 2 outlines the pseudo-code of the algorithm. It takes             the approaches are much lower on SCC platform, which is
+the thermal model, stage number n, mode-switching overhead                   owed to (a) the difference in the thermal parameter, such
+vectors, b, ρ, c, and a fixed stepsize ξ as input. The iteration             as chip thickness, heat sink size. (b) SCC has 48 cores,
+starts at the initial point tswoff (line 2). In every iteration, it          only turning on three or four cores won’t warm the whole
+first checks whether feeding one ξ to toff will exceed the limit             chip sufficiently, therefore the heat can be conducted to the
+of b (line 4). If not, ξ will be added to one of the to f f s                environment faster. To further confirm the effectiveness and
+(line 12). If the limit of b is hit, we will subtract ξ from                 feasibility of our approach, we simulate a randomly generated
+anther to f f at the same time(line 22). In every iteration, all             application on the two platforms and then increase the stage
+the possible directions are checked and the direction leading                number n from 2 up to 8 on ARM and to 12 on SCC
+to the current steepest descent will be selected to update toff              (simulating up to 48 stages needs a huge figure to display the
+(lines 5-7, 11-12, 15-17, 21-22). The algorithm executes the                 results and simulating up to 12 stages is enough to determine
+iteration until evolving towards all possible directions with step           the scalability). The WCETs of the sub-tasks are randomly
+ξ won’t result in a lower peak temperature (lines 8-9, 18-19).               generated between [6, 8]ms and the application is activated
+It’s worth noting that based on a set of systemic simulations,               every 100ms with δ = 1.2. The results are shown in Fig. 5. Due
+we conjecture that the peak temperature in Thm.(8) is a convex               to that SDP and BS may suffer from exploring space explosion
+function of toi f f , which means T  (toff ) has only one minimum           as stage number increases, we terminate their simulation when
+in the domain of toff . Therefore, the result found by Algo. 2               n reached 7 and 11, respectively. For clarity, only the time
+is the global minimum in the exploring space.                                expense on SCC platform is shown in the figure. Observe
+
+
+
+1094                               2016 Design, Automation & Test in Europe Conference & Exhibition (DATE)
+                                              (a) 3−stage                              (b) 4−stage                                             transformed into a set of sub-problems and a fast heuristic
+                            370                                    370 375                                 375
+                                                             BS                   BS                                                           algorithm is proposed to solve the problem. We conduct
+   Peak temperature / K
+
+
+
+
+                                                                                                                 Peak temperature / K
+                            365                              GD    365 370        GD
+                                                             SDP                  SDP
+                                                                                                           370                                 simulation of our approach on two actual platforms for real life
+                            360                                    360                                                                         applications and the results show that our approach reduces the
+                                                                         365                               365
+                            355                                    355                                                                         peak temperature more efficiently than the approach without
+                                                                         360                               360
+                            350                                    350                                                                         PBOO, especially for many-stage scenarios. It is also shown
+                                                                         355                               355
+                            345                                    345                                                                         that the time expense our fast algorithm grows (approximated)
+                            340                                    340 350                                 350                                 logarithmically as the stage number increases, indicating the
+                            335                              335 345                                  345                                      algorithm is scalable with the number of stages.
+                                     H.263       MP3 MADplayer       H.263                MP3 MADplayer
+Fig. 3. Peak Temperature produced by the tested approaches with δ = 0.9
+when the applications executed on platform ARM with different stage number.                                                                                           IX.     ACKNOWLEDGEMENTS
+                                                                                                                                                   This work has been partly funded by China Scholar-
+                                              (a) 3−stage                              (b) 4−stage                                             ship Council, German BMBF projects ECU (grant number:
+                            340                                    340 340                                 340
+                                                             BS                                      BS                                        13N11936), and China SYSU the Fundamental Research
+   Peak temperature / K
+
+
+
+
+                                                                                                                 Peak temperature / K
+                                                             GD                                      GD
+                            338                              SDP   338 338                           SDP   338                                 Funds for the Central Universities: 15lgjc32.
+                            336                                    336 336                                 336
+                                                                                                                                                                                 R EFERENCES
+                            334                                    334 334                                 334                                  [1] Gang Chen and et al. Applying pay-burst-only-once principle for periodic
+                                                                                                                                                    power management in hard real-time pipelined multiprocessor systems. TODAES,
+                            332                                    332 332                                 332                                      20(2):26, 2015.
+                                                                                                                                                [2] Sushu Zhang and Karam S Chatha. Approximation algorithm for the temperature-
+                            330                              330 330                                  330                                           aware scheduling problem. In TCAD, pages 281–288. IEEE, 2007.
+                                     H.263       MP3 MADplayer       H.263                MP3 MADplayer
+                                                                                                                                                [3] Nikhil Bansal and Kirk Pruhs. Speed scaling to manage temperature. In STACS,
+Fig. 4. Peak Temperature produced by the tested approaches with δ = 0.9                                                                             pages 460–471. Springer, 2005.
+when the applications executed on platform SCC with different stage number.                                                                     [4] Andrea Alimonda and et al. Temperature and leakage aware power control for
+                                                                                                                                                    embedded streaming applications. In DSD, pages 107–114. IEEE, 2008.
+                                                                                                                                                [5] Marco Cox and et al. Thermal-aware mapping of streaming applications on 3d
+                                 6
+                                      (a) Time expense on SCC (b) Peak Temperature. S−XX: SCC, A−XX: ARM                                            multi-processor systems. In ESTIMedia, pages 11–20. IEEE, 2013.
+                            10                                      345                                    420                                  [6] Fabrizio Mulas and et al. Thermal balancing policy for multiprocessor stream
+                                        BS                                     S−BS
+                                                                                                                                                    computing platforms. TCAD, 28(12):1870–1882, 2009.
+                                                                                                                        Peak temperature / K
+
+
+
+
+                                        GD                                     S−GD
+       Computing Time / s
+
+
+
+
+                                        SDP                         340        S−SDP                       400                                  [7] Thidapat Chantem and et al. Temperature-aware scheduling and assignment for
+                                                                               A−BS
+                            10
+                                 4
+                                                                               A−GD                                                                 hard real-time applications on mpsocs. VLSI, 19(10):1884–1897, 2011.
+                                                                    335        A−SDP                       380                                  [8] Yong Fu and et al. Feedback thermal control of real-time systems on multicore
+                                                                                                                                                    processors. In EMSOFT, pages 113–122. ACM, 2012.
+                                 2                                  330                                    360                                  [9] Buyoung Yun and et al. Thermal-aware scheduling of critical applications using job
+                            10                                                                                                                      migration and power-gating on multi-core chips. In TrustCom, pages 1083–1090.
+                                                                    325                                    340                                      IEEE, 2011.
+                                                                                                                                               [10] Pradeep M Hettiarachchi and et al. Achieving thermal-resiliency for multicore
+                                                                    320                                    320                                      hard-real-time systems. In ECRTS, pages 37–46. IEEE, 2013.
+                                     2 3 4 5 6 7 8 9 101112                2 3 4 5 6 7 8 9 101112                                              [11] Le Boudec and et al. Network calculus: a theory of deterministic queuing systems
+                                          stage number                          stage number                                                        for the internet, volume 2050. Springer, 2001.
+Fig. 5. (a) Computing time on SCC platform and (b) Peak Temperature of                                                                         [12] L. Thiele and et al. Real-time Calculus for Scheduling Hard Real-time Systems.
+                                                                                                                                                    ISCAS, 4:101–104, 2000.
+the tested approaches on SCC and ARM platforms, the right Y axis indicates                                                                     [13] Lothar Thiele and et al. Real-time interfaces for composing real-time systems. In
+the results on ARM platform.                                                                                                                        EMSOFT, pages 34–43, 2006.
+                                                                                                                                               [14] Kai Huang and et al. Periodic power management schemes for real-time event
+that the time required by GD generally is the lowest and the                                                                                        streams. In CDC/CCC, pages 6224–6231. IEEE, 2009.
+                                                                                                                                               [15] Wei Huang and et al. Hotspot: A compact thermal modeling methodology for
+curve is nearly flat as n increases, which indicates GD is                                                                                          early-stage vlsi design. VLSI, 14(5):501–513, 2006.
+feasible for pipelined systems with many stages. Fig. 5a also                                                                                  [16] Lothar Thiele and et al. Predictability for timing and temperature in multiprocessor
+                                                                                                                                                    system-on-chip platforms. TECS, 12(1s):48, 2013.
+shows that the computing time consumed by SDP is always                                                                                        [17] Vinay Hanumaiah and et al. Temperature-aware dvfs for hard real-time applications
+the highest and grows exponentially. This is because SDP                                                                                            on multicore processors. Computers, 61(10):1484–1494, 2012.
+examines all the possible deadline partitions, the amount of                                                                                   [18] Pradeep M Hettiarachchi and et al. A design and analysis framework for thermal-
+                                                                                                                                                    resilient hard real-time systems. TECS, 13(5s):146, 2014.
+which increases exponentially as the stage number increases.                                                                                   [19] Srinivasan Murali and et al. Temperature-aware processor frequency assignment
+Moreover, computing the service demand for every following                                                                                          for mpsocs using convex optimization. In CODES+ISSS, pages 111–116, 2007.
+stage requires numerical min-plus convolution, which incurs                                                                                    [20] Santiago Pagani and et al. Tsp: thermal safe power: efficient power budgeting for
+                                                                                                                                                    many-core systems in dark silicon. In CODES+ISSS, page 10. ACM, 2014.
+significant computation and memory overhead. Similarly, we                                                                                     [21] Ravishankar Rao and et al. Fast and accurate prediction of the steady-state
+find that the time overhead of BS grows exponentially as stage                                                                                      throughput of multicore processors under thermal constraints. TCAD, 28(10):1559–
+                                                                                                                                                    1572, 2009.
+number increases. Therefore, we can say that SDP and BS are                                                                                    [22] Yongpan Liu and et al. Accurate temperature-dependent integrated circuit leakage
+not scalable with the stage number regarding the requirement                                                                                        power estimation is easy. In DATE, pages 1526–1531, 2007.
+for computing resource. As suggested by Fig. 5b, we can                                                                                        [23] Lars Schor and et al. Worst-case temperature guarantees for real-time applications
+                                                                                                                                                    on multi-core systems. In RTAS, pages 87–96. IEEE, 2012.
+clearly see that the peak temperature generated by GD always                                                                                   [24] Dante C Youla. Two observations regarding first-quadrant causal bibo-stable digital
+equals that from BS, which further strength the effectiveness                                                                                       filters. Proceedings of the IEEE, 78(4):598–603, 1990.
+of GD. We notice that the peak temperature gap between                                                                                         [25] Dayan Adionel Guimaraes. Digital Transmission: A Simulation-Aided Introduction
+                                                                                                                                                    with VisSim/Comm. Springer Science & Business Media, 2010.
+the approaches is bigger in platform ARM than SCC, as we                                                                                       [26] Long Cheng and et al. Periodic thermal management for hard real-time systems.
+explained above. Fig. 5b also demonstrates that the temperature                                                                                     In SIES, pages 1–10. IEEE, 2015.
+                                                                                                                                               [27] John Howard and et al. A 48-core ia-32 message-passing processor with dvfs in
+difference between SDP and GD widens as stage number                                                                                                45nm cmos. In ISSCC, pages 108–109. IEEE, 2010.
+increases, which is expected because SDP pays burst more                                                                                       [28] MohammadSadegh Sadri and et al. Single-chip cloud computer thermal model. In
+times and therefore generates PTM schemes in which ton                                                                                              THERMINIC, pages 1–6. IEEE, 2011.
+                                                                                                                                               [29] Hyunok Oh and Soonhoi Ha. Hardware-software cosynthesis of multi-mode multi-
+occupies bigger partition.                                                                                                                          task embedded systems with real-time constraints. In CODES, pages 133–138.
+                                                                                                                                                    ACM, 2002.
+                                                                                                                                               [30] Hoeseok Yang and Soonhoi Ha. Pipelined data parallel task mapping/scheduling
+                                                      VIII.        C ONCLUSION                                                                      technique for mpsoc. In DATE, pages 69–74, 2009.
+
+    We have proposed a new approach to minimize the peak
+temperature of a pipelined hard real-time system by reversely
+utilizing the Pay-Burst-Only-Once principle. The problem is
+
+
+
+                                                            2016 Design, Automation & Test in Europe Conference & Exhibition (DATE)                                                                                             1095
+

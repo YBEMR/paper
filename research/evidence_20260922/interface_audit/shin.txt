@@ -1,0 +1,831 @@
+                                                                  Journal of Systems Architecture 167 (2025) 103508
+
+
+                                                                       Contents lists available at ScienceDirect
+
+
+                                                            Journal of Systems Architecture
+                                                             journal homepage: www.elsevier.com/locate/sysarc
+
+
+
+
+Inference framework supporting parallel execution across
+heterogeneous accelerators
+Philkyue Shin a , Myungsun Kim b , Seongsoo Hong a,*
+a
+    Department of Electrical and Computer Engineering, Seoul National University, Seoul 08826, Republic of Korea
+b
+    Department of Applied Artificial Intelligence, Hansung University, Seoul 02876, Republic of Korea
+
+
+
+
+A R T I C L E I N F O                                        A B S T R A C T
+
+Keywords:                                                    The growing demand for on-device deep learning inference, particularly in latency-sensitive applications, has
+Deep learning                                                driven the adoption of heterogeneous accelerators that incorporate GPUs, DSPs, and NPUs. While these accel­
+Inference                                                    erators offer improved energy efficiency, their heterogeneity introduces significant programming complexity due
+Heterogeneous accelerators
+                                                             to reliance on vendor-specific APIs. Existing deep learning inference frameworks, such as LiteRT, provide high-
+NPU
+Scheduler
+                                                             level APIs and support multiple backend APIs. However, they lack the ability to exploit parallel execution across
+                                                             heterogeneous accelerators. This paper introduces a novel inference framework that overcomes this limitation.
+                                                             Our framework utilizes a batch inference API to enable parallel execution across heterogeneous accelerators. The
+                                                             framework schedules heterogeneous accelerators to process batched inputs concurrently. To address the chal­
+                                                             lenge of integrating commercial NPU APIs that do not support LiteRT, we develop a portable hooking engine.
+                                                             Furthermore, the framework mitigates accuracy inconsistencies arising from diverse quantization methods by
+                                                             dynamically adjusting postprocessing parameters to balance accuracy and latency. The proposed framework
+                                                             minimizes both average turnaround time and postprocessing time. Experimental results on a Qualcomm SA8195
+                                                             SoC with Mobilint and Hailo NPUs demonstrate significant performance improvements compared to existing
+                                                             inference frameworks.
+
+
+
+
+1. Introduction                                                                                    rely on proprietary APIs. Examples include the Hexagon API [12] for
+                                                                                                   Qualcomm DSPs, the Maccel API [13] for Mobilint NPUs, the HailoRT
+    The deployment of deep learning (DL) models has shifted from cloud-                            API [14] for Hailo NPUs, and the NNAPI [15] for Android devices.
+centric to mobile-centric for on-device artificial intelligence [1–3]. This                            Current state-of-the-art DL inference frameworks, including LiteRT
+transition has enabled the development of various latency-sensitive                                [16], ONNX Runtime [17], and ExecuTorch [18], provide developers
+applications, including advanced driver assistance systems (ADAS)                                  with a high-level API while supporting multiple backend APIs to support
+[4], posture tracking on smartwatches [5], mobile virtual reality [6],                             the GPUs, DSPs, and NPUs. However, these frameworks are typically
+and drone control [7].                                                                             limited to executing a model on a single accelerator at a time. This re­
+    To meet the complex computational demands of DL applications                                   striction, often stemming from underlying backend library limitations
+within a limited power budget, commercial hardware for mobile devices                              (as will be detailed in Section 6), prevents the parallel utilization of
+integrates a variety of accelerators, including GPUs, DSPs, and NPUs [2].                          multiple accelerators. Furthermore, once a primary accelerator is
+The adoption of multiple accelerators, rather than a single accelerator,                           designated, these frameworks prioritize its use for executing the model
+has emerged as a strategy to enhance energy efficiency [46]. Each                                  as much as possible. Consequently, these frameworks fail to fully exploit
+accelerator is designed for hardware acceleration of specific computa­                             the potential of parallel heterogeneous computing to improve latency in
+tions frequently used in modern applications [8–10].                                               on-device DL inference.
+    However, these heterogeneous accelerators present a significant                                    To address this limitation, numerous researchers have explored
+challenge to developers, requiring them to utilize multiple Application                            dynamically partitioning models into subgraphs and assigning them to
+Programming Interfaces (APIs). While GPUs often offer a unified API                                multiple accelerators at runtime [45–52]. However, this strategy is
+option, such as CUDA [11] or OpenCL [11], DSPs and NPUs typically                                  incompatible with most commercial heterogeneous accelerators.
+
+
+    * Corresponding author.
+      E-mail addresses: pkshin@redwood.snu.ac.kr (P. Shin), kmsjames@hansung.ac.kr (M. Kim), sshong@redwood.snu.ac.kr (S. Hong).
+
+https://doi.org/10.1016/j.sysarc.2025.103508
+Received 6 March 2025; Received in revised form 28 May 2025; Accepted 19 June 2025
+Available online 20 June 2025
+1383-7621/© 2025 Elsevier B.V. All rights are reserved, including those for text and data mining, AI training, and similar technologies.
+P. Shin et al.                                                                                                    Journal of Systems Architecture 167 (2025) 103508
+
+
+Vendors mandate that developers convert models into proprietary rep­                  The postprocessing parameter adjuster aims to minimize post­
+resentations during a pre-runtime phase; these formats are optimized for          processing latency, which is particularly significant for compact models.
+the vendors’ specific DSPs and NPUs. Consequently, because each                   For example, the postprocessing latency of EfficientDet Lite 0 accounts
+accelerator requires a distinct model representation, dynamically                 for 80 % of the total DL application latency. To mitigate this, we propose
+decomposing a model into subgraphs at runtime for execution across                a strategy that selectively compromises the accuracy of specific accel­
+heterogeneous accelerators is practically infeasible.                             erators. Heterogeneous accelerators exhibit varying accuracies even
+    This paper aims to develop an inference framework that enables                when executing the same model, due to the use of different quantization
+concurrent execution across heterogeneous accelerators. To achieve                techniques. For instance, the Mobilint NPU employs percentile and KL
+this, we leverage a batch inference API, a feature supported by                   divergence quantization, while the Hailo NPU utilizes its proprietary IBC
+contemporary DL inference frameworks. Batch execution of multiple                 and QFT quantization methods [34,35], and LiteRT uses its own quan­
+inputs has been introduced to reduce inference time compared to                   tization approach [36]. Consequently, the mean average precision
+repeated single-input processing. Frameworks such as LiteRT, ONNX                 (mAP) for the YOLOv8 medium model varies: 0.476 for the Mobilint
+Runtime, and ExecuTorch all support this capability. A relevant example           NPU, 0.484 for the Hailo NPU, and 0.432 for LiteRT.
+highlighting the need for batch inference is surroundings recognition in              This variation in accuracy forces developers to accept the lowest
+ADAS, which requires vehicles to be equipped with multiple sensors                accuracy among the heterogeneous accelerators when selecting a model
+[19]. Fig. 1 depicts a vehicle that motivated this research, designed for         to meet an application’s accuracy requirements. Inspired by this, the
+ADAS by the Korea Automotive Technology Institute [20]. Equipped                  postprocessing parameter adjuster dynamically modifies parameters to
+with eight cameras and four LiDAR sensors, this vehicle underscores the           reduce postprocessing latency when processing outputs from accelera­
+need for concurrent processing of multiple inputs. In such scenarios,             tors with higher accuracy than the lowest accuracy.
+batch inference becomes a crucial capability.                                         We evaluated our inference framework on the target hardware
+    The proposed inference framework leverages heterogeneous accel­               platform, comprising the Qualcomm SA8195 SoC, the Mobilint NPU,
+erators to process batched inputs concurrently, aiming to reduce the              and the Hailo NPUs. A comparative analysis against the proprietary
+latency of DL applications. This framework comprises three key com­               inference frameworks provided by the NPU vendors and the open-source
+ponents: a hooking engine, an accelerator scheduler, and a post­                  inference framework LiteRT demonstrated a significant reduction in
+processing parameter adjuster. The hooking engine allows the LiteRT               application latency, reaching up to 91 %.
+API, a representative DL inference framework API, to utilize commercial               Our contributions are summarized as follows:
+NPUs on the target system. These NPUs, which employ proprietary APIs,
+are unsupported by contemporary DL inference frameworks. Notably,                  • We introduce an inference framework that enables parallel execution
+current inference frameworks offer limited support for commercial                    across commercial heterogeneous accelerators via LiteRT.
+NPUs, often supporting only a select few. The hooking engine is                    • We present a provably optimal scheduling algorithm that minimizes
+designed for high portability, requiring no modifications to the LiteRT              average turnaround time while guaranteeing first-come, first-
+library itself. Instead, developers only need to include our header file             finished processing and bounding the maximum turnaround time.
+and link the provided library—no alterations to their existing LiteRT                We formally prove the properties of the scheduling algorithm.
+code are necessary.                                                                • We propose a method to minimize postprocessing latency by selec­
+    The accelerator scheduler determines which accelerator to process                tively sacrificing the accuracy of accelerators with higher accuracy
+inputs in a batch. The idea of the scheduler is to assign each input to the          than others.
+accelerator that will have the shortest turnaround time. The effective­
+ness of the proposed scheduling algorithm is demonstrated by mathe­                  The rest of the paper is organized as follows. Section 2 briefly in­
+matically proving that the average turnaround time is minimized. We               troduces LiteRT. Section 3 describes the problem at hand. Section 4
+also prove that the algorithm guarantees the first-come, first-finish. In         presents our inference framework. Section 5 reports the experimental
+addition, the algorithm bounds the maximum turnaround time to a                   evaluation. Section 6 reviews studies on DL inference frameworks.
+constant value.                                                                   Finally, Section 7 concludes the paper.
+
+
+
+
+                                            Fig. 1. Vehicle equipped with multiple cameras and lidars for ADAS.
+
+                                                                              2
+P. Shin et al.                                                                                                    Journal of Systems Architecture 167 (2025) 103508
+
+
+2. Background
+
+    LiteRT, formerly known as TensorFlow Lite, is a prominent inference
+framework for embedded systems, released by Google in 2017 [16].
+Fig. 2 illustrates the LiteRT workflow. LiteRT supports models trained
+using various deep learning frameworks. To convert a trained model to a
+LiteRT model, developers must use the LiteRT converter at pre-runtime.
+During the conversion, it is essential to quantize the model to ensure its
+compatibility with DSPs and NPUs. The quantization scheme employed
+by the converter determines the accuracy of the converted model. The
+converted model is then transferred to the target embedded devices,
+where it is run via the LiteRT API.
+    The LiteRT interpreter reads the model file and executes it on CPUs.
+To utilize a GPU, DSP, or NPU, developers must employ the appropriate
+LiteRT delegate. The GPU delegate executes the model on the GPU, with
+the CPU serving as a fallback if certain layers are unsupported by the
+GPU. The Hexagon delegate executes the model on Qualcomm Hexagon
+DSPs, while the NNAPI delegate leverages the Android NNAPI for model
+execution. These delegates rely on the OpenCL, OpenGL ES, Hexagon,
+and NNAPI libraries, respectively.
+    The execution model of LiteRT is synchronous, meaning that the
+execution of a model occurs in a single, uninterrupted sequence. Initi­
+ation of a subsequent model execution is only permitted after the                                          Fig. 3. Target hardware.
+completion of the preceding execution. This synchronous nature re­
+stricts LiteRT to executing a single model at a time within a task. While        on-Chip (SoC) is a Qualcomm SA8195, featuring eight CPU cores, a GPU,
+LiteRT does offer batch execution capabilities for concurrently pro­             and a DSP. Two variants of the board were used: one equipped with a
+cessing multiple inputs, this feature is currently limited to its CPU            Mobilint Aries NPU connected to the SoC via PCIe, and the other with
+backend. Support for batch inference is not available on its GPU and             three Hailo-8 NPUs. Both board variants include Fakra connectors and
+Hexagon delegates.                                                               Automotive Ethernet for connecting multiple sensors.
+                                                                                     The target application is a batch inference application illustrated in
+3. Problem description                                                           Fig. 4. The timeline for the batch inference application is described as
+                                                                                 follows. First, the application collects sensor data from multiple sensors.
+   This paper aims to develop an inference framework that supports               Second, it preprocesses the collected sensor data to generate a batch
+parallel execution across heterogeneous accelerators via LiteRT. To              input on CPUs. Third, it executes a model with the batch input on the
+formally define this objective, we first describe the target hardware and        accelerators. Until the batch inference is finished, preprocess stops.
+application, followed by a presentation of the problem statement.                Fourth, as an output is generated from the accelerator, the output is
+                                                                                 postprocessed to produce the result on CPUs.
+3.1. Target system
+                                                                                 3.2. Problem definition
+   Our target hardware is an embedded system that possesses hetero­
+geneous accelerators. To exemplify this, we selected a board specifically          In order to run batch inference on heterogeneous accelerators, a
+designed for this research, as shown in Fig. 3. The board’s main System-         multi-queue, multi-accelerator scheduling model can be considered, as
+
+
+
+
+                                                              Fig. 2. Workflow for LiteRT.
+
+                                                                             3
+P. Shin et al.                                                                                                        Journal of Systems Architecture 167 (2025) 103508
+
+
+
+
+                                                                   Fig. 4. Target application.
+
+
+illustrated in Fig. 5. The batch input is provided as a queue, and the               outputs is equivalent to n. The postprocessing time of oi is denoted as pi .
+scheduler determines the assignment of each input to an accelerator                  oi becomes ri after postprocess. Given the discrepancy in accuracy across
+queue. Each accelerator processes the inputs in its queue sequentially               different accelerators, the accuracy of ri will be different. We define ai as
+and generates outputs.                                                               the accuracy of ri .
+     According to this model, the end-to-end latency from sensor data to                 Our goal is to minimize the arithmetic mean of ti and the arithmetic
+                                                                                                                   ∑                  ∑
+final result is comprised of three distinct components, as illustrated in            mean of pi , which are 1/n⋅ ni=1 ti and 1/n⋅ ni=1 pi , respectively. The
+Fig. 6. First, the sensor data undergoes preprocess and becomes one of               constraint is to avoid decreasing the minimum accuracy, represented as
+the inputs in batch input. Second, the input awaits execution in the                 min(a1 , a2 , …, an ).
+accelerator queue, where it remains until the previous inputs in the
+queue have been processed. The input is then subjected to inference,                 4. Inference framework
+yielding an output. Finally, this output undergoes postprocess, resulting
+in a final outcome.                                                                      The proposed inference framework operates in two primary steps to
+     In order to minimize the end-to-end latency, it is necessary to reduce          achieve the objective defined in the preceding section. Fig. 7 illustrates
+preprocessing time, turnaround time, and postprocessing time depicted                these operations of the framework. First, the accelerator scheduler de­
+in Fig. 6. Among these latencies, our focus is on reducing the turnaround            termines the assignment of each input to an accelerator queue, aiming to
+time and the postprocessing time, given that the preprocessing time is               minimize the arithmetic mean of ti . The inference thread in the target
+relatively short.                                                                    application initiates the scheduler via LiteRT’s batch inference API. The
+     To formally define the turnaround time and the postprocessing time,             hooking engine intercepts this API call and invokes the scheduler. After
+we introduce the notations summarized in Table 1. These notations are                the scheduler assigns inputs to the accelerator queues, it forks the
+defined within the scope of a single batch inference; they are reini­                worker threads. These worker threads obtain the inputs in each accel­
+tialized for each new batch inference.                                               erator queue and execute them on the accelerators via the compatible
+     We define τi as a job to execute the model on the ith input. Let the            APIs.
+number of inputs in an input batch be n. Then, we need to schedule τ1 ,                  Second, the postprocessing parameter adjuster provides the post­
+τ2 , …, τn to the accelerators. Fig. 5 will help to understand the notations.        processing parameters that minimize the arithmetic mean of pi while
+Define qj as the queue of the jth accelerator. Let the number of accel­              maintaining the minimum accuracy. Upon completion of the assignment
+erators be m. When τi is scheduled to qj , the number of inputs in qj in­            of inputs, the accelerator scheduler furnishes the mapping relationship
+creases. We denote the number of jobs scheduled to qj before τi as kj,i .            between inputs and their assigned accelerators to the postprocessing
+The turnaround time of τi is the sum of the wait time in the accelerator             parameter adjuster. The postprocessing parameter adjuster possesses a
+queue and the time required to execute τi . Since heterogeneous accel­               set of tuples of score threshold and mAP for each accelerator that is
+erators have different performance characteristics, the time needed to               provided offline, enabling it to ascertain the optimal score threshold for
+execute a model is different as well. We define the time needed to                   each output. These determined score thresholds are then provided to the
+execute a model on qj as cj . We then define ti as the turnaround time of τi .       postprocessing threads in the target application, where postprocess is
+Obviously, ti is kj,i ⋅cj + cj .                                                     performed on each output using the score threshold.
+     We subsequently define oi as the output of τi . The number of total                 The proposed inference framework operates within the layered
+
+
+
+
+                                         Fig. 5. Scheduling model for batch inference using heterogeneous accelerators.
+
+                                                                                 4
+P. Shin et al.                                                                                                   Journal of Systems Architecture 167 (2025) 103508
+
+
+
+
+                                                Fig. 6. End-to-end latency from sensor data to final result.
+
+
+                                                                                 provide a hooking engine to facilitate support for hardware utilizing
+   Table 1
+                                                                                 proprietary libraries. The accelerator scheduler and postprocessing
+   Basic notations.
+                                                                                 parameter adjuster components are also hardware-agnostic. The com­
+      Symbol                     Definition                                      plete source code and a comprehensive porting guide are available in
+      τi                         Job to execute model on the ith input           our GitHub repository [21].
+      n                          Number of inputs in an input batch                 The following sections detail the hooking engine, the accelerator
+      qj                         Queue of the jth accelerator
+                                                                                 scheduler, and the postprocessing parameter adjuster, respectively.
+      m                          Number of accelerators
+      kj,i                       Number of jobs scheduled to qj before τi
+      cj                         Time needed to execute a model on qj            4.1. Hooking engine
+      ti                         Turnaround time of τi
+      oi                         Output of τi                                        The purpose of the hooking engine is to enable the LiteRT API to
+      pi                         Postprocessing time of oi
+                                                                                 utilize Mobilint and Hailo NPUs. These NPUs rely on their proprietary
+      ri                         Result of oi
+      ai                         Accuracy of ri                                  Maccel and HailoRT libraries, which precludes their compatibility with
+                                                                                 the OpenCL, OpenGL ES, Hexagon, and NNAPI libraries used by LiteRT
+                                                                                 delegates. Consequently, the hooking engine has been developed to
+architecture depicted in Fig. 8. The framework is built on top of an             facilitate the LiteRT API to call the Maccel and HailoRT libraries.
+automotive-grade Linux operating system, and all necessary libraries                 Fig. 9 depicts the operation of the hooking engine. The hooking
+and drivers, including LiteRT and its delegates, have been ported to             engine implements custom LiteRT APIs that have the same names and
+ensure seamless integration. Crucially, the framework is designed for            arguments as the originals. When the target application calls a LiteRT
+hardware independence. This is achieved primarily through the LiteRT,            API, it is redirected to the corresponding custom LiteRT API. This custom
+which support a wide range of hardware platforms via XNNPack,                    API then invokes either the original LiteRT API or the appropriate
+OpenCL, OpenGL ES, Hexagon, and NNAPI libraries. Furthermore, we                 Maccel/HailoRT API. Critically, the hooking engine does not require any
+
+
+
+
+                                                  Fig. 7. Overview of the proposed inference framework.
+
+                                                                             5
+P. Shin et al.                                                                                                      Journal of Systems Architecture 167 (2025) 103508
+
+
+
+
+                                             Fig. 8. Layered architecture of the proposed inference framework.
+
+
+
+
+                                                           Fig. 9. Operation of hooking engine.
+
+
+modification to the LiteRT library itself, ensuring compatibility with any          Developers can utilize the hooking engine by simply including the
+version of the library.                                                          provided header file and linking the library. The header file instructs the
+    The primary challenge in developing the hooking engine is invoking           C++ preprocessor to convert the namespaces, a process that occurs
+the original LiteRT API within the custom LiteRT API. The LiteRT C++             transparently to the developer.
+API includes classes and functions. To call a C++ function without using
+its name directly, one must know its address. However, the C++ stan­             4.2. Accelerator scheduler
+dard prohibits taking the address of a constructor or destructor [22].
+Consequently, the LiteRT C++ functions (specifically constructors and                The idea of the accelerator scheduler is to put τi on qj that ti will be
+destructors) must be called directly within the custom functions of the          minimum. It calculates ti candidates if τi is scheduled to each qj and
+same name.                                                                       selects the minimum. The algorithm of the accelerator scheduler is
+    In order to address this challenge, we make custom classes with the          depicted in Fig. 10. The inputs are n, m, and cj for 1 ≤ j ≤ m. The outputs
+same names as the original LiteRT classes, but within a different                are ti for 1 ≤ i ≤ n and qj for 1 ≤ j ≤ m. Line 1~3 initializes kj,i as 0. Line
+namespace, and inheriting the original LiteRT classes. This inheritance
+                                                                                 5~7 calculates ti candidates. Line 8~14 finds the minimum ti candidate.
+allows us to call directly all original member functions and variables. We
+                                                                                 Line 15~16 increases kj,i and puts τi on qj . Line 5~16 is iterated for all τi .
+then overload about 30 functions, including creation of an interpreter
+                                                                                     This greedy algorithm minimizes the arithmetic mean of turnaround
+object from a model file and parsing of information from input and
+                                                                                 time. We will prove it.
+output tensors, to call the Maccel and HailoRT libraries when needed.                                                           ∑
+The batch inference API is also overloaded to invoke the accelerator             Theorem 1. Our algorithm minimizes 1/n⋅ ni=1 ti .
+scheduler. Since the LiteRT API does not map to the Maccel and HailoRT
+                                                                                    Proof.
+API one by one, the implementation requires precise coding techniques.
+                                                                                    For any turnaround time u,
+
+                                                                             6
+P. Shin et al.                                                                                                             Journal of Systems Architecture 167 (2025) 103508
+
+
+
+                                                                                      u1 = min(lst(U1 ), lst(U2 ), …, lst(Um ))
+                                                                                              = min(c1 , c2 , …, cm )
+                                                                                                       = t1
+                                                                                          Let u1 = cα that 1 ≤ α ≤ m.
+                                                                                      u2 = min(lst(U1 ), lst(U2 ), …, lst(Uα − {cα }), …, lst(Um ))
+                                                                                                   = min(c1 , c2 , …, 2⋅cα , …, cm )
+                                                                                            Since t1 = u1 = cα , our algorithm schedules τ1 to qα .
+                                                                                            ∴kj,2 = 0 for 1 ≤ j ≤ α and (α + 1) ≤ j ≤ m, and kα,2 = 1.
+                                                                                            ∴t2 = min(c1 , c2 , …, 2⋅cα , …, cm ) = u2 .
+                                                                                            After removing u1 , u2 , …, ui− 1 from U1 , U2 , …, Um , let the least
+                                                                                      element of Uj as sj,i ⋅cj .
+                                                                                                             (                               )
+                                                                                            Let ui = min s1,i ⋅c1 , s2,i ⋅c2 , …, sm,i ⋅cm = sα,i ⋅cα .
+                                                                                            We will prove that if sj,i = kj,i + 1 for 1 ≤ j ≤ m, then sj,i+1 = kj,i+1 + 1
+                                                                                      for 1 ≤ j ≤ m.
+                                                                                                           (                                     )      (
+                                                                                            ui+1 = min s1,i+1 ⋅c1 , s2,i+1 ⋅c2 , …, sm,i+1 ⋅cm = min s1,i ⋅c1 , s2,i ⋅c2 , …,
+                                                                                      (           )                )
+                                                                                        sα,i + 1 ⋅cα , …, sm,i ⋅cm
+                                                                                            ∴sj,i+1 = sj,i for 1 ≤ j ≤ α and (α + 1) ≤ j ≤ m, and sα,i+1 = sα,i + 1.
+                                                                                                  ((           )    (           )          (      ) )
+                                                                                       ti = min k1,i + 1( ⋅c1 , k2,i + 1 ⋅c2 , …, k)m,i + 1 ⋅cm
+                                                                                                     = min s1,i ⋅c1 , s2,i ⋅c2 , …, sm,i ⋅cm
+                 Fig. 10. Algorithm of acclerator scheduler.
+                                                                                                                  ( = sα,i ⋅cα)
+                                                                                                                 = kα,i + 1 ⋅cα
+u = s⋅cj
+                                                                                          Therefore, our algorithm schedules τi to qα .
+where s is a positive integer and j is an integer that 1 ≤ j ≤ m.                         ∴kj,i+1 = kj,i for 1 ≤ j ≤ α and (α + 1) ≤ j ≤ m, and kα,i+1 = kα,i + 1.
+    Sort all u by ascending order and let them u1 ≤ u2 ≤ ….                               If sj,i = kj,i + 1 for 1 ≤ j ≤ m, then sj,i+1 = sj,i = kj,i + 1 = kj,i+1 + 1 for
+    We will prove that ti = ui for 1 ≤ i ≤ n.                                         1 ≤ j ≤ α and (α + 1) ≤ j ≤ m, and sα,i+1 = sα,i + 1 = kα,i + 1 + 1 =
+    Let U1 = {1⋅c1 , 2⋅c1 , 3⋅c1 , …}.                                                kα,i+1 + 1.
+    Let U2 = {1⋅c2 , 2⋅c2 , 3⋅c2 , …}.                                                    ∴ If sj,i = kj,i + 1 for 1 ≤ j ≤ m, then sj,i+1 = kj,i+1 + 1 for 1 ≤ j ≤ m.
+    …                                                                                     sj,1 = kj,1 + 1 for 1 ≤ j ≤ m.
+    Let Um = {1⋅cm , 2⋅cm , 3⋅cm , …}.                                                    If sj,i = kj,i + 1 for 1 ≤ j ≤ m, then sj,i+1 = kj,i+1 + 1.
+    Obviously, u is an element of one of Uj .                                             ∴sj,i = kj,i + 1 for 1 ≤ j ≤ m and 1 ≤ i ≤ n.
+    We will prove that our proposed algorithm is equivalent to the                        ∴ti = ui for 1 ≤ i ≤ n.
+                                                                                                                                          ∑
+procedure that generates the sequence u1 , u2 , … by iteratively finding                  Therefore, our algorithm minimizes 1/n⋅ ni=1 ti . ∎
+the minimum among the current head elements (least elements) of sets                      Another strength of the proposed algorithm is that it guarantees first-
+U1 , U2 , …, Um , selecting it as the next ui , and conceptually removing it          come, first-finished. It is not necessary for all inputs in a batch to be
+from its source set (i.e., advancing to the next element in that set).                created simultaneously. See Fig. 4 again. Since preprocess stops during
+    Consider the illustrative example in Fig. 11 with initial sets U1 = {2,           batch inference, the collected sensor data accumulates if the period of
+ 4, 6, 8, 10, …}, U2 = {3, 6, 9, 12, 15, …}, and U3 = {4, 8, 12, 16,                  data collection is less than the batch inference latency. These sequential
+ 20, …}.                                                                              data can then be aggregated to form a batch input. Even when the inputs
+    To find u1 , we identify the least elements of U1 , U2 , and U3 , which are       within a batch are processed on different accelerators, the proposed
+2, 3, and 4, respectively. The minimum is min(2, 3, 4) = 2. Thus, u1 =                algorithm ensures that the input generated first will also be the first to
+ 2.                                                                                   complete processing.
+    Since u1 came from U1 , we remove u1 = 2 from U1 . To find u2 , we
+                                                                                      Theorem 2. If a < b, ta ≤ tb .
+find the minimum among the least elements of new set: 4 (from U1 ), 3
+(from U2 ), and 4 (from U3 ). The minimum is min(4, 3, 4) = 3. Thus, u2                  Proof.
+ = 3.                                                                                    From Proof of Theorem 1, ti = ui for 1 ≤ i ≤ n.
+    Since u2 came from U2 , we also remove u2 = 3 from U2 . To find u3 ,                 Therefore, ta = ua ≤ ub = tb . ∎
+we find the minimum among the least elements of new set: 4 (from U1 ),                   Finally, we will show that the proposed algorithm bounds the turn­
+6 (from U2 ), and 4 (from U3 ). The minimum is min(4, 6, 4) = 4. Thus,                around time to a constant value.
+u3 = 4.                                                                                                                             ∑
+                                                                                      Theorem 3. The maximum ti is (n + m − 1)/ m      j=1 1/cj .
+    This process of iteratively finding ui is equivalent to our algorithm. In
+general, the following holds.                                                             Proof.
+    Let the least element of set S as lst(S).                                             Let τn be scheduled to qα by our algorithm.
+                                                                                          We will derive the inequality of kα,n and kj,n for 1 ≤ j ≤ m and j ∕
+                                                                                                                                                             = α.
+                                                                                          Since our algorithm schedules qi to the minimum ti candidate,
+
+
+
+
+                                       Fig. 11. Simple example for finding the nth least number from sets U1 , U2 , and U3 .
+
+                                                                                  7
+P. Shin et al.                                                                                                                            Journal of Systems Architecture 167 (2025) 103508
+
+
+following inequality holds.                                                                             bounding boxes based on their confidence scores during suppression.
+                                                                                                        The maximum detection number limits the number of detections
+kα,n ⋅cα + cα ≤ kj,n ⋅cj + cj
+                                                                                                        selected after suppression.
+(           ) cα                                                                                            The evaluation revealed that all three parameters significantly in­
+    kα,n + 1 ⋅ ≤ kj,n + 1                                                                               fluence accuracy. However, only increasing the score threshold led to a
+              cj
+                                                                                                        reduction in postprocessing latency. Therefore, we decide to provide a
+(           ) cα                                                                                        higher score threshold than the default value to reduce pi when oi has
+    kα,n + 1 ⋅ − 1 ≤ kj,n
+              cj                                                                                        been executed on the Mobilint and Hailo NPUs.
+                                                                                                            The postprocessing parameter adjuster works in three steps. First, the
+      We then derive the inequality of tn .
+                                                                                                        developer must provide the set of tuples of score threshold and mAP for
+                                                                                                        each accelerator at pre-runtime. Second, at runtime, after model
+                                                                                                        execution is complete, the postprocessing parameter adjuster receives
+
+
+
+                                           ∑m               ∑α− 1                   ∑m
+                            n− 1=            j=1
+                                                   kj,n =     j=1
+                                                                    kj,n + kα,n +    j=α+1
+                                                                                             kj,n
+                             (                )               ∑m ((                           )
+             ∑α− 1 (              ) cα                                             ) cα
+           ≥             k  ,n + 1 ⋅    −   1    +  k   ,n +            k  ,n + 1 ⋅      −   1
+                                     cj                                               cj
+                 j=1
+                           α                          α           j=α+1
+                                                                         α
+
+
+  ∑α− 1 ((          ) cα
+                               ) ∑ (
+                                         α     (            ) cα
+                                                                      ) ∑
+                                                                              m
+                                                                                     (
+                                                                                       (         ) cα
+                                                                                                        )
+=          kα,n + 1 ⋅ − 1 +                      kα,n + 1 ⋅ − 1 +                        kα,n + 1 ⋅ − 1
+   j=1                cj                 j= α                 cj              j= α+1               cj
+                                    ∑m ((                    ) cα
+                                                                  )
+                                 =               kα,n + 1 ⋅         − m
+                                          j=1                  cj
+
+
+
+                                                                                                        information from the accelerator scheduler about which accelerator will
+                    m
+                    ∑ (            ) cα                                                                 generate each output. Finally, the postprocessing parameter adjuster
+n+m− 1≥                    kα,n + 1 ⋅                                                                   finds the optimal score threshold for oi that has been executed on the
+                     j=1
+                                      cj
+                                                                                                        Mobilint and Hailo NPUs. The score threshold is increased such that ai
+                                                                                                        from Mobilint and Hailo NPUs will be not less than the accuracy from
+     (        )     n+m− 1
+∴tn = kα,n + 1 ⋅cα ≤ ∑m 1                                                                               the DSP and GPU.
+                                    j=1 cj
+
+
+      As same above, we can derive the inequality of tn− 1 .                                            5. Experimental evaluation
+
+          n+m− 2 n+m− 1                                                                                    We evaluated the effectiveness of our proposed inference framework
+tn− 1 ≤    ∑m 1 < ∑m 1
+                 j=1 cj           j=1 cj                                                                against both the proprietary inference frameworks provided by the NPU
+                                              ∑                                                         vendors and the open-source framework LiteRT. For this evaluation, we
+   Therefore, the maximum ti is (n + m − 1)/ m  j=1 1/cj .
+                                                                                                        implemented a test application, which will be described in detail. Sub­
+   The maximum ti is available when τn is scheduled to qα and kα,n ⋅cα +                                sequently, we will present the experimental setup and results.
+cα = kj,n ⋅cj + cj for 1 ≤ j ≤ m and j ∕
+                                       = α. ∎
+                                                                                                        5.1. Test application
+4.3. Postprocessing parameter adjuster
+                                                                                                             We have developed an object detection application that takes a
+    The postprocessing parameter adjuster must determine when and                                       COCO 2017 validation dataset [24] comprising 5000 images as input.
+which parameters to provide in order to minimize the arithmetic mean                                    The application is illustrated in Fig. 12. Initially, the application selects n
+of pi while maintaining the minimum accuracy. In the target hardware,                                   images from the 5000 images. The preprocessing threads then prepro­
+the LiteRT model representation utilized by the GPU and DSP exhibits                                    cess the images to generate a batch input. Subsequently, the inference
+lower accuracy than the proprietary model representations used by the                                   thread initiates batch inference via the LiteRT’s batch inference API. As
+Mobilint and Hailo NPUs. Consequently, when oi has been executed on                                     the output is generated, the postprocessing threads perform the post­
+the Mobilint and Hailo NPUs, the postprocessing parameter adjuster                                      process. The application iterates until all 5000 images are detected.
+provides parameters that reduce pi by compromising ai .                                                      In this application, we restrict the preprocessing and postprocessing
+    To determine the specific parameters to adjust, it is necessary to                                  threads to run on four of the eight CPU cores in the target system. We
+define the scope of postprocess. This paper focuses on Non-Maximum                                      then constrain the inference thread to run on the other four cores. The
+Suppression (NMS) postprocess [23]. This postprocessing technique                                       inference thread invokes the accelerator scheduler, which forks worker
+has been extensively used in various computer vision tasks, including                                   threads for the accelerators (see Fig. 7). As a result, the inference thread
+object detection and motion estimation, to enhance the accuracy of the                                  and the worker threads run on different cores than the preprocessing and
+results. The NMS postprocess identifies the most relevant bounding                                      postprocessing threads. This prevents inference from interfering with
+boxes among a multitude of bounding boxes.                                                              preprocess and postprocess. We use the pthread_setaffinity_np()
+    To identify adjustable parameters, we have evaluated the impact of                                  Linux function to set the thread affinity.
+three representative NMS parameters on accuracy and postprocessing                                           For each batch inference, the application measures the sum of the
+latency. The parameters of interest include the IoU threshold, the score                                turnaround and postprocessing time for n images. Since the application
+threshold, and the maximum detection number. The IoU threshold de­                                      is iterated over 5000 images, the measurement is iterated 5000/n times.
+termines the maximum overlap permitted between bounding boxes                                           The application then calculates the mean of the sum of the turnaround
+prior to the suppression of one. The score threshold serves to filter out                               and postprocessing time by dividing the sum of the measurement by
+
+                                                                                                    8
+P. Shin et al.                                                                                                      Journal of Systems Architecture 167 (2025) 103508
+
+
+
+
+                                               Fig. 12. Test application implemented for experimental evaluation.
+
+
+5000. Additionally, the maximum value of the sum of the turnaround                 5.3. Experimental result
+and postprocessing time is identified. Upon application termination, the
+total application latency and the mAP are measured. It is important to                 In order to assess the effectiveness of the proposed inference
+note that measuring the turnaround time and the postprocessing time                framework, we first conducted a comparison of the mean of the sum of
+separately is not feasible. This limitation arises from the fact that some         the turnaround and postprocessing time, the total application latency,
+postprocess is executed within the LiteRT and NPU libraries along with             and the mAP. The following configurations were selected as baseline
+inference, which lack an API to measure the inference and post­                    comparisons: LiteRT(GPU), LiteRT(DSP), Maccel, and HailoRT. For the
+processing time.                                                                   LiteRT(GPU) configuration, we ran the LiteRT application on the orig­
+    The application is available in three variants: one written with the           inal LiteRT with the GPU delegate. For the LiteRT(DSP) configuration,
+LiteRT C++ API, another with the Maccel API, and the third with the                we ran the LiteRT application with the Hexagon delegate. Additionally,
+HailoRT API. The libjpeg library has been employed for image decoding              the Maccel application was deployed on the board with a Mobilint NPU
+while the json-c library has been used to output detected objects to a             for the Maccel configuration. Finally, the HailoRT application was
+JSON file.                                                                         executed on the board with the Hailo NPUs for the HailoRT configura­
+                                                                                   tion. Only one Hailo NPU was utilized on the HailoRT configuration.
+5.2. Experimental setup                                                                Subsequently, we ran the LiteRT application with the proposed
+                                                                                   inference framework on the board equipped with the Mobilint NPU and
+    Hardware. As previously stated, the target board contains the                  the board equipped with the Hailo NPUs, respectively. We set n to 40
+Qualcomm SA8195 SoC as its primary SoC. This SoC comprises eight                   and cg , cd , cm , ch1 , ch2 , and ch3 to the values measured at pre-runtime.
+CPU cores, a GPU, and a DSP. Two variants of the boards exist. One                     Fig. 13 depicts the result on the board equipped with the Mobilint
+variant is equipped with a Mobilint Aries NPU connected to the SoC via             NPU. The x-axis represents the model, while the y-axis denotes the
+PCIe, while the other is equipped with three Hailo-8 NPUs.                         normalized value for each model and mAP. It should be noted that no
+    DL model. We have tried to convert well-known models for the ac­               model supports both the GPU and the Mobilint NPU (see Table 2).
+celerators. The models that have been successfully converted to support            Therefore, our inference framework can only utilize the DSP and the
+multiple accelerators are enumerated in Table 2. The following models              Mobilint NPU concurrently. The proposed inference framework invari­
+were used in the experimental evaluation: SSD Mobilenet v1, v2, Effi­              ably diminished the mean of the sum of the turnaround and post­
+cientDet Lite 0, 1, 2, YOLO v5, v8, v11 nano, small, medium, large,                processing time and the total application latency when compared to the
+extra-large, and YOLOv9 compact [25–32]. The compatibility of the DL               Maccel configuration. The most effective model was the YOLO v5 nano,
+model with each accelerator is described in Table 2.                               which exhibited a 33 % reduction in the mean of the sum of the turn­
+    Parameters. Two types of parameters have been configured ac­                   around and postprocessing time and a 16 % reduction in the total
+cording to the objectives of the experiments. The first is the number of           application latency. The mAP was not decreased below the value when
+inputs in a batch, denoted as n. The second is the time needed to execute          using the LiteRT(DSP).
+a model on each accelerator, previously denoted as cj . The time needed                The results obtained from the board equipped with the Hailo NPUs
+to execute a model on a GPU, DSP, Mobilint NPU, Hailo NPU 1, Hailo                 are presented in Fig. 14. A blank spot in the graph indicates that the
+NPU 2, and Hailo NPU 3 is denoted as cg , cd , cm , ch1 , ch2 , and ch3            corresponding accelerator is not supported for that specific model. The
+respectively.                                                                      inference framework concurrently leverages the GPU, DSP, and three
+                                                                                   Hailo NPUs for the SSD Mobilenet v1 and v2 models. For the EfficientDet
+                                                                                   Lite 0, 1, 2 models, the GPU and the three Hailo NPUs are utilized. In the
+                                                                                   case of the YOLO series, the DSP and the three Hailo NPUs are employed.
+Table 2
+                                                                                   The proposed inference framework consistently demonstrated a reduc­
+Compatibility of DL model with each accelerator.
+                                                                                   tion in both the mean of the sum of the turnaround and postprocessing
+  Model                                  GPU   DSP   Mobilint      Hailo           time and the total application latency when compared to the HailoRT
+                                                     NPU           NPU
+                                                                                   configuration. The mAP was not reduced below the values observed on
+  SSD Mobilenet v1, v2                   O     O     X             O               the LiteRT(GPU) and LiteRT(DSP) configurations.
+  EfficientDet Lite 0, 1, 2              O     X     X             O                   The SSD Mobilenet v1 and v2 models were predicted to demonstrate
+  YOLO v5 nano, small, medium, large,    X     O     O             X
+    extra-large
+                                                                                   the most significant reduction since these models can run on the greatest
+  YOLO v8 nano, small, medium, large,    X     O     O             O               number of accelerators in parallel. However, the EfficientDet Lite
+    extra-large                                                                    0 model demonstrated the most efficacy, achieving 95 % reduction in
+  YOLO v9 compact                        X     O     O             O               the mean of the sum of the turnaround and postprocessing time and 91
+  YOLO v11 nano, small, medium, large,   X     O     X             O
+                                                                                   % reduction in the total application latency. This enhancement can be
+    extra-large
+
+
+                                                                               9
+P. Shin et al.                                                                                                          Journal of Systems Architecture 167 (2025) 103508
+
+
+
+
+Fig. 13. Comparison of the mean of the sum of the turnaround and postprocessing time, the total application latency, and the mAP on the board equipped with the
+Mobilint NPU.
+
+
+attributed to the fact that the postprocess for the EfficientDet Lite models         turnaround and postprocessing time increases stepwise, with a step size
+requires more time than that for the other models. Empirical evidence                of 4, which corresponds to the number of DSP and Hailo NPUs. However,
+supported this finding, demonstrating that the mean of the sum of the                an intermediate value was observed when the batch size was 9, indi­
+turnaround and postprocessing time drastically decreased when                        cating that the input was assigned to the GPU.
+increasing the score threshold while running the EfficientDet Lite                       Although the scheduler has functioned as anticipated, the perfor­
+models on the HailoRT configuration. Since the proposed inference                    mance of three Hailo NPUs in Fig. 14 did not align with our expectations,
+framework reduces the postprocessing latency, the most efficacy was                  prompting an investigation to understand the underlying causes. To this
+observed for the EfficientDet Lite models.                                           end, we measured the mean of the sum of the turnaround and post­
+    Among the non-EfficientDet models, as expected, the SSD Mobilenet                processing time of YOLO v8 series when using one Hailo NPU only, two
+v2 exhibited the most reduction in both the mean of the sum of the                   Hailo NPUs, and three Hailo NPUs. To execute a single Hailo NPU, we
+turnaround and postprocessing time and the total application latency,                configured ch1 to 1 and ch2 , ch3 , cd , and cg to infinite value. To assess the
+with a 72 % and 41 % decrease, respectively.                                         impact of two Hailo NPUs, we set ch1 and ch2 to 1 and ch3 , cd , and cg to
+    To assess the functionality of the accelerator scheduler, we focused             infinite value. Finally, to ascertain the impact of three Hailo NPUs, we
+on SSD Mobilenet v2, which can run on the greatest number of accel­                  set ch1 , ch2 , and ch3 to 1 and cd and cg to infinite value. The parameter n
+erators in parallel. We changed n from 1 to 20 and ran the LiteRT                    was set to 40.
+application with the proposed inference framework on the board                           As demonstrated in Fig. 16, the mean of the sum of the turnaround
+equipped with the Hailo NPUs. The ratio of ch1 , ch2 , ch3 , cd , and cg that        and postprocessing time on the two Hailo NPUs was between 52 % and
+were measured at pre-runtime was 1.00 : 1.00 : 1.00 : 0.971 : 2.71.                  70 % of that on the single Hailo NPU. The time on the three Hailo NPUs
+Therefore, as n increased from 1 to 8, the input was allocated to the DSP,           was between 38 % and 64 % of the value on the single Hailo NPU. While
+the Hailo NPU 1, the Hailo NPU 2, and the Hailo NPU 3 successively.                  the utilization of three Hailo NPUs led to a substantial reduction in time
+Notably, when n reached 9, the input was assigned to the GPU. When n                 compared to the utilization of two Hailo NPUs on the YOLO v8 nano and
+increased from 10 to 20, the input was assigned to the DSP, the Hailo                small models, the reduction was minimal on the YOLO v8 medium,
+NPU 1, the Hailo NPU 2, and the Hailo NPU 3 in turn.                                 large, and extra-large models.
+    Fig. 15 depicts the maximum value of the sum of the turnaround and                   The underlying reason for this phenomenon is likely insufficient PCIe
+postprocessing time according to the batch size n. This result provides              bandwidth, given that the SA8195 SoC only supports 1 × 4-lane PCIe
+empirical evidence to support the functionality of the accelerator                   3.0. The three Hailo-8 NPUs have to share this PCIe bandwidth;
+scheduler. As the batch size increases, the maximum value of the sum of
+
+                                                                                10
+P. Shin et al.                                                                                                         Journal of Systems Architecture 167 (2025) 103508
+
+
+
+
+Fig. 14. Comparison of the mean of the sum of the turnaround and postprocessing time, the total application latency, and the mAP on the board equipped with the
+Hailo NPUs.
+
+
+
+
+                        Fig. 15. The maximum value of the sum of the turnaround and postprocessing time according to the batch size.
+
+
+however, each NPU may require at least 2-lane PCIe 3.0 connection to                   equipped with powerful CPUs and GPUs. To facilitate the deployment of
+accommodate large models. This finding is supported by the specifica­                  DL models on resource-constrained embedded systems, a substantial
+tion sheet [33].                                                                       amount of research has focused on optimizing the DL inference. Early
+    Finally, we compared the maximum value of the sum of the turn­                     research concentrated on enhancing inference speed on a single accel­
+around and postprocessing time to the theoretical value in Theorem 3.                  erator [25,34–44]. Subsequent research has progressed to speed up
+We ran the LiteRT application with the proposed inference framework                    inference on homogeneous accelerators [45–50] and then on heteroge­
+on the board equipped with the Mobilint NPU and the board equipped                     neous accelerators [51,52].
+with the Hailo NPUs, respectively. We set n to 40 and cg , cd , cm , and ch1 to            Single accelerator. Improving inference speed on a single acceler­
+the values measured at pre-runtime. ch2 and ch3 were set to infinite value             ator involves optimizing the DL model itself. The optimization can be
+considering the PCIe bandwidth interference between multiple Hailo                     categorized into three approaches: (1) modifying the overall model
+NPUs.                                                                                  structure, (2) altering the layers within the model, and (3) adjusting the
+    Fig. 17 depicts the result. The value observed on the proposed                     nodes within individual layers. Modifying the model structure by
+inference framework was always smaller than the theoretical value.                     adjusting the number of depths and widths of the model to generate
+                                                                                       models of varying sizes is known as model scaling [25,37,38]. Effi­
+6. Related works                                                                       cientNets, for example, utilize model scaling to generate models ranging
+                                                                                       from 7.8 MB to 66 MB, achieving accuracy between 79 % and 84 %.
+    DL models are typically trained on high-performance servers                            Modifying the layers within the model involves either removing
+
+
+                                                                                  11
+P. Shin et al.                                                                                                   Journal of Systems Architecture 167 (2025) 103508
+
+
+
+
+                                   Fig. 16. Mean of the sum of the turnaround and postprocessing time on Hailo NPUs.
+
+
+
+
+                    Fig. 17. Comparison of the maximum of the sum of the turnaround and postprocessing time to the theoretical value.
+
+
+redundant weights or compressing weights by reducing their precision.            with the goal of supporting such heterogeneous execution. They incor­
+The former is referred to as pruning [39–41] and the latter is called            porate internal mechanisms to partition models into subgraphs, poten­
+quantization [34–36]. Adjusting the nodes within individual layers aims          tially assigning each to a different accelerator—utilizing Execution
+to design models that are hardware-friendly for specific devices. This           Providers (EPs) in ONNX Runtime, backends in ExecuTorch, and dele­
+often involves replacing operators or parameters within a node with              gates in LiteRT.
+those that execute efficiently on the target hardware [42–44]. It is                 However, despite these design intent, practical limitations within the
+important to note that these model optimization techniques are com­              respective backend libraries often constrain execution to a single
+plementary to accelerating models with multiple accelerators and have            accelerator at a time. For instance, in ONNX Runtime, specifying mul­
+been employed in subsequent research.                                            tiple EPs should ideally enable model partitioning and concurrent
+    Homogeneous accelerators. To speed up inference on homoge­                   execution, but this capability is frequently unsupported by individual
+neous accelerators, researchers have proposed strategies for dynami­             EPs. Many EPs, including those for Intel OpenVINO, Qualcomm QNN,
+cally dividing a model into subgraphs and assigning these subgraphs at           Android NNAPI, and Apple Core ML, treat ONNX graph as merely a
+runtime to multiple GPUs or NPUs using parallel or pipelined execution.          model description format, converting the entire graph into their pro­
+Young H. Oh and Kiwon Sohn proposed partitioning and scheduling                  prietary intermediate representation. These EPs implement the Get­
+subgraphs to maximize the utilization of multi-core NPUs [47,48]. Yunyi          Capability() function primarily to check if the provided graph is a
+Xiang and Arne Symons proposed genetic algorithm-based schedulers                subgraph (using IsSubgraph()) and reject processing if it is, thereby
+for multi-core accelerators to reduce application latency [49,50]. Rafael        preventing model partitioning. Even EPs that support subgraph execu­
+Sousa’s compiler-assisted scheduler employed tensor slicing to minimize          tion, like those for NVIDIA and AMD GPUs, do not currently enable
+data transfers between the host and the NPU cores’ memories [45].                ONNX Runtime to execute a single model concurrently across multiple
+Based on experimental heuristics, Hanwoong Jung proposed partition­              GPUs, a known limitation with pending feature requests [53].
+ing and scheduling algorithms for multi-core NPUs, considering syn­                  ExecuTorch and LiteRT face analogous challenges. Although Exec­
+chronization across multiple cores and communication between local               uTorch theoretically allows specifying multiple backends, most back­
+and global memory [46].                                                          ends require Ahead-Of-Time (AOT) compilation via the
+    Heterogeneous accelerators. The emergence of heterogeneous ac­               to_edge_transform_and_lower() function. This process converts the
+celerators has spurred research into partitioning models for concurrent          model into a target-specific representation—a step required for back­
+execution across these heterogeneous resources. Leading DL inference             ends targeting Apple Core ML, Qualcomm QNN, and Arm Ethos-U NPUs.
+frameworks like LiteRT, ONNX Runtime, and ExecuTorch are designed                Once a model is lowered for a specific backend, it cannot be dynamically
+
+                                                                            12
+P. Shin et al.                                                                                                           Journal of Systems Architecture 167 (2025) 103508
+
+
+retargeted to run parts on another accelerator. Similarly, LiteRT faces           declare that they have no known competing financial interests or per­
+restrictions regarding the concurrent application of multiple delegates;          sonal relationships that could have appeared to influence the work re­
+currently, only the CPU XNNPACK delegate is designed for cooperative              ported in this paper.
+execution alongside others. Notably, LiteRT delegates for GPUs and
+Hexagon DSPs do not mandate conversion to a proprietary intermediate              Acknowledgements
+representation. This suggests a potential pathway for modifying LiteRT
+to enable concurrent execution of a single model across these specific               This work was supported by the Technology Innovation Program
+delegates. Indeed, prior works by Joo Seong Jeong and Jianyu Wei                  (20014336, Autonomous Driving AI SW Platform & Tool Chain based on
+leveraged this characteristic, using the LiteRT model as a common                 Standard Architecture) funded By the Ministry of Trade Industry &
+representation to run partitioned models in parallel on CPUs, GPUs, and           Energy (MOTIE, Korea).
+DSPs via their respective delegates [51,52]. Nonetheless, this strategy
+remains inapplicable to delegates reliant on proprietary representation           Data availability
+conversion.
+     Positioning of our work. In summary, existing frameworks face                    Data will be made available on request.
+significant limitations, primarily stemming from backend library re­
+strictions that impede concurrent execution across heterogeneous ac­              References
+celerators. Compounding this issue, they typically employ simplistic
+greedy scheduling strategies. For example, ONNX Runtime, ExecuTorch,               [1] Sauptik Dhar, et al., A survey of on-device machine learning: an algorithms and
+                                                                                       learning theory perspective, ACM Trans. Internet of Things 2 (3) (2021) 1–49.
+and LiteRT attempt to offload as much computation as possible to the               [2] Sicong Liu, et al., Deep learning inference on heterogeneous mobile processors:
+first specified (or highest priority) accelerator. This heuristic approach             potentials and pitfalls, in: Proceedings of the 2024 Workshop on Adaptive AIoT
+does not guarantee minimal turnaround time. Moreover, even if back­                    Systems, 2024.
+                                                                                   [3] Runhua Zhang, et al., A high-performance dataflow-centric optimization
+end library limitations were resolved to allow static partitioning and                 framework for deep learning inference on the edge, J. Syst. Archit. 152 (2024)
+offline conversion for multiple hardware targets, this approach would                  103180.
+still lack the flexibility to adapt scheduling decisions dynamically at            [4] Abdallah Moujahid, et al., Machine learning techniques in ADAS: a review, in:
+                                                                                       2018 International Conference on Advances in Computing and Communication
+runtime.                                                                               Engineering (ICACCE), 2018.
+     In contrast, our proposed inference engine overcomes these limita­            [5] Miaomiao Liu, Sikai Yang, Wyssanie Chomsin, Wan Du, Real-time tracking of
+tions. It circumvents backend library restrictions by leveraging the batch             smartwatch orientation and location by multitask learning, in: Proceedings of
+                                                                                       SenSys 120–133, 2022.
+inference API, thereby enabling concurrent execution even with back­
+                                                                                   [6] Junchao Yang, et al., Joint optimization of layering and power allocation for
+ends not inherently designed for cooperation. Critically, departing from               scalable VR video in 6G networks based on Deep Reinforcement Learning, J. Syst.
+simplistic greedy approach, our framework employs an optimal sched­                    Archit. (2025) 103401.
+uling strategy to dynamically distribute computation across heteroge­              [7] Daniel Caballero-Martin, et al., Artificial intelligence applied to drone control: a
+                                                                                       state of the art, Drones 8 (7) (2024) 296.
+neous accelerators at runtime. This dynamic distribution effectively               [8] https://developer.nvidia.com/deep-learning-accelerator. Accessed 25 Feb. 2025.
+minimizes turnaround time, offering a more performant and adaptable                [9] https://docs.nvidia.com/vpi/architecture.html. Accessed 25 Feb. 2025.
+solution compared to current state-of-the-art frameworks.                         [10] https://docs.qualcomm.com/bundle/publicresource/topics/80-63442-50/bac
+                                                                                       kend.html. Accessed 25 Feb. 2025.
+                                                                                  [11] Peng Du, et al., From CUDA to OpenCL: towards a performance-portable solution
+7. Conclusion                                                                          for multi-platform GPU programming, Parallel. Comput. 38 (8) (2012) 391–407.
+                                                                                  [12] https://www.qualcomm.com/developer/software/hexagon-npu-sdk. Accessed 25
+                                                                                       Feb. 2025.
+   This paper presented a novel inference framework designed to                   [13] https://www.mobilint.com/sdk. Accessed 25 Feb. 2025.
+accelerate deep learning inference on heterogeneous accelerators. By              [14] https://github.com/hailo-ai/hailort. Accessed 25 Feb. 2025.
+leveraging a batch inference API and incorporating a portable hooking             [15] https://developer.android.com/ndk/guides/neuralnetworks. Accessed 25 Feb.
+                                                                                       2025.
+engine for commercial NPUs, our framework enables concurrent pro­                 [16] https://ai.google.dev/edge/litert. Accessed 25 Feb. 2025.
+cessing of multiple inputs across heterogeneous accelerators via LiteRT.          [17] https://onnxruntime.ai. Accessed 25 Feb. 2025.
+The proposed scheduling algorithm demonstrably minimizes average                  [18] https://pytorch.org/executorch-overview. Accessed 25 Feb. 2025.
+                                                                                  [19] Jihun Kim, Dong Seog Han, Benaoumeur Senouci, Radar and vision sensor fusion
+turnaround time. Furthermore, our adaptive postprocessing parameter
+                                                                                       for object detection in autonomous vehicle surroundings, in: 2018 tenth
+adjuster minimizes postprocessing latency while maintaining the mini­                  international conference on ubiquitous and future networks (ICUFN), 2018.
+mum accuracy. Evaluation on a Qualcomm SA8195 SoC with Mobilint                   [20] https://www.katech.re.kr/eng. Accessed 25 Feb. 2025.
+and Hailo NPUs demonstrated a significant reduction in application la­            [21] https://github.com/Hozzu/TFLite-for-Heterogeneous-Accelerators. Accessed 24
+                                                                                       April. 2025.
+tency compared to existing inference frameworks. Future work will                 [22] British Standards Institute: The C++ Standard incorporat ing Technical
+focus on developing scheduling algorithms for scenarios involving                      Corrigendum 1. John Wiley and Sons, Ltd., 2003. ISBN 0-470-84674-7.
+concurrent execution of multiple DL models across accelerators, with a            [23] Jan Hosang, Rodrigo Benenson, Bernt Schiele, Learning non-maximum
+                                                                                       suppression, in: Proceedings of the IEEE conference on computer vision and pattern
+particular emphasis on optimizing energy efficiency.                                   recognition, 2017.
+                                                                                  [24] https://cocodataset.org. Accessed 25 Feb. 2025.
+CRediT authorship contribution statement                                          [25] Howard, Andrew G. "Mobilenets: Efficient convolutional neural networks for
+                                                                                       mobile vision applications." arXiv preprint arXiv:1704.04861. 2017.
+                                                                                  [26] Wei Liu, et al., Ssd: single shot multibox detector, in: Computer Vision–ECCV2016:
+   Philkyue Shin: Visualization, Supervision, Resources, Methodology,                  14th European Conference, Amsterdam, The Netherlands, October 11–14, 2016,
+Formal analysis, Conceptualization, Writing – original draft, Validation,              Proceedings, Part I 14, 2016.
+                                                                                  [27] Yu-Chen Chiu, et al., Mobilenet-SSDv2: an improved object detection model for
+Software, Project administration, Investigation, Data curation. Myung­                 embedded systems, in: 2020 International conference on system science and
+sun Kim: Writing – review & editing. Seongsoo Hong: Writing – review                   engineering (ICSSE), 2020.
+& editing, Funding acquisition.                                                   [28] Mingxing Tan, Ruoming Pang, Quoc V. Le, Efficientdet: scalable and efficient
+                                                                                       object detection, in: Proceedings of the IEEE/CVF conference on computer vision
+                                                                                       and pattern recognition, 2020.
+Declaration of competing interest                                                 [29] Joseph Redmon, et al., You only look once: unified, real-time object detection, in:
+                                                                                       Proceedings of the IEEE conference on computer vision and pattern recognition,
+                                                                                       2016.
+    The authors declare the following financial interests/personal re­
+                                                                                  [30] Jocher, Glenn, Ayush Chaurasia, and Jing Qiu. "Ultralytics YOLOv8." https://githu
+lationships which may be considered as potential competing interests:                  b.com/ultralytics/ultralytics. 2023.
+Seongsoo Hong reports financial support was provided by Korea Min­
+istry of Trade Industry and Energy. If there are other authors, they
+
+                                                                             13
+P. Shin et al.                                                                                                                            Journal of Systems Architecture 167 (2025) 103508
+
+[31] Chien-Yao Wang, I-Hau Yeh, Hong-Yuan Mark Liao, Yolov9: learning what you                     [52] Jianyu Wei, et al., Nn-stretch: automatic neural network branching for parallel
+     want to learn using programmable gradient information, in: European conference                     inference on heterogeneous multi-processors, in: Proceedings of the 21st Annual
+     on computer vision, Cham: Springer Nature Switzerland, 2024.                                       International Conference on Mobile Systems, Applications and Services, 2023.
+[32] Jocher, Glenn and Jing Qiu. "Ultralytics YOLO11." https://github.com/ultralyt                 [53] https://github.com/microsoft/onnxruntime/issues/16382. Accessed 24 April.
+     ics/ultralytics. 2024.                                                                             2025.
+[33] https://hailo.ai/products/ai-accelerators/hailo-8-m2-ai-acceleration-module/#h
+     ailo8-m2-overview. Accessed 25 Feb. 2025.
+[34] Finkelstein, Alexander, Uri Almog, and Mark Grobman. "Fighting quantization bias
+     with bias." arXiv preprint arXiv:1906.03193. 2019.                                                                       Philkyue Shin earned his B.S. degrees in the Department of
+[35] Alex Finkelstein, et al., Qft: post-training quantization via fast joint finetuning of                                   Electrical and Computer Engineering from Seoul National
+     all degrees of freedom, in: European Conference on Computer Vision, 2022.                                                University, Korea, in 2017. He is currently a Ph.D. candidate in
+                                                                                                                              the Department of Electrical and Computer Engineering at
+[36] Benoit Jacob, et al., Quantization and training of neural networks for efficient
+     integer-arithmetic-only inference, in: Proceedings of the IEEE conference on                                             Seoul National University, Korea. He is also a member of Real-
+                                                                                                                              Time Operating System Laboratory at Seoul National Univer­
+     computer vision and pattern recognition, 2018.
+[37] Kaiming He, et al., Deep residual learning for image recognition, in: Proceedings of                                     sity. His current research interests include task scheduling and
+     the IEEE conference on computer vision and pattern recognition, 2016.                                                    resource management in the Linux kernel and software archi­
+[38] Mingxing Tan, Quoc Le, Efficientnet: rethinking model scaling for convolutional                                          tecture for embedded AI.
+     neural networks, in: International conference on machine learning, 2019.
+[39] Yang He, et al., Filter pruning via geometric median for deep convolutional neural
+     networks acceleration, in: Proceedings of the IEEE/CVF conference on computer
+     vision and pattern recognition, 2019.
+[40] Yihui He, Xiangyu Zhang, Jian Sun, Channel pruning for accelerating very deep
+     neural networks, in: Proceedings of the IEEE international conference on computer
+     vision, 2017.                                                                                                            Myungsun Kim is currently an Associate Professor with the
+[41] Tien-Ju Yang, Yu-Hsin Chen, Vivienne Sze, Designing energy-efficient                                                     Department of Applied Artificial Intelligence, Hansung Uni­
+     convolutional neural networks using energy-aware pruning, in: Proceedings of the                                         versity, Seoul, South Korea. Prior to joining the university, he
+     IEEE conference on computer vision and pattern recognition, 2017.
+                                                                                                                              had worked in Samsung Electronics R&D for the development
+[42] Xiaoliang Dai, et al., Chamnet: towards efficient network design through platform-                                       of NPU (Neural Processing Unit), Linux kernel internal,
+     aware model adaptation, in: Proceedings of the IEEE/CVF Conference on Computer
+                                                                                                                              Android framework, and SoC. He received the Ph.D degree
+     Vision and Pattern Recognition, 2019.                                                                                    from the Department of Electrical and Computer Engineering,
+[43] Mingxing Tan, et al., Mnasnet: platform-aware neural architecture search for                                             Seoul National University, in 2016, and the B.S and M.S de­
+     mobile, in: Proceedings of the IEEE/CVF conference on computer vision and
+                                                                                                                              grees in Electrical Engineering from Chung-Ang University, in
+     pattern recognition, 2019.                                                                                               1998 and 2000, respectively. His current research interests
+[44] Tien-Ju Yang, et al., Netadapt: platform-aware neural network adaptation for
+                                                                                                                              include generative AI, embedded system design, HW/SW cross-
+     mobile applications, in: Proceedings of the European conference on computer                                              layer optimization for on-device AI.
+     vision (ECCV), 2018.
+[45] Rafael Sousa, et al., Tensor slicing and optimization for multicore NPUs, J. Parallel.
+     Distrib. Comput. 175 (2023) 66–79.
+[46] Hanwoong Jung, et al., Accelerating deep neural networks on mobile multicore
+     NPUs, in: Proceedings of the 21st ACM/IEEE International Symposium on Code                                              Seongsoo Hong earned his B.S. and M.S. degrees in computer
+     Generation and Optimization, 2023.                                                                                      engineering from Seoul National University, Korea, in 1986
+[47] Young H. Oh, et al., Layerweaver: maximizing resource utilization of neural                                             and 1988, respectively. He received his Ph.D. degree in com­
+     processing units via layer-wise scheduling, in: 2021 IEEE International Symposium                                       puter science from the University of Maryland, College Park, in
+     on High-Performance Computer Architecture (HPCA), 2021.                                                                 1994. He is currently a professor in the Department of Elec­
+[48] Kiwon Sohn, et al., A strategy to maximize the utilization of AI neural processors                                      trical and Computer Engineering at Seoul National University.
+     on an automotive computing platform, in: 2024 IEEE International Conference on                                          His current research interests include software-defined vehicles
+     Consumer Electronics (ICCE), 2024.                                                                                      (SDV) and cloud native computing, task scheduling and
+[49] Yunyi Xiang, et al., Aries: a DNN inference scheduling framework for multi-core                                         resource management in the Linux kernel, embedded and real-
+     accelerators, in: Proceedings of the 2024 5th International Conference on                                               time systems design, real-time operating systems, software
+     Computing, Networks and Internet of Things, 2024.                                                                       architecture for embedded and real-time systems, and cross-
+[50] Arne Symons, et al., Stream: a modeling framework for fine-grained layer fusion on                                      layer optimization of complex multi-layered software sys­
+     multi-core DNN accelerators, in: 2023 IEEE International Symposium on                                                   tems. He is the member of the advisory committee of IEEE
+     Performance Analysis of Systems and Software (ISPASS), 2023.                                  RTCSA. He served as a general co-chair of IEEE RTCSA 2006 and CASES 2006 and as a
+[51] Joo Seong Jeong, et al., Band: coordinated multi-dnn inference on heterogeneous               program committee co-chair of IEEE RTAS 2005, RTCSA 2003, IEEE ISORC 2002 and ACM
+     mobile processors, in: Proceedings of the 20th Annual International Conference on             LCTES 2001. He has served on numerous program committees, including IEEE RTSS and
+     Mobile Systems, Applications and Services, 2022.                                              ACM OOPSLA. He is a fellow of the National Academy of Engineering of Korea (NAEK). He
+                                                                                                   is currently a senior member of the IEEE and a senior member of the ACM.
+
+
+
+
+                                                                                              14
+

@@ -1,0 +1,1068 @@
+                      2020 IEEE Real-Time and Embedded Technology and Applications Symposium (RTAS)
+
+
+
+
+       Latency-Aware Generation of Single-Rate DAGs
+                 from Multi-Rate Task Sets
+                         Micaela Verucchi∗† , Mirco Theile† , Marco Caccamo† and Marko Bertogna∗
+                                            ∗ University of Modena and Reggio Emilia, Italy
+
+                                            {micaela.verucchi, marko.bertogna}@unimore.it
+                                             † Technical University of Munich, Germany
+                                                  {mirco.theile, mcaccamo}@tum.de
+
+
+      Abstract—Modern automotive and avionics embedded systems
+                                                                                 GPS
+   integrate several functionalities that are subject to complex tim-           T = 50
+   ing requirements. A typical application in these ﬁelds is composed             τ0
+
+   of sensing, computation, and actuation. The ever increasing                              gps pose
+                                                                                                                    occupancy grid
+   complexity of heterogeneous sensors implies the adoption of
+   multi-rate task models scheduled onto parallel platforms. Aspects
+   like freshness of data or ﬁrst reaction to an event are crucial               Lidar   cloud    Localization           pose         EKF          state   Planner   steer,speed   Control
+   for the performance of the system. The Directed Acyclic Graph                T = 50              T = 50                           T = 10                T = 10                  T = 10
+                                                                                  τ1                  τ2                               τ6                     τ7                     τ8
+   (DAG) is a suitable model to express the complexity and the
+   parallelism of these tasks. However, deriving age and reaction                                           cloud                             objects
+
+   timing bounds is not trivial when DAG tasks have multiple rates.
+   In this paper, a method is proposed to convert a multi-rate
+   DAG task-set with timing constraints into a single-rate DAG that             Camera
+                                                                                T = 25
+                                                                                         frame         Detection
+                                                                                                        T = 50
+                                                                                                                         bbox        Fusion
+                                                                                                                                     T = 50
+   optimizes schedulability, age and reaction latency, by inserting               τ5                      τ3                           τ4
+   suitable synchronization constructs. An experimental evaluation
+   is presented for an autonomous driving benchmark, validating               Fig. 1: An example of high-utilization automotive application
+   the proposed approach against state-of-the-art solutions.                  with tasks at different periods.
+      Index Terms—DAG, multi-rate, end-to-end latency, schedula-
+   bility.
+
+                          I. I NTRODUCTION                                    a valid sensor input until the last output related to that input in
+      Modern automotive and avionics real-time embedded sys-                  the chain. Data age constraints are commonly found in control
+   tems are composed of applications including sensors, control               systems, where the age of the data can directly inﬂuence the
+   algorithms and actuators to regulate the state of a system in its          quality of the control. In the considered application, key effect
+   environment within given timing constraints. Task chains are               chains to optimize for data age are connected to the processing
+   commonly adopted to model a sequence of steps performed                    of camera frames and LiDAR point clouds: the older the input,
+   along the control path. Complex data dependencies may exist                the less precise is the localization of the ego vehicle and the
+   between task chains with different activation rates, making                detection of obstacles.
+   it very hard to ﬁnd reliable upper bounds on the end-to-end                   Another key metric to optimize is the reaction latency,
+   latency of critical effect chains [1].                                     a parameter that measures the reactivity of the system to
+      This problem is exacerbated by the adoption of even more                a change in the input. It is deﬁned as the maximum delay
+   complex task models based on Directed Acyclic Graphs                       between a valid sensor input until the ﬁrst output of the event
+   (DAG) to capture the parallel activation of multiple jobs                  chain that reﬂects such an input. It measures how much time
+   executing on heterogeneous multi-core platforms. A recent                  it takes for a new event to propagate through a chain. In the
+   example in the automotive domain is given in the WATERS                    considered autonomous driving example, key reaction times to
+   industrial challenge [2], focusing on the minimization of the              optimize are the detection of an obstacle in the driving path,
+   end-to-end latency of critical effect chains of an autonomous              and the related actuation on the steering and breaking system
+   driving system involving several sensors. The application is               to safely avoid it in due time.
+   modeled in Figure 1, with three sensors providing input to                    The aim of this work is to consider such systems composed
+   multiple task chains. Nodes represent tasks with different                 of DAG tasks having multiple rates with given constraints on
+   activation periods, while edges represent the exchange of                  age and reaction latencies. Starting from a high-level repre-
+   data between tasks, forming effect chains. Reaction to input               sentation, a method is presented to create a single-rate DAG
+   stimuli and freshness of data are key factors to consider when             that fulﬁlls the given restrictions, optimizing schedulability
+   deploying the application on a selected computing platform.                and end-to-end delays. To do so, a set of DAG candidates
+   Data age quantiﬁes for how long an input data affects an                   is generated and evaluated by a constrained cost function
+   output of a task chain, i.e., it is the maximum delay between              designed to pick the best DAG meeting the given requirements.
+
+
+2642-7346/20/$31.00 ©2020 IEEE                                          223
+DOI 10.1109/RTAS48715.2020.00023
+   The paper is organized as follows: in the next section, an               considering task chains. In [15], the authors propose a method
+overview of the state-of-the-art is given before introducing                to ﬁnd the best period to bound data freshness of task chains,
+the system model of the proposed approach. In Section IV,                   assuming the task set given in input be already schedulable.
+the mathematical basis of the following sections is derived.                Adapting these solutions to our setting is not trivial, because
+Section V gives a detailed explanation of the conversion from               we assume periods and deadline to be given.
+the multi-rate task set to the single-rate DAG. Section VI
+focuses on the requirements: end-to-end latency, schedulability             B. Multi-rate DAG
+and their evaluation. Finally, we conclude with an experimen-                  In [16], Saito et al. present a framework developed for
+tal part, in which the results of our framework are shown,                  the Robot Operating System (ROS) to handle automotive
+comparing them with other existing methods.                                 applications with multi-rate tasks. The model assumes an
+                      II. R ELATED W ORK                                    event-driven data-ﬂow system in which a node starts when the
+A. End-to-end latency                                                       predecessor nodes are completed. In order to handle multi-rate
+                                                                            tasks, a synchronization system is adopted consisting of two
+   A task chain is a sequence of communicating tasks in which               kinds of additional nodes: synch driver nodes and synch nodes.
+every task receives data from its predecessor. In literature,               The synch driver node is used to adjust the publishing period
+two types of task chains can be found: periodic chains and                  of the sensors, buffering the data of the highest rate one, in
+event-driven chains [3]. In the former, each task is activated              order to have a node with a unique rate for all the sensors.
+independently at a given rate, and it communicates with its                 Synch nodes are then inserted before the tasks to handle
+successor by means of shared variables; in the latter, task exe-            buffered data. In this way, a single-rate DAG is obtained and
+cutions are triggered by an event issued from a preceding task.             scheduled using a ﬁxed-priority algorithm based on the HLBS
+The propagation delays of a task chain affect responsiveness,               scheduler [17].
+performance and stability of an application.                                   Forget et al. [18] faced the same problem for autopilot
+   We hereafter focus on the periodic model, which is the                   applications, considering periodic tasks modeled as nodes
+most common in the automotive domain [1]. Di Natale et                      in a DAG with two kinds of edges: simple and extended.
+al. [4] proposed a method to evaluate the worst-case latency of             Simple edges are precedence constraints between tasks having
+mixed chains of real-time tasks and Controller Area Network                 the same rate, while extended edges are data dependencies
+(CAN) messages. Zeng et al. [5], [6] computed the probability               between tasks having different rates. To handle extended
+distribution, via statistical analysis, of end-to-end latencies for         edges, a method is proposed to generate multiple conversions
+CAN message chains.                                                         from extended edges through simple precedence constraints
+   Feiertag et al. [7] were the ﬁrst to deﬁne data age and                  between jobs, selecting a permutation that guarantees Earliest
+reaction time and to propose a framework to calculate end-to-               Deadline First (EDF) schedulability.
+end latencies in automotive systems, where each task operates
+                                                                               Another conversion method from a multi-rate DAG to a
+according to the read-execute-write semantic, also known as
+                                                                            single-rate one has been proposed by Saidi et al. in [19] for
+the implicit communication model of AUTOSAR [8].
+                                                                            a similar DAG model. The output DAG has a period equal to
+   Becker et al. presented in [9] [10] a method to compute
+                                                                            the hyper-period of the input task set. The nodes are the job
+worst- and best-case data age for periodic tasks with implicit
+                                                                            instances activated in a hyper-period for each task. Edges are
+deadlines using implicit, explicit and Logical Execution Time
+                                                                            precedence constraints between jobs, which are inserted based
+(LET) communication models. The analysis is based on Read
+                                                                            on the ratio between the periods of the communicating tasks.
+Interval (RI) and Data Interval (DI), which respectively are the
+                                                                            A multi-core heuristic is proposed to schedule the DAG, while
+interval in which a task can possibly read its input data in order
+                                                                            minimizing a cost function related to task schedulability.
+to complete its execution before the deadline, and the interval
+                                                                               Converting the original task set to a DAG is a very
+for which the output data of a task can be available to the
+                                                                            convenient approach that allows seamlessly inserting explicit
+successor task in the chain. Multiple Data Propagation Trees
+                                                                            precedence constraints to control end-to-end latency. To our
+(DPT) are constructed in order to compute the data age. A
+                                                                            knowledge, most of the other methods in the literature perform
+method is also described to constrain the maximum latency by
+                                                                            similar conversions to impose such precedence constraints for
+inserting job-level dependencies. A tool, called MECHAniSer
+                                                                            limiting latency. While the work of Becker [9] may appear
+[11], is presented to compute latency values for a given task
+                                                                            different, as it does not explicitly consider DAGs, it ends
+set. Regarding the LET model, Biondi et al. [12] and Martinez
+                                                                            up implementing a similar approach by inserting precedence
+et al. [13] addressed the problem of computing end-to-end
+                                                                            constraints between different jobs. In Section VII, we will
+latency bounds on multi-cores, improving the results of Becker
+                                                                            highlight the differences between the presented methods and
+et al. in [10]. Our paper does not focus on the LET model,
+                                                                            our approach.
+but it aims at deriving better latency bounds for the implicit
+model.
+                                                                                                III. S YSTEM M ODEL
+   There exist other works that aim at selecting the best
+periods or deadlines to minimize data age in simpler task                     This work shows how to convert a Multi-Rate Task set with
+models. In [14], this is done on a single core platform, without            Constraints into a Single-Rate Directed Acyclic Graph (DAG),
+
+
+
+
+                                                                      224
+in order to analyze schedulability and end-to-end latency of               with a read-execute-write semantic, i.e., it reads a private copy
+task-chains.                                                               before the execution, and it writes a private copy at the end
+                                                                           of the execution [1].
+A. Multi-Rate Task set with Constraints
+   The input to the proposed method is a task set Γ, modeling              C. Notation
+an application like the one in Figure 1, composed of N                        For the sake of clarity, a standardized set of indexing names
+periodic tasks τx arriving at time t = 0. Each task τx is                  is adopted throughout the entire paper, i.e., {i, j, k} denote
+described by the tuple (W Cx , BCx , Tx , Dx ), where:                     general nodes in a DAG (jobs, synchronization or dummy
+   • W Cx ∈ R is the Worst Case Execution Time (WCET)                      nodes), {x, y, z} indicate tasks, and {a, b, c} are used for jobs.
+      of the task;
+   • BCx ∈ R is the Best Case Execution Time (BCET);
+                                                                                                     IV. BACKGROUND
+   • Tx ∈ N is the period;                                                   This part describes the main algorithms used in the fol-
+   • Dx ∈ R represents the relative deadline.                              lowing sections. A DAG is represented as an adjacency
+   The exchange of data between two tasks is modeled with as               matrix T ∈ Bn×n , in which Ti,j = 1 iff there exists an
+data edge, a directed (dashed) edge between the producer and               edge e(vj , vi )1 . Given this Boolean formulation of the DAG,
+the consumer of the data. Moreover, precedence constraints                 Boolean algebra can be applied. Therefore, the Boolean matrix
+may be speciﬁed between two tasks (τx , τy ), stating that a               product is deﬁned as:
+job τy,b cannot start until all the jobs of τx released in τy ’s                   C = AB,        A ∈ Bn×m , B ∈ Bm×n , C ∈ Bn×n                   (1)
+period completed their execution. For this reason, precedence
+constraints can be inserted only between tasks having the same             for which the cells of C evaluate to
+period, corresponding to job level precedence constraints.                                                  
+                                                                                                            m−1
+   To constrain the latency of data propagation in task-chains,                                    ci,j =         ai,k ∧ bk,j                      (2)
+upper bounds on data age and on reaction time can be given.                                                 k=0
+The latency constraints evaluation is described in more detail             Cell-wise Boolean operations are denoted as ∧ and ∨ for and
+in Section VI.                                                             and or, respectively. Additionally, a maximum matrix multi-
+   Our approach is based on a global non-preemptive list                   plication is used in this work to combine Boolean matrices
+scheduling approach, as described in Section VI-B. Such a                  with real matrices. It is deﬁned as
+policy allows different instances of the same task to run on
+different cores, while preventing a job to be migrated during                                       C = maxProduct(A, B),                          (3)
+its execution, mitigating the preemption overhead.                                        A∈B      n×m
+                                                                                                         ,B ∈ R   m×n
+                                                                                                                        ,C ∈ R    n×n
+
+
+B. Directed Acyclic Graph                                                  where the cells of C are calculated as
+   The output of the proposed method is a single-rate Directed
+                                                                                              ci,j =        max       {ai,k bk,j }.                (4)
+Acyclic Graph (DAG). Such a model is based on the parallel                                             k∈{0,...,m−1}
+DAG model proposed by Baruah in [20] to capture the
+                                                                           A. Transitive Closure
+parallelism of a task to be scheduled on a multi-core platform.
+In this model, tasks are represented as directed acyclic graphs,              The proposed scheduling method and the related end-to-end
+each with a unique source vertex and a unique sink vertex.                 latency computation make use of the mathematical principles
+Each vertex represents a sequential job, while edges represent             of graph theory [21]. One principle is the transitive closure
+precedence constraints between jobs.                                       [22] of a DAG, deﬁned as
+   In this work, we use a similar model with a semantic                                                         
+                                                                                                                n
+
+difference, i.e., a DAG represents a full application, with each                                         D=          Tk                            (5)
+vertex representing a task instance, which we call job. In detail,                                             k=1
+
+the DAG is speciﬁed by a 3-tuple (V, E, HP ) where:                        where the exponentiation of a Boolean matrix is calculated
+   • V represents the set of nodes, namely the jobs of the                 through the Boolean matrix product deﬁned in (1). The tran-
+     tasks of Γ, and n = |V |;                                             sitive closure of a DAG describes the set of descendants of
+   • E is the set of edges describing job-level precedence                 each node, where di,j = 1 if there exists a path from vj to vi ,
+     constraints;                                                          i.e., vi is a descendant of vj . Consequently, vj is an ascendant
+   • HP is the period of the DAG, namely the hyper-period                  of vi . The transpose of the descendants matrix, DT , therefore
+     of the tasks involved: HP = lcm∀τx ∈Γ {Tx }.                          represents the ascendants matrix.
+   In this model, the communication between jobs utilizes                     Computing the power of k of an adjacency matrix of a graph
+buffers in shared memory, which can be accessed by all the                 means calculating the nodes reachable through any k-step walk
+cores. The time to write/read a shared buffer is included                  from every node vi , which is a general result in graph theory
+in the execution time of each task. We adopt the implicit                    1 We chose the column-row approach over the commonly used row-column
+communication model deﬁned in AUTOSAR [8], solving                         approach to perform state and value propagation, described later in this
+mutual exclusion via double-buffering. Each task complies                  section, by left-multiplying the transition matrix to a column state vector.
+
+
+
+
+                                                                     225
+(Lemma 2.5 in [21]). Instead of computing the descendants                                     τ0                data       τ1        data              τ2
+matrix via (5), we can adopt a simpler formulation. By                                  T0 = 10                        T1 = 30                      T2 = 30
+introducing a self-loop to every node, the power of k of
+the adjacency matrix calculates not only the reachable nodes                   Fig. 2: The simple task set deﬁned in Example 1.
+of any k-step walk, but it also includes the reachable nodes
+through all shorter walks. Therefore,                                                                                                                τ2,0
+
+
+
+                     D = (T ∨ I)n ∧ ¬I                       (6)                                   τ2,0
+                                                                                                                                                     τ1,0
+
+
+
+where I ∈ Bn×n is the identity matrix, and ¬I is the Boolean                                       τ1,0
+
+complement of I. Given that T is an acyclic transition matrix,                                                                   S     τ0,0          τ0,1         τ0,2   E
+
+
+Tk has no element on the main diagonal ∀k ∈ N>0 . Therefore,               S     τ0,0              τ0,1         τ0,2   E
+the elements introduced on the main diagonal are set back to                                                                                  s10           s20
+
+
+zero.                                                                             (a) Replication                                       d0           d1           d2
+
+
+                                                                                                                                     (b) Synchronization
+B. State and Value Propagation                                                                     τ2,0                                              τ2,0
+
+
+
+   To use the DAG matrix T for the analysis of a DAG, two
+                                                                                                   τ1,0                                              τ1,0
+propagation methods are useful. The ﬁrst is a Boolean state
+propagation and the second is a maximum value propagation.
+Let xk ∈ Bn×1 denote a state describing which node of the                  S     τ0,0              τ0,1         τ0,2   E         S     τ0,0          τ0,1         τ0,2   E
+
+
+DAG is visited at iteration k. Then, the state of the DAG in
+iteration k + 1 can be calculated using the Boolean matrix                              s10               s20                                 s10           s20
+
+
+multiplication as:                                                                d0               d1           d2                      d0           d1           d2
+
+
+                         xk+1 = Txk                          (7)                 (c) Permutation                                            (d) Reduction
+
+In this way xk+1 will contain 1 for the nodes that are reached                  Fig. 3: The 4-Stage DAG generation depicted.
+with one step-walk from the ones in state xk , 0 for the others.
+   Similarly, a value can be propagated through the DAG. Let
+                                                                                                            V. DAG G ENERATION
+vk ∈ Rn×1 denote a value for each node of the DAG at
+iteration k. This value can be propagated through the paths of             In this section, we explain how to convert a task set of
+the DAG by using                                                         periodic tasks with constraints to a set of potential single-
+                                                                         rate DAGs. The explanation and mathematical derivations are
+                vk+1 = maxProduct(T, vk ),                   (8)         augmented with an example to illustrate the conversion.
+
+where the vector vk+1 describes the value vk in the next                 Example 1. We consider an application modeled as a
+iteration.                                                               Multi-Rate task set Γ = {τ0 = (7, 5, 10, 10), τ1 =
+                                                                         (13, 10, 30, 30), τ2 = (10, 8, 30, 30)}, with a constraint on the
+   In this work, we are interested in propagating execution
+                                                                         maximum data age of chain {τ0 , τ1 , τ2 } to be smaller than 50.
+times along the DAG. Given that in a DAG more paths can
+                                                                         The Multi-Rate task set is represented in Figure 2.
+converge to the same node, we will propagate the maximum
+value among converging paths. In the case of propagating                    A set of DAGs is generated using a 4-Stage DAG Genera-
+execution times through the DAG, we can deﬁne a value                    tion. The set is subsequently pruned to accelerate the analysis
+function v as                                                            in the next sections.
+
+                v = maxProduct(T, v + c),                    (9)         A. 4-Stage DAG Generation
+                                                                            We aim at generating a set of DAGs that have the potential
+with c being the execution time of each node (W C or BC).                to meet all the constraints. The DAG generation can be split
+In this equation, the value of a node is equal to the maximum            into four stages:
+of its predecessors’ values plus its execution time. The ﬁxed-
+                                                                            1) The respective jobs of the tasks are created.
+point v∗ solving Equation (9) can be found by iterating
+                                                                            2) The jobs are synchronized to meet their respective
+              vk+1 = maxProduct(T, vk + c)                 (10)                deadlines.
+                                                                            3) The job-level precedence edges are added to address the
+until it converges to v∗ when vk+1 = vk . Convergence is                       data edges.
+guaranteed to happen after at most n iterations, because the                4) The DAGs are simpliﬁed by removing redundant edges.
+graph is acyclic and, therefore, all its paths are composed of           The four steps for the example are depicted in Figure 3. We
+n or fewer nodes.                                                        hereafter detail each step.
+
+
+
+
+                                                                   226
+                                                                                                         τ1,0                         τ1,0                         τ1,0
+                     τj,0                      τj,1               τj,2
+
+                                                                                              S   τ0,0   τ0,1   τ0,2   E   S   τ0,0   τ0,1   τ0,2   E   S   τ0,0   τ0,1   τ0,2   E
+          0                            5                  10                    15
+
+                                                                                             (a) A0,1 = (0, 2, 1) (b) A0,1 = (1, 1, 1) (c) A0,1 = (2, 0, 1)
+          0   τi,0          3   τi,1       6   τi,2   9    τi,4   12     τi,5   15
+
+                                                                                           Fig. 5: Arrangement permutations with one parallel job of τx ;
+Fig. 4: Example of jobs of non-harmonic tasks limited to their                             there are three permutations because Q = 3 and ψ0 = 1,
+super-period. Doubled arches indicate possible interaction                                 therefore Q + 1 − ψ = 3. The permutation (b) corresponds to
+between jobs.                                                                              the example in 3c.
+
+
+   1) Replication: Each task has to execute a number of jobs                               Each possible edge assignment that complies with the multi-
+within one hyper-period. For a task τx , the number of jobs is                             rate task speciﬁcation is called “job arrangement”.
+HP
+ Tx . Since jobs are just instances of the same task, they should                              To ﬁnd all the possible permutations, two cases must be
+always run sequentially, therefore job-level precedence edges                              considered: harmonic and non-harmonic periods. In the former
+are added between successive jobs τx,a and τx,a+1 where a ∈                                                                            T
+                                                                                           case, there exists q ∈ N for which q = Txy and SPx,y = Ty .
+            Tx − 1}. Additionally, the start node of the DAG is
+{0, . . . , HP                                                                             Therefore, ﬁnding all the permutations between one job of
+connected to each ﬁrst job of each task, and each last job is                              τy and q of τx allows ﬁnding all the job arrangements in
+connected to the end node. The resulting DAG for the example                               their super-period. The non-harmonic case is slightly more
+is shown in Figure 3a. To synchronize the jobs in the following                            complicated. For two non-harmonic tasks, q ∈ N can be
+                                                                                                                  T
+step, each job gets an offset and deadline. For τx,a , the offset                          computed as q =  Txy , but SPx,y = Ty . In this case, one
+is aTx and the deadline is aTx + Dx .                                                      job of τy can be arranged with q or q + 1 jobs of τx , because
+   2) Synchronization: To be sure that tasks instances maintain                            of the non-harmonicity. To better understand the problem, let
+their original period and deadlines in the DAG, a synchronisa-                             us consider an example in which Tx = 3 and Ty = 5, as in
+tion mechanism has to be applied. In this way, we can enforce                              Figure 4.
+a job to start after its offset and to ﬁnish before its deadline. To                           When periods are harmonic, a job of τx always interact
+accomplish this, we add additional nodes for synchronization                               with exactly one job of τy (and respectively, τy interacts with
+purposes, as in Figure 3b. Firstly, we add a synchronization                               exactly q jobs of τy ) . However, for non-harmonic periods,
+node σt , with W C = BC = 0, for each unique value                                         a job of τx can interact with 1 or 2 (at most) jobs of τy ,
+t in the list of offsets and deadlines of all jobs. Secondly,                              as shown in Figure 4. For this reason, in the non-harmonic
+we add dummy nodes δ between each two consecutive syn-                                     scenario some jobs of τy will interact with q (in the example
+chronization nodes σt and σt , with W C = BC = t − t,                                     53  = 2, as for τy,0 and τy,2 ) jobs of τx , while others with
+i.e., the difference in the timestamps of the corresponding                                q + 1 (in this case 3, as for τy,1 ). In general, a job τy,a can
+synchronization nodes. The source and sink of the DAG are                                  interact with all the jobs between τx,b and τx,c , where b and
+synchronization nodes too, with a timestamp of 0 and HP ,                                  c can be obtained as:
+respectively.
+                                                                                              b ∈ N | o(τx,b ) ≤ o(τy,a ) ∧ o(τx,b ) + Tx > o(τy,a )                             (11)
+   To enforce the jobs to execute in a time-window within
+its offset and deadline, an edge to the job is added from the                              c ∈ N | o(τx,c ) < o(τy,a ) + Ty ∧ o(τx,c ) + Tx ≥ o(τy,a ) + Ty
+synchronization node of the corresponding offset, and another                                                                                            (12)
+one from the job to the synchronization node corresponding                                 where o(τx,b ) stands for the offset of the job τx,b .
+to its deadline.                                                                              Once the interacting job of τx and τy have been associated,
+   3) Permutation: The various instances of tasks with differ-                             this case can be traced back to the harmonic one.
+ent periods may be scheduled in multiple ways. We would like                                  Now, let us consider a job τy,s and all the possible arrange-
+to enforce a suitable execution order between such instances,                              ments with Q jobs of τx (which is either q or q + 1), denoted
+in order to minimize the latency of a given set of task chains.                            as Ax,y (s) = (pres , posts , ψs ) in the super-period SPx,y . In
+Thus, we convert the original multi-rate task set into several                             this tuple, pres (resp. posts ) denotes the number of jobs of τx
+single-rate DAGs, each representing a possible activation pat-                             executing before (resp. after) each job of τy . ψs denotes the
+tern of the considered tasks. To do so, we include additional                              number of jobs of τx that can execute in parallel to the job of
+precedence edges to the DAG obtained at the previous step.                                 τy . This parameter is critical for the data update variability,
+   Consider two tasks τx and τy with periods Tx and Ty ,                                   that is deﬁned as the difference between the maximum and
+assuming Ty ≥ Tx without loss of generality. Let SPx,y be the                              minimum number of data updates. Since pres , posts , and ψs
+super-period of tasks τx and τy , deﬁned as the least common                               comprise all the jobs of τx interacting with τy,s , it follows that
+multiple of their periods, i.e., SPx,y = lcm(Tx , Ty ). Note
+                                                                                                                       pres + posts + ψs = Q.                                    (13)
+there are SP  HP
+               x,y
+                   − 1 super-periods in the hyper-period HP of
+the whole task set.                                                                           Three example arrangements for two tasks, τ0 with T0 = 10
+   There exist multiple ways to insert precedence edges be-                                and τ1 with T1 = 30, are shown in Figure 5. In all three
+tween jobs of τx and τy in each super-period of length SPx,y .                             arrangements, the job of τ1 is parallel to one job of τ0 (ψ0 =
+
+
+
+
+                                                                                     227
+1). The number of permutations of arrangements with each                                             means removing direct edges e(vj , vi ) in T that are redundant
+τy,s can be calculated as:                                                                           because a non-direct path already exists between node j and
+                                                                                                    node i.
+          perm(Ax,y (s)) =         (Q + 1 − ψ),     (14)                                               In Figure 3d, the obtained DAG with reduced edges is
+                                            ψ={0...Q}
+                                                                                                     presented. For that example, the matrix T·D and Tr (obtained
+while the permutations can be found combining all the possible                                       with (18)) are the following3 :
+edges between the jobs of the two tasks.
+  For the harmonic case, this value is also the total number                                                       S
+                                                                                                                         ⎡
+                                                                                                                           0   0   1   1   1   1   1
+                                                                                                                                                    ⎤
+                                                                                                                                                                  S
+                                                                                                                                                                        ⎡
+                                                                                                                                                                          0   1   0   0   0   0   0
+                                                                                                                                                                                                    ⎤
+of permutations of a super-period:                                                                                τ0,0   ⎢0    0   0   1   0   1   1⎥            τ0,0   ⎢0    0   1   0   1   0   0⎥
+                                                                                                                         ⎢                          ⎥                   ⎢                           ⎥
+                                                                                                                  τ0,1   ⎢0    0   0   0   0   0   1⎥            τ0,1   ⎢0    0   0   1   0   0   0⎥
+                                                                                                                         ⎢                          ⎥                   ⎢                           ⎥
+                                                                                                                  τ0,2   ⎢0    0   0   0   0   0   0⎥            τ0,2   ⎢0    0   0   0   0   0   1⎥
+                       permSPx,y = perm(Ax,y (s)).                                      (15)             T·D=
+                                                                                                                  τ1,0
+                                                                                                                         ⎢
+                                                                                                                         ⎢0    0   0   0   0   0
+                                                                                                                                                    ⎥ Tr =
+                                                                                                                                                   1⎥            τ1,0
+                                                                                                                                                                        ⎢
+                                                                                                                                                                        ⎢0    0   0   1   0   1   0⎥
+                                                                                                                                                                                                    ⎥
+                                                                                                                         ⎢                          ⎥                   ⎢                           ⎥
+                                                                                                                  τ2,0   ⎣0    0   0   0   0   0   0⎦            τ2,0   ⎣0    0   0   0   0   0   1⎦
+On the other hand, for the non-harmonic case, the number of                                                        E       0   0   0   0   0   0   0              E       0   0   0   0   0   0   0
+permutations for the super-period is obtained as:
+                                                                                                       The interaction of the different data edges during the
+     permSPx,y =                    perm(Ax,y (s)).    (16)                                          Permutation stage can result in DAGs that are inherently not
+                                              SPx,y
+                               ∀τy,s ∈{0...    Ty }
+                                                                                                     schedulable. These DAGs can be removed to speed up the
+                                                                                                     analysis. Then, two factors are further inspected: potential
+  Finally, considering all the super-periods contained in a                                          cycles in the generated DAG, and length of the longest chain.
+hyper-period, the total number of permutations can be given                                             DAGs containing cycles need to be removed, as they are
+by:
+                                      HP
+                                      SP
+                                                                                                     inconsistent with the task semantics and they could not be
+                permtotal =      permSPx,y
+                                         x,y
+                                             ,         (17)                                          feasibly scheduled. Finding cycles in a graph is a common
+                                              ∀x,y                                                   problem which can be solved with several approaches. In this
+where x = y and τx and τy are consecutive tasks in a given                                           work, we use state propagation, described in Section IV-B.
+task chain. Each combination of arrangement permutations                                             We adopt a state vector x, whose elements indicate whether
+generates a new DAG that can be analyzed. Therefore, it is                                           a path exists (1) or not (0). Initially, x0 = 1 to consider
+critical to keep the number of possible permutations as small                                        the potential paths from all the nodes. Then, we apply state
+as possible. A reduction of the exploration space is discussed                                       propagation in Equation (7), multiplying the state vector with
+in Section V-B.                                                                                      the adjacency matrix T. This means stepping from a node to
+   Figure 3c shows one of the obtained DAG, whose sim-                                               its successor: if it has any, the resulting vector will have a
+pliﬁed2 adjacency matrix T and transitive closure matrix D                                           1 in the corresponding position, otherwise it will have a 0.
+(obtained with (6)) are the following:                                                               Repeating this operation means going through all the possible
+                                                                                                     paths. Since the graph is acyclic and it has n nodes, there
+                 ⎡                            ⎤              ⎡                           ⎤           should be no path with a length greater than n. In other words,
+           S       0   1   0    0   1   1   0          S       0   1   1   1   1   1   1
+          τ0,0   ⎢0    0   1    0   1   0   0⎥        τ0,0   ⎢0    0   1   1   1   1   1⎥            the resulting vector should have all 0’s after at most n steps,
+                 ⎢                            ⎥              ⎢                           ⎥
+          τ0,1   ⎢0    0   0    1   0   0   0⎥        τ0,1   ⎢0    0   0   1   0   0   1⎥
+                 ⎢                            ⎥              ⎢                           ⎥           indicating that all the paths have ended, i.e., there are no more
+          τ0,2   ⎢0    0   0    0   0   0   1⎥        τ0,2   ⎢0    0   0   0   0   0   1⎥
+    T=           ⎢                            ⎥ D=           ⎢                           ⎥
+          τ1,0   ⎢0    0   0    1   0   1   1⎥        τ1,0   ⎢0    0   0   1   1   1   1⎥            nodes to step into. If this is not the case, it means the DAG
+                 ⎢                            ⎥              ⎢                           ⎥
+          τ2,0   ⎣0    0   0    0   0   0   1⎦        τ2,0   ⎣0    0   0   0   0   0   1⎦
+           E       0   0   0    0   0   0   0          E       0   0   0   0   0   0   0             contains cycles, and it can be discarded.
+                                                                                                        Finally, the longest chain in the DAG corresponds to the
+   4) Reduction: While constructing the DAGs, it is possible
+                                                                                                     chain with the longest execution time. This chain can be
+to end up generating redundant edges. There is a redundant
+                                                                                                     explicitly found by calculating the ﬁxed-point of (9) with
+edge between two nodes when there exist both a direct edge
+                                                                                                     c = WC, the WCET of each node. If any value in v∗ + WC
+and a non-direct path. Redundant edges can be removed using
+                                                                                                     is bigger than the hyper-period HP , it means that there
+a technique called transitive reduction, ﬁrstly proposed by Aho
+                                                                                                     exists a path whose sum of WCETs exceeds the hyper-period,
+et al. in [23]. The transitive reduction of a DAG uniquely
+                                                                                                     which makes the DAG not schedulable. Also these DAGs are
+describes the sub-graph of this DAG with the fewest possible
+                                                                                                     discarded.
+edges, while maintaining the same reachability relation.
+                                                                                                        In the example, the vectors of WC and v∗ are the follow-
+   The transitive reduction of a DAG can be calculated in
+                                                                                                     ing:
+different ways. Since in this work we need the transitive
+reduction as well as the transitive closure of the DAG, we                                                                                    0
+                                                                                                                                               ⎡⎤            ⎡
+                                                                                                                                                              30
+                                                                                                                                                                 ⎤
+
+compute the transitive reduction using                                                                                                      ⎢7⎥              ⎢23⎥
+                                                                                                                                            ⎢ ⎥              ⎢ ⎥
+                                                                                                                                            ⎢7⎥              ⎢7⎥
+                                                                                                                                            ⎢ ⎥              ⎢ ⎥
+                                                                                                                                            ⎢7⎥ ∗            ⎢0⎥
+                               Tr = T ∧ ¬(T · D),                                       (18)                                           WC = ⎢   ⎥
+                                                                                                                                            ⎢10⎥ v =
+                                                                                                                                                             ⎢ ⎥
+                                                                                                                                                             ⎢10⎥
+                                                                                                                                            ⎢ ⎥              ⎢ ⎥
+                                                                                                                                            ⎣13⎦             ⎣0⎦
+
+where (T · D) has 1 in (j, i) if the node j can reach the node                                                                                0                0
+
+i in more than one step, 0 otherwise. Applying equation (18)                                            3 Given the previously mentioned simpliﬁcation, consecutive jobs of the
+                                                                                                     same task have precedence constraints between them, rather than having edges
+  2 Without synchronization and dummy nodes, removed for a clearer repre-                            to and from synchronization nodes. In the example, there is an edge from τ0,0
+sentation, but used in the actual algorithm.                                                         to τ0,1 and one from τ0,1 to τ0,2 .
+
+
+
+
+                                                                                               228
+                                               SPs+1
+                      SPs
+                                                                           and thus the same arrangement. However, in a homogeneous
+                      τj,0                      τj,0
+                                                                           arrangement, Ax,y (s) = Ax,y (s + 1) = (pre, post, ψ) and
+                                                                           s = t. Therefore,
+               τi,0   τi,1   τi,2   τi,0        τi,1   τi,2
+
+                                                                                                     V arx,y,hom = 2ψs                            (24)
+(a) Heterogeneous arrangement example with Ax,y (s) = (0, 2, 1)
+and Ax,y (s + 1) = (2, 1, 0)                                               Comparing to heterogeneous arrangements, in which
+                      SPs                      SPs+1
+                                                                           Ax,y (s) = Ax,y (s + 1), ∀s, two observations can be made.
+                      τj,0                      τj,0
+                                                                           On the one hand, a higher value of ψs for a job τy,s increases
+                                                                           schedulability of the related super-period, since it allows
+               τi,0   τi,1   τi,2   τi,0        τi,1   τi,2
+                                                                           for more parallelism and shortens the longest path. Given
+                                                                           that the schedulability of all the super-periods determines
+(b) Homogeneous arrangement example with Ax,y (s) = Ax,y (s +              the schedulability of the hyper-period, the value of ψs is
+1) = (0, 2, 1)                                                             crucial. On the other hand, from an application side, the data
+Fig. 6: Examples showing heterogeneous and homogeneous                     update variability should be as low as possible to constrain
+arrangements.                                                              end-to-end latency.
+                                                                              To reduce the permutation space while investigating all
+                                                                           the permutations that optimize latency, we chose to sacriﬁce
+B. Permutation Space Reduction                                             optimality w.r.t. schedulability. Homogeneous arrangements
+  The worst-case number of permutations, and thus the total                are better at this compromise. To show it, we prove that
+number of DAGs created, is given in (17), i.e., it is scaling
+exponentially with the size of the task set. Therefore, a                                        V arx,y,het > V arx,y,hom                        (25)
+reduction of the permutation space is essential to keep the
+approach computationally tractable for larger task sets. To                   Proposition: Given two tasks τx and τy with periods
+reduce the permutation space, we inspect the inter-super-                  gTx = Ty , hTy = HP, g, h ∈ N+ , a heterogeneous
+period-arrangement.                                                        arrangement results in a strictly higher variability than a
+  Given the previously adopted tasks τ0 and τ1 , Figure 6                  homogeneous arrangement.
+shows two possible arrangements, omitting synchronization
+nodes for simplicity.                                                      Proof: In a heterogeneous arrangement, Ax,y (s) =
+   Let us consider a couple of harmonic tasks τx , a τy in                 Ax,y (s + 1), which means that (pres , posts , ψs ) =
+their super-period SPx,y . For a given parallelism ψs , relative           (pres+1 , posts+1 , ψs+1 ). Let us deﬁne αs ∈ Z (resp.
+to job τy,s , the execution order of the parallel jobs is not              βs ∈ Z) as the difference between the jobs of τx that execute
+deﬁned. Therefore, a bounded number of jobs of τx , denoted                before (resp. after) τy,s+1 and the jobs of τx that execute
+as preP ars ∈ {0, . . . , ψs }, can execute before τy,s . Conse-           before (resp. after) τy,s 4
+quently ψs − preP ars jobs of τx will execute after τy,s . The                                     αs = pres+1 − pres                             (26)
+probability distribution of preP ars is not relevant since the
+only values that affect the latency variability are, by deﬁnition,                                 βs = posts+1 − posts                           (27)
+the extremes, i.e.,
+                                                                           Consequently, considering that pres + posts + ψs = pres+1 +
+      max(preP ars ) = ψs and min(preP ars ) = 0              (19)         posts+1 + ψs+1 = Q, we derive
+Based on these deﬁnitions, the number of jobs of τx between                                        ψs+1 = ψs − αs − βs                            (28)
+two consecutive jobs τy,s and τy,s+1 (in the following super-
+period) is given by                                                           With this deﬁnition, Equation (20) provides
+ ns,s+1 = posts +(ψs −preP ars )+pres+1 +preP ars+1 (20)
+                                                                           ns,s+1 = posts + (ψs − preP ars ) + pres+1 + preP ars+1
+The upper and lower bound of this value are given by                       ns,s+1 = posts + (ψs − preP ars ) + pres + αs + preP ars+1
+      max(ns,s+1 ) = posts + ψs + pres+1 + ψs+1               (21)                 = Q + αs − preP ars + preP ars+1 .
+      min(ns,s+1 ) = posts + pres+1                           (22)
+                                                                           Then,
+  The variability of the data updates, i.e., the difference
+between the maximum and the minimum data updates in                                          max(ns,s+1 ) = Q + αs + ψs+1
+between, can be formalized as:                                                                            = Q + ψs − βs
+  V arx,y = max{max(ns,s+1 )} − min{min(nt,t+1 )}, (23)                                       min(ns,s+1 ) = Q + αs − ψs
+               s                           t
+using t in the minimum to highlight that the maximum                         4 Remember that there is only one job of τ
+                                                                                                                        y,s in each super-period SPx,y .
+and minimum do not need to consider the same job of τy ,                   Therefore, τy,s+1 refers to the next super-period.
+
+
+
+
+                                                                     229
+  The variability in Equation (23) can then be simpliﬁed to                              job    EST   LST    EFT    LFT
+                                                                                         τ0,0     0     0      5      7
+   V arx,y,het = max{max(ns,s+1 )} − min{min(nt,t+1 )}                                   τ0,1    10    13     15     20
+                   s                                t                                    τ0,2    20    23     25     30
+              = max{ψs − βs } − min{αt − ψt }                                            τ1,0     5     7     15     20
+                   s                       t                                             τ2,0    15    20     23     30
+              = max{ψs − βs } + max{ψt − αt }
+                   s                        t                                TABLE I: Timing attribute for the for Example 1.
+              = 2ψs + max{−βs } + max{−αt }.
+                              s                 t
+   As the full arrangement is the same in each hyper-period,            The complexity is thus exponential in the number of edges
+the super-period arrangement is cyclic. Since αs and βs denote          |E|. Such a high cost is mainly determined by the need to
+the change of the arrangement, the cyclicity of A requires              take into account all the permutations at once. However, this
+                                                                      is also the reason why the proposed conversion method allows
+                        αs =               βs = 0.        (29)
+                                                                        better controlling end-to-end latencies, jointly optimizing data
+            s∈{0,..., HP
+                      Ty }          s∈{0,..., HP
+                                              Ty }
+                                                                        and reaction times of all the task chains given in input. This
+Therefore, ∃αs < 0 and ∃βs < 0 such that                                is achieved by picking up the best conﬁguration out of all the
+                                                                        permutations generated by means of a cost function.
+                       V arx,y,het > 2ψs                   (30)
+                                                                            VI. E ND - TO - END L ATENCY AND S CHEDULABILITY
+  Since V arx,y,het         >      2ψs , it then        follows
+V arx,y,het > V arx,y,hom , proving the proposition.                       In this section, a method to calculate an upper bound on
+                                                                        data age and reaction time is proposed. As explained in
+                                                                        the introduction, data age deﬁnes the maximum time a data
+   We can therefore omit heterogeneous arrangements without             produced by the ﬁrst task of the chain can inﬂuence the
+affecting the resulting end-to-end latency, since no such ar-           last one. Reaction time is the maximum interval between the
+rangement can provide a better compromise with respect to               acquisition of a stimulus in the ﬁrst task of a chain and the
+variability. By discarding the heterogeneous arrangements in            moment the ﬁrst instance of the last task in the chain reacts
+the permutations, the value of permtotal in (17) can be reduced         to it.
+to                                                                        We ﬁrst deﬁne a set of additional timing attributes, that will
+                 permtotal =      permSPx,y ,              (31)         be used to compute the end-to-end latency. The schedulability
+                                   ∀x,y                                 of the DAG is veriﬁed by deriving a static schedule. If more
+                                                                        than one generated DAG meets the latency and schedulability
+where x = y and τx and τy are consecutive tasks in a given
+                                                                        constraints, we select the DAG that maximizes a weighted sum
+task chain, and the full hyper-period arrangement is deﬁned
+                                                                        of the end-to-end latencies, taking into account all the tasks
+by a unique super-period arrangement. This is valid both for
+                                                                        chains in input.
+harmonic and non-harmonic tasks.
+                                                                           For each job, we deﬁne the following timing attributes:
+C. Computational Complexity                                             Earliest Finishing Time (EFT), Latest Finishing Time (LFT),
+  The computational cost of the overall method can be sum-              Earliest Starting Time (EST) and Latest Starting Time (LST).
+marized as O(permψ × permA × n4 ). The ﬁrst term permψ                  The earliest a node can start is the maximum of all its
+represents all the permutations for all the possible ψ values.          predecessors’ earliest ﬁnishing times. Similarly, the latest a
+From (31), it can be expressed as                                       node can ﬁnish is the minimum of its successors’ latest starting
+                            max(Tx , Ty )                              times. These values can be iteratively calculated using the
+               permψ =                          .         (32)          operators deﬁned in Section IV, initializing ESTj = 0 and
+                                  min(Tx , Ty )                         EF Tj = HP for all nodes j:
+                             (ex ,ey )∈E
+
+The second term permA represents all the arrangement per-                            ESTi = max {(ESTj + BCj )Tj,i }
+mutations for a ﬁxed ψ. From (14), it can be expressed as                                       ∀j
+
+                         max(Tx , Ty )                                              LF Ti = min {(LF Tj − W Cj )Ti,j }
+                                                                                                ∀j
+     permA =                             −ψ+1 .         (33)
+                           min(Tx , Ty )                                             EF Ti = ESTi + BCi
+                (ex ,ey )∈E
+                                                                                     LSTi = LF Ti − W Ci .
+Lastly, O(n4 ) is the maximum cost of all the math opera-
+tions applied on the obtained DAGs, which are matrix-vector             Table I reports the timing attributes computed for Example 1.
+multiplication O(n2 ), matrix multiplication O(n3 ) and matrix
+exponentiation O(n4 ). Let us deﬁne R as the maximum ratio              A. Task Chain Propagation
+between periods of the taskset, i.e., R = max(T     x)                    In a DAG G, a node j is deﬁned to react to node i if there
+                                               min(Ty ) ∀x, y ∈
+{0 . . . N − 1}. The computational cost of the method can then          exists a direct or indirect edge from node i to node j. A node
+be expressed as:                                                        k reacting to node j also reacts to node i. Further, a node k
+                                                                        reacts to the chain (i, j) if node j reacts to node i and node
+          O(R|E| R|E| (RN )4 ) = O(R2|E| (RN )4 ).         (34)         k reacts to node j.
+
+
+
+                                                                  230
+   Extending this deﬁnition to tasks and jobs:                                   i.e., reaction time (resp. data age) is the difference between
+   • τy,b reacts to τy,a , ∀b > a;                                            the ﬁrst (resp. last) moment some data is used by a job of the
+   • Consequently, if τy,a reacts to τx,c , it follows that τy,b              last task in the chain (LFT) and the ﬁrst moment the same
+      reacts to τx,c .                                                        data is read from the job of the ﬁrst task in the chain (EST).
+Given a task chain (τx , . . . , τz ), the reactions of jobs of task          Since the schedule repeats identically after each hyper-period,
+τz to each job of τx can be found. Consider a job τx,a of the                 it is sufﬁcient to consider all the jobs of the ﬁrst task in the
+ﬁrst task in the chain. The ﬁrst (resp. last) reaction to τx,a is             ﬁrst hyper-period.
+deﬁned as the ﬁrst (resp. last) job of the last task τz that reacts              We hereafter prove that Algorithm 1 correctly ﬁnds the ﬁrst
+to τx,a . The reaction time (resp. data age) is then deﬁned as                and last reactions. The algorithm considers all the jobs of the
+the maximum interval between a stimulus in a job τx,a and                     starting task in the chain (line 1). For each of the starting jobs,
+the ﬁnishing time of the ﬁrst (resp. last) reaction, taken over               it iterates over all the other tasks in the chain, always looking
+all instances τx,a , for all a ∈ [0, HP                                       for the ﬁrst and last reacting job (lines 4-14). Let us consider
+                                         Tx ]. Since the structure of
+the DAG repeats after each hyper-period, it is sufﬁcient to                   two consecutive tasks in the chain τx and τy and only one job
+consider only the ﬁrst hyper-period.                                          a of τx .
+                                                                                 • To ﬁnd the maximum reaction time, the jobs of τy that are
+
+  Algorithm 1: ﬁndReactions                                                         said to react to τx,a are those that are deﬁnitely executing
+                                                                                    after τx,a , i.e., they belong to τx,a ’s descendants, or their
+   Input: C = {τstart , ..., τend }
+                                                                                    EST is greater than the LF T of τx,a . Since the DAG is
+   Output: 1st reactions, lastreactions
+                                                                                    schedulable, a reacting job can always be found (and the
+ 1 forall a ∈ {0, . . . , T
+                           HP
+                                  + 1} do
+                            start                                                   loop at line 6 is not inﬁnite) either in the same hyper-
+ 2     f r job = τstart,a ;
+                                                                                    period of τx,a , or in the next one. Once a job τx,b is found
+ 3     lr job = null;
+                                                                                    to react to τx,a , it becomes the starting job to ﬁnd the ﬁrst
+ 4     forall τx ∈ C \ τstart do
+                                                                                    reaction between τy and the next task in the chain.
+ 5         b = 0;
+                                                                                 • The maximum data age of τx,a is strictly related to the
+ 6         while τx,b does not react to f r job do
+                                                                                    ﬁrst reaction to τx,a+1 . Indeed, the ﬁrst reaction to τx,a+1
+ 7             b++;
+                                                                                    assures that the data from τx,a are no longer used: the
+ 8           f r job = τx,b ;                                                       last time they were used was by the job preceding the
+ 9           if b > 0 then                                                          one that surely reacts to τx,a+1 . Thus, when ﬁnding the
+10                lr job = τx,b−1 ;                                                 ﬁrst reaction τx,a+1 , the last reaction of τx,a can be found
+                                                                                    (line 14).
+11      if a ≤ THP
+                 start
+                       then
+                                                                                 In the example DAG in Figure 3d, data age is 30, while
+12          1st reactions.insert(τstart,a , f r job);
+                                                                              reaction time is 50. The chains leading to these values are
+        if (b = null) and (a > 0) and                                                                                               
+13                                                                            {τ0,0 , τ1,0 , τ2,0 } for data age and {τ0,1 , τ1,0 , τ2,0 } for reaction
+          (1st reactions(τstart,a−1 ) = f r job) then                         time, where a prime indicates that the job is in the next hyper-
+14           lastreactions.insert(τstart,a−1 , lr job);                       period.
+15   return 1st reactions, lastreactions;                                     B. Schedulability
+                                                                                 To build a feasible schedule for a given number of cores,
+   A method to compute the ﬁrst and last reactions is shown in                we apply a list-scheduling heuristic for non-preemptive DAG,
+Algorithm 1. The algorithm considers every job of the starting                very similar to the Heterogeneous Earliest Finishing Time
+task of the chain in one hyper-period, plus an additional job (to             (HEFT) algorithm presented in [24]. We decided to use a
+cover the last reactions). The ﬁrst reacting job (f r job) is set             (node-level) limited preemptive scheduling for (i) avoiding
+to τstart,a . Then, for each task in the chain, we ﬁnd the ﬁrst job           job-level migrations, (ii) reducing cache-related preemption
+τx,b that reacts to f r job, and we use it to update f r job. This            delays, and (iii) minimizing the input-output delay and jitter
+can happen either in the same hyper-period of f r job, or in the              [25].
+next one. The preceding job τx,b−1 is instead used to update                     The list-scheduling algorithm is summarized in Algorithm
+lr job, which keeps track of the last reaction to τstart,a−1 .                2. Jobs are sorted in increasing LFT order (line 3). Given p
+Once the whole chain has been considered, 1st reactions and                   homogeneous processors, a job is scheduled at time t only
+lastreactions are updated. The latter is updated only if b is                 if it is ready and a processor is available. A job enters the
+not null and if the ﬁrst reaction to τstart,a is different from               ready queue (line 8) at time t only if (i) its EST is greater
+the ﬁrst reaction to τstart,a−1 . Reaction time and data age can              than or equal than t, (ii) all its predecessors in the DAG
+then be simply derived as                                                     have been executed, and (iii) its LFT is the smallest between
+                                                                              all the remaining jobs’ LFT. The ready queue is sorted in
+     RT =          max            {LF T1st reactions − ESTτx,a } (35)         increasing LFT order (line 9). A ready job is scheduled if a
+            τx,a ∈1st reactions
+                                                                              processor is available and if its execution time, starting from
+     DA =         max             {LF Tlastreaction − ESTτx,a }, (36)         the current t, does not exceed its LFT (lines 13,16,17). If
+            τx,a ∈lastreactions
+
+
+
+
+                                                                        231
+                                                                                                         Taskset Γ
+     P1                           τ0,1                    τ2,0                          τi = (W Ci , BCi , Pi , Di )      Task
+          0                  10          17   20                 30
+
+                                                                                        τ0 = (7, 5, 50, 50)               GPS
+     P0         τ0,0              τ1,0             τ0,2                                 τ1 = (12, 10, 50, 50)             Lidar
+          0              7                    20                 30                     τ2 = (28, 22, 50, 50)             Localization
+                                                                                        τ3 = (28, 25, 50, 50)             Detection
+Fig. 7: Schedule produced for the DAG in Figure 3d with 2                               τ4 = (25, 18.9, 50, 50)           Fusion
+cores                                                                                   τ5 = (2, 1.8, 25, 25)             Camera
+                                                                                        τ6 = (6.5, 3, 10, 10)             EKF
+                                                                                        τ7 = (5, 3.2, 10, 10)             Planner
+                                                                                        τ8 = (4.5, 1.8, 10, 10)           Control
+this last condition is not met, the algorithm declares the DAG                                              Task chains
+not schedulable (lines 13,14). An example of the schedule                               chain {τstart , . . . , τend }    (Age, Reaction)
+obtained for Example 1 is shown in Figure 7.
+                                                                                        {τ5 , τ3 , τ4 }                    (120, 120)
+                                                                                        {τ0 , τ2 , τ6 , τ7 , τ8 }          (120, 150)
+  Algorithm 2: isDAGSchedulable                                                         {τ1 , τ2 , τ6 , τ7 , τ8 }          (120, 150)
+                                                                                        {τ5 , τ3 , τ4 , τ7 , τ8 }          (150, 150)
+   Input: V, pred, p, EST, LF T, W C                                                                    Scheduling constraints
+   Output: true if the DAG is schedulable on p                                                                6 processors
+             processors, false otherwise
+                                                                            TABLE II: Periodic taskset and constraints used for the
+   Data: Ready queue of jobs rq = {}, procExec vector
+                                                                            simulation, referring to the application of Figure 1.
+ 1 pqi = {}, ∀i = 1, . . . , p;
+ 2 nodes = {v0 , . . . , vn−1 }, n = |V |;
+ 3 sort(nodes) sort by ascending value of
+                                                                            a simulation tool. The tool uses the DAG to schedule the
+    LFT
+                                                                            individual tasks, which tracks the data propagation through
+ 4 for t = 0, 1, . . . , HP do
+                                                                            the task chains under analysis. The execution time of each
+ 5     forall node ∈ nodes do
+                                                                            task is identically and independently sampled from the BC to
+ 6         if EST [node] > t and all pred[node] have
+                                                                            WC interval. The schedule is generated according to EDF, and
+             ﬁnished and LF T [node] ≤ all other nodes
+                                                                            the deadline is set equal to LFT.
+             LFTs then
+                                                                               We simulated the best DAG, in terms of schedulability and
+ 7             nodes = nodes \ node;
+                                                                            end-to-end latency, produced for the application introduced in
+ 8             rq.push(node);
+                                                                            Figure 1. The task set speciﬁcation and constraint are detailed
+ 9            sort(rq) sort by ascending value of                           in Table II. The latency computed for the given chains is
+               LFT                                                          reported in Table III.
+10            for i = 1, ..., p do                                             Using the simulation tool, the DAG is simulated for 109
+11                if rq = {} and procExeci == 0 then                        ms, which leads to the following results. Two distributions
+12                    readyJob = rq.pop();                                  of reaction time and data age of two task chains are shown
+13                    if t + W C[readyJob] > LF T [readyJob]                in Figure 8 and 9. In Figure 8 the reaction time plot is
+                        then                                                showing two distributions, one for each camera frame. In
+14                         return false;                                    the DAG, the camera jobs are serialized to the detection job,
+                                                                            leading to only one distribution for the data age, because the
+15                     else
+                                                                            detection job always receives the freshest camera frame. A
+16                         procExeci = W C[readyJob];
+                                                                            similar distribution for the reaction time can be seen for the
+17                         pqi .push(readyjob);
+                                                                            task chain in Figure 9, as the task chain, is extended with the
+18               if procExeci > 0 then                                      planner and control task. The data age, however, shows several
+19                   procExeci = procExeci − 1 ;                            distributions. This is due to the higher rate of the planner and
+                                                                            control task with respect to the fusion task. Nevertheless, the
+20    return true;                                                          data age of the data corresponding to each control output is
+                                                                            always based on the freshest camera frame, which can be seen
+                                                                            by comparing the distribution shapes. The simulation showed
+                      VII. E VALUATION                                      that all the calculated upper bounds for data age and reaction
+   To evaluate our approach, we ﬁrst use simulation to validate             time for the four task chains are not exceeded.
+end-to-end latency bounds as well as schedulability and then                B. Evaluation via Benchmark
+compare the proposed method with the state-of-the-art using
+a realistic automotive benchmark.                                              To further analyze the performance of the proposed
+                                                                            method the detailed automotive benchmark proposed by
+A. Evaluation via Simulation                                                BOSCH for the WATERS challenge in 2015 [26] has been
+  To validate that the DAGs generated with the method pre-                  adopted. Multi-rate periodic task sets and cause-effect chains
+sented in this paper comply with the constraints, we developed              are randomly generated while conforming with the char-
+
+
+
+                                                                      232
+                              chain {τx , . . . , τy }         (Age, Reaction)                                                      permutation      admissible (%)    schedulable (%)
+                              {τ5 , τ3 , τ4 }                    (75, 98.2)                                                   min      0.00               0.00               0.00
+                              {τ0 , τ2 , τ6 , τ7 , τ8 }          (105, 65)                                                    avg    1.830.48            62.10              61.60
+                              {τ1 , τ2 , τ6 , τ7 , τ8 }          (105, 65)                                                    max    18.148.00          100.00             100.00
+                              {τ5 , τ3 , τ4 , τ7 , τ8 }         (125, 108.2)
+                                                                                                            TABLE IV: Statistics about DAG permutations, admissible and
+TABLE III: Maximum data age and reaction time for task                                                      schedulable DAGs on 1000 different task set.
+chains of the best DAG produced for the task set described by
+Table II                                                                                                             
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+
+
+
+
+                                                                                                             
+                         
+                                                                                                                   
+            
+                                                                                                                     
+                                                                                                                      
+                                                                                                                         
+ 
+
+
+
+
+            
+                                                                                                                         
+
+                                                                                                                      
+                                                                                                                             
+                                                                                                                                                        
+                                                                        
+                                                                                                                                          !     "#         !! 
+                                                           
+                         
+                                                                                                          Fig. 10: Statistic about produced DAG on 50 randomly chosen
+            
+                                                                                                            task set of the 1000 analyzed.
+        
+ 
+
+
+
+
+            
+                                                                                                            acterization. Task periods are selected with given distri-
+        
+                                                                                                            bution, out of the periods found in automotive applica-
+                                                                                                           tions [1, 5, 10, 20, 50, 100, 200, 1000]ms. Cause-effect chains
+                                                                        
+                                                                                                    are generated to include tasks of either 1, 2, or 3 different
+                                                                                                            period wherein tasks of the same period can appear 2 to
+Fig. 8: Reaction time and data age of the chain {Camera,                                                    5 times. To obtain a higher utilization, the individual task
+Detection, Fusion}, or {τ5 , τ3 , τ4 }, evaluated in simulation                                             execution times are generated based on UUniFast [27]. For
+with the red lines showing the calculated maximum.                                                          the experiments 1000 task set composed of 5 tasks and 15
+                                                                                                            chains have been taken into account, with a utilization equal
+                                                                                                            to 1.5, considering 2 cores available.
+                                                                                                               Table IV reports some statistics about the DAG obtained
+                 
+                                                                                                           from the 1000 multi-rate periodic task sets. From the initial
+        
+                                                                                                            generated permutations the 40% is on average removed due to
+                                                                                                            cycles or a non-schedulable longest chain. However, between
+ 
+
+
+
+
+                                                                                                           the admissible generated DAGs5 , almost the totality is also
+                                                                                                           schedulable on 2 cores. Figure 10 shows 50 randomly selected
+                                                                                                            examples in which the number of permutations, admissible
+        
+                                                                                          DAGs and schedulable DAGs are compared.
+                                                          
+                     
+        
+                                                                                                          C. Comparison with state-of-the-art
+
+        
+                                                                                                               1) Qualitative: In [19], Saidi et al. present a method to
+                                                                                                            convert a parallel multi-rate task set with precedence and data
+ 
+
+
+
+
+                                                                                                           edges into a single-rate DAG. However, the end-to-end latency
+        
+                                                                                                            is not considered, and only one possible DAG is generated.
+                                                                                                            Therefore, no guarantee is given on reaction time or data age.
+                                                                                                           Moreover, there are no synchronization methods to force task
+                                                                                 
+                                                                                                    instances to execute within their periods, potentially leading
+Fig. 9: Reaction time and data age of the chain {Camera,                                                    to a wrong implementation of the system.
+Detection, Fusion, Planner, Control}, or {τ5 , τ3 , τ4 , τ7 , τ8 },                                            In [18], Foget et al. present another conversion method,
+evaluated in simulation with the red lines showing the cal-                                                 producing different DAGs. However, neither this work takes
+culated maximum.                                                                                            into account latency. Different solutions are created just for
+                                                                                                              5 DAGs that have a correct structure (i.e., no cycles and no path greater
+                                                                                                            than the hyper-period) but that may still be unschedulable.
+
+
+
+
+                                                                                                      233
+                            Forget [18]   Saidi [19]   Becker [9]   this paper
+  schedulable task set(%)      46.9          21.8        90.56         90.5              On the other hand, when optimizing a single chain, our
+  1st lowest data age (%)     45.89         17.85        77.81        96.82            method allows ﬁnding a better solution than with the method
+  2nd lowest data age (%)      2.79          0.09        13.55         3.15
+  3rd lowest data age (%)      3.03          1.46        6.38          0.03            presented in [9]. As an example, consider the task chain in
+  4th lowest data age (%)      0.00          4.58        2.25          0.00            Example 1. Using the method by Becker et al., a minimum
+TABLE V: Schedulability and data age results on 1000 task                              data age of 40 can be achieved, inserting a precedence
+set compliant to [26] of 5 tasks and 15 chains, with utilization                       constraint between τ1,0 and τ2,0 . Instead, our method allows
+equals to 1.5.                                                                         achieving a data age of 30, picking a DAG with additional
+                                                                                       precedence constraints.
+                  Forget [18]     Saidi [19]     Becker [9]     this paper               As can be expected, the improved performance of the
+     min [ms]       0.002           0.002          0.078           0.002               proposed algorithm are obtained by paying a somewhat higher
+     avg [ms]       0.571           0.022          3.001          21.410
+     max [ms]       4.422           0.116         16.614         433.033               computational cost. Table VI shows that our method is on
+                                                                                       average about 7 times slower than [9]. We believe such a slow-
+TABLE VI: Execution times in milliseconds on an Intel(R)                               down is acceptable for an ofﬂine analysis performed at system
+Core(TM) i7-7700HQ CPU @2.80GHz.                                                       design time, as it allows obtaining the best solution for even
+                                                                                       complex task systems within a reasonable time.
+schedulability reasons, picking the version that makes the
+                                                                                                             VIII. C ONCLUSIONS
+DAG schedulable with EDF.
+   Focusing on data latency, the most related approach is the                             This paper presented a detailed method that allows con-
+one introduced by Becker et al. in [9], where the focus is                             verting a multi-rate task set into a single-rate DAG which
+on the computation of data age. In their work, they can                                meets schedulability and timing requirements. To the best
+compute data age for a given chain of periodic tasks, given                            of our knowledge, this approach is the most general and
+a communication model (i.e. implicit, explicit or LET). The                            complete w.r.t. the methods available in the literature. The
+method allows generating job-level dependencies to meet                                transformation process maps the whole application into a
+latency requirements. However, data age is the only parameter                          DAG, using precedence constraints for synchronizing jobs
+under their analysis. Moreover, they can optimize end-to-end                           to comply with task activation periods. Multiple DAGs are
+latency for only a single chain. Once job-level dependencies                           generated in four stages and a pruning process is applied
+are inserted, all the other chains are affected. Finally, their                        to exclude the ones that are inherently not feasible. The set
+work assumes the input task set is already schedulable. Our                            of feasible DAGs is narrowed down using a further analysis
+work has several improvements over their approach, i.e., (i) the                       that considers data age and reaction time bounds on speciﬁc
+model is more general and can jointly optimize the latency                             task chains, as well as the schedulability of the system on
+of multiple chains, (ii) we consider not only data age, but                            the considered homogeneous multi-core platform. The best
+also reaction time, and (iii) our task allocation and scheduling                       DAG is selected based on the weighted sum of end-to-end
+algorithms also consider the schedulability of the system.                             latencies. Most of the operations performed are based on a
+   2) Quantitative: To show that our method dominates the                              matrix representation of the DAG. The conversion method
+state-of-the-art, we implemented the solutions proposed in                             and a simulation tool have been implemented and made avail-
+[19], [18], [9], and tested them on the previously presented                           able7 . The efﬁciency of the proposed approach over existing
+automotive benchmark by BOSCH. Table V shows the results                               methods has been extensively validated on real experimental
+for the 1000 task sets considered, and all the 15000 task chains,                      benchmarks. In future works, we plan to extend this model to
+while Table VI offers a comparison of the running times of                             heterogeneous platforms. Moreover, we plan to integrate the
+the considered methods for larger task sets, i.e., composed of                         proposed approach considering predictable execution models
+10 tasks with 15 task chains.                                                          to solve the contention problems on the memory hierarchy
+   The proposed method not only dominates the others in term                           [28].
+of schedulability, but also in terms of data age. Given that
+[18] and [19] do not propose a method to compute end-to-end                                                   ACKNOWLEDGMENT
+latency, we adopted our algorithm for this scope. Considering
+data age, our method produces a DAG that leads to the lowest                              The research leading to these results has received funding
+end-to-end latency bound in 96.82% of cases. There are some                            from the European Union’s Horizon 2020 Programme under
+cases in which Becker [9] method obtains a tighter latency,                            the CLASS Project (https://class-project.eu/), grant agreement
+since it optimizes a single chain. However, the limitation of                          n° 780622. Marco Caccamo was supported by an Alexander
+that approach is that it is not able to optimize all the given                         von Humboldt Professorship endowed by the German Federal
+chains for a task set, while our method optimizes them all.                            Ministry of Education and Research.
+Therefore, we are willing to sacriﬁce the latency of some
+chains for a more balanced improvement of all chains.
+  6 Since no method is proposed in [9] to check schedulability, we applied
+our method to derive the schedulable task sets.                                         7 https://github.com/mive93/multi-rate-DAG
+
+
+
+
+                                                                                 234
+                              R EFERENCES                                              [22] P. Purdom, “A transitive closure algorithm,” BIT Numerical Mathemat-
+                                                                                            ics, vol. 10, no. 1, pp. 76–94, 1970.
+ [1] A. Hamann, D. Dasari, S. Kramer, M. Pressler, F. Wurst, and D. Ziegen-            [23] A. V. Aho, M. R. Garey, and J. D. Ullman, “The transitive reduction
+     bein, “Waters industrial challenge 2017,” 2017.                                        of a directed graph,” SIAM Journal on Computing, vol. 1, no. 2, pp.
+ [2] A. Hamann, F. Dasari, Dakshina Wurst, I. Sañudo, N. Capodieci,                        131–137, 1972.
+     P. Burgio, and M. Bertogna, “Waters industrial challenge 2019,” 2017.             [24] H. Topcuoglu, S. Hariri, and M.-y. Wu, “Performance-effective and
+ [3] A. Vincentelli, P. Giusto, C. Pinello, W. Zheng, and M. Natale, “Op-                   low-complexity task scheduling for heterogeneous computing,” IEEE
+     timizing end-to-end latencies by adaptation of the activation events in                transactions on parallel and distributed systems, vol. 13, no. 3, pp. 260–
+     distributed automotive systems,” in 13th IEEE Real Time and Embedded                   274, 2002.
+     Technology and Applications Symposium (RTAS’07). IEEE, 2007, pp.                  [25] G. Buttazzo and A. Cervin, “Comparative assessment and evaluation of
+     293–302.                                                                               jitter control methods,” in Proceedings of the 15th conference on Real-
+ [4] M. D. Natale, H. Zeng, P. Giusto, and A. Ghosal, Understanding and                     Time and Network Systems, 2007, pp. 163–172.
+     Using the Controller Area Network Communication Protocol: Theory                  [26] S. Kramer, D. Ziegenbein, and A. Hamann, “Real world automotive
+     and Practice. Springer Publishing Company, Incorporated, 2012.                         benchmarks for free,” in 6th International Workshop on Analysis Tools
+ [5] H. Zeng, M. D. Natale, P. Giusto, and A. L. Sangiovanni-Vincentelli,                   and Methodologies for Embedded and Real-time Systems (WATERS),
+     “Statistical analysis of controller area network message response times,”              2015.
+     in IEEE Fourth International Symposium on Industrial Embedded Sys-                [27] E. Bini and G. C. Buttazzo, “Measuring the performance of schedula-
+     tems, SIES 2009, Ecole Polytechnique Federale de Lausanne, Switzer-                    bility tests,” Real-Time Systems, vol. 30, no. 1-2, pp. 129–154, 2005.
+     land, July 8-10, 2009, 2009, pp. 1–10.                                            [28] R. Pellizzoni, E. Betti, S. Bak, G. Yao, J. Criswell, M. Caccamo, and
+ [6] H. Zeng, “Probabilistic timing analysis of distributed real-time auto-                 R. Kegley, “A predictable execution model for cots-based embedded
+     motive systems,” Ph.D. dissertation, EECS Department, University of                    systems,” in 2011 17th IEEE Real-Time and Embedded Technology and
+     California, Berkeley, Dec 2008.                                                        Applications Symposium. IEEE, 2011, pp. 269–279.
+ [7] N. Feiertag, K. Richter, J. Nordlander, and J. Jonsson, “A compositional
+     framework for end-to-end path delay calculation of automotive systems
+     under different path semantics,” in IEEE Real-Time Systems Symposium:
+     30/11/2009-03/12/2009. IEEE Communications Society, 2009.
+ [8] “Autosar - speciﬁcation of timing extensions,” Tech. Rep., 2014.
+ [9] M. Becker, D. Dasari, S. Mubeen, M. Behnam, and T. Nolte, “Synthe-
+     sizing job-level dependencies for automotive multi-rate effect chains,”
+     in 2016 IEEE 22nd International Conference on Embedded and Real-
+     Time Computing Systems and Applications (RTCSA). IEEE, 2016, pp.
+     159–169.
+[10] ——, “End-to-end timing analysis of cause-effect chains in automotive
+     embedded systems,” Journal of Systems Architecture, vol. 80, pp. 104–
+     113, 2017.
+[11] ——, “Mechaniser-a timing analysis and synthesis tool for multi-
+     rate effect chains with job-level dependencies,” in 7th International
+     Workshop on Analysis Tools and Methodologies for Embedded and Real-
+     time Systems WATERS, vol. 16, no. 05, 2016.
+[12] A. Biondi and M. D. Natale, “Achieving Predictable Multicore Execution
+     of Automotive Applications Using the LET Paradigm,” in Proceedings
+     of the 24th IEEE Real-Time and Embedded Technology and Applications
+     Symposium (RTAS 2018), Porto, Portugal, April 2018.
+[13] J. Martinez, I. Sañudo, P. Burgio, and M. Bertogna, “End-to-end latency
+     characterization of implicit and let communication models,” in Proc. of
+     the 8th International Workshop on Analysis Tools and Methodologies
+     for Embedded and Real-time Systems, ser. WATERS, 2017.
+[14] M. Xiong, S. Han, K.-Y. Lam, and D. Chen, “Deferrable scheduling for
+     maintaining real-time data freshness: Algorithms, analysis, and results,”
+     IEEE Transactions on Computers, vol. 57, no. 7, pp. 952–964, 2008.
+[15] D. Golomb, D. Gangadharan, S. Chen, O. Sokolsky, and I. Lee, “Data
+     freshness over-engineering: Formulation and results,” in 2018 IEEE 21st
+     International Symposium on Real-Time Distributed Computing (ISORC).
+     IEEE, 2018, pp. 174–183.
+[16] Y. Saito, F. Sato, T. Azumi, S. Kato, and N. Nishio, “Rosch: Real-time
+     scheduling framework for ros,” in 2018 IEEE 24th International Confer-
+     ence on Embedded and Real-Time Computing Systems and Applications
+     (RTCSA). IEEE, 2018, pp. 52–58.
+[17] Y. Suzuki, T. Azumi, S. Kato et al., “Hlbs: Heterogeneous laxity-based
+     scheduling algorithm for dag-based real-time computing,” in 2016 IEEE
+     4th International Conference on Cyber-Physical Systems, Networks, and
+     Applications (CPSNA). IEEE, 2016, pp. 83–88.
+[18] J. Forget, F. Boniol, E. Grolleau, D. Lesens, and C. Pagetti, “Scheduling
+     dependent periodic tasks without synchronization mechanisms,” in 2010
+     16th IEEE Real-Time and Embedded Technology and Applications
+     Symposium. IEEE, 2010, pp. 301–310.
+[19] S. E. Saidi, N. Pernet, and Y. Sorel, “Automatic parallelization of
+     multi-rate fmi-based co-simulation on multi-core,” in Proceedings of the
+     Symposium on Theory of Modeling & Simulation. Society for Computer
+     Simulation International, 2017, p. 5.
+[20] S. K. Baruah, D. Chen, S. Gorinsky, and A. K. Mok, “Generalized
+     multiframe tasks,” Real-Time Systems, vol. 17, pp. 5–22, 1999.
+[21] N. Biggs, N. L. Biggs, and B. Norman, Algebraic graph theory.
+     Cambridge university press, 1993, vol. 67.
+
+
+
+
+                                                                                 235
+

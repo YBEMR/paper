@@ -1,0 +1,1039 @@
+                                                                                                                                             1
+
+
+
+
+          Energy-Efficient Application Mapping and
+         Scheduling for Lifetime Guaranteed MPSoCs
+                         Weichen Liu, Member, IEEE, Juan Yi, Mengquan Li, Peng Chen, Lei Yang
+
+
+
+
+   Abstract—Energy optimization is one of the most critical objec-              To obtain the chip temperature profiles for thermal-aware
+tives for the synthesis of multiprocessor system-on-chip (MPSoC).            managements on MPSoC platforms, numerous temperature
+Besides, to ensure a long processor lifetime and to maintain                 estimation techniques have been proposed [5], [6], [7]. Most
+a safe chip temperature are also important for multiprocessor
+manufactures under deep submicrometer process technologies.                  of them suffer from either inaccurate estimation precision or
+This paper presents a Mixed Integer Linear Programming                       expensive computation cost (time consuming) during design
+(MILP) model to determine the mapping and scheduling of real-                space exploration. Inaccurate prediction (an underestimation or
+time applications onto embedded MPSoC platforms, such that                   overestimation of chip temperature) would result in overheated
+the total energy consumption is minimized with the lifetime                  processor cores and further affect the system reliability or
+reliability constraint and the temperature threshold constraint
+satisfied. We develop a lightweight temperature model that can               reduced performance at runtime. Meanwhile, the temperature
+be integrated in the MILP model to predict the chip temperature              estimation process has to be computationally efficient.
+accurately and efficiently. By exploiting the Dynamic Voltage                   In addition, ensuring a long processor lifetime by limiting
+and Frequency Scaling (DVFS) capability of modern processors,                wear-out related failures is also a critical requirement for all
+processor voltage/frequency assignment is also considered in our             multiprocessor manufactures in deep submicrometer process
+MILP model. Extensive performance evaluations on synthetic
+and real-world applications demonstrate the effectiveness of                 technologies. As demonstrated in [8], the average Mean Time
+the proposed approach. Our MILP model achieves an average                    To Failure (MTTF) of a contemporary superscalar processor
+reduction of 19.09% and 28.53% total energy in comparison with               drops by about 4× from 180nm to 65nm technology nodes.
+two state-of-the-art techniques on the basis of guaranteeing the             The ITRS has identified lifetime reliability as a growing
+safe chip temperature and system lifetime reliability.                       challenge for users and designers of all types of integrated
+   Index Terms—Multiprocessor system-on-chip, lifetime relia-                circuits [9]. It is expected that, in the near future, the design
+bility, temperature model, real-time application mapping and                 cost and effort required for ensuring lifetime reliability will
+scheduling, energy optimization.
+                                                                             be as high as for classic design constraints, e.g., timing and
+                                                                             power consumption. Therefore, it is essential to consider the
+                       I. I NTRODUCTION
+                                                                             lifetime reliability issue in embedded system design.
+   MultiProcessor System-on-Chip (MPSoC) is being widely                        Energy optimization has been a major factor to be con-
+used in various embedded application domains like telecom-                   sidered for MPSoCs at system-level design. DVFS techniques
+munication (e.g., smart phones), transportation (e.g., car elec-             are widely explored for energy optimization. Considering both
+tronics) and industrial automation (e.g., process control). How-             the energy consumption and the system reliability in terms of
+ever, though have brought MPSoCs with enhanced function-                     lifetime reliability or chip temperature on MPSoCs, extensive
+ality and improved performance, technology scaling and the                   researches have been proposed [10], [11], [12], [13], [14],
+ever-increasing demand for system performance have resulted                  [15]. However, existing works on energy-efficient application
+in high power densities and increasing chip temperatures in                  mapping and scheduling techniques only consider thermal
+current circuits. Both of them make failure mechanisms serious               control or lifetime reliability constraint separately. On-chip
+threats for reliable MPSoCs [1]. Chip temperature significantly              temperature profile and system lifetime reliability affect each
+affects the device lifespan and the circuit soft error rate, e.g.,           other and complement each other. On the one hand, chip
+a 10-15◦ C temperature increase can result in a 2× reduction                 temperature is necessary to be considered to guarantee system
+in the lifespan of device [2], and a 216% increase in soft                   lifetime reliability; many failure mechanisms are exponentially
+error rate is observed on c17 as the temperature climbs from                 dependent on chip temperature. Considering chip temperature
+25◦ C to 125◦ C) [3]. Moreover, the leakage power grows                      ensures that the chip temperature is always below safe thresh-
+exponentially with the increasing temperature in the nanometer               old at any moment. Although temperature-aware methods
+era [4], and high chip temperature also requires effective                   [16], [15], [17] are effective in reducing temperature, they
+cooling and packaging solutions to ensure reliable runtime                   may not enhance and may even hamper the system lifetime
+operation, resulting in a significant increase in cooling and                reliability that is also related to other aging factors, such
+packaging costs.                                                             as current density and voltage. On the other hand, ensuring
+   W. Liu is with School of Computer Science and Engineering, Nanyang        processors’ lifetime cannot perfectly prevent chip temperature
+Technological University, Singapore. Email: liu@ntu.edu.sg.                  from violating the safe threshold, since the system lifetime
+   J. Yi is with Huawei Technologies CO., LTD, China. Email: wsyi-           reliability is estimated based on the whole scheduling period
+juan@hotmail.com. (Corresponding author: Juan Yi.)
+   M. Li, P. Chen, L. Yang are with College of Computer Science, Chongqing   and is a result of the accumulation effect of multiple factors.
+University, China.                                                           The complicated relationship between chip temperature and
+                                                                                                                                    2
+
+
+
+system lifetime reliability requires that both of them should be    real-time constraint of applications. Huang and Xu et al. [10]
+considered explicitly for the system design of energy-efficient     proposed a simulated annealing based algorithm to minimize
+techniques.                                                         energy for MPSoC considering the lifetime reliability con-
+   In this paper, we propose an effective Mixed Integer Lin-        straint. Das et al. [11] tried to maximize system lifetime while
+ear Programming (MILP)-based approach to conduct energy-            maintaining the energy consumption under a given energy
+efficient application mapping and scheduling on MPSoC               budget using DVFS and task replication. Hanumaiah et al.
+platforms, which explicitly takes both the transient impact         [12] maximized the overall energy efficiency yet maintained
+caused by chip temperature and the duration impact resulted         the safe chip temperature by considering DVFS and thread
+from lifetime reliability on MPSoCs into consideration. To          migration. Zhuravlev et al. [20] surveyed the related schedul-
+estimate the chip temperature and determine the effect of           ing techniques performing energy-efficient computation. These
+temperature on chip’s aging accurately and efficiently, we          works have mainly tackled one aspect of the complex scenario:
+develop a lightweight temperature model that is integrated          by acting on DVFS and processor frequency assignment for
+in the MILP model. Our MILP model minimizes the energy              optimizing the trade-off between performance and energy, or
+consumption of applications by judiciously determining their        by accurately mapping the application to improve the system
+mapping and scheduling based on voltage/frequency scaling           lifetime. However, none of these works takes both the chip
+techniques. Chip temperature is guaranteed below the safe           temperature control and the system lifetime reliability into
+threshold and the chip lifetime would be at least the predefined    consideration explicitly.
+target value. The accuracy and efficiency of the temperature           Both system-level lifetime design methods and thermal-
+model are verified by comparing with existing temperature           aware design techniques require accurate thermal estima-
+estimation techniques; Compared to the HotSpot simulator            tion techniques. A thermal emulation framework for field-
+that has been widely recognized for the architecture-level          programmable gate arrays (FPGAs) was introduced in [5],
+temperature modeling on MPSoCs, an average of over 99%              which allows designers to extract a number of critical statistics
+accuracy is presented. The effectiveness and scalability of         from processor cores, memories and interconnection systems.
+the proposed MILP-based technique are verified by a huge            Another temperature model developed by Dhodapkar et al. [7],
+set of synthetic applications and real-world applications on        called TEMPEST, models the temperature directly using an
+different floorplans. The experimental results show that our        equivalent RC circuit containing only a single RC pair for the
+approach reduces 24.3% reliability threshold violations on          entire chip. HotSpot [6] is an automated temperature model
+average and achieves 19.09% and 28.53% total energy savings         which uses the duality between heat flow and electrical circuit
+in comparison with two state-of-the-art techniques.                 phenomena. Each core on the die is divided into several blocks,
+   The contributions of this paper are listed as follows:           with the same division being applied to the Thermal Interface
+   • An accurate and efficient temperature model is developed,      Material (TIM). The heat spreader and the heat sink are also
+      which achieves an average of over 99% temperature pre-        divided into multiple blocks. For a processor with n cores
+      diction accuracy with greatly reduced computation time,       and m functional units for each core, there will be n ∗ m
+      compared to a widely recognized temperature simulator.        block in the die, another n ∗ m blocks in the TIM and 14
+   • A systematical approach for energy-efficient application       blocks in the package according to the model. HotSpot has
+      mapping and scheduling on MPSoC platforms is pro-             been widely recognized for the architecture-level temperature
+      posed, in which chip temperature profile and lifetime         modeling on MPSoCs. However, the computation efficiency of
+      reliability issue are explicitly taken into consideration     HotSpot limits its application for quick temperature estimation
+      simultaneously and are well controlled. Performance eval-     during design space exploration.
+      uations on extensive synthetic and real-world applications
+      prove the effectiveness of the proposed approach.                                  III. P RELIMINARIES
+   The rest of this paper is organized as follows: Section II          In this section, we introduce the application model, system
+discusses related work; Section III presents the system mod-        model, power model, and lifetime reliability model used in
+els and reliability modeling techniques; Section IV uses an         this paper in turn.
+example to illustrate the motivation of this paper, and then for-
+mulates the problem studied in this paper; Section V presents       A. Application model
+the lightweight temperature model, and Section VI presents
+                                                                       We use a Data Flow Graph (DFG) to model the application
+the MILP-based energy optimization technique; Experimental
+results and concluding remarks are provided in Section VII          to be executed in the system. A DFG G =⟨T , E⟩ is a directed
+                                                                    acyclic graph (DAG), where T = {τ1 , τ2 , ..., τn } is the set
+and Section VIII, respectively.
+                                                                    of nodes, and E ⊆ T × T is the set of edges that defines
+                                                                    the precedence relations among the nodes in T . Each node
+                     II. R ELATED W ORK                             τi ∈ T represents a task to be executed. Each edge in the
+  A significant body of work has been published on DVFS-            graph (eij ∈ E) indicates that task τj is dependent on τi . A
+aware task allocation and scheduling techniques for thermal         deadline L is associated with a DFG G, which indicates that
+control or lifetime optimization. Chantem et al. [18], [14],        the application G has to be completed before L. We assume the
+[15], [19] tried to minimize the maximum temperature of             worst-case execution times (WCETs) of the tasks are known
+MPSoCs by utilizing the DVFS technique, subjecting to the           a priori.
+                                                                                                                                       3
+
+
+
+B. System Model and Power Model                                         to the permanent faults such as opening of metal lines/contacts,
+   We consider a MPSoC architecture consisting of a set of              shortening between adjacent metal lines, etc. The MTTF of a
+processor cores, which is defined as M. For each processor,             wire, taking EM into consideration, is as follows [26]:
+we can assign different frequencies and voltages at any time.                                                          Ea
+Unlike the static frequency assignment with fixed operating                         M T T FEM ∝ (J − Jcrit )−n × e k×T
+frequency at all time, the dynamic case that varies the fre-
+                                                                        where J is the current density in the interconnect, Jcrit is
+quencies and voltages gains a better performance and increases
+                                                                        the threshold current density, Ea is the activation energy for
+the energy efficiency. We assume that the processor cores are
+                                                                        electromigration, k is Boltzmann’s constant, and T is absolute
+architecturally identical and the only source of heterogeneity
+                                                                        temperature in Kelvin. n and Ea are constants that depend
+is that the processors can operate at different voltage and
+                                                                        on the interconnect metal used. J tends to be much higher
+frequency levels, as assumed in [21], [22].
+                                                                        than Jcrit in interconnects (nearly 2 orders of magnitude [27]).
+   Each processor has K discrete voltage settings V =
+                                                                        Hence, J − Jcrit ≈ J. J for an interconnect can be related to
+{V1 , V2 , ..., VK } (in descending order). Each voltage setting Vk
+                                                                        the switching probability of the line p [28]:
+can be associated with a computation speed vk in terms of cy-
+cles/second. The energy consumption for executing any τi ∈ T                                     C × Vdd
+at speed vk can be expressed as Ei,k = P w(Vk , vk ) × ti,k ,                               J=           ×f ×p                       (1)
+                                                                                                 W ×H
+where P w(Vk , vk ) is the power consumption under voltage
+Vk and speed vk , and ti,k is the execution time of task τi with        where C, W , and H are the capacitance, width, and thickness
+speed vk . Assuming the tasks execute up to their WCETs and             of the line, respectively, f is the clock frequency, and Vdd is
+W CETi is given as the execution time of task τi in the default         the supply voltage. We assume all interconnects in a structure
+(highest) processor frequency, the WCET for τi running at               to be similar, and do not differentiate interconnects on the
+processor speed vk is computed as: ti,k = W CETi ×(v1 /vk ).            basis of their C, W , and H.
+   A processor core has two operating modes: an active mode,               Time Dependent Dielectric Breakdown (TDDB) is a wear-
+in which it is able to execute instructions, and a sleep mode,          out mechanism of the gate dielectric, when the gate oxide
+in which it ceases working and rests with minimized power               breaks down as a result of long-time application of relatively
+consumption. The processor cores consume both dynamic                   low electric field (as opposite to immediate breakdown, which
+power and leakage power while executing instructions, and               is caused by strong electric field). The breakdown is caused
+only consume leakage power during idle periods. The leakage             by formation of a conducting path through the gate oxide to
+power in a sleep mode is 3% of the leakage power in the                 substrate due to electron tunneling current, when MOSFETs
+active mode running in the lowest frequency [23]. Dynamic               are operated close to or beyond their specified operating
+power dominates the power consumption of processors in                  voltages. With the wide application of low-k and ultralow-
+micrometer CMOS technology. While leakage power increases               k dielectric materials at the 90-nm technology node, TDDB
+its percentage in total power consumption as chip density               becomes a major system lifetime reliability threat and gets
+increases. Both dynamic power consumption and static power              even worse with further scaling [29]. The MTTF affected by
+consumption need to be considered in overall energy optimiza-           TDDB is based on recent experimental work in [30]:
+tion of the system. The power consumption under different                                           1 a−b×T       X+Y /T +Z×T
+voltage/frequency settings are similar to the model in [24],                    M T T FT DDB ∝ (      )       ×e      k×T
+                                                                                                    V
+[25].
+                                                                        where T is the absolute temperature in Kelvin, a, b, X, Y, Z
+                                                                        are fitting parameters, and V is the voltage.
+C. Lifetime reliability model                                              The models of the above failure mechanisms have been
+   In this paper, we focus on two critical failure factors, i.e., the   widely proposed [26], [31], [32]. It is shown that they are
+electromigration (EM) and time dependent dielectric break-              strongly related to the temperature and voltage applied to
+down (TDDB), in the lifetime reliability model. Various failure         the circuit. Figure 1 shows the impact of voltage scaling on
+mechanisms have been extensively studied in the literature,             the chip lifetime under the EM and TDDB mechanisms. The
+such as interconnect shorts/opens during fabrication that can           parameters used in EM and TDDB are from [1] and [30],
+be weeded out during the manufacturing test and burn-in                 respectively. We can see that the chip lifetime under both
+process, radiation effects that do not fundamentally damage the         EM and TDDB decrease as voltage goes up, and that under
+circuit and are not viewed as lifetime reliability threats, and the     TDDB is highly sensitive to voltage. For this reason, we
+hard errors of intrinsic failures that are permanent once they          consider voltage selection for each task when evaluating a
+manifest. The most representative hard errors include TDDB              core’s lifetime based on a schedule.
+in the gate oxides and EM in the interconnects [1]. Both of                To estimate the combined lifetime of the platform, we adopt
+them are widely recognized to decrease the reliability of chips         the lifetime estimation model proposed in [33]. The adopted
+(integrated circuits (ICs)) significantly.                              model can avoid lifetime underestimation by distinguishing
+   Electromigration (EM) is the transport of material resulted          the impact of every individual mechanism compared to SOFR
+from the gradual movement of the ions in the conducting path            model [8]. The key fact ignored by SOFR model is that
+due to the momentum transfer between conducting electrons               different failure mechanisms impact on different components
+and diffusing metal atoms. It is a typical reason that will lead        of a system, for example, TDDB affects transistors, while
+                                                                                                                                                 4
+
+
+
+                                                                                                  IV. P ROBLEM D EFINITION
+                                                           EM
+                                                           TDDB                     There may be numerous ways in which an application
+                   102                                                           can be mapped and scheduled to the hardware components,
+                                                                                 but different scheduling techniques would result in a great
+         MTTF in years
+
+                                                                                 difference in the total energy consumption. Various scheduling
+                                                                                 solutions change the components’ power density, voltage,
+                   10 1                                                          and temperature profiles, and therefore allowing for a wide
+                                                                                 range of lifetime enhancement and energy optimization with-
+                                                                                 out requiring additional investment in hardware or affecting
+                                                                                 performance. It provides us a potential chance to improve the
+                   100
+                    1.18     1.19   1.2      1.21   1.22       1.23 1.24         energy efficiency of MPSoCs by searching for the optimal ap-
+                                          Voltage (V)                            plication mapping and scheduling with optimized total energy
+Fig. 1: The impact of voltage scaling on the chip lifetime under                 consumption.
+the failure mechanisms of EM and TDDB.                                              In this paper, we tackle the problem of energy-efficient
+                                                                                 application mapping and scheduling on MPSoC platforms
+                                                                                 considering both chip temperature and lifetime reliability
+EM affects interconnects. In other words, the effects of                         constraints simultaneously.
+failure mechanisms impacting on different components are
+independent from the spatial perspective, and thus should not
+                                                                                 A. Motivational Example
+be additive. The combined MTTF of a system component
+Pi , denoted by M T T F (Pi ), is determined by the minimum                        In this section, we use a simple example to illustrate how the
+MTTF across various failure mechanisms [33]:                                     chip temperature, system lifetime reliability, and total energy
+                                                                                 consumption affect one another.
+                         M T T F (Pi ) = min(M T T Fj (Pi ))               (2)
+where M T T Fj (∗) is the independent MTTF result due to an
+individual failure mechanism (e.g., EM or TDDB).
+   We evaluate the lifetime of each core for a given schedule
+based on (3) and (4). According to the EM model, the lifetime
+of core m is calculated based on the tasks assigned to it and
+the corresponding frequencies. In (3), Xi,m,f is 1 if task i is
+mapped to core m with speed f , and 0 otherwise. Jf is the
+current density when the core runs under speed f , which is                                         (a)                     (b)
+calculated by (1). T askm is the number of tasks mapped to                       Fig. 2: Motivational example.(a)Task graph;(b)Execution time
+core m. T H is the properly predefined temperature threshold.
+                                                                                    The example application is composed of 6 tasks whose
+        M T T FEM (m) =                                                          execution times under different processor speeds are shown
+        ∑ ∑            Xi,m,f × A0                                  Ea
+                                                                           (3)   in Figure 2a. There are three voltage/frequency levels for
+                                                               × e k×T H         each core: k1, k2, k3. k1 represents the original (highest) level
+                               (Jf − Jcrit   )n × T ask    m
+        i∈T 1≤f ≤K
+                                                                                 and k3 represents the lowest one. A task requires different
+   For the TDDB model, the lifetime is calculated based on                       execution times under different voltage/frequency levels. For
+the tasks assigned to it and the corresponding voltage levels.                   example, task τ1 takes 7, 8, and 10 time units to complete
+Vf is the corresponding voltage level when the core runs with                    under levels k1, k2, and k3, respectively. We run this appli-
+speed f .                                                                        cation on a chip with two identical cores P 1, P 2, assuming
+                                                                                 the temperature threshold to be 70◦ C which is considered as a
+   M T T FT B (m) =                                                              high temperature value for a silicon chip. Based on the analysis
+   ∑ ∑            Xi,m,f × A0                            X+Y /T H+Z×T H
+                                                                           (4)   in Section III-C, we set the deadline for the application is 40
+                                                    ×e        k×T H
+                                                                                 and the targeted service life of this chip is 10 years.
+              V a−b×T H × T askm
+    i∈T 1≤f ≤K f                                                                    Figure 3 gives three different schedules for this application.
+   For moderate temperatures in 65nm technology, Srini-                          Different voltage/frequency levels are distinguished by differ-
+vasan et al. [34] demonstrate that the contribution of elec-                     ent patterns and colors. The tasks marked in dark gray are
+tromigration, dielectric breakdown, and cycling to the overall                   executed under level k1, and the tasks marked in light gray
+failure rate are similar to each other. This allows us to calibrate              are executed under level k3.
+the constants in each failure equation to give a system MTTF                        In both schedules (a) and (b), each task runs under the
+of 30 years at nominal temperature [35]. And we used the                         same voltage/frequency level, and the chip temperatures are
+same constants for all the experiments. It is noteworthy that the                below 70◦ C. That means that both of them satisfy the thermal
+relative impact of different failure mechanisms might change                     threshold and consume the same total energy. However, the
+depending on the conditions.                                                     schedule (a) leads to much shorter chip lifetime compared
+                                                                                                                                    5
+
+
+
+                                                                    B. Problem formulation
+                                                                       Based on the above analysis, the problem addressed in
+                                                                    this paper is formulated as follows: Given the floorplan of a
+                                                                    MPSoC containing a set of processor cores M, an application
+                                                                    represented with a task graph G =⟨T , E⟩, its associated dead-
+                               (a)                                  line L, a thermal threshold T H, and a target system lifetime
+                                                                    LF , determine a non-preemptive schedule of the application
+                                                                    and the corresponding voltage/frequency level of the core
+                                                                    running each task, such that the total energy consumption is
+                                                                    minimized, under the constraints that tasks are finished before
+                                                                    deadlines, the chip runs below thermal threshold T H, and the
+                                                                    system lifetime is guaranteed to be no less than LF .
+                               (b)
+                                                                               V. L IGHTWEIGHT TEMPERATURE MODEL
+                                                                       In this section, we present a lightweight temperature model
+                                                                    for on-chip temperature prediction.
+                                                                       The heating/cooling process of MPSoCs is complicated
+                                                                    and dynamic. As the approaches in [15], [36], [13] show,
+                                                                    inspired by the duality between heat flow and electrical circuit
+                                                                    phenomenon, the heating/cooling process in an MPSoC can be
+                               (c)
+                                                                    approximately modeled as an equivalent first-order RC circuit
+Fig. 3: Three different schedules for the example task graph        by applying Fourier’s Law. The thermal coefficients can be
+in Figure 2a.                                                       obtained in [37].
+                                                                       For a MPSoC platform with a set of processor cores M,
+                                                                    each core is modeled as a discrete thermal element. Heat sink
+to schedule (b). The chip can only survive 5 years based on         and heat spreader layers are on top of the cores. We combine
+our EM and TDDB models in accordance with schedule (a)              the heat sink layer and heat spreader layer as a whole and still
+because of the excessive stress on P 1. Although it is able to      call it heat sink layer for convenience, similar to the model
+keep the chip temperature under the thermal threshold, P 1          in [6], [15]. Heat sink layer can also be modeled as multiple
+always run under the highest voltage/frequency level for each       thermal elements whose partitioning corresponds to the layout
+task, and ends up with a high temperature close to the thermal      of the cores. Define H as the set of heat sink elements in the
+threshold and poor lifetime performance.                            MPSoC according to their partition.
+   In fact, for a given system temperature threshold, there are        The heat transfer among cores and heat sink elements is
+significant variations on the achievable lifetime by different      quite related to the power consumption of processor cores,
+task mapping and scheduling decisions. From the results of the      the ambient temperature, and the temperature of neighboring
+experiments on two benchmark sets including 20 task graphs,         thermal elements. When the power consumption of each core
+we find that not all the scheduling results that are generated by   is the same, the percentage of energy converted to heat among
+only considering the thermal constraints can meet the targeted      cores is very low, around 3%. Theoretically, there is no heat
+chip service lifetime requirements. On average, the system          transfer between the cores. However, in the situation where a
+lifetime is reduced by 17.3% compared to the results obtained       core is idle and its neighbors are running tasks, a relatively
+by taking both thermal constraints and lifetime constraints         high percentage of energy is converted to heat, and the core
+into account. In addition, satisfying the targeted chip service     absorbs heat from its neighbors. A part of the heat is dissipated
+lifetime requirement cannot ensure a safe on-chip temperature.      through heat sink, and the rest is absorbed by itself which leads
+The system lifetime reliability is estimated based on the           to a rise of its temperature.
+whole scheduling period and is a result of the accumulation            Let Ce be the thermal capacitance for any thermal element
+effect of multiple factors, such as temperature, current density,   e ∈ M ∪ H. Let Rm,l be the lateral thermal resistance
+and voltage level. Therefore, it is important to include both       between core m and l for any m, l ∈ M. Let Rh,g be the
+lifetime reliability optimization and temperature management        thermal resistance between two heat sink elements h and g
+in designing task mapping and scheduling strategies for system      for any h, g ∈ H. Let Rh,A be the vertical resistance of a
+reliability.                                                        heatsink elements h ∈ H to the ambient. For each task-to-
+   Schedule (c) also satisfies all the performance requirements     core assignment, P w(τ, m) indicates the power consumption
+including timing constraints and expected system lifetime.          of core m when executing task τ . The temperature of thermal
+What’s more, the schedule achieves minimized total energy           element e ∈ M ∪ H at time t is denoted by T (t, e). The
+consumption by further adjusting the voltage/frequency levels       temperature of each thermal element can be expressed as a
+of certain processor cores, and 10.8% further energy reduction      function of its power consumption, the ambient temperature,
+is observed compared to schedule (b). In fact, schedule (c) is      and the temperatures of neighboring thermal elements. The
+the optimal solution to the problem, obtained by our MILP           heating/cooling process by Fourier’s Law can be formulated
+model (refer to Section VI).                                        as follows:
+                                                                                                                                                          6
+
+
+
+                                                                     the values obtained from our temperature model and those
+  ∑                                 ∑ T (t, m) − T (t, l)            from HotSpot. The normalization is performed for the 4 cores
+         α(t, τ, m) × P w(τ, m) =                                    individually. For each core under every power consumption
+                                                Rm,l
+  τ ∈T                              l∈Nm                             trace, the temperature value obtained by HotSpot simulator
+                                                              (5)
+                   dT (t, m)        T (t, m) − T (t, h)              is normalized to be 1, as the ground truth value; the predic-
+             +Cm ×           + fc ×
+                      dt                   Rm,h                      tion value obtained by our temperature model is normalized
+                                                                     with respect to the HotSpot value. Each curve represents the
+             T (t, m) − T (t, h)   ∑ T (t, h) − T (t, g)             normalized temperature values of a processor core for various
+      fc ×                       =
+                    Rm,h                    Rh,g                     power consumption traces. The temperature values obtained
+                                    g∈Nh
+                                                              (6)    from the proposed model and HotSpot simulator only differ
+                        dT (t, h)        T (t, h) − TA
+                  +Ch ×           + fh ×                             in 0.3% on average. Besides, the running time of our model
+                           dt                 Rh,A                   can be reduced by over two orders of magnitude compared to
+where T (t, h) is the temperature of the heatsink element h at       HotSpot simulator-based technique. The execution time of the
+time t (h is vertically on top of core m), and α(t, τ, m) = 1        temperature model is less than 60µs, whereas HotSpot takes
+if task τ executes on active core m at time t. The thermal           about 0.2s for temperature simulation.
+resistance parameters between any two thermal elements can
+be calculated easily as described in [37]. The steady-state                                        1.004                               max max=1.0029
+temperature values can be obtained when the capacitor values                                       1.002
+
+
+
+
+                                                                         Normalized Temperatures
+Cm and Ch both equal zero in (5) and (6).
+   To make the temperature model more robust to different                                             1
+configurations, we add two scaling factors, f c and f h, in
+the model, as (5) and (6) suggest. Both f c and f h are                                            0.998
+                                                                                                                                              min
+applied for adjusting vertical thermal resistances. The vertical                                                                             min=0.9973
+                                                                                                   0.996
+thermal resistance captures heat flow from one layer to the
+next, moving from the die through the package and eventually                                       0.994
+                                                                                                                Core 1
+into the air. For example, Rm,h counts the amount of heat                                                       Core 2
+flowing from core m into the heat sink elements h that is                                          0.992        Core 3
+directly above the core m. The value of the vertical thermal                                                    Core 4
+                                                                                                    0.99
+resistance of a specific architecture generally indicates the heat                                      1   2     3      4    5    6    7    8   9   10
+dissipation rate. The lateral thermal resistance captures the heat                                                    Power consumption traces
+diffusion between adjacent thermal elements within a layer.          Fig. 4: The steady-state temperature estimation on different
+It indicates the temperature difference between the adjacent         processor cores.
+thermal elements. It is observed that the temperature value
+estimated by [15] is lower than that obtained from HotSpot.             Figure 5 shows the transient temperature behavior variations
+This is because the heat spreader layer is omitted and the           of one processor core when executing different tasks under
+divided equivalent circuit is not accurate enough, though the        different speeds. The red curve and the blue curve represent
+temperature differences among adjacent thermal elements are          transient thermal results generated by using the temperature
+well presented. To offset the accuracy loss from imprecise           model and HotSpot, respectively. The light blue curve is the
+vertical thermal resistance, two scaling factors are used to         steady state temperatures curve for the core. We can see that
+adjust the vertical thermal resistance empirically in an efficient   the transient temperature results of our model is consistent
+manner. The two scaling factors can be calculated easily as          with that generated from HotSpot. This observation once again
+described in [4].                                                    clearly testifies that the temperature model is accurate enough
+   To testify the prediction accuracy of the temperature model,      to be used for chip temperature prediction.
+we compare the predicted temperature values from the temper-            Our temperature model provides accurate temperature pre-
+ature model with the simulated results from HotSpot simulator        diction with reduced computation time in high-level mod-
+on a 2×2-core mesh-based MPSoC. Every core is simulated as           eling. HotSpot-based simulation has been widely applied in
+out-of-order Alpha 21364 in 32nm technology. We execute 10           architecture level thermal modeling on MPSoCs. It achieves
+different sets of synthetic applications. The power consump-         high accuracy while incurs heavy computation overhead [39].
+tion traces of every set of applications are generated by McPAT      The thermal model proposed in [15] simplifies the high-
+[38] and are used as the input to both the temperature model         order model of HotSpot and models the heat dissipation
+and HotSpot to obtain the respective estimated temperature           process into an equivalent first-order RC circuit based on the
+values. Detailed experimental setup refers to Section VII.           Fourier’s Law. It can obtain the chip temperature distribution
+Figure 4 shows the steady-state temperature results of each          by solving a set of equivalent linear equations in polynomial
+core under different power consumption traces. The unit of           time. However, the accuracy of the simple RC thermal model
+temperature is uniformly Celsius degree in this paper. Since         is not perfectly promised due to the extreme uncertainty and
+the temperature of every processor core in each set of synthetic     complexity of heat dissipation process. Our temperature model
+applications is distinctly different, we draw the normalized         is also a linearized formal method, similar to the model in
+values to clearly illustrate the temperature differences between     [15]. While we have added two scaling factors, f c and f h,
+                                                                                                                                                                7
+
+
+
+                       90                                                                  representation of a feasible execution schedule; secondly,
+                       88                                                                  they should make it possible to represent all constraints and
+                       86                                                                  objectives as linear formulations. The decision variables used
+                       84
+                                                                                           in our formulation are shown in Table II. The variables Xi,m,k ,
+      Temperature °C
+
+
+
+
+                                                                                           si and fi are used to construct the objective function. Binary
+                       82
+                                                                                           variable Oi,j is used to ensure that no task overlaps with
+                       80                                                                  another task on the same core. T Si,m and βi,j,m,k are used to
+                       78                                                                  model chip temperature distribution and lifetime value.
+                       76       Our model
+                                Hotspot                                                      TABLE II: Decision variables used in the MILP model.
+                       74       Steady state temperature
+                       72                                                                   Variables      Description
+                            0   0.1       0.2   0.3     0.4      0.5   0.6   0.7   0.8
+                                                      Time (s)                              si             the start time of task i.
+                                                                                            fi             the finish time of task i.
+Fig. 5: The transient temperature variation of a processor core.
+                                                                                            Xi,m,k         binary variable, equals to 1 if task i executes on
+                                                                                                           core m with speed k.
+to adjust the dissipation rate of the heat transfer process,                                Oi,j           binary variable, equals to 1 if and only if task j
+consequently increasing the accuracy of the temperature model                                              finishes after task i begins.
+in an efficient manner. The two scaling factors are empirically                             T Si,m         the temperature of thermal element m when task i
+trained with respect to the HotSpot values at design time. Our                                             starts to execution.
+temperature model is suitable to be combined with high-level                                βi,j,m,k       binary variable, equals to 1 if task j executes on
+                                                                                                           core m with speed k, precedes and overlaps with
+optimization techniques for real-time application mapping and
+                                                                                                           task i.
+scheduling thanks to the high accuracy and efficiency.
+
+       VI. MILP-BASED A PPLICATION M APPING AND
+                    S CHEDULING A PPROACH                                                  B. Optimization Objective
+   In this section, we formally propose a MILP model to solve                                  Our objective is to minimize total energy consumption,
+the problem formulated in Section IV-B.                                                    including the dissipated energy when processor executing
+                                                                                                                                                ∑     tasks
+                                                                                           and the energy when the core being idle. [L∗|M|− i∈T (fi −
+A. Inputs and Decision                                                                     si )] is the total time of all cores staying in the sleep mode,
+                                                                                           and P w∑         ∑corresponding
+                                                                                                     sl is the     ∑        power consumption in the sleep
+   For our MILP formulation, we provide several input vari-
+                                                                                           mode. i∈T m∈M k∈K Xi,m,k ∗ ti,k ∗ P w(Vk , vk ) is the
+ables that represent the power consumption and characteristics
+                                                                                           total energy consumption for executing all the tasks.
+of the target applications and platform, as shown in Table I.
+The ti,k and P w(Vk , vk ) parameters are calculated based on                                                                  ∑
+worst case execution time (WCET) of every task node for                                                     min{[L ∗ |M| −           (fi − si )] ∗ P wsl
+every frequency level supported by the processor (as discussed                                                                 i∈T
+                                                                                                         ∑ ∑ ∑
+in Section III-B).                                                                                   +                 Xi,m,k ∗ ti,k ∗ P w(Vk , vk )}
+                                                                                                         i∈T m∈M k∈K
+      TABLE I: Input variables for the MILP formulation.
+  Inputs                              Description                                          C. Constraints
+  ti,k                                worst-case execution time of task i when running        To satisfy the real-time requirements of applications on a
+                                      at speed vk .                                        target MPSoC platform within safe chip temperature and life-
+  T                                   the set of tasks.                                    time reliability demands, the constraints are listed as follows.
+  M                                   the set of cores, and the number of thermal             Constraint for target platform: each task is assigned to
+                                      elements is 2 ∗ |M|.                                 exactly one core with an assigned execution speed.
+  H                                   the set of heat sink elements.                                       ∑ ∑
+  K                                   the set of discrete voltage settings of each core.                             Xi,m,k = 1      ∀i ∈ T             (7)
+  L                                   given timing constraint of the application (dead-                    m∈M k∈K
+                                      line).                                                  Timing constraints: all the tasks must be finished before L
+  LF                                  targeted chip lifetime.                              to meet the deadline constraint, as shown in (8). In addition,
+  Vk /vk                              the k − th voltage/speed level.                      each task must follow the precedence relation defined by the
+  P w(Vk , vk )                       the power consumption of the cores running with      DFG. (9) model this dependency by forcing destination task
+                                      speed vk .                                           nodes to start only after their predecessor nodes have finished.
+  P wsl                               the power consumption when core is with the                              ∑ ∑
+                                      sleep mode.                                                  fi = si +              Xi,m,k × ti,k    ∀i ∈ T
+                                                                                                               m∈M k∈K
+  There are two major requirements for decision variables
+in our MILP problem: firstly, they must form a complete                                                            fi ≤ L       ∀i ∈ T                     (8)
+                                                                                                                                         8
+
+
+
+
+                    fi ≤ sj        ∀(i, j) ∈ E                (9)                     sj ≤ si + (1 − βi,j,m,k ) ∗ Z
+
+  Mutual exclusion: Mutual exclusion ensures that no task
+overlaps with another task on the same core. Variable Oij is        si + ϵ − (3 − (Oij + Oji + Xj,m,k )) × Z ≤ sj + βi,j,m,k ∗ Z
+used to guarantee that. Oij is 1 iff task j finishes after task i
+begins as shown in (10) and (11). Z is a very large constant           (13) and (14) calculate the temperatures for each thermal
+number that no less than the maximum finish time.                   element based on the proposed temperature model when any
+                                                                    core begins to execute a new task. (15) states that the steady-
+               fj − si ≤ Z × Oij          ∀i, j ∈ T          (10)   state temperature (T S) of each core must be no more than
+                                                                    T H when a new task begins to execute on a core.
+
+         ϵ + si − fj ≤ Z × (1 − Oij )            ∀i, j ∈ T   (11)               ∑ ∑
+                                                                      P wsl +                 βi,j,m,k × (P w(Vk , vk ) − P wsl )
+   Based on the definition of Oij , Oij + Oji = 2 if and only                   j∈T 1≤k≤K
+
+if the executions of the two ∑tasks i and j overlap. According                  ∑ T Si,m − T Si,l                T Si,m − T Si,h    (13)
+         ∑                                                                 =                            + fc ×
+to (12), k∈K Xi,m,k and k∈K Xj,m,k cannot be 1 at the                                    Rm,l                         Rm,h
+                                                                               l∈Nm
+same time if Oij + Oji = 2, indicating if i and j overlap,
+they will not execute on ∑the same core. In contrast,
+                                             ∑        Oij + Oji                  T Si,m − T Si,h
+would be less than 2 if k∈K Xi,m,k and k∈K Xj,m,k are                          fc ·               =
+                                                                                      Rm,h
+both 1, indicating their executions must be serialized if they                  ∑ T Si,h − T Si,g                                   (14)
+                                                                                                         T Si,h − TA
+are mapped to the same core.                                                                      + fh ×
+                                                                                       Rh,g                 Rh,A
+                                                                               g∈Nh
+                       ∑                 ∑
+         Oij + Oji +          Xi,m,k +         Xj,m,k ≤ 3                         T Si,m ≤ T H          ∀i ∈ T , ∀m ∈ M             (15)
+                       k∈K               k∈K                 (12)
+                              ∀i, j ∈ T , i ̸= j, ∀m ∈ M               The temperature of each core when a task finishes its
+                                                                    execution can be modeled in the same way. Due to space
+   Thermal threshold: We can use (5) and (6) to compute the         limitations, this part is omitted here.
+temperature for each core at any given time corresponding to           Lifetime constraint: Based on the model in (2), we only need
+dynamic or transient thermal analysis.                              to guarantee that the predicted lifetime of each core under EM
+   Since the power consumptions for each core only change at        or TDDB is no less than LF , as shown in (16) and (17). It is
+the beginning and end of a task’s execution, and the steady-        based on our lifetime reliability model (refer to (3) and (4)).
+state temperature of a core only experiences a rapid change         For EM, we take the physical parameters like current density
+when the power consumption of at least one core on the              into account. For TDDB, the different voltage/frequency levels
+chip changes. We can reduce the amount of computation for           lead to different predicted lifetime values, which is handled in
+obtaining the temperatures during tasks execution. Specifical-      (17). By applying the predefined temperature threshold T H,
+ly, we only need to evaluate the temperature of each core           (16) and (17) linearize the lifetime estimation model. The
+immediately after a task starts or finishes on any core of the      expected lifetime of one core will be at least LF , since the
+MPSoC. Besides, the tasks run for a duration of at least the        actual temperature is less than or equal to T H.
+thermal time constant of chip die (in a few milliseconds). The         ∀m ∈ M, we have:
+thermal time constant is defined as the time for the chip peak
+temperature to reach 63% of the steady-state after turning on        ∑ ∑ Xi,m,k × A0                   Ea             ∑∑
+the power. For the Alpha 21364 circuit in 32nm, the largest                                        × e k×T H ≥ LF ×             Xi,m,k
+                                                                                (Jf − Jcrit   )n
+time constant for any chip block was 10 ms [40]. Thus the            i∈T k≤K                                          i∈T k∈K
+thermal die capacitances are normally saturated during tasks                                                                        (16)
+execution. For this reason, we set the capacitance values in (5)
+and (6) to zero to obtain the steady-state temperature when                    ∑ ∑ Xi,m,f × A0          X+ Y +Z×T H
+                                                                                                          TH
+                                                                                                    × e    k×T H
+predicting temperatures in our MILP formulation. In addition,                             V a−b×T H
+                                                                               i∈T 1≤f ≤K  f
+the differential part is eliminated, which greatly enhance the                                       ∑∑                             (17)
+computation efficiency during design space exploration.                                       ≥ LF ×         Xi,m,k
+   Variable βi,j,m,k is used to model the temperature estima-                                                i∈T k∈K
+tion process. βi,j,m,k = 1 if and only if task j executes on           Based on the defined input and decision variables, optimiza-
+core m with speed k, precedes and overlaps with task i, that        tion objective, and formulated constraints, we employ a MILP
+is, β(i, j, m, f ) = 1 iff Oij , Oji , Xj,m,k all equals to 1 and   solver to systematically explore all the application mapping
+sj ≤ si .                                                           and scheduling alternatives to obtain a globally optimal solu-
+   ∀i, j ∈ T , ∀m ∈ M, we have:                                     tion with minimum total energy consumption. We allow every
+                                                                    task of an application to map to any a processor core with
+             3 × βi,j,m,k ≤ Oij + Oji + Xj,m,k                      any voltage/frequency level. For the tasks that map to the
+                                                                                                                                                                                      9
+
+
+
+same core, we provide a total scheduling order by employing                  TABLE III: Parameters in HotSpot and temperature models.
+order-based scheduling (run-to-completion scheduling). Each                               Parameter                                                           Value
+task must follow the precedence relation and be finished                                  Silicon thermal conductivity [W/m·K]                                100
+before the deadline. We also consider both chip temperature                               Silicon specific heat [J/m3 ·K]                                     1.75 · 106
+and system lifetime reliability constraints. Equation (13)–(15)                           Thickness of the chip [mm]                                          3.5
+estimate the steady-state temperature profiles and limit the chip                         Convection resistance [K/W]                                         2
+temperature under the safe threshold. Equation (16)–(17) limit                            Heatsink thickness [mm]                                             2
+the obtained solution satisfying the target demand of system                              Heatsink thermal conductivity [W/m·K]                               400
+lifetime reliability.                                                                     Heatsink specific heat [J/m3 ·K]                                    3.55 · 106
+   Our MILP technique will be conducted at design time in                                 Ambient temperature [K]                                             318.15
+the warehouse to obtain the optimal application mapping and
+scheduling solution with minimum energy consumption. The
+obtained solution will be applied at runtime efficiently with                10 sets of synthetic applications for every floorplan of MPSoC,
+very little overhead. The design-time optimization (e.g., on                 2×2, 3×3, 4×4 in total. For each of the sets of applications,
+high-performance workstation) and runtime application (e.g.,                 we randomly generate the number of applications and obtain
+on MPSoC) can be executed on different platforms. Moreover,                  the corresponding task graphs by TGFF [41]. The power con-
+our MILP technique gains in energy optimization based on the                 sumption traces of every set of applications are generated by
+guaranteed optimality.                                                       McPAT based on random voltage/frequency-level assignment
+                                                                             and used as the input to the temperature models and HotSpot
+               VII. P ERFORMANCE E VALUATION                                 to obtain the respective estimated average temperature over all
+   In this section, we first verify the accuracy and efficiency of           the processor cores, i.e., the average chip temperature. Figure 6
+the proposed temperature model by comparing it with existing                 shows the comparison of the normalized steady-state chip
+temperature models. We then conduct extensive experiments                    average temperature predicted by different temperature models
+on different MPSoC floorplans with a large number of synthet-                on different floorplans. The results from HotSpot simulator on
+ic and real-world applications to verify the effectiveness and               each floorplan is always 1 in the figure. The results show that
+scalability of the proposed MILP-based application mapping                   the average difference between the temperatures obtained from
+and scheduling approach by comparing it with two state-of-                   our model and HotSpot is less than 0.5% on the three different
+the-art optimization techniques.                                             floorplans. While the average difference between our model
+   In the experiments, we consider mesh-based MPSoC plat-                    and the model in [15] is as high as 46% on 2×2 mesh-based
+forms. Every processor core of the MPSoC platforms is sim-                   floorplan, 11.0% on 3×3 mesh-based floorplan, and 15.8%
+ulated as out-of-order Alpha 21364 core in 32nm technology.                  on 4×4 mesh-based floorplan. The results convincingly verify
+We assume each processor core can be adjusted at four                        that the proposed temperature model is much more accurate
+different voltage and frequency levels for DVFS: 1.210V at                   than the existing technique.
+2.1GHz, 1.200V at 2.0GHz, 1.187V at 1.9GHz, and 1.06V at
+1.7GHz. The power consumption and area cost of the proces-
+                                                                                                             1.1
+sor cores are simulated by McPAT simulation. According to
+our simulation results, each core has an area of 9.12mm2 .                                                    1
+                                                                                   Normalized temperatures
+
+
+
+
+   All the experiments are performed on a Dell Precision                                                     0.9
+T5610 Tower Workstation with Red Hat Enterprise Linux
+Workstation release 6.4, based on Intel⃝        Xeon⃝
+                                             R        R                                                      0.8
+                                                          E5-2650
+                                                                                                             0.7
+at 2.6GHz and 64GB memory.
+                                                                                                             0.6
+                                                                                                                                                          Ours 2 × 2 floorplan
+                                                                                                                                                          Ours 3 × 3 floorplan
+A. Evaluation of the temperature model                                                                       0.5                                          Ours 4 × 4 floorplan
+                                                                                                                                                          [15] 2 × 2 floorplan
+
+   We compare our temperature model with a widely used                                                       0.4                                          [15] 3 × 3 floorplan
+                                                                                                                                                          [15] 4 × 4 floorplan
+                                                                                                                                                          Hotspot
+temperature model presented in [15] and a HotSpot simulator                                                  0.3
+                                                                                                                   1   2   3     4     5    6     7       8         9            10
+for accuracy verification on chip temperature prediction. The                                                                  Power consumption traces
+resulting temperature values of the HotSpot v5.0.2 are used as
+                                                                             Fig. 6: Accuracy comparison between different temperature
+reference values. The parameter settings used in HotSpot and
+                                                                             models and HotSpot on different platforms.
+the temperature models are listed in Table III.1
+   As shown in Figure 4 and 5, the temperature model well
+                                                                                Comparing with HotSpot simulator, our temperature model
+estimates the temperature behavior of every individual core,
+                                                                             achieves high temperature prediction accuracy with reduced
+no matter the steady-state temperature or the transient one. In
+                                                                             running time. We obtain the running time of our model and
+this section, we further verify the accuracy of the temperature
+                                                                             HotSpot when estimating the temperature of every set of
+model on MPSoCs of different sizes. We randomly generate
+                                                                             synthetic applications. The computation time of the model
+  1 Our temperature model can adapt to different parameter settings corre-   in [15] is almost the same as our model’s and is omitted for
+sponding to different chip physical properties.                              simplicity. Figure 7 shows the accumulated time for multiple
+                                                                                                                                                   10
+
+
+
+runs of our temperature model and HotSpot. As discussed in
+                                                                                      Model in [15]
+Section V, the running time of our model can be reduced by                            Our model
+over two orders of magnitude compared to HotSpot simulator-
+based technique. The execution time of our temperature model
+is less than 60 µs. Such a big gap between the running time
+of our temperature model and that of HotSpot indicates that
+our model is of satisfactory efficiency.
+
+                                                                                                                                   TH
+                                                                                                                                violation
+
+
+
+                                                                                100    200   300      400   500   600   700   800   900     1000
+
+
+
+                                                                   Fig. 8: Temperature threshold violation resulted from inaccu-
+                                                                   rate temperature model.
+
+
+                                                                   years at nominal temperature and we use the same constants
+                                                                   for all the experiments. The parameters of the electromigration
+                                                                   failure model are set as follows: the cross-sectional area of
+                                                                   conductor Ac = 6.4 × 10−8 cm2 , the current density for the
+Fig. 7: Efficiency comparison between our temperature model        original voltage level J = 1.5 × 106 A/cm2 , and the activation
+and HotSpot on different platforms.                                energy Ea = 0.48 eV [1]. The parameters of the TDDB failure
+                                                                   model are set as follows: a = 78, b = −0.081, X = 0.759ev,
+   An accurate temperature model is vital for application          Y = −66.8evK and Z = −8.37e − 4ev/K [30].
+mapping and scheduling techniques. To demonstrate this, we            To illustrate the effectiveness and performance of our MILP-
+conduct a large number of experiments on randomly generated        based approach, a large number of experiments are performed
+synthetic applications. We generate 1000 sets of synthetic         by comparing our approach with a simulated annealing-based
+applications, and then, assign and schedule each of them to a      technique [1] and a heuristic algorithm ThermalSched [15].
+4 × 4 MPSoC. Our temperature model and the model in [15]           Simulated annealing-based algorithm is an effective tech-
+are used separately to test the chip peak temperature for every    nique which can be devised to solve application mapping
+case. Since the temperature obtained from HotSpot simulator        and scheduling problems. Many researchers devise SA-based
+is almost the same with that obtained from our model, we           algorithm to obtain the results effectively and efficiently [42].
+use the temperature obtained from our model as reference              The MILP model is solved by Gurobi v5.60 [43] with CVX
+value for simplicity. A temperature threshold violation occurs     2.1 in the Matlab, which is designed to be the fastest, most
+when the real chip temperature exceeds the safe threshold.         powerful solver available for MILP problems. We set the run-
+It may eventually cause the damage of the physical system.         ning time limit of the MILP model to two hours and ten hours
+Underestimation of chip peak temperature that result from          for the synthetic benchmarks and real-world benchmarks, re-
+inaccurate temperature estimation techniques would increase        spectively. Considering the heavy time overhead of this formal
+the risk of threshold violations. As shown in Figure 8, 24.3%      method, we can relax its optimality to obtain a sub-optimal yet
+of temperature threshold violation cases resulted from inap-       highly acceptable application mapping and scheduling solution
+propriate application mapping and scheduling solutions are         more efficiently. In this paper, a sub-optimal resultis also
+avoided by applying our temperature model, which enhances          generated from the MILP solver by setting the current relative
+the system reliability to some extend.                             MIP (Mixed Integer Programming) optimality gap to 5%. The
+   Due to the feature of high accuracy and efficiency, our         gap is computed as (ObjBound − ObjV al)/|ObjV al|, where
+model is applied in the proposed MILP-based application            ObjBound and ObjV al are the MIP objective bound and
+mapping and scheduling approach to estimate the temperature        incumbent solution objective, respectively. The Gurobi solver
+of every processor core and to determine the impact on its         will terminate (with an optimal/sub-optimal result) when the
+aging, and hence, its reliability.                                 relative gap between the lower and upper objective bound is
+                                                                   less than the gap times the upper bound.
+B. Evaluation of the MILP-based Approach                              Both the simulated annealing algorithm and the Ther-
+   We conduct extensive performance evaluations on both            malSched algorithm are run in the Matlab. The parameters
+synthetic and real-world benchmarks to demonstrate the ef-         for the simulated annealing approach are set as follows:
+fectiveness of the proposed MILP-based application mapping         initial temperature = 100, cooling rate = 0.99, and ending
+and scheduling approach.                                           temperature = 10−5 . The ThermalSched algorithm [15] is
+   In this paper, the temperature threshold is set to 70◦ C, and   extended accordingly to be applied to the proposed problem.
+the targeted chip lifetime is set to 10 years. We calibrate the    Specifically, the earliest start time and the latest start time
+constants in each failure equation to give a system MTTF of 30     of a given task are computed using a middle voltage level
+                                                                                                                                                                                                                                                                                                           11
+
+
+
+
+                                         1.5                                                                                                1.5                                                                                                   1.5
+                                                                            ThermalSched                                                                                       ThermalSched                                                                                          ThermalSched
+
+
+
+
+                                                                                                                                                                                                          Normalized energy for 4 + 4 floorplan
+ Normalized energy for 2 + 2 floorplan
+
+
+
+
+                                                                                                    Normalized energy for 3 + 3 floorplan
+                                                                            Simulated annealing                                                                                Simulated annealing                                                                                   Simulated annealing
+                                         1.4                                MILP sub−optimal                                                1.4                                                                                                   1.4                                MILP sub−optimal
+                                                                                                                                                                               MILP sub−optimal
+                                                                            MILP optimal                                                                                       MILP optimal                                                                                          MILP optimal
+                                         1.3                                                                                                1.3                                                                                                   1.3
+
+
+                                         1.2                                                                                                1.2                                                                                                   1.2
+
+
+                                         1.1                                                                                                1.1                                                                                                   1.1
+
+
+                                           1                                                                                                  1                                                                                                     1
+
+
+                                         0.9                                                                                                0.9                                                                                                   0.9
+                                               6   9   12   15      18    21    24   27   30   33                                                 6   9   12   15      18    21    24   27   30      33                                                 6   9   12   15      18    21    24   27   30      33
+                                                                 Task graph set                                                                                     Task graph set                                                                                        Task graph set
+                                                   (a) 2×2 mesh-based floorplan                                                                       (b) 3×3 mesh-based floorplan                                                                          (c) 4×4 mesh-based floorplan
+
+                                                                            Fig. 9: Comparison of different techniques on total energy consumption.
+
+
+between the highest and lowest voltage levels since the latest                                                                                                           achieve significant energy saving compared to the other two
+start time of a task is set according to the deadline of that                                                                                                            algorithms. Finally, our approach is able to obtain the optimal
+task. Using the middle voltage to calculate the latest start time                                                                                                        results for the applications with 33 tasks on average, and it
+makes the problem resilient. Furthermore, the first available                                                                                                            is scalable to as many as 51 tasks for 2×2 floorplans. This
+processor core is selected to schedule the current ready task,                                                                                                           strongly verifies the scalability of the proposed technique.
+since the processor cores have identical configurations. Then,
+a proper speed for running each task is identified such that                                                                                                                Figure 10 shows the average running time of the three
+all the requirements can be met and the total energy can be                                                                                                              techniques on different floorplans within the predetermined
+minimized.                                                                                                                                                               limited time (two hours). As the problem is NP-hard, the run-
+                                                                                                                                                                         ning time of the MILP-based approach increases exponentially
+   We first apply the proposed MILP-based approach to sets of                                                                                                            with the increasing sizes of task graphs and platforms. It is
+synthetic benchmarks. The synthetic benchmarks are generated                                                                                                             also highly related to the shape of the task graph according
+by TGFF using the sample input files that come with the                                                                                                                  to our experimental results. There are some task graphs in
+software package. The maximum in-degree and out-degree of                                                                                                                the task graph sets that the MILP approach cannot obtain
+graph nodes for the TGFF input files are set among interval                                                                                                              the optimal results for them within two hours. These task
+[2, 9]. For the synthetic benchmarks, ten synthetic task graphs                                                                                                          graphs are not included in Figure 10 since the running time
+are generated for each benchmark category, beginning from                                                                                                                of the MILP technique is beyond the predetermined limited
+task graphs each of whom contains 6 tasks, and increasing the                                                                                                            time in the experiments. Comparing to the MILP technique,
+task number by 3 for tasks in each benchmark category.                                                                                                                   both the ThermalSched and SA-based algorithm take a short
+   Figures 9a, 9b, and 9c compare the normalized energy                                                                                                                  period of time to find the results. It takes less than 1 second
+consumption of the three techniques on the 2×2, 3×3, and                                                                                                                 for the ThermalSched to obtain a solution, and the running
+4×4 floorplans, respectively. The X-axis is the synthetic task                                                                                                           time of the SA-based algorithm finding a feasible solution
+graph sets with different number of tasks. The Y-axis shows                                                                                                              ranges from less than 1 second to 17 seconds. ThermalSched
+the normalized energy consumption by each technique. The                                                                                                                 heuristic algorithm is scalable and efficient, which can speedily
+energy consumption is in unit of microjoule, µJ, in this paper.                                                                                                          find a solution. The SA-based algorithm performs stochastic
+The optimal results generated by the MILP-based approach                                                                                                                 search in the design space and delivers better results with
+are normalized to be 1 and are set as the baseline. Several key                                                                                                          increased search time. The MILP approach, as a formal
+observations can be derived from Figure 9. Firstly, for all task                                                                                                         method instead, can perform systematic exploration in the
+graph sets on every floorplan, our technique outperforms both                                                                                                            design space and provide a theoretically guaranteed optimal
+simulated annealing algorithm and ThermalSched algorithm.                                                                                                                solution. In addition, for the full set of task graphs with 6
+Specifically, for 2×2 floorplan, 26.4% and 22.6% lower energy                                                                                                            tasks, our MILP technique normally takes less than one second
+consumption are achieved on average compared to the Ther-                                                                                                                to obtain the optimal solution; for the full set of task graphs
+malSched algorithm and SA-based algorithm, respectively. For                                                                                                             with 33 tasks, it still takes only 20 minutes on average. The
+3×3 floorplan, the ThermalSched algorithm and SA-based                                                                                                                   sub-optimal results can be obtained within one hour for all the
+algorithm deviate from the optimal solution by 20.3% and                                                                                                                 task graphs. In most cases, the time needed for finding a sub-
+8.7% on average, respectively. For 4×4 floorplan, an average                                                                                                             optimal result is much lower than that for generating a globally
+of 25.6% and 9.5% lower energy consumption are achieved                                                                                                                  optimal result which takes much more time to cover the entire
+compared to the ThermalSched algorithm and SA-based algo-                                                                                                                design space for the provable optimality. As shown in Figure 9,
+rithm, respectively. Secondly, the sub-optimal results obtained                                                                                                          the average difference between the optimal and sub-optimal
+by our model are very close to the optimal results: 1.43%                                                                                                                results is small and the sub-optimal result outperforms the
+more energy consumption on average compared to the optimal                                                                                                               other two techniques outstandingly. This indicates that a sub-
+approach, which indicates that the sub-optimal results also                                                                                                              optimal solution is good alternative when finding the optimal
+                                                                                                                                                                                                                                            12
+
+
+
+
+                      103   MILP sub−optimal            MILP optimal                                   103    MILP sub−optimal          MILP optimal                                   103   MILP sub−optimal         MILP optimal
+                            SA−based algorithm          ThermalSched                                          SA−based algorithm        ThermalSched                                         SA−based algorithm       ThermalSched
+
+                      102                                                                              10 2                                                                            102
+ Runtime in seconds
+
+
+
+
+                                                                                                                                                                  Runtime in seconds
+                                                                                  Runtime in seconds
+                      101                                                                              101                                                                             101
+
+
+                                                                                                                                                                                        0
+                  10
+                       0                                                                               100                                                                        10
+
+
+                       −1                                                                               −1                                                                              −1
+                10                                                                                 10                                                                              10
+
+
+                      −2                                                                                −2                                                                              −2
+              10 6                                                                                 10                                                                             10 6
+                            9   12    15      18   21       24     27   30   33                           6   9   12    15      18     21     24   27   30   33                              9   12    15     18    21       24   27   30   33
+                                           Task graph set                                                                    Task graph set                                                                 Task graph set
+                            (a) 2×2 mesh-based floorplan                                                      (b) 3×3 mesh-based floorplan                                                   (c) 4×4 mesh-based floorplan
+
+                                                                 Fig. 10: Comparison of different techniques on running time.
+
+
+solution experiences a long running time.                                                                                            energy reduction is achieved compared to SA-based algorithm
+                                                                                                                                     and ThermalSched, respectively. Moreover, the time needed for
+                                TABLE IV: Benchmark description.                                                                     suboptimal results is much shorter than it for optimal results,
+        Benchmark                          α       ε         IN/OUT          Description                                             ranging from less than 1 minute to at most 45 minutes. Note
+        audiobeam                          22      35        15/15           Audio beamformer                                        that the time needed for the MILP solver depends on a number
+        autocor                            12      18        8/8             Produce         auto-                                   of factors, and it cannot simply be measured by the size of the
+                                                                             correlation series                                      chip floorplan or the application. In the case of the “fmradio”,
+        fmradio                            31      37        4/4             FM radio with                                           the time needed for the 3×3 mesh-based floorplan is much
+                                                                             equalizer                                               shorter than it needed for the 2×2 mesh-based floorplan. This
+        tde pp                             29      28        1/1             Time-delay                                              is normal phenomenon in the case of finding optimal solution
+                                                                             equalization
+                                                                                                                                     using MILP model.
+        h.264                              51      71        11/12           Video compression
+                                                                             standard                                                   In summary, our approach exhibits high effectiveness and
+        channelvocoder                     55      70        17/17           Channel voice coder                                     good performance compared to the state-of-the-art techniques,
+           1 α                                                                                                                       which achieves energy minimization for real-time application
+                and ε are the number of actors and edges in the benchmark,
+             respectively.                                                                                                           mapping and scheduling at design time, with the safe chip
+           2 IN/OUT represents the maximum indegree/outdegree of the bench-
+                                                                                                                                     temperature and system lifetime reliability constraints satis-
+             mark.                                                                                                                   fied.
+   In order to test the practicability and scalability of the
+proposed approach to real-world applications, we conduct                                                                                                           VIII. C ONCLUSION
+case studies on several different real-world benchmarks that
+are shown in Table IV. The benchmarks are collected from                                                                                This paper has proposed a high-level energy optimization
+two sources. The first source is the StreamIt benchmark [44]                                                                         framework, in which a MILP formulation is proposed for
+which contributes 5 streaming applications (audiobeam, auto-                                                                         mapping and scheduling real-time applications onto MPSoCs.
+cor, fmradio, tde pp, channelvocoder). The actors execution                                                                          Combining DVFS techniques, the MILP formulation mini-
+times of the StreamIt benchmark are specified by its authors                                                                         mizes the total energy consumption with both thermal thresh-
+in clock cycles measured on MIT RAW architecture. The                                                                                old constraint and system lifetime reliability constraint satis-
+second source is the H.264 HDTV decoder. In [45], the                                                                                fied. A lightweight temperature model has also been employed
+functional parallelization of H.264 decoding is parsed into                                                                          to efficiently yet accurately estimate the thermal distribution of
+macro blocks (MB). We derive a prototype task graph with 51                                                                          MPSoCs in the MILP formulation. The accuracy and efficiency
+task nodes from H.264 decoder. WCETs of tasks are obtained                                                                           of the temperature model have been verified by comparing
+by profiling. In total, 6 applications are considered.                                                                               with existing temperature models. Its prediction accuracy is
+   The experiment results are shown in Table V. We can see                                                                           improved by as much as 46% than the existing temperature
+that the optimal result obtained with MILP model reduces                                                                             model, and an average of over 99% accuracy is provided
+energy by 19.09% compared to SA-based algorithm, and                                                                                 with greatly reduced computation time comparing with the
+28.53% compared to ThermalSched. The time needed to obtain                                                                           architecture-level HotSpot simulator. The effectiveness and
+an optimal result spans from less than 1 minute (for autocor                                                                         scalability of the MILP-based technique have been further
+and tde pp) to several hours. The optimal results cannot be                                                                          verified. We have conducted extensive experiments on a large
+obtained within 10 hours for H.264 decoder under the 3×3                                                                             number of synthetic and real-world applications on different
+and 4×4 mesh-based MPSoC. For the suboptimal results                                                                                 floorplans. The results show that our approach reduces on
+obtained with MILP formulation, it is quite close to the                                                                             average 19.09% and 28.53% total energy consumption in
+optimal results. Specifically, an average of 16.29% and 27%                                                                          comparison with two state-of-the-art techniques, with the tem-
+                                                                                                                                                                13
+
+
+
+          TABLE V: Energy consumption for different real-world applications obtained by using different techniques.
+                                                                            MILP sub-optimal                                    MILP optimal
+  Floorplan       Benchmark            SA        ThermalSched
+                                                                     Energy Time %(SA) %(TS)                       Energy       Time %(SA)             %(TS)
+                  audiobeam           4.54            4.63            3.63   5.86 20.04% 21.60%                      3.58        247  21.15%           22.68%
+                    autocor           15.36           19.35           13.32   0.2   13.28% 31.16%                   12.75       0.31  16.99%           34.11%
+                   fmradio            26.07           29.56           20.59  11.56 21.02% 30.35%                    20.05      180.3 23.09%            32.17%
+    2×2
+                    tde pp           2814.02         3322.4          2441.56 0.18 13.24% 26.51%                    2394.2       0.25  14.92%           27.94%
+                channelvocoder       7330.14         8825.56         6147.17 9.85 16.14% 30.35%                    6025.87     259.76 17.79%           31.72%
+                     h.264             901            1059             807     6    10.43% 23.80%                    800       356.4 11.21%            24.46%
+                  audiobeam           5.35            5.85            4.26   10.1 20.37% 27.18%                      4.07      156.12 23.93%           30.43%
+                    autocor           16.56           20.41           14.11  0.22 14.79% 30.87%                     13.51       0.21  18.42%           33.81%
+                   fmradio            29.61           29.22           23.05  5.55 22.15% 21.12%                     22.82      13.48 22.93%            21.90%
+    3×3
+                    tde pp           3634.25         4256.8          3020.5  0.23 16.89% 29.04%                    3004.6       0.62  17.33%           29.42%
+                channelvocoder       7647.48         9215.28         6514.81 14.57 14.81% 29.30%                   6479.91     472.34 15.27%           29.68%
+                     h.264            1044            1253             946   16.2    9.39% 24.50%                      -          -      -                -
+                  audiobeam           7.18            7.46            5.77     7    19.64% 22.65%                    5.53      126.38 22.98%           25.87%
+                    autocor           21.03           23.44           18.14  0.55 13.74% 22.61%                     17.52       0.56  16.69%           25.26%
+                   fmradio            37.01           38.89           27.07  7.72 26.86% 30.39%                      26.9      268.7 27.32%            30.83%
+    4×4
+                    tde pp           4107.37         4684.3          3405.8  0.22 17.08% 27.29%                    3309.1       0.58  19.44%           29.36%
+                channelvocoder       8478.63         9748.25         7463.28 14.79 11.98% 23.44%                   7128.64     574.22 15.92%           26.87%
+                     h.264            1266            1696            1122    45    11.37% 33.84%                      -          -      -                -
+   Average                                                                          16.29% 27.00%                                     19.09%           28.53%
+  1 The energy consumption is in unit of microjoule, µJ.
+  2 The time for MILP formulation is measured in minutes.
+
+
+
+perature threshold and system lifetime reliability constraints                     [7] A. Dhodapkar, C. H. Lim, G. Cai, and W. R. Daasch, “Tem2p2est: A
+satisfied.                                                                             thermal enabled multi-model power/performance estimator,” in Interna-
+                                                                                       tional Workshop on Power-Aware Computer Systems. Springer, 2000,
+                                                                                       pp. 112–125.
+                        ACKNOWLEDGMENT                                             [8] J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers, “Lifetime reliability:
+                                                                                       Toward an architectural solution,” IEEE Micro, vol. 25, no. 3, pp. 70–80,
+  This work is partially supported by NTU SUG                                          2005.
+                                                                                   [9] “International technology roadmap for semiconductors, 2011 edition:
+M4082087.020, Singapore, and NSFC No. 61772094,                                        Process integration, devices, and structures.” 2011.
+Chongqing High-Tech Research Program cstc2017jcyjA1430,                           [10] L. Huang and Q. Xu, “Energy-efficient task allocation and scheduling for
+and the Fundamental Research Funds for the Central                                     multi-mode mpsocs under lifetime reliability constraint,” in Proceedings
+                                                                                       of the conference on Design, automation and test in Europe. European
+Universities No. 106112017CDJQJ188829, China.                                          Design and Automation Association, 2010, pp. 1584–1589.
+                                                                                  [11] A. Das, A. Kumar, B. Veeravalli, C. Bolchini, and A. Miele, “Combined
+                                                                                       dvfs and mapping exploration for lifetime and soft-error susceptibility
+                             R EFERENCES                                               improvement in mpsocs,” in Design, Automation and Test in Europe
+                                                                                       Conference and Exhibition (DATE), 2014. IEEE, 2014, pp. 1–6.
+[1] L. Huang, F. Yuan, and Q. Xu, “On task allocation and scheduling
+    for lifetime extension of platform-based mpsoc designs,” Parallel and         [12] V. Hanumaiah and S. Vrudhula, “Energy-efficient operation of multicore
+    Distributed Systems, IEEE Transactions on, vol. 22, no. 12, pp. 2088–              processors by dvfs, task migration, and active cooling,” IEEE Transac-
+    2099, 2011.                                                                        tions on Computers, vol. 63, no. 2, pp. 349–360, 2014.
+[2] R. Viswanath, V. Wakharkar, A. Watwe, V. Lebonheur, M. Group, and             [13] M. Li, W. Liu, L. Yang, P. Chen, and C. Chen, “Chip temperature
+    I. Corp, “Thermal performance challenges from silicon to systems,” Intel           optimization for dark silicon many-core systems,” Transactions on
+    Corporation Tech Rep, no. 3, 2000.                                                 Computer-Aided Design of Integrated Circuits and Systems, 2017.
+[3] S. S.-Y. Hsueh, R. H.-M. Huang, and C. H.-P. Wen, “Tasser: A                  [14] Y. Liu, H. Yang, R. P. Dick, H. Wang, and L. Shang, “Thermal vs
+    temperature-aware statistical soft-error-rate analysis framework for com-          energy optimization for dvfs-enabled processors in embedded systems,”
+    binational circuits,” in Quality Electronic Design (ISQED), 2014 15th              in Quality Electronic Design, 2007. ISQED’07. 8th International Sym-
+    International Symposium on. IEEE, 2014, pp. 529–534.                               posium on. IEEE, 2007, pp. 204–209.
+[4] M. Li, W. Liu, L. Yang, P. Chen, and C. Chen, “Chip temperature               [15] T. Chantem, X. S. Hu, and R. P. Dick, “Temperature-aware scheduling
+    optimization for dark silicon many-core systems,” IEEE Transactions                and assignment for hard real-time applications on mpsocs,” Very Large
+    on Computer-Aided Design of Integrated Circuits and Systems, vol. PP,              Scale Integration (VLSI) Systems, IEEE Transactions on, vol. 19, no. 10,
+    no. 99, pp. 1–1, 2017.                                                             pp. 1884–1897, 2011.
+[5] D. Atienza, P. G. Del Valle, G. Paci, F. Poletti, L. Benini, G. De Micheli,   [16] N. Fisher, J.-J. Chen, S. Wang, and L. Thiele, “Thermal-aware global
+    and J. M. Mendias, “A fast hw/sw fpga-based thermal emulation                      real-time scheduling on multicore systems,” in Real-Time and Embedded
+    framework for multi-processor system-on-chip,” in Proceedings of the               Technology and Applications Symposium, 2009. RTAS 2009. 15th IEEE.
+    43rd annual Design Automation Conference. ACM, 2006, pp. 618–623.                  IEEE, 2009, pp. 131–140.
+[6] K. Skadron, M. R. Stan, W. Huang, S. Velusamy, K. Sankara-                    [17] H. Huang, V. Chaturvedi, G. Quan, J. Fan, and M. Qiu, “Throughput
+    narayanan, and D. Tarjan, “Temperature-aware microarchitecture,” in                maximization for periodic real-time systems under the maximal temper-
+    ACM SIGARCH Computer Architecture News, vol. 31, no. 2. ACM,                       ature constraint,” ACM Transactions on Embedded Computing Systems
+    2003, pp. 2–13.                                                                    (TECS), vol. 13, no. 2s, p. 70, 2014.
+                                                                                                                                                            14
+
+
+
+[18] V. Hanumaiah and S. Vrudhula, “Temperature-aware dvfs for hard                   Transactions on Very Large Scale Integration (VLSI) Systems, vol. 22,
+     real-time applications on multicore processors,” IEEE Transactions on            no. 11, pp. 2366–2379, 2014.
+     Computers, vol. 61, no. 10, pp. 1484–1494, 2012.                            [40] R. Rao, S. Vrudhula, and C. Chakrabarti, “Throughput of multi-core
+[19] M. Li, J. Yi, W. Liu, W. Zhang, L. Yang, and E. H.-M. Sha, “An efficient         processors under thermal constraints,” in Proceedings of the 2007
+     technique for chip temperature optimization of multiprocessor systems in         international symposium on Low power electronics and design. ACM,
+     the dark silicon era,” in International Conference on High Performance           2007, pp. 201–206.
+     Computing and Communications (HPCC). IEEE, 2015, pp. 688–693.               [41] R. P. Dick, D. L. Rhodes, and W. Wolf, “Tgff: task graphs for free,”
+[20] S. Zhuravlev, J. C. Saez, S. Blagodurov, A. Fedorova, and M. Prieto,             in Proceedings of the 6th international workshop on Hardware/software
+     “Survey of energy-cognizant scheduling techniques,” IEEE Transactions            codesign. IEEE Computer Society, 1998, pp. 97–101.
+     on Parallel and Distributed Systems, vol. 24, no. 7, pp. 1447–1464, 2013.   [42] J. Yi, Q. Zhang, Y. Tian, T. Wang, W. Liu, E. H.-M. Sha, and
+[21] C. Ravishankar, S. Ananthanarayanan, S. Garg, and A. Kennings,                   Q. Xu, “Approxmap: On task allocation and scheduling for resilient
+     “Analysis and evaluation of greedy thread swapping based dynamic                 applications,” in Design Automation Conference (ASP-DAC), 2016 21st
+     power management for mpsoc platforms,” in Quality Electronic Design              Asia and South Pacific. IEEE, 2016, pp. 318–323.
+     (ISQED), 2012 13th International Symposium on. IEEE, 2012, pp.              [43] “Gurobi optimizer,” http://www.gurobi.com/.
+     617–624.                                                                    [44] W. Thies and S. Amarasinghe, “An empirical characterization of stream
+[22] K. K. Rangan, G.-Y. Wei, and D. Brooks, “Thread motion: fine-                    programs and its implications for language and compiler design,” in Pro-
+     grained power management for multi-core systems,” in ACM SIGARCH                 ceedings of the 19th International Conference on Parallel Architectures
+     Computer Architecture News, vol. 37, no. 3. ACM, 2009, pp. 302–313.              and Compilation Techniques, ser. PACT ’10. New York, NY, USA:
+[23] M. Fleischmann, “Longrun power management,” White Paper of Trans-                ACM, 2010, pp. 365–376.
+     meta Corporation, 2001.                                                     [45] J. Chong, N. Satish, B. C. Catanzaro, K. Ravindran, and K. Keutzer,
+[24] R. Jejurikar, C. Pereira, and R. Gupta, “Leakage aware dynamic voltage           “Efficient parallelization of h. 264 decoding with macro block level
+     scaling for real-time embedded systems,” in Design Automation Confer-            scheduling.” in ICME, 2007, pp. 1874–1877.
+     ence, 41st Conference on (DAC’04). ACM, 2004, pp. 275–280.                                           Dr. Weichen Liu (S’07-M’11) received the B.Eng.
+[25] S. M. Martin, K. Flautner, T. Mudge, and D. Blaauw, “Combined                                        and M.Eng. degrees from the Harbin Institute of
+     dynamic voltage scaling and adaptive body biasing for lower power                                    Technology, Harbin, China, and the Ph.D. degree
+     microprocessors under dynamic workloads,” in Proceedings of the 2002                                 from the Hong Kong University of Science and
+     IEEE/ACM international conference on Computer-aided design. ACM,                                     Technology, Hong Kong.
+     2002, pp. 721–725.                                                                                      He is an Assistant Professor with the School of
+[26] J. R. Black, “Electromigrationa brief survey and some recent results,”                               Computer Science and Engineering, Nanyang Tech-
+     Electron Devices, IEEE Transactions on, vol. 16, no. 4, pp. 338–347,                                 nological University, Singapore. His current research
+     1969.                                                                                                interests include embedded and real-time systems,
+[27] “Failure mechanisms and models for semiconductor devices,” In JEDEC                                  multiprocessor systems, and fault-tolerant systems.
+     Publication JEP122-C, 2006.                                                                          He has authored and co-authored over 70 research
+[28] A. Dasgupta and R. Karri, “Electromigration reliability enhancement via     papers in peer-reviewed journals, conferences, and books.
+     bus activity distribution,” in Design Automation Conference Proceedings                              Juan Yi received the B.E. degree from the School
+     1996, 33rd, Jun 1996, pp. 353–356.                                                                   of Software Engineering in Chongqing University,
+[29] F. Chen and M. Shinosky, “Addressing cu/low-dielectric tddb-reliability                              Chongqing, China, in 2010 and Ph.D. degree in
+     challenges for advanced cmos technologies,” Electron Devices, IEEE                                   the Department of Computer Science at the same
+     Transactions on, vol. 56, no. 1, pp. 2–12, 2009.                                                     university in June 2016. She is now a senior engineer
+[30] E. Wu, J. Sune, W. Lai, E. Nowak, J. McKenna, A. Vayshenker, and                                     at Huawei Technologies CO., LTD.
+     D. Harmon, “Interplay of voltage and temperature acceleration of oxide                                  Her current research interests include embedded
+     breakdown for ultra-thin gate oxides,” Solid-State Electronics, vol. 46,                             and real-time systems, big data technology, and
+     no. 11, pp. 1787–1798, 2002.                                                                         multicore/manycore system.
+[31] S. Zafar, A. Kumar, E. Gusev, and E. Cartier, “Threshold voltage
+     instabilities in high-κ gate dielectric stacks,” IEEE Transactions on                                Mengquan Li received the B.E. degree from the
+     Device & Materials Reliability, vol. 5, no. 1, pp. 45–64, 2005.                                      School of Computer Science at Chongqing Univer-
+[32] Z. Lu, W. Huang, M. R. Stan, K. Skadron, and J. Lach, “Interconnect                                  sity, Chongqing, China, in 2015 and is currently
+     lifetime prediction for reliability-aware systems,” Very Large Scale                                 pursuing the Ph.D. degree from the Departmen-
+     Integration (VLSI) Systems, IEEE Transactions on, vol. 15, no. 2, pp.                                t of Computer Science at Chongqing University,
+     159–172, 2007.                                                                                       Chongqing, China.
+[33] K.-C. Wu, M.-C. Lee, D. Marculescu, and S.-C. Chang, “Mitigating life-                                  Her current research interests include temperature
+     time underestimation: A system-level approach considering temperature                                modeling and optimization, optical network-on-chip
+     variations and correlations between failure mechanisms,” in Proceedings                              optimization, and high-performance parallel comput-
+     of the Conference on Design, Automation and Test in Europe. EDA                                      ing.
+     Consortium, 2012, pp. 1269–1274.
+[34] J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers, “The impact of                                 Peng Chen received the B.E. degree from the School
+     technology scaling on lifetime reliability,” in Dependable Systems and                               of Software Engineering at Chongqing University,
+     Networks, 2004 International Conference on. IEEE, 2004, pp. 177–186.                                 Chongqing, in 2015 and is currently pursuing the
+[35] Z. Gu, C. Zhu, L. Shang, and R. P. Dick, “Application-specific mpsoc                                 Ph.D. degree from the Department of Computer Sci-
+     reliability optimization,” Very Large Scale Integration (VLSI) Systems,                              ence at Chongqing University, Chongqing, China.
+     IEEE Transactions on, vol. 16, no. 5, pp. 603–608, 2008.                                               His current research interests include embedded
+[36] S. Murali, A. Mutapcic, D. Atienza, R. Gupta, S. Boyd, and                                           and real-time systems, multicore scheduling.
+     G. De Micheli, “Temperature-aware processor frequency assignment for
+     mpsocs using convex optimization,” in Hardware/Software Codesign and
+     System Synthesis (CODES+ ISSS), 2007 5th IEEE/ACM/IFIP Interna-
+     tional Conference on. IEEE, 2007, pp. 111–116.
+[37] R. A. Serway and J. W. Jewett Jr, “Physics for scientists and engineers                              Lei Yang received the B.E. degree from the School
+     with modern physics, volume 2,” 2008.                                                                of Computer Science at Chongqing University,
+[38] S. Li, J. H. Ahn, R. D. Strong, J. B. Brockman, D. M. Tullsen, and                                   Chongqing, China, in 2013 and is currently pursuing
+     N. P. Jouppi, “McPAT: An Integrated Power, Area, and Timing Modeling                                 the Ph.D. degree from the Department of Computer
+     Framework for Multicore and Manycore Architectures,” in MICRO 42:                                    Science at Chongqing University, Chongqing, Chi-
+     Proceedings of the 42nd Annual IEEE/ACM International Symposium                                      na.
+     on Microarchitecture, 2009, pp. 469–480.                                                                Her current research interests include Network-
+[39] A. Ziabari, J.-H. Park, E. K. Ardestani, J. Renau, S.-M. Kang, and                                   on-chip optimization, multi-core architecture opti-
+     A. Shakouri, “Power blurring: Fast static and transient thermal analysis                             mization and high-performance parallel computing.
+     method for packaged integrated circuits and power devices,” IEEE
+

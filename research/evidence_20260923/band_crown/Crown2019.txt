@@ -1,0 +1,347 @@
+                                   2019 27th European Signal Processing Conference (EUSIPCO)
+
+
+
+
+    Scheduling Moldable Parallel Streaming Tasks on
+    Heterogeneous Platforms with Frequency Scaling
+                 Sebastian Litzinger, Jörg Keller                                     Christoph Kessler
+          Faculty of Mathematics and Computer Science                 Dept. of Computer and Information Science (IDA)
+                     FernUniversität in Hagen                                      Linköping University
+                      58084 Hagen, Germany                                       58183 Linköping, Sweden
+                   First.Last@FernUni-Hagen.de                                    Christoph.Kessler@liu.se
+
+
+
+    Abstract—We extend static scheduling of parallelizable tasks     frequency (resp., frequency-voltage) level as low as possible.
+ to machines with multiple core types, taking differences in per-    If task runtimes are long enough, it is even possible to switch
+ formance and power consumption due to task type into account.       the frequency level between tasks without noticeable overhead.
+ Next to energy minimization for given deadline, i.e. for given
+ throughput requirement, we consider makespan minimization              As a device might have to execute only one or few fixed
+ for given energy or average power budgets. We evaluate our          applications throughout its lifetime, and execution of this ap-
+ approach by comparing schedules of synthetic task sets for          plication comprises many rounds of task invocation, it pays off
+ big.LITTLE with other schedulers from literature. We achieve        to compute an optimized static schedule. Crown scheduling [1]
+ an improvement of up to 33%.                                        is a static scheduling approach for this situation, i.e. it provides
+    Index Terms—static scheduling, energy-efficient execution,
+ streaming tasks, heterogeneous platform
+                                                                     a static schedule to execute a set of tasks on a parallel platform
+                                                                     until a deadline, parallelizes the tasks if necessary, and scales
+                                                                     the frequencies for energy efficiency. Crown scheduling as-
+                       I. I NTRODUCTION
+                                                                     sumes a homogeneous platform. Current platforms are often
+    Signal processing applications are often implemented by a        heterogeneous, e.g. ARM’s big.LITTLE platform comprises
+ set of streaming tasks. Each task does a specific job, input        two types of cores with identical instruction set architecture
+ tasks take input and follow-up tasks are provided with results      but different speed and power consumption profiles. Moreover,
+ from predecessor tasks. All tasks are activated repeatedly, as      the behavior on different core types, e.g. how much faster a
+ the input data repeatedly arrives, i.e. forms a data stream.        task is on a big core compared to execution on a LITTLE
+ Consider for example an image processing algorithm where            core, or the concrete power consumption of that core while
+ an initial task enhances sharpness of an input image, while         executing the task, depends on the instruction mix. [2] char-
+ two follow-up tasks apply different filtering algorithms to this    acterize tasks into a small number of categories and provide
+ image, and a final task combines the filtered variants into one     speed and power profiles for big.LITTLE architectures.
+ image again. As data streams typically are to be processed with        We try to bring both worlds together and present a schedul-
+ a given throughput requirement such as number of processed          ing algorithm based on crown scheduling for heterogeneous
+ images per second, this leads to a maximum time span for            platforms and tasks with task types. The scheduling algorithm
+ every execution unit for executing its assigned tasks once.         is based on solving an integer linear program (ILP) or mixed
+    In order to fulfill the throughput requirement, it might be      integer linear program (MILP), depending on optimization
+ necessary to parallelize tasks to reduce their runtime. This is     goal. As the number of tasks for a signal processing applica-
+ especially true for low task count, so that a multicore processor   tion is often moderate, this is no disadvantage, as scheduling
+ could not be completely filled if the tasks remained sequential.    problems for task sets of moderate size can still be optimally
+    At the same time, energy consumption has become a                solved. As the scheduling is only done once before deploying
+ first-class design constraint. The tasks should be run in a         the application, the savings during execution of the application
+ manner that, while meeting the deadline requirement, they           — possibly for years and possibly in thousands of installations
+ consume as little energy as possible per round. Given the           — far outweigh the energy invested in the scheduling. Our
+ throughput requirement, this also incurs a minimum average          contributions thus comprise:
+ power consumption. This is especially important if a higher            • We present a static scheduling algorithm for a set of tasks
+ power consumption would necessitate changes to the device                 on a heterogeneous platform with frequency scaling, to
+ itself, such as adding an opening with a fan to the chassis,              meet a deadline and minimize energy consumption, given
+ which in turn might mean higher operational and maintenance               that the tasks are of different types and thus have different
+ cost. Thus, an additional goal might also be to maximize                  power and speed profiles on this platform.
+ throughput, i.e. minimize makespan of one scheduling round,            • We extend the scheduling algorithm to situations where
+ for a given (average) power budget. Controlling power and                 an energy budget per round or an average power budget
+ energy consumption can be achieved by running the tasks at a              is given, and the makespan for this round is minimized.
+
+
+978-9-0827-9703-9/19/$31.00 ©2019 IEEE
+                                         2019 27th European Signal Processing Conference (EUSIPCO)
+
+
+                                                                                 B. Speed and Energy on Heterogeneous Platforms
+                                                                                    The execution speed of a task on a processor core depends
+                                                                                 on many factors. Most prominent among them is the oper-
+                                                                                 ating frequency of the core, as it determines the length of
+                                                                                 one processor cycle. The microarchitecture of the core also
+Fig. 1. Left: A streaming task graph. Right: The steady state of the streaming   influences the runtime of a task, because it determines the
+pipeline (rectangle) consists of n independent (instances of) streaming tasks.   number of cycles needed for each instruction, and how the
+                                                                                 instructions can be overlapped by pipelining or superscalar
+                                                                                 execution. For two cores with identical instruction set archi-
+   • We perform experiments with profiles of ARM’s                               tectures but different microarchitectures, the same code will
+     big.LITTLE architecture that have been tested to be                         lead to different power consumptions or different runtimes
+     accurate. We compare our results with Crown Scheduling,                     or both. While the “stronger” core typically leads to shorter
+     already extended for a heterogeneous architecture but                       runtime, it often cannot be predicted which core leads to lower
+     without task types, and with the scheduling from [2],                       energy consumption. ARMs big.LITTLE1 is an example for
+     where tasks remain sequential. We achieve improvements                      such a heterogeneous architecture. It comprises multiple cores
+     of up to 33%. To do so, we extend the original Crown                        with identical instruction set architecture but with different
+     Scheduling MILP, and modify both MILPs to address the                       microarchitecture (e.g. A7 and A15). LITTLE cores have a
+     additional target functions.                                                simpler architecture but are less power-hungry than big cores.
+   The remainder of this paper is organized as follows. In                          A core’s power consumption depends on its operating
+Section II, we provide technical background information and                      frequency, if we assume that the supply voltage is always set at
+discuss related work. In Section III we present the hetero-                      the minimum possible value and the temperature is controlled,
+geneous crown scheduling algorithm for tasks with types,                         on the instructions that are executed, and on the structure of the
+and extend this algorithm to situations where a fixed energy                     core’s execution units to execute these instructions. Assuming
+budget per round or a fixed average power budget is given                        that a task’s instruction mix is stable over its execution, i.e. the
+and the makespan is minimized. In Section IV we report on                        power consumption is stable, too, then the energy to execute
+experiments to evaluate our scheduling algorithm. In Section V                   the task is the product of power consumption and execution
+we give our conclusions and an outlook to future work.                           time. Thus, there are complex relationships between execution
+                                                                                 time, power consumption and energy consumption for a task.
+            II. BACKGROUND AND R ELATED W ORK                                    It may e.g. not be energy-efficient to execute a task on a
+A. Scheduling Streaming Applications                                             low frequency instead of a higher, as the reduction in power
+                                                                                 consumption may not make up for the increase in runtime.
+   Streaming computations (such as Kahn Process Networks
+[3]) model signal processing applications [4] by a graph of                      C. Related Work
+streaming tasks that repeatedly process and forward packets of                      Pruhs et al. [5] provide a static scheduler to minimize
+data flowing along buffered communication channels. Applied                      makespan for a task set on a parallel machine with frequency
+to a large input data stream, pipelining the task executions for                 scaling for a given energy budget. Their tasks are sequential,
+subsequent data results in a cyclically executed steady-state                    have no task types, have dependencies, the frequency f can
+pattern, also referred to as a round, where task instances are                   be scaled to an arbitrary continuous value, the power function
+independent (see Fig. 1). A required minimum throughput thus                     is restricted to f α , and the machine is homogeneous.
+results in a deadline for the round on every execution unit.                        Melot et al. [1] and Xu et al. [6] propose static schedulers
+   A static schedule is computed once prior to execution, which                  to minimize energy consumption for a task set on a parallel
+tells each processor the list of tasks it has to execute in                      machine with discrete frequency levels, given a deadline.
+one round. The execution is done by a user-level scheduler,                      While their tasks are parallelizable, they do not have task
+where each core simply calls its assigned tasks in round-                        types, and the machine is homogeneous. Also, they do not
+robin order. A barrier per round might be necessary, but when                    address energy or power budgets.
+tasks are parallelized the synchronization of cores happens                         Holmbacka and Keller [2] investigate power profiles of
+implicitly. As the tasks are executed on a multicore platform,                   ARM big.LITTLE for tasks of different types, and provide a
+communication between tasks is via the shared memory, and                        static scheduling for task sets given a deadline. However, their
+thus fast. We do not model the dependencies between tasks                        tasks are sequential, and their scheduler enumerates solutions.
+explicitly, so it might happenthat processing one input data                     Also, they do not address power or energy budgets.
+packet might take t rounds in the worst case, where t is the                        Kuang and Bhuyan [7] optimize latency and throughput
+maximum number of nodes on a path through the graph, e.g.                        for network packet processing under a given power budget.
+t = 3 in Fig. 1. However, usually part of the dependencies                       However, their tasks are sequential, have no task types, have
+can be covered even within one round, if dependent tasks                         dependencies, and use a given mapping of tasks to processors.
+are scheduled later than their predecessors, thus reducing
+processing latency without affecting throughput.                                   1 https://developer.arm.com/technologies/big-little
+                                        2019 27th European Signal Processing Conference (EUSIPCO)
+
+
+                                                                               to processor group i at frequency level fk . Two constraints to
+                                                                               be fulfilled are that each task j is only mapped once, i.e.
+                                                                                                           X
+                                                                                                      ∀j :     xi,j,k = 1                  (1)
+                                                                                                               i,k
+
+                                                                               and that no task’s mapping supersedes its maximum width:
+                                                                                                      X X
+Fig. 2. A binary crown for p = 8 cores of 2 different types, where the core                     ∀j :           xi,j,k = 0 .           (2)
+types are given by the color coding (orange = A15-cores (big), green = A7-                               i:pi >Wj    k
+cores (LITTLE)). The boldface numbers 1, . . . , 15 show the processor group
+indices of the crown.                                                          The remaining constraints and target function are presented
+                                                                               when adapting Crown scheduling to a heterogeneous platform.
+                                                                               B. Heterogeneous and Task type-Aware Crown Scheduling
+   Sarood et al. [8] present a dynamic scheduler for HPC                          To fit Crown scheduling to a heterogeneous multicore ma-
+cluster to increase performance under a strict power budget. In                chine, we assume that the heterogeneous machine consists of
+contrast, we target static schedules and average power budget.                 2q core types, each with p/2q cores. All processor groups that
+   Zahaf et al. [9] present a static scheduler for task sets of                span more than one type of core remain empty, as each task is
+different task types on a heterogeneous parallel machine, in                   only parallelized on one type of core. These are groups i = 1
+particular ARM big.LITTLE. In contrast to our work, their                      to 2q − 1, so that only groups of size at most p/2q remain. This
+tasks have individual deadlines and periods, they use a non-                   can e.g. be achieved by restricting the task widths wi ≤ p/2q .
+linear program, and do not address energy or power budgets.                    In Fig. 2, 2q = 2 core types are present, so that group i = 1
+ III. S CHEDULING FOR E NERGY AND P OWER EFFICIENCY                            will remain empty by setting the maximum widths to at most
+                                                                               4. The processor groups in Crown scheduling can be adapted
+A. Original Crown Scheduler
+                                                                               to architectures with numbers of core types that are no power
+   Crown scheduling considers a set of n independent, paral-                   of two, and different core counts for the different core types.
+lelizable (i.e. moldable) tasks tj , each with given workload                     To correctly compute runtime and energy of a task depend-
+τj (given in number of cycles) and parallel efficiency ej (wj )                ing on the core type the task runs on, we scale the workload
+when executing the task on wj ≤ Wj processors, where Wj is                     with a core type-dependent constant factor ri that expresses the
+the maximum degree (width) of parallelism. The runtime (in                     relative performance of different core types. For big.LITTLE,
+sec.) for a task executed at frequency f (cycles per second) is                the factor for LITTLE cores is set to 1, and the factor for big
+                                   τj                                          cores will normally be less than 1 as the runtime on a big core
+                                              .                                will be shorter than on a LITTLE. Additionally, there must be
+                            f · wj · ej (wj )
+                                                                               a power profile for each core type. In the equations, we index
+  The machine to execute the task set has p cores, each                        relative performance and power profile by the processor group
+scalable to a finite number s of discrete frequency levels fk .                index i, which however uniquely defines the core type.
+For each frequency level, the power consumption of the core                       To introduce task-type awareness, relative performance and
+P ow(fk ) is known. Thus, the energy consumption of a task                     power profiles must additionally be indexed by task index j
+running at fk is the product of runtime, power consumption                     (actually the task’s type, but that is uniquely determined by
+per core and the number of cores                                               the task index). We obtain optimization problem min E with
+              τj                             τj · P ow(fk )                                      X            τj · ri,j · P ow(fk , i, j)
+                          · P ow(fk ) · wj =                .                              E :=      xi,j,k ·                               (3)
+       fk · wj · ej (wj )                     fk · ej (wj )                                                           fk · ej (pi )
+                                                                                                 i,j,k
+   Each task is allocated a width, mapped to a set of cores,                   under the constraint that for each core l, the runtime of that
+and assigned an operating frequency. This is to be done such                   core must not exceed the deadline, i.e. Tl ≤ M where
+that all tasks are executed until a given deadline M is reached                                    X                   τj · ri,j
+and that the energy consumption is minimized.                                              Tl :=          xi,j,k ·                    .   (4)
+                                                                                                                   fk · pi · ej (pi )
+   To simplify the scheduling complexity, the number of pos-                                       i∈Gl ,j,k
+
+sible allocations and mappings is greatly reduced. A task can                  Here Gl denotes the set of all groups that comprise core l.
+only be allocated a width that is a power of 2. The mapping                    Constraints (1) and (2) remain as in the Crown scheduler.
+of a task to a set of cores can only be done according to                      Variables E and Tl are no variables in the ILP but only
+the hierarchy of core groups i, each of size pi , as depicted                  abbreviations for expressions (3) and (4). Besides the variables
+in Fig. 2. Thus, there are only 2p − 1 processor groups for                    xi,j,k , the symbols in the formulae like τj or P ow(fk , i, j) are
+mapping: one with p cores, two with p/2 cores, and so on.                      constants in the ILP representing the taskset or the platform.
+   Integrated Crown Scheduling considers allocation, mapping                      Please note that the approach by Keller and Holmbacka
+and frequency together as an optimization problem in an                        can be considered a special case of our scheduling where all
+integer linear program (ILP). The ILP uses ns(2p − 1) binary                   maximum task widths are artificially set to 1, i.e. the tasks
+decision variables xi,j,k where xi,j,k = 1 if task j is mapped                 remain sequential.
+                                  2019 27th European Signal Processing Conference (EUSIPCO)
+
+
+C. Scheduling for Fixed Energy and Power Budgets                       The parallel efficiency functions for all tasks j are defined as
+   The ILP from Subsec. III-B is quite general with respect to      ej (1) = 1.0, ej (2) = 0.9 and ej (4) = 0.86. Thus, we account
+optimization target. When a fixed energy budget Emax is given       for the initial overhead incurred by any kind of parallelization
+instead of a fixed deadline M to be met, we just switch the         as well as the diminishing efficiency due to the increasing
+target function for energy and the time constraint and obtain:      number of processing elements involved in the computations.
+                                                                       We derive our power profile P ow(fk , i, j) from [2, Table 3].
+                           min Tmax                                 The interested reader can find details in the appendix. As the
+under constraints                                                   power is given in Watt, and runtimes in milliseconds, energy
+                       ∀l : Tl ≤ Tmax ,                             values are computed in milli Joule.
+                                                                       The experiments comprise three scheduling approaches: the
+                         E ≤ Emax .                                 task type-aware approach for sequential tasks (TAS) from
+                                                                    [2], the task type-ignorant crown scheduler for parallelizable
+  We must introduce an additional variable Tmax because
+                                                                    tasks (TIP) from [1] (adapted to the heterogeneous platform)
+the time constraint from the previous subsection is really a
+                                                                    and our task-type aware crown scheduler for parallelizable
+constraint for each core, which cannot directly be transferred
+                                                                    tasks (TAP). We investigate three optimization targets, of
+to a target function. Thus, the ILP becomes a mixed ILP
+                                                                    which we will only present the first scenario (given deadline
+(MILP). Constraints (1) and (2) remain as they are.
+                                                                    constraint, minimize energy) in detail for space restrictions,
+  If an average power budget Pavg is given, we again use
+                                                                    and summarize the other scenarios (for details cf. appendix).
+min Tmax as optimization problem with the accompanying
+                                                                       We derive the deadline for each task set by computing the
+constraint ∀l : Tl ≤ Tmax . We relate time, average power
+                                                                    average between running all tasks utilizing all processors on
+and energy in the usual way and obtain the constraint:
+                                                                    highest and lowest frequency, respectively:
+                      E ≤ Pavg · Tmax .                                                                P       P
+                                                                                                         j τj   j τj
+                                                                                                        p·f1 + p·fs
+Because of the target function, the ILP solver tries to make the                         M = 0.6 ·               .               (5)
+                                                                                                          2
+inequality’s right hand side, i.e. Tmax , as small as possible.
+However, this increases the energy E, i.e. the left hand side, so   The factor 0.6 helps to emphasize the differences between
+that the ILP solver strives towards bringing both sides as close    sequential and parallel scheduling, as some task sets might not
+as possible. Again, constraints (1) and (2) remain as they are.     be schedulable in TAS under tight deadline constraints while
+For convenience, all MILPs are summarized in the appendix.          parallel scheduling still is. Energy and power budgets are also
+                                                                    derived from the task set characteristics. The interested reader
+                      IV. E XPERIMENTS                              can find details in the appendix.
+   In our experiments, we consider synthetic task sets with 10,        All schedulers were implemented in Python utilizing the
+20, 40, and 80 tasks as in [1]. For each cardinality, 10 task       gurobipy module. Accordingly, the Gurobi 8.1.0 solver was
+sets are chosen and scheduled. The workloads are taken from         deployed. It was executed on an AMD Ryzen 7 2700X in 16
+[1], in units of 106 cycles on LITTLE. Thus, the performance        threads (8 physical cores). A 5 minute timeout for solving
+factors ri,j can be taken from [2, Table 4]. Each task is           each individual (M)ILP was in effect.
+randomly and uniformly assigned one of the types MEMORY,               Table I provides information on scheduling time2 , number
+BRANCH , FMULT, SIMD , or MATMUL as in [2]. To ensure that          of timeout occurrences, and number of infeasible models for
+task sets are suitable for parallelization, the joint workload      each of the combinations of scenario and scheduling approach.
+of BRANCH tasks is limited to 10% of the total workload. A          Scheduling tasks sequentially under a deadline (scenario 1) or
+task’s maximum width is set with regard to its type as follows:     energy (scenario 2) constraint does not permit a valid schedule
+                                                                   in some small task sets. Apart from that, runtimes are heavily
+          1,
+                           if j is of type BRANCH,                 influenced by the number of ILPs which cannot be solved
+W (j) = wj ∈ {2, 4}, if j is of type MEMORY or FMULT,               to optimality within the 5 minute time limit. Most of the
+          
+          
+            4,              if j is of type SIMD or MATMUL.         remaining ILPs are solved within seconds.
+                                                                       Table II shows average makespan and average energy
+For task types SIMD and MATMUL, considerable parallelization
+                                                                    consumption for each task set cardinality, relative to task-
+potential can be expected, whereas tasks mainly consisting of
+                                                                    aware crown scheduling (TAP) as well as the number of
+branch instructions may have to be executed sequentially. For
+                                                                    deadline violations for task type-ignorant scheduling (TIP)
+MEMORY and FMULT task types, some parallelization seems
+                                                                    when optimizing for energy consumption. Scheduling larger
+realistic, so the respective widths are either 2 or 4 (randomly
+                                                                    task sets for sequential execution does not yield a significant
+determined based on a uniform distribution).
+                                                                    difference with regard to the parallel scheduler, neither con-
+   The big cores’ highest frequency level is not available on
+                                                                    cerning makespan nor energy consumption. However, for some
+the LITTLE cores and is therefore ignored during schedul-
+                                                                    small task sets, no feasible sequential schedule exists, while
+ing, hence the set of possible operating frequencies is
+{0.6, 0.8, 1.0, 1.2, 1.4} GHz. As workload is in 106 cycles,           2 All runtimes are sums of user and system times, whereas the time limit
+runtimes will be in milliseconds.                                   is set in real (wall clock) time.
+                                        2019 27th European Signal Processing Conference (EUSIPCO)
+
+
+                          TABLE I                                                                   V. C ONCLUSIONS
+   RUNTIME , TIMEOUT OCCURRENCES AND NUMBER OF INFEASIBLE
+       MODELS FOR ALL SCENARIOS AND SCHEDULING APPROACHES                       We have presented a static scheduling algorithm for sig-
+                                                                             nal processing applications modelled as a set of streaming
+   scenario      scheduling    runtime [min]   #timeouts      #infeasible    tasks. The algorithm either minimizes energy consumption
+                 TAP                     563           6                0
+   1             TAS                     637           7                4    for a given throughput or maximizes throughput for a given
+                 TIP                     254           2                0    energy budget per input or for a given average power budget.
+                 TAP                     764           9                0    The scheduling algorithm allows parallelization of tasks and
+   2             TAS                     797           9                2
+                 TIP                    1383         15                 0    takes heterogeneity of the platform and different execution
+                 TAP                     683           8                0    characteristics of tasks into account. Our scheduling algorithm
+   3             TAS                     733           9                0    is derived as an extension of the Crown Scheduler [1].
+                 TIP                    1653         18                 0
+                                                                                We have compared the results for the power and per-
+                                                                             formance profile of an ARM big.LITTLE architecture with
+                                TABLE II                                     restricted versions, i.e. a task type-unaware Crown scheduler
+                R ESULTS FOR SCENARIO 1, RELATIVE TO TAP
+                                                                             (already adapted to the heterogeneous platform) and scheduler
+   scheduling     task set card.   makespan    energy      #deadline viol.   from [2], where tasks cannot be parallelized. We achieve
+                  10                  1.000     1.046                        advantages for each target function, up to 33%.
+                  20                  1.000     1.001
+   TAS            40                  1.000     1.000                           Future work will comprise modeling of communication
+                  80                  1.000     1.000                        cost between tasks, as e.g. communication between caches of
+                  total               1.000     1.008                        different core types is more expensive than communication
+                  10                  1.246     1.259                   7    within one core type. Also, we will explore explicit modeling
+                  20                  1.225     1.316                   8
+   TIP            40                  1.157     1.313                   9    of task dependencies to include input-to-output latency as an
+                  80                  1.109     1.341                   8    optimization goal. Finally, we plan experiments with a real
+                  total               1.184     1.307                  32    ARM board to confirm the effect of our optimization also by
+                                                                             measurement.
+
+parallel execution can be completed prior to the deadline in                                             A PPENDIX
+any case. Task type-ignorant scheduling leads to an increase                   We provide an appendix with further details and results
+in both makespan (more pronounced for small task sets) and                   under https://e.feu.de/ii .
+energy consumption (more pronounced for larger task sets). It                                              R EFERENCES
+should be noted that in 80% of all cases, task type-ignorant
+                                                                             [1] N. Melot, C. Kessler, J. Keller, and P. Eitschberger, “Fast Crown schedul-
+scheduling brings about a deadline violation.                                    ing heuristics for energy-efficient mapping and scaling of moldable
+   In scenario 2 (given energy budget, minimize makespan),                       streaming tasks on manycore systems,” ACM Trans. Archit. Code Optim.,
+the task type-ignorant scheduler again performs considerably                     vol. 11, no. 4, pp. 62:1–62:24, Jan. 2015.
+                                                                             [2] S. Holmbacka and J. Keller, “Workload type-aware scheduling on
+worse than the other two for all task set cardinalities, the                     big.LITTLE platforms,” in Algorithms and Architectures for Parallel
+difference being yet more noticeable than in the first scenario.                 Processing, S. Ibrahim, K.-K. R. Choo, Z. Yan, and W. Pedrycz, Eds.
+Moreover, roughly 25% of the task type-ignorant schedules                        Cham: Springer International Publishing, 2017, pp. 3–17.
+                                                                             [3] G. Kahn, “The semantics of a simple language for parallel programming,”
+do not comply with the energy budget. Only for small task                        in Proc. IFIP Congress on Information Processing. North-Holland, 1974,
+sets, sequential scheduling leads to an increase in makespan                     pp. 471–475.
+compared to parallel scheduling. In medium and large task                    [4] I. Bacivarov, W. Haid, K. Huang, and L. Thiele, “Methods and tools
+                                                                                 for mapping process networks onto multi-processor systems-on-chip,” in
+sets, most of the tasks are executed sequentially in any case.                   Handbook of Signal Processing Systems, third edition, S. S. Bhattacharyya
+Thus, no deviation from the sequential schedule is to be                         et al., Ed. Springer, 2019, pp. 685–719.
+expected even if scheduling tasks in parallel is permitted.                  [5] K. Pruhs, R. van Stee, and P. Uthaisombut, “Speed scaling of tasks with
+                                                                                 precedence constraints,” Theory of Computing Systems, vol. 43, no. 1, pp.
+Again, for some small task sets no feasible solution of the                      67–80, 2008.
+respective ILP can be obtained under sequential scheduling,                  [6] H. Xu, F. Kong, and Q. Deng, “Energy minimizing for parallel real-time
+while scheduling in parallel always yields a valid schedule.                     tasks based on level-packing,” in Proc. 18th Int. Conference on Embedded
+                                                                                 and Real-Time Computing Systems and Applications (RTCSA), 2012, pp.
+Result details can be found in the appendix.                                     98–103.
+   For makespan optimization under an average power budget                   [7] J. Kuang and L. N. Bhuyan, “Optimizing throughput and latency under
+                                                                                 given power budget for network packet processing,” in INFOCOM 2010.
+(scenario 3), the schedulers’ relative performance is very                       29th IEEE International Conference on Computer Communications, Joint
+similar to the one in scenario 2. The sequential scheduler                       Conference of the IEEE Computer and Communications Societies, 15-19
+manages to narrow the gap to TAP for small task sets. Due to                     March 2010, San Diego, CA, USA, 2010, pp. 2901–2909.
+                                                                             [8] O. Sarood, A. Langer, A. Gupta, and L. Kale, “Maximizing throughput
+the nature of the ILP constraints, a feasible solution can always                of overprovisioned hpc data centers under a strict power budget,” in Proc.
+be found: to lower the power, just stretch the runtime by lower                  International Conference for High Performance Computing, Networking,
+frequency. Interestingly, the task type-ignorant scheduler over-                 Storage and Analysis (SC ’14), 2014, pp. 807–818.
+                                                                             [9] H.-E. Zahaf, A. E. H. Benyamina, R. Olejnik, and G. Lipari, “Energy-
+estimates energy consumption and consequently does not fully                     efficient scheduling for moldable real-time tasks on heterogeneous com-
+exploit the given power budget — at the cost of an increased                     puting platforms,” Journal of Systems Architecture, vol. 74, pp. 46–60,
+makespan. Result details can be found in the appendix.                           2017.
+

@@ -1,0 +1,1038 @@
+    Dynamic GPGPU Power Management Using Adaptive Model Predictive Control
+
+ Abhinandan Majumdar∗ Leonardo Piga† Indrani Paul† Joseph L. Greathouse† Wei Huang† David H. Albonesi∗
+                               ∗ Computer System Laboratory, Cornell University, Ithaca, NY, USA
+                               † AMD Research, Advanced Micro Devices, Inc., Austin, TX, USA
+         ∗ {am2352, dha7}@cornell.edu, † {Leonardo.Piga, Indrani.Paul, Joseph.Greathouse, WeiN.Huang}@amd.com
+
+
+
+   Abstract—Modern processors can greatly increase energy effi-       erations of each kernel [8], [9], [10], ignoring future kernel
+ciency through techniques such as dynamic voltage and frequency       behavior; they utilize information from the last timestep to pre-
+scaling. Traditional predictive schemes are limited in their effec-   dict hardware configurations for the next. This falls short for
+tiveness by their inability to plan for the performance and energy
+characteristics of upcoming phases. To date, there has been little    applications with multiple interleaved kernels with different
+research exploring more proactive techniques that account for         characteristics and for irregular applications with kernels that
+expected future behavior when making decisions.                       vary across iterations [11]. Moreover, these approaches treat
+   This paper proposes using Model Predictive Control (MPC) to        each kernel equally in terms of power management decisions,
+attempt to maximize the energy efficiency of GPU kernels without      even though kernels may widely vary in their impact on overall
+compromising performance. We develop performance and power
+prediction models for a recent CPU-GPU heterogeneous proces-          application performance. As a result, they may not be able to
+sor. Our system then dynamically adjusts hardware states based        “catch up” for lost performance or energy savings in later
+on recent execution history, the pattern of upcoming kernels, and     phases with unanticipated behavior. CPU schemes such as
+the predicted behavior of those kernels. We also dynamically          phase tracking/prediction only consider the performance of
+trade off the performance overhead and the effectiveness of           the immediate phase. Similarly, Chen et al. [12] predict the
+MPC in finding the best configuration by adapting the horizon
+length at runtime. Our MPC technique limits performance loss by       performance of the immediate phase but ignore past behavior.
+proactively spending energy on the kernel iterations that will gain      This paper presents a GPGPU power management approach
+the most performance from that energy. This energy can then be        that performs inter-kernel optimization while accounting for
+recovered in future iterations that are less performance sensitive.   future kernel behavior. The approach anticipates the expected
+Our scheme also avoids wasting energy on low-throughput phases        pattern of future kernels, and their performance and power
+when it foresees future high-throughput kernels that could better
+use that energy.                                                      characteristics, in order to optimize overall application perfor-
+   Compared to state-of-the-practice schemes, our approach            mance and energy. A key component of our approach is model
+achieves 24.8% energy savings with a performance loss (including      predictive control (MPC). MPC optimizes for a future pre-
+MPC overheads) of 1.8%. Compared to state-of-the-art history-         diction horizon in a receding manner but applies the optimal
+based schemes, our approach achieves 6.6% chip-wide energy
+                                                                      configuration at the current timestep. However, the implemen-
+savings while simultaneously improving performance by 9.6%.
+                                                                      tation overheads of a full MPC algorithm make it unsuitable
+                      I. I NTRODUCTION                                for the timescales of chip-level dynamic power management,
+   Dynamic voltage and frequency scaling (DVFS) is a power-           as the problem of maximizing kernel-level energy efficiency
+saving mechanism that places devices such as CPUs, GPUs,              under a given performance target is NP-hard. We propose new
+and DRAM channels into lower performance states in order              greedy and heuristic approximations of MPC that are effective
+to save power. By using low-power states when they will not           at saving energy with modest performance loss yet applicable
+greatly affect performance, significant energy can be saved           to runtime power management. Furthermore, we dynamically
+without slowing down the application. Good DVFS policies              adjust the prediction horizon in order to limit the performance
+are vital, since poor decisions can cause both performance            overhead caused by MPC.
+and energy losses.                                                       To determine the appropriate hardware configuration for a
+   Existing DVFS-based power management techniques, such              kernel, we develop a prediction model to estimate kernel-level
+as AMD’s Turbo Core [1], [2] and Intel’s Turbo Boost [3], [4],        performance and power at different hardware configurations
+[5], select performance states based on the chip activity seen in     and a pattern extractor that predicts which kernels will appear
+the recent past. This may lead to performance and efficiency          in the future. Our overall approach permits MPC to proactively
+losses, since this fails to anticipate future performance de-         limit performance losses by dynamically expending more en-
+mands. For instance, lowering the frequency for the next time         ergy on high-throughput kernels. MPC also avoids spending a
+step may reduce power at the cost of lost performance, while          disproportionate amount of energy on low-throughput kernels.
+the same action at a future time step may save the same power         Instead, it seeks opportunities from the future high-throughput
+with no performance loss. Both techniques may equally reduce          phases to compensate for the performance lost when low-
+power, but the latter will yield better energy and performance.       throughput kernels are run at slow DVFS states.
+This work attempts to alleviate this problem in general-purpose          Our approach saves 24.8% energy with a performance loss
+GPU (GPGPU) compute-offload applications.                             of 1.8% compared to AMD Turbo Core and reduces energy
+   Previous work that statically optimized individual GPGPU           by 6.6% while improving performance by 9.6% with respect
+kernels [6], [7], or dynamically optimized over multiple it-          to state-of-the-art history-based power management schemes.
+                     TABLE I: Software visible CPU, Northbridge, and GPU DVFS states on the AMD A10-7850K.
+          CPU P States         Voltage (V)         Freq (GHz)
+                                                                                                                    Memory        GPU P                         Freq
+              P1                     1.325             3.9                                                                                   Voltage (V)
+                                                                                NB P States           Freq (GHz)     Freq         States                       (MHz)
+              P2                    1.3125             3.8
+                                                                                                                    (MHz)         DPM0               0.95       351
+              P3                    1.2625             3.7
+                                                                                   NB0                    1.8        800          DPM1               1.05       450
+              P4                     1.225             3.5
+                                                                                   NB1                    1.6        800          DPM2             1.125        553
+              P5                    1.0625             3.0
+                                                                                   NB2                    1.4        800          DPM3            1.1875        654
+              P6                     0.975             2.4
+                                                                                   NB3                    1.1        333          DPM4             1.225        720
+              P7                    0.8875             1.7
+
+
+
+                                                                                                           TABLE II: Execution pattern of three irregular benchmarks.
+                                      TRANSFER
+        TRANSFER
+
+
+
+
+                                                        TRANSFER
+
+
+
+
+                                                                                         TRANSFER
+                         CPU                                          CPU
+                                                                                                           Here, Ai indicates kernel A repeats i times. F1 to F9 are
+                                        DATA
+          DATA
+
+
+
+
+                                                          DATA
+
+
+
+
+                                                                                           DATA
+  CPU                                            CPU                               …                CPU
+                      GPU Kernel                                   GPU Kernel
+                                                                                                           invocations of the same kernel F , each taking different inputs.
+                                                 Time
+                                                                                                                   Benchmark               Kernel Execution Pattern
+            Fig. 1: Typical GPGPU application phases.
+                                                                                                                         Spmv                               A10 B 10 C 10
+                   II. BACKGROUND AND M OTIVATION                                                                      kmeans                                     AB 20
+                                                                                                                    hybridsort   ABCDEF1 F2 F3 F4 F5 F6 F7 F8 F9 G
+A. Heterogeneous Processor Architectures
+   Modern heterogeneous processors consist of CPU cores
+integrated on the same die with GPU cores and components                                                   C. GPGPU Kernel Characterization
+such as a northbridge (NB) and power controllers. Power and
+                                                                                                              GPGPU kernels show sensitivity to hardware configurations
+thermal budgets may be shared across resources, and some
+                                                                                                           and a range of performance and power scaling behavior.
+devices (e.g., the GPU and NB) may share voltage rails.
+                                                                                                           Figure 2 shows the relative performance of example GPU
+   Table I shows the different DVFS states for the CPU, NB,
+                                                                                                           kernels as NB DVFS states and the number of active GPU
+and GPU in the AMD A10-7850K processor that we study in
+                                                                                                           compute units (CUs) are varied. Each graph contains a mark
+this work. Changing NB DVFS impacts memory bandwidth,
+                                                                                                           at the energy-optimal point.
+since each state maps to a specific memory bus frequency. All
+                                                                                                              These kernels reach their best efficiency at different con-
+CPU cores share a power plane. The GPU is on a separate
+                                                                                                           figurations. Compute-bound kernels perform better with more
+power plane, which it shares with the NB; the NB and GPU
+                                                                                                           CUs, and their energy-optimal point is at a lower NB state.
+frequencies can be set independently, but they share a common
+                                                                                                           Memory-bound kernels are sensitive to higher NB states, but
+voltage.
+                                                                                                           the performance saturates from NB2 onwards because NB2
+   Lower CPU DVFS states reduce the CPU power and can                                                      through NB0 have the same DRAM bandwidth. Peak kernels
+slightly reduce the GPU power due to a reduction in tempera-                                               maximize performance and minimize energy at a lower hard-
+ture and leakage. GPU DVFS states change the core frequency                                                ware configuration due to destructive shared cache interference
+of the GPU; however, higher NB states can prevent reducing                                                 [14], [15], [16]. Finally, the performance of unscalable kernels
+the GPU’s voltage along with the frequency. This can limit                                                 is not affected by hardware changes; these achieve high energy
+the amount of power saved when changing GPU DVFS states.                                                   efficiency at the lowest GPU configuration. These results
+Similarly, if the GPU is at a high power state, reducing the                                               demonstrate that mischaracterization can lead to sub-optimal
+NB state may only change the NB frequency.                                                                 performance or energy.
+B. GPGPU Program Phases                                                                                    D. Kernel Runtime Execution Diversity
+   A breakdown of a typical GPGPU application is shown in                                                     Table II shows the execution pattern of the kernels of three
+Figure 1. The host CPUs first perform some amount of work,                                                 benchmarks represented using regular expression. Spmv, from
+shown as CPU. After this, they launch computational kernels                                                a modified version of SHOC [17], runs three sparse matrix
+to the GPU. A kernel consists of parallel workgroups that are                                              vector multiplication algorithms ten times each. The kmeans
+comprised of parallel threads. While the GPU is busy doing                                                 application from Rodinia [18] runs the swap kernel once,
+computation, the CPUs may be waiting for the GPU to finish,                                                and then iterates the kmeans kernel 20 times. The hybridsort
+preparing data for launching the next GPU kernel, or running                                               application from Rodinia runs six different kernels, with the
+parts of the computation concurrently with the GPU.                                                        kernel mergeSortPass iterating nine times, each with different
+   The relative amount of time spent in each phase varies                                                  input arguments. Each kernel achieves energy optimality at
+across applications and inputs. For the workloads we inves-                                                different hardware configurations.
+tigate in this paper, the CPU and GPU have little overlapping                                                 Figure 3 shows how the kernel instruction throughput (nor-
+execution. We therefore focus on the power efficiency and                                                  malized to the overall throughput) varies during an applica-
+performance of the GPU kernel execution phases and leave                                                   tion’s execution. We observe that Spmv transitions from high-
+workloads that simultaneously exercise the CPUs and GPU or                                                 to low-throughput phases, while kmeans demonstrates a low-
+concurrent GPU kernels as future work [13].                                                                to high-throughput transition. Hybridsort shows multiple phase
+                                                                                                 2.5
+      4.5                                                                                                                                         6.5
+
+
+
+
+                                                                                           Speedup
+                                                                                                                                                                                                                   4.5
+Speedup
+
+
+
+
+                                                                                                                                            Speedup
+
+
+
+
+                                                                                                                                                                                                             Speedup
+                                                                                                      2                                           5.5
+      3.5
+                                                                                                                                                  4.5                                                              3.5
+                                                                                                     1.5
+          2.5                                                                                                                         NB0             3.5
+                                                                                                                                                                                                                       2.5
+                                                                                     NB0              1                              NB1                                                              NB0                                                      NB0
+                                                                                                                                                      2.5
+          1.5                                                                       NB1                                                                                                              NB1               1.5                                    NB1
+                                                                                                                                    NB2               1.5
+                                                                                   NB2               0.5                                                                                            NB2                                                      NB2
+          0.5                                                                                              2                        NB3               0.5                                                              0.5
+                                                                                                                    4       6
+                2                                                                  NB3                                          8                                      2                            NB3                      2                               NB3
+                                                       4           6                                                                                                           4        6                                             4       6
+                                                                               8                                                                                                                8                                                        8
+
+                                      (b) Memory-bound:
+          (a) Compute-bound: MaxFlops readGlobalMemoryCoalsced                                                                                                         (c) Peak: writeCandidates                                 (d) Unscalable: astar
+
+                                               Fig. 2: Performance trends and energy-optimal points of GPGPU kernels at different hardware configurations.
+
+                                                                       Spmv          kmeans                    hybridsort                                                          Predict Previous Kernel                        Theoretically Optimal
+                Normalized kernel throughput
+
+
+
+
+                                                                                                                                                                      80
+
+
+
+
+                                                                                                                                                 Energy Savings (%)
+                                               4
+                                                                                                                                                                      60
+                                               3                                                                                                                      40
+                                                                                                                                                                      20
+                                               2
+                                                                                                                                                                           0
+                                               1                                                                                                                      -20
+                                               0
+                                                   1       3   5       7   9   11 13 15 17 19 21 23 25 27 29                                                                                                (a)
+                                                                                                                                                                      1.6
+                                                                               Kernel execution order                                                                 1.4
+
+
+                                                                                                                                                Speedup
+                                                                                                                                                                      1.2
+Fig. 3: Kernel throughput for Spmv, kmeans and hybridsort.                                                                                                              1
+The y-axis is normalized to the overall throughput.                                                                                                                   0.8
+                                                                                                                                                                      0.6
+transitions not only among kernels, but even by the same                                                                                                              0.4
+kernel taking different input arguments. These characteristics
+are typically seen in irregular applications. For example, graph
+                                                                                                                                                                                                            (b)
+algorithms can vary across input and iteration [11].
+
+E. Potential of “Future-Based” Schemes                                                                                                         Fig. 4: Comparison of Predict Previous Kernel and Theoreti-
+                                                                                                                                               cally Optimal algorithms. (a) indicates energy savings and (b)
+   Our goal is to minimize energy while meeting a perfor-                                                                                      speedup over AMD Turbo Core.
+mance target, in our case, the performance of AMD Turbo
+Core, which we describe in Section V-B. In this section,                                                                                       knowledge is not helpful. However, for the remaining irregular
+we perform a limit study using two configuration decision                                                                                      benchmarks, PPK consumes more energy (up to 48%) and
+algorithms. Both approaches have perfect knowledge of the                                                                                      degrades performance (up to 46%) compared to TO.
+effect of every hardware configuration on kernel performance                                                                                      To understand why future knowledge can be so beneficial,
+and power. The latter also knows the exact pattern of future                                                                                   we reconsider the benchmarks hybridsort, Spmv, and kmeans,
+kernel executions, as well as their performance and power                                                                                      shown in Figure 3. In hybridsort, all of the kernel invocations
+characteristics. Thus, these results could not be obtained in                                                                                  differ in throughput, with some varying with inputs. As a
+a real system with imperfect predictions.                                                                                                      result, PPK always mispredicts the next kernel behavior, which
+   The Predict Previous Kernel (PPK) algorithm attempts to                                                                                     leads to far-from-optimal performance and energy results. The
+minimize energy while assuming the previous kernel will                                                                                        applications XSBench, srad and lulesh exhibit similar behavior.
+repeat next. It does not look further in the future, but makes                                                                                    Spmv, on the other hand, exhibits two high-to-low through-
+its decision based on perfect knowledge of the performance                                                                                     put transitions. While this behavior results in only two mis-
+and power characteristics of every hardware configuration                                                                                      predictions by PPK, the performance loss compared to the
+with respect to the just completed kernel. PPK represents                                                                                      baseline is 4%. This is because PPK reduces the performance
+a best-case scenario for current state-of-the-art history-based                                                                                of the initial high-throughput phase in order to save energy. On
+algorithms [8], [9], [19], which in practice have errors in                                                                                    encountering future low-throughput phases, PPK is unable to
+their performance and power predictions. In contrast, the                                                                                      increase the performance enough to make up for the lost per-
+Theoretically Optimal (TO) algorithm performs a full state                                                                                     formance; even the highest-powered hardware configuration
+space exploration of all future kernels and finds the globally                                                                                 does not suffice. As such, PPK suffers a performance loss with
+optimal hardware configuration for each kernel iteration.                                                                                      respect to Turbo Core. The application lud shows a similar
+   Figure 4 compares the energy and performance of these                                                                                       high-to-low throughput transition. This result demonstrates the
+algorithms against Turbo Core on the AMD A10-7850K.                                                                                            benefits of not only anticipating future kernel patterns, but the
+We observe that PPK matches TO for regular benchmarks                                                                                          performance characteristics of these future kernels as well.
+such as mandelbulbGPU, NBody and lbm. These benchmarks                                                                                            In contrast to Spmv, kmeans shows a single low-to-high tran-
+have a single kernel iterating multiple times; thus, future                                                                                    sition. On encountering the first dominating low-throughput
+                                                                                           Past   Future
+kernel, PPK is temporarily unable to reach the performance
+target. The performance is degraded so severely that it cannot                                          H          Shift
+                                                                                                                  horizon
+be made up in the remaining kernels even when they are                                                               …
+
+run in highest power configuration, thereby consuming more
+energy. Unaware of the fact that future high-throughput kernels                                   𝑖 𝑡ℎ timestep
+will compensate for the initial low performance, PPK achieves                      Fig. 5: Overview of the MPC process.
+lower energy savings compared to the optimal algorithm. The
+benchmark pb-bfs also exhibits similar results. The hybridsort       The theoretically optimal (TO) approach assigns a hardware
+application has multiple high-to-low changes, and thus suffers     configuration for each kernel instance such that the total kernel
+both reduced energy savings and performance losses.                energy is minimum with no performance loss. For M possible
+                                                                   hardware configurations and N kernels, TO requires O(M N )
+   Motivated by this fundamental limitation of algorithms that
+                                                                   searches. Discrete DVFS states and GPU CUs make this
+ignore the future, like Predict Previous Kernel, and by the
+                                                                   problem NP-hard and thus impractical to use at runtime.1
+potential demonstrated by Theoretically Optimal by perfectly
+predicting future kernels, we propose a future-aware dynamic         Rather than exhaustive search, current runtime power man-
+kernel-level power management policy. This proposed policy         agement approaches optimize the next kernel in execution
+anticipates future kernel performance and proactively assigns      order based on past knowledge. To reflect this more tractable
+hardware resources in order to meet its performance and en-        and runtime feasible approach, we reformulate Equation 1 as
+ergy targets. We show that a power management policy driven        Equation 2.
+by the principle of feedback and MPC limits the performance
+loss while significantly improving energy efficiency.                     min Ei (si )
+                                                                          si ∈S
+
+                                                                         such that
+                    III. P ROBLEM F ORMULATION                             Pi                                                                 (2)
+                                                                                  j=1 Ij  Itotal
+   In this section, we mathematically formulate the problem.              Pi            ≥        ∀1 ≤ i ≤ N and ∀sj ∈ S
+                                                                           j=1 Tj (sj )   Ttotal
+The overall objective is to minimize the total kernel-level en-
+ergy consumption of a GPGPU application without impacting            Here for every ith kernel, the optimization algorithm
+the net kernel performance compared to AMD Turbo Core. In          chooses the hardware configuration that minimizes the energy
+order to compare the performance of a given application over       of that kernel while ensuring that the total kernel throughput
+different hardware configurations, we adopt kernel instruction     thus far (including this kernel) at least matches that of the
+throughput as our performance metric. Equation 1 presents the      default configuration. The polynomial time complexity of
+formulation.                                                       O(M ×N ) makes the optimization tractable.
+                                                                     The Predict Previous Kernel (PPK) approach described
+            N
+            X                                                      earlier assumes that the last seen kernel or phase repeats
+      min
+       −
+       →
+                  Ei (si )                                         again and uses its behavior to estimate the energy optimal
+       s
+            i=1
+                                                                   configuration of the upcoming kernel. As shown earlier, this
+     such that                                                     approach is far from optimal, which motivates our future-
+       PN                                                    (1)
+              Ii       Itotal                                      aware MPC approach.
+     PN i=1          ≥
+        i=1 Ti (si )
+                       Ttotal
+
+     where si ∈ S and S = −
+                               →
+                           → × −
+                          cpu  nb × −     →
+                                     −→ × −
+                                    gpu   cu                                      IV. MPC- BASED P OWER M ANAGEMENT
+
+   The objective is to minimize the total kernel-level applica-       Model predictive control (MPC) is an advanced process
+tion energy (E) across all N kernels while at least matching       control technique popular in various application domains [21],
+the performance of the default Turbo Core algorithm. In            [22], [23], [24]. It uses a dynamic process model to proactively
+Equation 1, N is the total number of kernels in an application;    optimize for the current timestep by anticipating future events.
+and vectors −  → −
+             cpu,
+                  →
+                  nb, and −  −→ represent the CPU, NB, and
+                            gpu                                    An overview of the MPC process is shown in Figure 5. At
+                          →
+                          −
+GPU DVFS states, while cu represents the different ways that       each timestep i, MPC optimizes for a future horizon of H
+the GPU CUs can be activated. S is the Cartesian product of        timesteps. By doing so, it captures the future events that may
+− → −
+cpu,
+     → −→
+     nb, −
+         gpu and −
+                 → The vector →
+                 cu.            −s , which belongs to the set S,
+                                                                   affect the optimal operation of the ith timestep. After running
+                                                                   the optimization, MPC applies the decision to the current ith
+corresponds to the hardware configurations of N kernels. Each
+                                                                   timestep. Then, for the next (i + 1)th timestep, the horizon
+vector element si of →−
+                      s represents the hardware configuration
+        th                                                         shifts one timestep and the algorithm optimizes over the next
+for an i kernel. Ii and Ti are the total number of instructions
+                                                                   H timesteps. A larger H requires more computation overhead
+(thread-count × instruction-count per thread) and execution
+                                                                   but leads to a better solution. While MPC with imperfect
+time of the ith kernel; Ei is the energy consumed by kernel
+i; and Itotal and Ttotal are the total number of instructions         1 Formally, this can be proven by reducing the 0-1 knapsack problem, which
+and the execution time of all kernels in the application in the    is NP-hard [20], to finding a kernel-level energy optimal configuration without
+default Turbo Core approach.                                       any performance loss. The formal proof is beyond the scope of this paper.
+                                                                                     Kernel
+                                                                         MPC
+                                                                                                             of dynamic power management. While truly optimiz-
+                                                                                              Performance    ing over multiple H
+Performance           Pred.                                            Overhead
+                                                                                                                                       kernels may−  →
+                                                                                                                                                         require backtrack-
+                                                                                                                                              −→
+                                                                                                             ing and involves O N × (|cpu| × |nb| × |−        −→ × |−→ H
+                   Perf/Power                                               HW
+                                                                                                                                                                            
+   Power
+   Model           HW config
+                                        MPC Optimizer                     settings                                                                           gpu|    cu|)
+                                                                        Adaptive                   Power     searches, we employ greedy and heuristic approxima-
+                                    Optimization                         Horizon
+                                                         Horizon (H)
+                                     Headroom                           Generator           Performance          that permit−
+                                                                                                             tions                   a polynomial time complexity of
+                                                                                                                                  →
+                                                                                                             O N × (|−     → + |nb|  + |−       → × H to approximate
+                                                                                                                                          −→ + |−
+         Performance Counters                                                                Feedback
+         of Future Kernels          Performance Tracker
+                                                                                               Performance
+                                                                                                                          cpu|           gpu|   cu|)
+   Kernel                                  Optimizer                                              Target
+
+   Pattern
+                                                                           Performance                       the benefits of backtracking.
+                                                                         Counter Feedback
+  Extractor                                                                                                     Our approach gathers per-kernel performance information
+            Fig. 6: MPC-based power management system.                                                       during the first invocation of a GPGPU program in order
+                                                                                                             to minimize the energy of future invocations. Using this
+prediction models does not guarantee global optimality, con-                                                 information, it determines a search order to optimize the
+tinuous feedback and proactive optimization can compensate                                                   future kernels such that none of the optimized kernels are
+for prediction model inaccuracies.                                                                           revisited, thereby reducing the complexity from exponential
+                                                                                                             to polynomial.
+A. MPC-Based Online Power Management
+                                                                                                                The optimization algorithm attempts, in polynomial time, to
+   Figure 6 shows our proposed MPC-based runtime system                                                      address two shortcoming of previous approaches such as PPK:
+that attempts to minimize total energy across all kernels while                                              1) The inability to foresee future lower-throughput kernels,
+avoiding performance loss. The architecture has four key                                                         which may reduce performance due to the inability to
+components: (1) the optimizer, (2) the kernel pattern extractor,                                                 “catch up” performance-wise for aggressively saving en-
+(3) the power and performance predictor, and (4) the adaptive                                                    ergy in earlier, high-throughput, kernels; and
+prediction horizon generator. This framework runs as a CPU-                                                  2) The inability to foresee future higher-throughput kernels,
+based software policy between successive GPU kernels.                                                            which may reduce energy savings due to the inability to
+   1) Optimizer: In theory, MPC minimizes energy while at                                                        compensate for overly aggressive performance settings in
+least meeting the target performance. In our case, we target                                                     earlier, low-throughput, kernels.
+the performance of the default power manager. The optimizer                                                     At the conclusion of the execution of each kernel, our ap-
+runs the MPC algorithm to determine the per-kernel energy                                                    proach notes whether the accumulated application throughput
+optimal hardware configurations (number of GPU CUs; CPU,                                                     is above the overall target throughput. Those kernels for which
+GPU, and NB DVFS states) while maintaining the desired per-                                                  the overall throughput is above the target are grouped into the
+formance. It also tracks the past performance and instruction                                                above-target cluster and those remaining grouped as below-
+counts to determine the available execution time headroom.                                                   target. The former group are ordered in increasing order by
+This mechanism takes as input estimates from the power and                                                   individual kernel performance, and then the latter group in
+performance model, which we describe later.                                                                  decreasing order. The union of these two groups forms the
+     a) Model Predictive Control: At each ith step (kernel                                                   search order for the heuristic optimization.
+invocation, in this case), the MPC algorithm optimizes across                                                   Figure 7 shows an example execution of a hypothetical
+a window of the next Hi kernels. It determines the minimum                                                   irregular application, with the individual kernel (squares) and
+energy configuration across those Hi kernels that meets the                                                  accumulated application throughput (solid line) normalized to
+ongoing performance target and uses that configuration for                                                   the overall target throughput. The first three kernels (1, 2, 3)
+the current (ith ) kernel. After the execution of that kernel,                                               are placed in the above-target group because their accumulated
+the prediction window is shifted one kernel in time and the                                                  runtime throughput values (solid line) are above the overall
+process is repeated for the new window of Hi+1 kernels. The                                                  target throughput (dashed line), while the remaining (4, 5, 6)
+performance tracker takes the past performance as feedback                                                   are placed in the below-target group. We order the above-
+and dynamically adjusts the execution time headroom for the                                                  target group in increasing throughput order (squares). Hence,
+next optimization. Equation 3 shows the MPC formulation for                                                  the order is (3, 2, 1). The below-target group is ordered in
+optimizing kernel energy across Hi future kernels under a                                                    decreasing order; therefore the order is (6, 5, 4). The overall
+performance target for an ith kernel.                                                                        search order becomes (3, 2, 1, 6, 5, 4).
+           i+Hi −1
+              X                                                                                                 With this order determined, the next time the application is
+   min
+    →
+    −
+                         Ej (sj )                                                                            invoked, execution proceeds as follows:
+     s
+               j=i                                                                                           Kernel 1: The optimization is performed in the order (3, 2, 1).
+  such that                                                                                           (3)    The algorithm first estimates the lowest energy configuration
+    Pi+Hi −1
+            j=1          Ij         Itotal                                                                   for kernel 3 that at least meets the overall target throughput.
+  Pi+Hi −1                      ≥                      ∀1 ≤ i ≤ N and ∀sj ∈ S                                Any excess performance headroom carries over to kernel
+      j=1            Tj (sj )       Ttotal
+                                                                                                             2, for which the lowest energy configuration is found that
+MPC Search Heuristic: Traditional MPC approaches use                                                         meets the new target. Any accumulated excess performance
+computationally expensive backtracking [25], [26], [27] for                                                  headroom carries over to kernel 1, for which the lowest energy
+each timestep, which is infeasible given the timescales                                                      configuration is estimated again. The algorithm anticipates the
+                          Kernel Throughput      Runtime Throughput        timization based on the desired performance target, execution
+                  4
+
+     Normalized
+     throughput
+                  3                                                        history of past kernels, and performance behavior of future
+                  2                                                        kernels. The performance requirement for an ith kernel is
+                                                              Target       enforced according to Equation 4.
+                  1
+                  0                                                                              Pi−1
+                      1        2          3         4         5        6                              j=1 Ij + E[Ii ]             Itotal
+                                                                                              Pi−1                          ≥                              (4)
+                                     Kernel Execution Order
+                                                                                               j=1 Tj (sj ) + E[Ti (si )]
+                                                                                                                                  Ttotal
+Fig. 7: An example showing the kernel throughout (squares)                    The headroom for MPC optimization is dynamically ad-
+and overall application throughput (solid line) during the                 justed using the net performance of the past i − 1 kernels
+execution of a hypothetical irregular application. The y axis is           and performance counters from the kernel pattern extractor.
+normalized to the overall target throughput.                               The expected kernel time E[Ti ], provided by the performance
+                                                                           predictor, must be within this updated headroom (Equation 5).
+future drop in throughput, which guards against aggressively               Significant performance slack provides the optimizer with the
+reducing kernel 1 performance such that it cannot be “made                 opportunity to aggressively save energy. With less headroom,
+up” in future low performance kernels 2 and 3.                             the optimizer operates more conservatively, choosing higher
+Kernel 2: The optimization order is (3, 2). The algorithm                  performance, and higher energy, configurations.
+first finds the lowest energy configuration for kernel 3 that at
+least meets the overall target throughput, taking into account                                 i−1
+                                                                                                                   !.                   i−1
+                                                                                               X                         Itotal           X
+the overall performance thus far. Any excess performance                      E[Ti (si )] ≤          Ij + E[Ii ]                      −         Tj (sj )   (5)
+                                                                                                                         Ttotal
+is carried over to kernel 2, for which the lowest energy                                       j=1                                        j=1
+
+configuration is found.                                                       2) Kernel Pattern Extractor: GPGPU applications com-
+Kernel 3: The optimization order is (3); that is, the optimiza-            monly execute many kernels in a regular order. As shown
+tion only considers the current kernel.                                    in Section II-D, several applications present regular execu-
+Kernel 4: The optimization order is (6, 5, 4). Since the first             tion patterns. There may also be distinct patterns within the
+three kernels have already executed, they are no longer con-               same kernel across multiple invocations due to input data set
+sidered. At this point, the algorithm attempts to foresee future           changes. We use these patterns to predict the future behavior
+higher-throughput kernels (6 and 5) in order to trade off                  of the kernels and to store their performance counters for
+performance for increased energy savings for kernel 4.                     future use by the optimizer. The mechanism we develop to
+   Kernels 5 and 6 are optimized in a similar manner.                      extract kernel execution patterns is composed of three steps:
+Greedy Hill Climbing Optimization: To reduce the search                    (1) build the kernel execution list over time; (2) identify the
+overhead and avoid an exhaustive exploration of all possible               kernel signature; and (3) pass the future kernel information to
+hardware configurations, we employ greedy hill climbing.                   the optimizer.
+   Among the hardware knobs, i.e., the DVFS states (CPU,                      The kernel pattern extractor samples the performance coun-
+NB or GPU) and GPU CUs, the algorithm first estimates                      ters at runtime and stores them in a reduced format. These
+their energy sensitivities2 using the prediction model, and                performance counters are then used by our power and perfor-
+sorts them in descending order. The knob with the highest                  mance predictor. The execution ordering list is dynamically
+energy sensitivity is selected first and then its corresponding            extracted when our framework first encounters the benchmark.
+configuration is searched in a hill-climbing fashion such                  At this initial stage, our MPC framework simply runs PPK
+that the predicted kernel energy continues to decrease while               while it dynamically extracts the pattern.
+meeting the default performance target. The search stops once                 The pattern extractor implements the dynamic pattern ex-
+the energy increases. The optimization then continues with                 tractor as proposed by Totoni et al. [28]. It identifies different
+the next highest energy sensitive knob, and so on. In the                  kernels through their signature, extracts the execution pattern
+event that the algorithm fails to meet the overall performance             once it observes a repetitive behavior, and stores the ordering
+requirements, it defaults to an empirically determined fail-safe           along with the performance counters.
+configuration of [P7, NB2, DPM4, 8 CUs].                                      To find the kernel signatures at run-time, we first reduce
+   While this approach compromises optimality, the number                  the number of performance counters to reduce the runtime
+of energy evaluations reduces from (|−    → × |−
+                                         cpu|
+                                                  →
+                                                  nb| × |−−→ ×
+                                                         gpu|              compute and storage overheads. This is done by clustering
+ −
+ →         − →     →
+                   −      −−→      →
+                                   −                                       the counters that are more correlated in a similar fashion as
+|cu|) to (|cpu| + |nb| + |gpu| + |cu|), or a factor of 19×. The
+greedy search in conjunction with the MPC heuristic reduces                Zhu and Reddi [29]. Based on the clustering, we select eight
+the search cost by 65× compared to an exhaustive MPC search                representative performance counters that reflect any input data
+involving backtracking, which makes our approach suitable for              and kernel characteristics, as presented in Table III. Our pattern
+runtime optimization.                                                      extractor stores eight of these performance counters along with
+      b) Performance Tracker: The performance tracker dy-                  the kernel time and power as double-precision values, which
+namically adjusts the execution time headroom for MPC op-                  accounts for 80 bytes, for each dissimilar kernel.
+                                                                              Next, we approximate kernels with similar performance
+  2 Ratio of predicted change in energy to change in configuration.        by binning their counter values according to the following
+           TABLE III: GPU performance counters.                             carefully chosen to avoid significant runtime overheads for
+              Name      Description                                         these applications.
+      GlobalWorkSize    Global work-time size of the kernel.                   To address this issue, we propose to dynamically adapt the
+      MemUnitStalled    Percentage of GPUTime the memory unit is stalled.
+                        Percentage of fetch, write, atomic, and other in-   value of H on a per-kernel basis at runtime. The adaptive
+            CacheHit
+                        structions that hit the data cache.                 horizon generator determines the horizon length Hi for each
+                        Average number of vector fetch instructions from
+          VFetchInsts
+                        video memory executed per work-item.                upcoming ith kernel such that the total performance loss
+         ScratchRegs    Number of scratch registers used.                   (the MPC overhead plus the performance loss due to MPC
+                        Percentage of GPUTime LDS is stalled by bank
+     LDSBankConflict
+                        conflicts.                                          approximations and imperfect predictions) remains bounded.
+          VALUInsts
+                        Average number of vector ALU instructions exe-         To determine the horizon Hi for each ith kernel, we make
+                        cuted per work-item.
+            FetchSize   Total kB fetched from video memory.
+                                                                            use of the information gathered on the first invocation of the
+                                                                            application, namely: (1) the number of kernels N , (2) the
+                                                                            average per-kernel horizon length N calculated from the search
+formula: bini = blog uc, ∀u ∈ S, where S is the eight perfor-               order, and (3) the total time to run PPK during the initial
+mance counters. The tuple (bin1 , ...bink ) is the signature.               invocation TP P K .
+   The kernel signature and the execution ordering together                    The adaptive horizon generator determines a horizon length
+maintain an indexed list of kernels. In successive iterations, the          Hi of the present ith kernel based on the estimated MPC
+pattern extractor identifies which kernel signature to expect in            overhead (Hi × N    N
+                                                                                                  × TP P K ), the total execution times of
+                                                                                                            Pi−1
+the future and passes the corresponding performance counters                the previous i − 1 kernels ( j=1 Tj ), the total MPC opti-
+                                                                             Pi−1 overhead incurred for the previous i − 1 kernels
+to the prediction model, and the expected instruction count to              mization
+the optimizer. It also dynamically updates the stored kernel                ( j=1 TM P C,j ), and the estimated execution time of the
+performance counter values based on the performance counter                 present ith kernel (Ttotal /N ). We attempt to bound the perfor-
+feedback of the last executed kernel.                                       mance penalty relative to the baseline Turbo Core execution
+   3) Performance and Power Predictor: The performance                      time so far, including the current kernel (i × Ttotal N ), to a
+and power predictor uses an offline trained model that predicts             factor α, as shown below.
+the power and performance of a kernel. It takes as inputs the
+performance counters of future kernels from the kernel pattern                                   Pi−1                               
+                                                                            Hi × N
+                                                                                 N
+                                                                                   × TP P K +       j=1 (Tj + TM P C,j ) + Ttotal    N
+extractor and the corresponding hardware configuration, and                                                                             ≤ 1+α
+provides the power and performance estimates of a kernel for                                     i × Ttotal N
+any desired hardware configuration.                                           Solving for Hi , we get:
+   Our performance and power model uses machine learning to
+model the behavior of the integrated GPU. We use a Random                                          1 i×Ttotal
+                                                                                                               Pi−1
+Forest regression algorithm [30] to capture the GPU power and                       N (1 + α − i )     N      − j=1 (Tj + TM P C,j )
+                                                                               Hi ≤
+performance behavior. Random Forest is an ensemble learning                         N                        TP P K
+method that creates multiple regression trees for each random                  We take the floor of Hi to create an integer value, and
+subset of the training data. The predicted class is the mean                further bound Hi to be between 0 and N .
+prediction from these individual regression trees. We selected
+Random Forest because it gave the highest accuracy among                                V. E XPERIMENTAL M ETHODOLOGY
+other learning algorithms.                                                     In this paper, we use an AMD A10-7850K APU as our
+   For the kernel performance and power prediction, Random                  experimental platform. We use this APU in our studies be-
+Forest uses the kernel-level GPU performance counters, kernel               cause, due to its more stringent thermal constraints, it more
+execution time, and GPU (including NB) power numbers for                    aggressively manages power compared to discrete GPUs. The
+several benchmark suites executed under different GPU/NB                    core concepts, observations, and insights from this work are
+configurations. Since the GPU and NB share the same voltage                 also applicable to other heterogeneous processors.
+plane, the GPU power numbers also capture the NB power                         We implemented the MPC framework on the host CPU of
+and the effect of changing NB configurations. The model is                  the AMD A10-7850K APU running at the hardware config-
+trained offline and the system-level software implements the                uration of [P5, NB0, DPM0 and 2 CUs]. The CPU runs the
+predictor. The accuracy of this model is described in Section               MPC algorithm between GPU kernel invocations. While in a
+VI-D. For CPU power prediction, we use a normalized V 2 f                   real implementation, there may be an idle CPU available to run
+model because the CPU usually busy waits while the kernel                   the algorithm during CPU phases between the GPU kernels,
+is executing.                                                               we assume a worst-case scenario in which the GPU kernel
+   4) Adaptive Horizon Generator: The choice of a horizon                   invocations occur back-to-back, or a CPU is not available
+length H is a tradeoff between the quality of the solution                  to run the algorithm during the CPU phase. In our studies,
+and the computation overhead of the algorithm. The overhead                 the horizon length generator attempts to limit the maximum
+may be particularly problematic for applications with short                 performance loss to an α of 0.05 (5%).
+GPU kernels separated by short CPU times. Even with our                        In order to simulate our approach as well as competing
+polynomial time MPC algorithm, the value of H must be                       schemes, we captured performance and power data on the
+   TABLE IV: Benchmarks with their execution pattern.                  the CPU busy waits while the GPU is executing the kernel.
+  Category          Benchmarks      Benchmark Suite    Reg. Exp.       Therefore, Turbo Core does not drop the CPU DVFS states as
+                    mandelbulbGPU   Phoronix [31]      A20             long as the system stays within its TDP.
+  Regular           NBody           AMD APP SDK [32]   A10                We also compare our MPC method to the PPK and TO
+                    lbm             Parboil [33]       A10             schemes described in Section III. PPK represents the state-of-
+  Irregular w/      EigenValue      AMD APP SDK [32]   (AB)5           the-art predictive techniques for GPGPU benchmarks that do
+  repeating                                                            not consider future kernel behavior [8], [9], [19], while TO is
+  pattern           XSBench         Exascale           (ABC)2
+  Irregular w/      Spmv [17]       SHOC [34]          A10 B 10 C 10   an impractical scheme that demonstrates what is theoretically
+  non-repeating                                                        possible. Furthermore, since the CPU is mostly busy-waiting,
+  pattern           kmeans          Rodinia [18]       AB 20
+                    swat            OpenDwarfs [35]                    due to the nature of the available benchmarks, we also compare
+                    color           Pannotia [36]                      the energy savings both with and without the CPU energy to
+                                                       No pattern.
+                    pb-bfs          Parboil [33]       Multiple        provide a fair assessment.
+                                                       iterations of      Upon encountering the benchmark for the first time, all the
+  Irregular w/      mis             Pannotia [36]      a same
+  kernels varying                                                      schemes run PPK, while dynamically extracting the kernel
+                    srad            Rodinia [18]       kernel
+  with input
+                                                       varying with    execution pattern. At this stage, our framework starts with
+                    lulesh          Exascale           input
+                    lud             Rodinia [18]       arguments.      no stored knowledge. The very first kernel is run at fail-
+                    hybridsort      Rodinia [18]
+                                                                       safe since no performance counters are available to predict its
+                                                                       power and performance. Subsequently, PPK uses the previous
+                                                                       kernel’s performance counters to predict the next kernel’s
+AMD hardware for 336 APU hardware configurations by                    energy-optimal configuration.
+varying the CPU, NB and three out of five GPU DVFS states                                      VI. R ESULTS
+as shown in Table I, and changing the number of active GPU
+CUs from 2 to 8 in steps of 2. We use AMD CodeXL to                      In this section, we first show the benefits of MPC after
+capture the runtime GPU performance counters and measure               the initial run of the application has been performed, and
+CPU and GPU power from the APU’s power management                      then explore how the initial energy and performance losses
+controller at 1ms intervals. The NB power is included in the           of running PPK the first time are amortized over multiple
+GPU measurement, since they share the same voltage rail.               executions, as encountered in real-world applications. Unless
+This extensive power and performance information, which                otherwise stated, all of our results include the energy and
+is captured at run-time for the individual kernels for each            performance overheads of the MPC and PPK optimizations.
+of the benchmark suites described in the next subsection,              A. Energy-Performance Gains
+permits accurate comparison of the performance and energy
+use of different power management schemes with respect to                 Figure 8 compares the energy savings and performance
+the baseline AMD Turbo Core approach.                                  impact of PPK and MPC over AMD Turbo Core. MPC fares
+                                                                       similarly to PPK for the three regular benchmarks with a single
+A. GPGPU Benchmarks                                                    repeating kernel. However, the differences are pronounced for
+   We study 73 benchmarks from 9 popular benchmark suites              the irregular benchmarks whose complex patterns benefit from
+and sample 15 of them (Table IV) that have wide-ranging be-            additional future knowledge. Here, MPC considers the future
+havior and utilize the hardware in different ways. Within the 73       kernel behavior and mitigates the performance losses of look-
+benchmarks we studied, we found that 75% are irregular and             ing only a single kernel into the future, while simultaneously
+44% of the kernels varied significantly with input. To represent       saving energy. Overall, including the MPC overheads, MPC
+such a distribution, we categorize our benchmarks according            achieves a 24.8% energy savings over Turbo Core with a 1.8%
+to their kernel execution pattern. Regular benchmarks have             performance loss. Except srad, MPC achieves a maximum
+a single kernel that iterates multiple times; we include these         performance loss of 3.8% for hybridsort. This is because
+to show that MPC does not degrade performance or energy                MPC adaptively tunes the MPC horizon and restricts the total
+efficiency for regular applications. Irregular applications are        performance loss to 5%. The 15.7% performance loss for srad
+categorized into the ones with repeating and non-repeating             represents a worst-case scenario for our MPC approach with
+kernel patterns, and those that vary with inputs.                      imperfect prediction. Here, the prediction model mispredicts
+                                                                       during the last phases of srad, and MPC is unable to recover
+B. Baseline Schemes                                                    from the performance loss.
+   We report the energy and performance improvements with                 Figure 9 shows the results of MPC with respect to PPK,
+respect to the default Turbo Core scheme in the AMD A10-               which include the optimization overheads. Unlike the PPK
+7850K [37]. Turbo Core is a state-of-the-practice technique            approach described in Section II-E with perfect performance
+that balances power and performance under thermal con-                 and power prediction, for a fair comparison, this version
+straints. It controls the DVFS states based on the recent re-          uses Random Forest for power and performance prediction
+source utilization, and shifts power between the GPU and CPU           as with MPC. Among the regular benchmarks, PPK works
+based on their recent load. For these GPGPU applications,              well for mandelbulbGPU and NBody because the same kernel
+                           Predict Previous Kernel   MPC                                                   Predicted Previous Kernel             MPC
+
+
+
+
+                                                                         GPU Energy Savings (%)
+                     60
+Energy Savings (%)
+
+                     50                                                                           45
+                     40
+                     30                                                                           25
+                     20
+                     10                                                                                5
+                      0
+                                                                                                  -15
+
+                                                                                                  -35
+                                          (a)
+                     1.1
+   Speedup
+
+
+
+
+                       1
+                     0.9                                                                           Fig. 10: GPU energy savings over AMD Turbo Core.
+                     0.8
+                     0.7                                                                                         1   10    100    Steady state
+                                                                                                  20
+
+
+
+
+                                                                  Energy Savings (%)
+                     0.6
+                                                                                                  15
+                                                                                                  10
+                                          (b)                                                      5
+                                                                                                   0
+                                                                                                  -5
+Fig. 8: PPK and MPC (a) energy savings and (b) speedup over
+                                                                                                                            (a)
+AMD Turbo Core.                                                                                   1.3
+                     20                                                                           1.2
+
+
+
+
+                                                                       Speedup
+Energy Savings (%)
+
+
+
+
+                                                                                                  1.1
+                     15
+                                                                                                    1
+                     10                                                                           0.9
+                      5                                                                           0.8
+                      0
+                      -5                                                                                                    (b)
+
+                                          (a)
+                     1.3                                          Fig. 11: MPC (a) energy savings, and (b) speedup relative
+                     1.2                                          to PPK when the benchmarks are re-executed the specified
+Speedup
+
+
+
+
+                     1.1
+                       1
+                                                                  number of times after the initial execution.
+                     0.9
+                     0.8
+                                                                  This is because MPC intelligently lowers the CPU state as it
+                                                                  does not improve the kernel execution time, whereas Turbo
+                                          (b)                     Core keeps the CPU at a higher DVFS state as long as the
+                                                                  system is operating within its TDP limit. For this reason, we
+    Fig. 9: MPC (a) energy savings and (b) speedup over PPK.      also show the GPU energy savings of MPC over Turbo Core
+                                                                  in Figure 10. These energy savings also includes the static
+                                                                  energy overhead of the GPU during MPC optimization.
+is iterated and the kernels are input independent. For these
+                                                                     The highest savings (51%) is achieved for lbm because
+benchmarks, MPC does not show an advantage.
+                                                                  its kernels exhibit peak behavior. For other benchmarks, the
+   MPC significantly outperforms PPK for the 12 irregular         savings is not as large, but still significant (3-20%), which
+benchmarks, where PPK often mispredicts the next kernel           leads to an overall energy savings of 10%. For EigenValue
+behavior, achieving 12% greater performance than PPK while        and XSBench, PPK shows higher GPU energy savings than its
+simultaneously reducing energy by 7.5%. For these bench-          chip-wide savings. This is because PPK lowers the CPU and
+marks, PPK suffers an 8–26% performance loss compared             GPU power states while significantly increasing the execution
+to AMD Turbo Core (Figure 8). This is due to next kernel          time, thereby resulting in higher CPU energy. Compared with
+misprediction in conjunction with the inability to proactively    PPK, MPC achieves an average GPU energy savings of 5.1%
+change decisions based on future kernel behavior. In contrast,    while simultaneously improving performance by 9.6%.
+MPC foresees the ability to catch up on the lost performance
+due to mispredictions in future kernels. For example, for srad,   B. Amortization of Initial Losses
+MPC outperforms PPK by 15%. MPC performs particularly                Our approach benefits from repeated application execution
+well for the irregular benchmarks with kernels with varying       to achieve gains. The initial losses of running PPK for the first
+input, outperforming PPK by 12.3% while reducing energy           execution can be amortized over these repeated executions.
+by 9.7%. For XSBench, MPC consumes more energy than               Figure 11 shows the energy savings and performance loss of
+PPK by choosing higher power configurations to reduce the         MPC compared to PPK when the benchmarks are re-executed
+performance loss. Overall, MPC outperforms PPK by 9.6%            the specified number of times after the initial execution. The
+while reducing energy by 6.6%.                                    energy savings and performance loss includes the associated
+   The CPU’s contribution to the overall MPC energy savings       overheads. The steady state value is the ideal case with no
+over Turbo Core is 75%, while the GPU contributes 25%.            initial losses during the profiling. Non-negligible gains are
+                     70
+                           MPC   Theoretically Optimal                                         RF   Err_15%_10%    Err_5%   Err_0%
+                                                                                         80
+Energy Savings (%)
+
+
+
+
+                                                                    Energy Savings (%)
+                     50                                                                  60
+                                                                                         40
+                     30                                                                  20
+                     10                                                                   0
+
+                     -10
+                                                                                                             (a)
+                                                                                         1.3
+                                    (a)                                                  1.2
+                     1.5
+
+
+
+
+                                                                   Speedup
+                                                                                         1.1
+                     1.4                                                                   1
+                     1.3
+Speedup
+
+
+
+
+                                                                                         0.9
+                     1.2
+                     1.1                                                                 0.8
+                       1
+                     0.9
+                     0.8                                                                                     (b)
+
+
+                                                                   Fig. 13: Ramification of prediction inaccuracy on energy-
+                                    (b)                            performance tradeoff.
+Fig. 12: Comparison with Theoretical Limit. (a) Energy sav-
+                                                                   racy of recently published prediction models. Err 15% 10%
+ings and (b) speedup over AMD Turbo Core.
+                                                                   assumes prediction inaccuracies of 15% and 10% for perfor-
+                                                                   mance and power respectively, as reported by Wu et al. [38].
+observed with just a single repeated execution, and most of the
+                                                                   Similarly, Err 5% considers prediction inaccuracy of 5%, as
+full gains are observed after only ten re-executions, indicating
+                                                                   reported for Paul et al. [8]. A prediction model with no errors is
+that MPC can significantly improve the energy efficiency of
+                                                                   represented by Err 0%. To implement these prediction models,
+real-world workloads that repeatedly re-execute.
+                                                                   we assume a half random normal distribution [39], with its
+C. Comparison with Theoretical Limit                               absolute mean equal to the corresponding average error.
+   In this section, we explore how closely our polynomial-time        From Figure 13, RF behaves similar to Err 15% 10%. RF is
+heuristic MPC approach matches the theoretically achievable        better for mandelbulbGPU and XSBench, while Err 15% 10%
+savings by comparing against the exponential-time Theoret-         is better for kmeans, swat and srad. On average, the energy
+ically Optimal (TO) scheme. We assume perfect prediction,          savings of other models range from 27-28%, while RF’s
+no MPC overhead, exhaustive search of all hardware config-         savings is 25%. Similarly, other prediction models improve
+uration for each kernel, and a horizon length of all kernels.      performance by 1.7-3%, while RF decreases performance by
+Figure 12 shows the results.                                       1.7%. The reason that the energy and performance results are
+   As expected, MPC performs similarly to TO for regular           not highly sensitive to prediction accuracy is that MPC relies
+benchmarks. In general, MPC benefits from looking into the         on the prediction models far less (a factor of 65×) than exhaus-
+future behavior of all the kernels, and thus achieves near-        tive search. It also takes the runtime performance as feedback
+optimal energy savings and performance gains. In particular,       and thus further rectifies the impact of these mispredictions
+pb-bfs, mis and lud show lower energy savings than TO,             by dynamically updating the performance headroom. The
+while EigenValue, mis and Spmv suffer a slight performance         result is comparable energy savings with minor differences
+loss. This is because the effectiveness of MPC is highly           in performance.
+sensitive to its search order, which is derived based on the
+                                                                   E. MPC Overheads and Horizon Length
+sub-optimal PPK-based profiling. Overall, MPC achieves 92%
+of the maximum theoretical energy savings and 93% of the              Figure 14 shows the MPC energy and performance over-
+potential performance gain.                                        heads with respect to Turbo Core when adapting the horizon
+                                                                   length for an α of 0.05 (5%). The average energy overhead
+D. Ramification of Prediction Inaccuracy                           is 0.15% (maximum of 0.53% for Spmv) with a performance
+  The Mean Absolute Percentage Errors of our Random                overhead of 0.3% (maximum of 1.2% for Spmv). The over-
+Forest prediction model over the 15 benchmarks are 25%             heads consider a worst case situation when kernels appear
+and 12% for performance and power respectively. The high           back-to-back with no CPU phases in between, or when there
+performance error is due to diverse performance scaling trends     are no available CPUs to run the algorithm during CPU phases.
+and the presence of outliers with unexpected performance           In practice, GPGPU application kernels may be separated by
+behavior. In this section, we examine the potential loss in        CPU phases with an available CPU, which can hide the MPC
+energy savings by our RF-based MPC compared to a MPC               overheads. As a result, the actual overheads will be lower,
+using a perfect prediction model. We consider a horizon length     permitting longer horizon lengths to improve performance.
+equal to the number of kernels and exclude the MPC overhead.          Figure 15 shows the average MPC horizon length as a
+  Figure 13 compares our Random Forest based MPC imple-            percentage of N , the total number of kernels in an appli-
+mentation (RF) with MPC implementations based on the accu-         cation. Benchmarks NBody, lbm, EigenValue and XSBench
+Overhead (%)
+MPC Energy
+                              0.6                                  behavior to represent the immediate phase, while Chen et
+                              0.4                                  al. [12] predicts the execution time of the immediate next
+                              0.2
+                                                                   phase of the embedded applications. These schemes do not
+                                0
+                                                                   use feedback to fine-tune, and therefore are unable to recover
+                                                                   from the past performance losses.
+                                            (a)                       Within the feedback-driven power management schemes,
+                                                                   Paul et al. [8] train linear regression models to predict per-
+MPC Performance
+
+
+
+
+                              1.2
+ Overhead (%)
+
+
+
+
+                              0.8                                  formance and power sensitivities and use two levels of tuning
+                              0.4
+                                                                   to adapt based on the past performance trend at the kernel
+                                0
+                                                                   level, without across-kernel considerations. Our PPK scheme
+                                                                   represents such state-of-the-art future agnostic schemes. For
+                                             (b)                   applications with irregular throughput phases, we demonstrate
+                                                                   significant reduction in performance loss with substantial
+Fig. 14: MPC (a) energy and (b) performance overheads with         energy savings over such schemes.
+respect to Turbo Core.
+                                                                                          VIII. C ONCLUSION
+% Avg. Horizon Length rel.
+
+
+
+
+                             100
+  to number of kernels
+
+
+
+
+                              80                                      This paper presents a dynamic power management scheme
+                              60
+                              40                                   for GPGPU applications using Model Predictive Control
+                              20                                   (MPC). MPC anticipates future kernel behavior and makes
+                               0
+                                                                   proactive decisions to maximize energy efficiency with min-
+                                                                   imum impact on performance. We devise a variant of MPC
+                                                                   that uses greedy and heuristic approximations and adaptively
+                                                                   tunes the horizon length to permit a low overhead practi-
+Fig. 15: Average MPC horizon as a percentage of the total          cal runtime implementation. Our scheme achieves significant
+number of kernels.                                                 energy savings with negligible performance loss compared
+                                                                   to the AMD Turbo Core power manager, and both energy
+have long kernels, which permits MPC to explore the full           savings and performance improvement over current history-
+horizon. For MandelbulbGPU, kmeans and swat, the horizon           based approaches.
+length generator initially selects a low horizon length before
+determining that there is enough performance margin to use
+the full horizon. The full horizon is initially selected for       AMD, the AMD Arrow logo, and combinations thereof are
+srad, but lowered when encountering a performance loss due         trademarks of Advanced Micro Devices, Inc. Other product
+to misprediction. For the remaining benchmarks, the horizon        names used in this publication are for identification purposes
+length generator shrinks the horizon length significantly to       only and may be trademarks of their respective companies.
+limit the overheads since they have shorter kernel lengths.
+                                                                                               R EFERENCES
+   We compare our adaptive horizon MPC scheme with one
+that uses full horizon. When ignoring overheads, the full-         [1] S. Nussbaum, “AMD “Trinity” APU.” Presented at Hot Chips, August
+                                                                       2012.
+horizon MPC approach reduces energy by only 2.6% com-
+                                                                   [2] P. Dongara, L. Bircher, and J. Darilek, “AMD Richland Client APU.”
+pared to our adaptive scheme, with similar performance im-             Presented at Hot Chips, August 2013.
+pact. When the MPC overheads are included, the full-horizon        [3] E. Rotem, A. Naveh, D. Rajwan, A. Ananthakrishnan, and E. Weiss-
+scheme achieves a 15.4% energy savings over Turbo Core,                mann, “Power-Management Architecture of the Intel Microarchitecture
+                                                                       Code-Named Sandy Bridge,” IEEE Micro, vol. 32, pp. 20–27, March
+with a performance loss of 12.8%, compared to 24.8% energy             2012.
+savings with a 1.8% performance loss for the adaptive scheme.      [4] E. Rotem, R. Ginosar, C. Weiser, and A. Mendelson, “Energy Aware
+                                                                       Race to Halt: A Down to EARtH Approach for Platform Energy
+                                    VII. R ELATED W ORK                Management,” Computer Architecture Letters, vol. 13, pp. 25–28, Jan–
+                                                                       June 2012.
+   Among the reactive power-performance optimization stud-         [5] E. Rotem, “Intel Architecture, Code Name Skylake Deep Dive: A New
+ies, Pegasus captures the historical latency statistics to dy-         Architecture to Manage Power Performance and Energy Efficiency.”
+namically control the CPU DVFS states [40], while Sethia and           Presented at Intel Developer Forum, August 2015.
+                                                                   [6] H. Wang, V. Sathish, R. Singh, M. J. Schulte, and N. S. Kim, “Work-
+Mahlke’s Equalizer [9] monitors the performance counters and           load and Power Budget Partitioning for Single-chip Heterogeneous
+reactively tunes the GPU knobs to operate under performance            Processors,” in Proc. of the Int’l Conf. on Parallel Architectures and
+boost or energy efficiency mode.                                       Compilation Techniques (PACT), 2012.
+                                                                   [7] J. Leng, T. Hetherington, A. ElTantawy, S. Gilani, N. S. Kim, T. M.
+   Other prior work [41], [42], [43] propose analytical esti-          Aamodt, and V. J. Reddi, “GPUWattch: Enabling Energy Optimizations
+mation models, while [38], [44], [45], [46] present learning           in GPGPUs,” in Proc. of the Int’l Symp. on Computer Architecture
+or statistical models. Optimizing power efficiency using these         (ISCA), 2013.
+                                                                   [8] I. Paul, W. Huang, M. Arora, and S. Yalamanchili, “Harmonia: Balancing
+estimation models has been proposed by [19], [46], [47],               Compute and Memory Power in High Performance GPU,” in Proc. of
+[48], [49]. All of these locally predictive studies use the past       the Int’l Symp. on Computer Architecture (ISCA), 2015.
+ [9] A. Sethia and S. Mahlke, “Equalizer: Dynamic Tuning of GPU Re-              [29] Y. Zhu and V. J. Reddi, “High-performance and Energy-Efficient Mobile
+     sources for Efficient Execution,” in Proc. of the Int’l Symp. on Microar-        Web Browsing on Big/Little Systems,” in Proc. of the Int’l Symp. on
+     chitecture (MICRO), 2014.                                                        High Performance Computer Architecture (HPCA), 2013.
+[10] J. Guerreiro, A. Ilic, N. Roma, and P. Tomas, “Multi-Kernel Auto-Tuning     [30] L. Breiman, “Random Forests,” Machine Learning, vol. 45, no. 1, pp. 5–
+     on GPUs: Performance and Energy-Aware Optimization,” in Proc. of                 32, 2001.
+     the Int’l. Conf. on Parallel, Distributed and Network-Based Processing      [31] “PHORONIX TEST SUITE.” http://www.phoronix-test-suite.com/.
+     (PDP), 2015.                                                                [32] “APP SDK - A Complete Development Platform.” http:
+[11] A. McLaughlin, I. Paul, J. L. Greathouse, S. Manne, and S. Yala-                 //developer.amd.com/tools-and-sdks/opencl-zone/amd-accelerated-
+     manchili, “A Power Characterization and Management of GPU Graph                  parallel-processing-app-sdk/.
+     Traversal,” in Workshop on Architectures and Systems for Big Data           [33] J. A. Stratton, C. Rodrigues, I.-J. Sung, N. Obeid, L.-W. Chang,
+     (ASBD), 2014.                                                                    N. Anssari, G. D. Liu, and W. W. Hwu, “Parboil: A Revised Benchmark
+[12] T. Chen, A. Rucker, and G. E. Suh, “Execution Time Prediction for                Suite for Scientific and Commercial Throughput Computing,” Tech. Rep.
+     Energy-efficient Hardware Accelerators,” in Proc. of the Int’l Symp. on          IMPACT-12-01, University of Illinois at Urbana-Champaign, March
+     Microarchitecture (MICRO), 2015.                                                 2012.
+[13] Y. Sun, X. Gong, A. K. Ziabari, L. Yu, X. Li, S. Mukherjee, C. McCard-      [34] A. Danalis, G. Marin, C. McCurdy, J. S. Meredith, P. C. Roth,
+     well, A. Villegas, and D. Kaeli, “Hetero-Mark, A Benchmark Suite for             K. Spafford, V. Tipparaju, and J. S. Vetter, “The Scalable Heterogeneous
+     CPU-GPU Collaborative Computing,” in Proc. of the IEEE Int’l Symp.               Computing (SHOC) Benchmark Suite,” in Proc. of the Workshop on
+     on Workload Characterization (IISWC), 2016.                                      General-Purpose Computation on Graphics Processing Units (GPGPU),
+[14] O. Kayiran, A. Jog, M. Kandemir, and C. Das, “Neither More Nor Less:             2010.
+     Optimizing Thread-level Parallelism for GPGPUs,” in Proc. of the Int’l      [35] W. Feng, H. Lin, T. Scogland, and J. Zhang, “OpenCL and the 13
+     Conf. on Parallel Architectures and Compilation Techniques (PACT),               Dwarfs: A Work in Progress,” in Proc. of the Int’l Conf. on Performance
+     2013.                                                                            Engineering (ICPE), 2012.
+[15] M. Lee, S. Song, J. Moon, J. Kim, W. Seo, Y. Cho, and S. Ryu,               [36] S. Che, B. M. Beckmann, S. K. Reinhardt, and K. Skadron, “Pannotia:
+     “Improving GPGPU Resource Utilization Through Alternative Thread                 Understanding Irregular GPGPU Graph Applications,” in Proc. of the
+     Block Scheduling,” in Proc. of the Int’l Symp. on High Performance               IEEE Int’l Symp. on Workload Characterization (IISWC), 2013.
+     Computer Architecture (HPCA), 2014.                                         [37] Advanced Micro Devices, Inc, BIOS and Kernel Developer’s Guide
+                                                                                      (BKDG) for AMD Family 15h Models 30h-3Fh Processors, February
+[16] J. Lee, P. P. Ajgaonkar, and N. S. Kim, “Analyzing Throughput of
+                                                                                      2015.
+     GPGPUs Exploiting Within-Die Core-to-Core Frequency Variation,”
+                                                                                 [38] G. Wu, J. L. Greathouse, A. Lyashevsky, N. Jayasena, and D. Chiou,
+     in Proc. of the Int’l Symp. on Performance Analysis of Systems and
+                                                                                      “GPGPU Performance and Power Estimation Using Machine Learning,”
+     Software (ISPASS), 2011.
+                                                                                      in Proc. of the Int’l Symp. on High Performance Computer Architecture
+[17] J. L. Greathouse and M. Daga, “Efficient Sparse Matrix-Vector Mul-               (HPCA), 2015.
+     tiplication on GPUs Using the CSR Storage Format,” in Proc. of the          [39] R. H. Byers, Half-Normal Distribution. John Wiley & Sons, Ltd, 2005.
+     Conference on High Performance Computing, Networking, Storage and           [40] D. Lo, L. Cheng, R. Govindaraju, L. A. Barroso, and C. Kozyrakis,
+     Analysis (SC), 2014.                                                             “Towards Energy Proportionality for Large-scale Latency-critical Work-
+[18] S. Che, M. Boyer, J. Meng, D. Tarjan, J. Sheaffer, S.-H. Lee, and                loads,” in Proc. of the 41st Annual Int’l Symp. on Computer Architecture,
+     K. Skadron, “Rodinia: A Benchmark Suite for Heterogeneous Com-                   ISCA ’14, pp. 301–312, 2014.
+     puting,” in Proc. of the IEEE Int’l Symp. on Workload Characterization      [41] B. Su, J. L. Greathouse, J. Gu, M. Boyer, L. Shen, and Z. Wang,
+     (IISWC), 2009.                                                                   “Implementing a Leading Loads Performance Predictor on Commodity
+[19] I. Paul, V. Ravi, S. Manne, M. Arora, and S. Yalamanchili, “Coordinated          Processors,” in Proc. of the USENIX Annual Technical Conf. (USENIX
+     Energy Management in Heterogeneous Processors,” in Proc. of the Conf.            ATC), 2014.
+     on High Performance Computing, Networking, Storage and Analysis             [42] S. Hong and H. Kim, “An Integrated GPU Power and Performance
+     (SC), 2013.                                                                      Model,” in Proc. of the Int’l Symp. on Computer Architecture (ISCA),
+[20] M. R. Garey and D. S. Johnson, ““ Strong ” NP-Completeness Results:              2010.
+     Motivation, Examples, and Implications,” Journal of ACM, vol. 25,           [43] C. Isci and M. Martonosi, “Runtime Power Monitoring in High-End
+     pp. 499–508, July 1978.                                                          Processors: Methodology and Empirical Data,” in Proc. of the Int’l Symp.
+[21] A. Majumdar, J. L. Setter, J. R. Dobbs, B. M. Hencey, and D. H.                  on Microarchitecture (MICRO), 2003.
+     Albonesi, “Energy-Comfort Optimization using Discomfort History and         [44] B. C. Lee and D. M. Brooks, “Accurate and Efficient Regression
+     Probabilistic Occupancy Prediction,” in Proc. of the Int’l. Green Com-           Modeling for Microarchitectural Performance and Power Prediction,”
+     puting Conference (IGCC), 2014.                                                  in Proc. of the Int’l Symp. on Architectural Support for Programming
+[22] R. Van Der Linden and A. P. Leemhuis, “The Use of Model Predictive               Languages and Operating Systems (ASPLOS), 2006.
+     Control for Asset Production Optimization: Application to a Thin-Rim        [45] C. Zhang, A. Ravindran, K. Datta, A. Mukherjee, and B. Joshi, “A
+     Oil Field Case,” in SPE Annual Technical Conference and Exhibition,              Machine Learning Approach to Modeling Power and Performance of
+     Society of Petroleum Engineers, 2010.                                            Chip Multiprocessors,” in Proc. of the Int’l Conf. on Computer Design
+[23] T. Le, H. L. Vu, Y. Nazarathy, B. Vo, and S. Hoogendoorn, “Linear-               (ICCD), 2011.
+     Quadratic Model Predictive Control for Urban Traffic Networks,” in          [46] G. Dhiman and T. S. Rosing, “Dynamic Power Management Using
+     Proc. of the Int’l Symp. on Transportation and Traffic Theory, 2013.             Machine Learning,” in Proc. of the Int’l Conf. on Computer-Aided
+[24] A. Marquez, C. Gomez, P. Deossa, and J. Espinosa, “Infinite Horizon              Design (ICCAD), 2006.
+     MPC and Model Reduction Applied to Large Scale Chemical Plant,”             [47] M. Curtis-Maury, A. Shah, F. Blagojevic, D. S. Nikolopoulos, B. R.
+     in Proc. of the Robotics Symposium, Latin American and Colombian                 de Supinski, and M. Schulz, “Prediction Models for Multi-dimensional
+     Conference on Automatic Control and Industry Applications (LARC),                Power-Performance Optimization on Many Cores,” in Proc. of the Int’l
+     2011.                                                                            Conf. on Parallel Architectures and Compilation Techniques (PACT),
+[25] J. Löfberg, Minimax Approaches to Robust Model Predictive Control,              2008.
+     vol. 812. Linköping University Electronic Press, 2003.                     [48] M. Curtis-Maury, J. Dzierwa, C. D. Antonopoulos, and D. S. Nikolopou-
+[26] M. H. Chauhdry and P. B. Luh, “Nested Partitions for Global Opti-                los, “Online Power-performance Adaptation of Multithreaded Programs
+     mization in Nonlinear Model Predictive Control,” Control Engineering             Using Hardware Event-based Prediction,” in Proc. of the Int’l Conf. on
+     Practice, vol. 20, no. 9, pp. 869 – 881, 2012.                                   Supercomputing (ICS), 2006.
+[27] Y. Wang and S. Boyd, “Fast Model Predictive Control Using Online            [49] B. Su, J. Gu, L. Shen, W. Huang, J. L. Greathouse, and Z. Wang,
+     Optimization,” IEEE Trans. on Control Systems Technology, vol. 18,               “PPEP: Online Performance, Power, and Energy Prediction Framework
+     pp. 267–278, March 2010.                                                         and DVFS Space Exploration,” in Proc. of the Int’l Symp. on Microar-
+[28] E. Totoni, J. Torrellas, and L. V. Kale, “Using an Adaptive HPC Runtime          chitecture (MICRO), 2014.
+     System to Reconfigure the Cache Hierarchy,” in Proc. of the Conference
+     on High Performance Computing, Networking, Storage and Analysis
+     (SC), 2014.
+

@@ -1,0 +1,1336 @@
+                   Alma Mater Studiorum Università di Bologna
+                       Archivio istituzionale della ricerca
+
+
+
+A two-layer distributed MPC approach to thermal control of Multiprocessor Systems-on-Chip
+
+
+
+ This is the final peer-reviewed author’s accepted manuscript (postprint) of the following publication:
+
+ Published Version:
+ Tilli A., Garone E., Conficoni C., Cacciari M., Bosso A., Bartolini A. (2022). A two-layer distributed MPC
+ approach to thermal control of Multiprocessor Systems-on-Chip. CONTROL ENGINEERING PRACTICE, 122,
+ 1-14 [10.1016/j.conengprac.2022.105099].
+
+
+ Availability:
+ This version is available at: https://hdl.handle.net/11585/868929 since: 2024-09-22
+ Published:
+ DOI: http://doi.org/10.1016/j.conengprac.2022.105099
+
+
+ Terms of use:
+
+ Some rights reserved. The terms and conditions for the reuse of this version of the manuscript are
+ specified in the publishing policy. For all terms of use and more information see the publisher's website.
+
+
+
+
+               This item was downloaded from IRIS Università di Bologna (https://cris.unibo.it/).
+                             When citing, please refer to the published version.
+
+
+                                             (Article begins on next page)
+
+ 22 September 2026
+            A two-layer distributed MPC approach to thermal control of Multiprocessor
+                                       Systems-on-Chip
+
+          Andrea Tillia , Emanuele Garoneb , Christian Conficonia , Matteo Cacciaria , Alessandro Bossoa , Andrea Bartolinia
+    a Department of Electrical, Electronic and Information Engineering, University of Bologna, Viale del Risorgimento 2, Bologna, Italy. Email: {andrea.tilli,
+
+                                          christian.conficoni3, matteo.cacciari,alessandro.bosso,a.bartolini}@unibo.it.
+                          b Université Libre de Bruxelles, 50 Av. F.D. Roosvelt, B-1050 Brussels, Belgium. Email: egarone@ulb.ac.be.
+
+
+
+
+Abstract
+Next-generation Multiprocessor, or Multicore, Systems-on-Chip offer very high computing performance at the expense of a very
+high power density unevenly distributed on the chip. The hot spots thus generated represent a significant source of performance
+and reliability degradation, as well as power consumption increase. In recent years, run-time thermal control strategies have been
+developed to deal with this issue by acting on some “computational knobs” (e.g., clock frequencies and supply voltages). In this
+context, schemes based on Model Predictive Control (MPC) are particularly suitable due to their capability to deal with constraints
+explicitly. In this paper, we first discuss relevant properties for the design of predictive controllers for thermal systems. Starting
+from the Partial Differential Equation (PDE) describing heat diffusion in a solid, we prove meaningful feasibility properties that can
+be leveraged for constraint reduction. We then present a procedure to derive approximated but effective modular thermal models
+intended to build an efficient distributed MPC. Finally, a two-layer control solution is proposed to maximize performance while
+preserving feasibility despite model approximations. The effectiveness of this approach is validated through extensive and realistic
+numerical simulations.
+Keywords:
+Distributed MPC, Many-core Systems, Thermal Modeling
+
+
+1. Introduction                                                                    chip’s operating speed by degrading the carrier mobility in tran-
+                                                                                   sistors, whereas the power consumption is increased since leak-
+   In recent years, the growing demand for efficient and high-                     age power exponentially increases with temperature. In addi-
+performance computing has fostered the diffusion of Multi-                         tion, components’ lifetime shortens as a consequence of high
+processor Systems-on-Chip (MPSoCs) in every sector of the                          temperatures and hot spots, while thermal gradients acceler-
+worldwide economy, ranging from industry to everyday prod-                         ate failure mechanisms such as electro-migration, stress migra-
+ucts such as laptops, tablets, and mobile phones. From the                         tion, and dielectric breakdown. These effects cause a bottleneck
+early 70’s up to now, the performance trend in microproces-                        in enhancing MPSoC performance and reliability, commonly
+sors has been accurately described by Moore’s law, according to                    called “Thermal Wall”. Lately, this problem has received an
+which performance is doubled every 18 months. Until the early                      increasing level of attention.
+2000’s the main factors enabling performance improvements                             In general, the approaches that address such thermal is-
+were micro-architectural enhancements (such as instruction-                        sues can be grouped into two prominent families: Static Ther-
+level parallelism) and technology scaling. Then, the so-called                     mal Management (STM) and Dynamic Thermal Management
+“Power Wall” was hit. Ever since, silicon power density could                      (DTM) techniques. The former approach allows increasing
+not be kept invariant with respect to technology scaling and im-                   the power consumption sustained by the chip (the so-called
+provement, owing to leakage and dynamic power terms that do                        “thermal design power”) by acting on architectural design, e.g.,
+not scale as well as the transistors’ size.                                        through a suitable sizing of heatsinks, fans, and, in some cases,
+   For this reason, single CPUs gradually disappeared in favor                     liquid cooling. However, for today’s MPSoCs, STM strategies
+of multi-core architectures, with multiple cores integrated on                     can no longer remove heat in worst-case conditions. Conse-
+the same silicon die. Exploiting parallelism, multi-core pro-                      quently, DTM techniques have become more and more crucial
+cessors increase the computational throughput without increas-                     to bound the operating temperature by “run-time active con-
+ing frequency. Nevertheless, power remains a concern for MP-                       trol”, exploiting temperature sensors along with Dynamic Volt-
+SoC improvement. Because of the speed disparity between the                        age and Frequency Scaling (DVFS) (Kang et al., 2011), thread
+(quadratic) scaling of transistor size and the reduction of power                  migration/scheduling (Coskun et al., 2009), (Liu et al., 2014),
+consumption, power density still grows. As a consequence, the                      throttling (Tsai and Chen, 2014), and clock gating. Then, stan-
+temperature on the chip unevenly increases, creating hot spots                     dard cooling systems can be designed to handle the average
+and thermal gradients. High temperatures adversely affect the                      case, leaving the management of peaks to active control.
+Preprint submitted to Control Engineering Practice                                                                                                   April 2, 2022
+This work focuses on DTM techniques based on frequency                    ing, specifically reinforcement learning. Indeed, there is a con-
+scaling. Early methods relied on simple empirical “ON-OFF”                siderable literature of reinforcement learning applications to
+strategies: in case of temperature-bound violations, all core fre-        power management and thermal control of computational plat-
+quencies were set to the minimum value. Later on, the benefits            forms (Das et al., 2014), (Shafik et al., 2015)), (Mandal et al.,
+of feedback control have been exploited, leading to the adop-             2019). As discussed in (Pagani et al., 2018), the main draw-
+tion of classic regulators such as PIDs (Skadron et al., 2002;            backs of this class of solutions are : significant complexity
+Kadin et al., 2009; Wang et al., 2008).                                   (leading to processing overhead), and convergence issues (it is
+   More recently, the framework of Model Predictive Control               not trivial to tune the learning rate for balancing the exploration
+(MPC) has been recognized as very promising due to the ca-                versus exploitation phases).
+pability of explicitly dealing with inputs (i.e., core frequencies)       In general, the aforementioned methods, lack formal feasibility
+and state-space constraints (i.e., temperature bounds) (Zanini            guarantees, especially in case of model uncertainties.
+et al., 2009; Wang et al., 2009; Bartolini et al., 2012), while
+pursuing performance optimization. In this context, frequency-            1.1. Contribution of this paper
+scaling is typically used as the control input, and a linear-                This paper proposes a two-layer fully distributed (no central-
+quadratic formulation of the MPC is considered. This control              ized component is needed) MPC strategy for reliable thermal
+problem can be either managed online (implicitly) by solving              capping and optimization of the MPSoC performance. To build
+a constrained Quadratic Programming (QP) problem at each                  an effective MPC scheme, we begin with a careful model anal-
+sampling instant or off-line (explicitly) by solving a multi-             ysis of the conditions for feasibility. To the best of our knowl-
+parametric constrained QP problem (Bemporad et al., 2002).                edge, this issue is usually disregarded in the specific literature
+In both cases, the main impact on performance is the prob-                on MPSoC thermal control, i.e., no formal proofs are provided
+lem complexity, which depends on the dimension of inputs                  to guarantee constraint satisfaction at all times. In this con-
+and states and is strongly affected by the number of con-                 text, we employ the heat equation, i.e., the Partial Differential
+straints. In implicit formulations, the computational burden              Equation (PDE) representing the heat conduction (Evans, 1998;
+scales with dimensionality, whereas in explicit ones, the crit-           Strauss, 1992), to study constraint reduction for both central-
+icality is the memory usage. Additionally, the system model               ized and distributed scenarios. This approach allows defining
+should be simple enough to comply with computational and                  simple control policies with guaranteed feasibility that need few
+storage limitations, yet sufficiently accurate to produce reliable        measurements, no accurate knowledge of the model, and no in-
+predictions. This task is increasingly difficult in modern and            formation exchange among cores (i.e., in a decentralized fash-
+near-future MPSoCs, which, for High-Performance Computing                 ion).
+(HPC) and Datacenter applications, could integrate hundreds                  The obtained strategies can be implemented as an ultimate
+of cores (McKeown et al., 2018). A common way to deal with                thermal capping control layer that is triggered whenever dan-
+controller complexity in such conditions is through distributed           gerous working conditions occur (i.e., the temperature is too
+solutions (Bartolini et al., 2012). Indeed, the MPSoC thermal             high in some regions). We remark that the thermal capping
+model can be split into several simpler core-centric interacting          does not boil down to the expected trivial solution: “whenever
+modules. This way, the centralized MPC problem can be cast                the critical temperature is approached, turn off all of the power
+into a set of simpler interconnected problems, one for each core.         sources”. Indeed, the PDE analysis allows to extend the basic
+Then, an MPC is implemented separately for each core, leading             intuition to the case of decentralized control, i.e., “turn off only
+to a distributed and scalable solution.                                   the sources whose temperature is too high”, and to the realis-
+   Recent works in the MPC framework applied to multicore                 tic case of power dissipation that cannot be zeroed, i.e., “turn
+systems are (Wang et al., 2016), (Wang et al., 2019). In the              to minimum power the sources whose temperature is danger-
+first contribution, DVFS and task migration are combined, by              ous”. To this aim, the thermal constraints are reformulated to
+solving a centralized unconstrained problem (the temperature              show that the dangerous temperature for a source may be dif-
+threshold is penalized in the objective function), and partioning         ferent from the silicon critical temperature, as its effects on the
+the task migration part between the core blocks. The second               neighborhood have to be taken into account.
+work proposes a nonlinear MPC solution to account for power                  With the above result at hand, feasibility is always preserved,
+leakage terms, yet again in a centralized fashion. Distributed            but no performance optimization can be achieved. As already
+MPC solutions are presented in (Camponogara et al., 2021),                mentioned, MPC strategies have been proposed to handle this
+(Scherer et al., 2015) for resource constrained thermal manage-           aspect. These approaches modulate the computation (related to
+ment of large scale systems such as buildings. In this case,              the dissipated power) to keep performance as close as possible
+the decomposition is applied to the optimization problem, with            to the required level while satisfying thermal constraints. In
+a centralized master updating the coupling variables (e.g., La-           this respect, a crucial aspect concerns the accuracy of the con-
+grange multipliers) for a set of distributed sub-problems. Other          trol model, i.e., a finite-dimensional model used to predict the
+approaches include power budget constraints, along with ther-             thermal dynamics. To maximize performance, one should stay
+mal capping, via heuristic, multi-layer optimization techniques           close to the maximum temperatures. However, using a reduced-
+either centralized (Iranfar et al., 2017; Dey et al., 2019), or           order model, one must trade-off between its complexity and the
+partially distributed (Bambini et al., 2020). Another popular             safety margin that must be considered to account for the model-
+framework that tackles this class of problems is machine learn-           ing inaccuracies. Therefore, we propose an identification-based
+                                                                      2
+procedure to perform state- and time-discretization of the orig-                                                     Heat Sink
+                                                                          Cache L2          Cache L2
+inal PDE, aiming to obtain for each core a prediction model
+slightly biased toward temperature overestimation. The result               L1 L1              L1 L1
+                                                                                                                                       Heat
+of this procedure is a set of low-complexity thermal models that         CORE 0 CORE 1     CORE 2 CORE 3 TIM
+physically interact between each other.                                                                                                 DIE              Heat Spreader
+                                                                         L1 = level 1 caches                           PCB
+   Finally, a distributed MPC layer is defined to achieve per-           L2 = level 2 caches             a)     b)
+
+formance optimization. Unlike the decentralized thermal cap-
+ping layer, this controller is regarded as distributed because re-                                   Figure 1: Chip thermal architecture.
+quires some connectivity properties between cores, i.e., some
+communication infrastructure to allow information exchange               et al., 2007). This motivates the choice, quite common in litera-
+among neighbor cores. Combining this layer with the afore-               ture, of considering simple thermal models with only cores and
+mentioned thermal capping strategy, we obtain a two-layer dis-           cache components for simulations (see Fig. 1).
+tributed control strategy with a low computational burden in                As previously mentioned, architecture-level design solutions
+performance optimization (given by the distributed MPC) and              (STM) cannot entirely remove the heat dissipated on the chip
+model-independent guaranteed temperature constraint preser-              due to high power densities. This limit can be addressed with
+vation (thanks to the thermal capping strategy). This way, the           run-time techniques (DTM), which use introspective monitors,
+MPC layer is not designed to be conservatively robust to un-             sensors, and performance knobs available in modern MPSoCs
+avoidable modeling approximations. Indeed, even if the pro-              to maximize computational performance, maintaining the chip
+posed identification method is polarized toward temperature              temperature below a preset threshold. Recent literature pre-
+overestimation, we do not formally guarantee that the MPC pre-           sented many variants of MPC-based DTM schemes for manag-
+serves feasibility for the actual system. For this, we rely on the       ing thermal issues in MPSoCs (see (Zanini et al., 2009) (Wang
+ultimate thermal capping layer. Nevertheless, the distributed            et al., 2009) and references therein). The common idea is to
+MPC based on the simplified, discretized models must admit               act on core frequencies with the twofold objective of meeting
+feasible solutions at any time. To this aim, we carry out a feasi-       the temperature constraints and tracking the frequency targets
+bility test based on (Löfberg, 2011) and check the consistency          requested by a high-level SoC manager.
+of the identified models w.r.t. the properties of thermal systems.          For an MPSoC composed of nC cores, the prototype of the
+   The paper is organized as follows. In Section 2, we for-              MPC optimization problem can be formulated in discrete-time
+mulate the thermal management problem in MPSoCs. In Sec-                 and discrete-space, with nT points selected to represent the die
+tion 3, after presenting the PDE thermal model and its prop-             thermal state, as follows:
+erties, constraint reduction and feasibility issues are treated
+                                                                                                         N−1
+to derive the ultimate thermal capping strategy. In this re-                                             X
+                                                                                     min                       | fT (t + k|t) − fC (t + k|t)|2Q
+spect, very preliminary results were given (Tilli et al., 2012)             fC (t|t),..., fC (t+N−1|t)
+                                                                                                         k=0
+for the centralized scenario. Here we address the decentral-
+                                                                         subj. to: T j (t+k+1|t)≤T CRIT , j∈{1, . . . , nT }, k∈{0, . . . , N − 1},
+ized scenario and non-zero minimum power, leading to rele-
+vant upgrades in the control strategy. In Section 4, we de-                              1nC fmin ≤ fC (t + k|t) ≤ 1nC fmax ,                 k∈{0, . . . , N − 1},
+fine an H∞ identification/model-reduction problem to obtain                                                                                                     (1)
+distributed models and to improve feasibility preservation. In           where N is the prediction horizon (i.e. the number of steps
+this regard, the approach proposed in (Löfberg, 2011) has been          ahead to be evaluated to make an optimal decision at time t)),
+integrated and adapted to our discretization process to discard           fC = [ fC,1 , . . . , fC,nC ]> ∈ RnC are the frequencies assigned to
+models that cannot ensure MPC feasibility. The architecture of           the cores, fT = [ fT,1 , . . . , fT,nC ]> ∈ RnC are the core target fre-
+our two-layers distributed control solution is then presented in         quencies, Q ∈ RnC ×nC is a symmetric positive definite√matrix,
+Section 5, proposing an efficient and reliable, even if heuris-          and | · |Q denotes the norm induced by it, i.e., |x|Q B x> Qx.
+tic, tuning procedure to obtain performance optimization and             T CRIT and T j , j = 1, . . . , nT , are respectively the critical tem-
+feasibility preservation. Finally, Sections 6 and 7 respectively         perature and the states of the reduced-order model. Finally, ≤ is
+provide simulation results and a conclusive discussion.                  used to denote the element-wise inequality and 1nC is a column
+                                                                         vector of all ones of dimension nC .
+2. Thermal control of MPSoCs                                                In problem (1), we implied that a model is available to relate
+                                                                         the core frequencies (and the ambient temperature) with future
+   MPSoCs integrate on a single chip substrate memory hier-              core temperatures (see, e.g., (Zanini et al., 2009; Ladenheim
+archies, I/O components, and cores, i.e., processing units con-          et al., 2018)). Specifically, the notation T j (t + k|t), fC (t + k|t),
+nected all together by on-chip networks. From a constructive             and fT (t + k|k), k ∈ N, is used to indicate, respectively, the
+point of view (see Fig. 1b), the chip architecture is designed to        estimated temperature, the assigned frequencies, and the target
+favor heat flow from the active silicon device to the heat sink,         frequencies for the future time t + k. The prediction model is
+that is, from where heat is generated to where it is removed             also required to perform such estimation, and thus, formulate
+towards the ambient (Mallik et al., 2008). The primary heat              the MPC problem. Such a model can be written as:
+sources are localized on cores where the highest power is con-
+sumed and where thermal criticalities usually occur (Hamann                                    x(t + 1) = α(x(t)) + β( fC (t), w(t), e(t))
+                                                                     3
+with state x ∈ RnT collecting all the nT points temperatures,                                       control problem becomes, for all i:
+α(·) : RnT → RnT a state function taking into account the cou-                                                                       N−1
+pling of one state to the others, β(·) an input function of proper
+                                                                                                                                     X
+                                                                                                               min                         |PT,i (t + k|t) − PC,i (t + k|t)|2
+dimensions, taking into account the effect of controlled inputs                                     PC,i (t|t),...,PC,i (t+N−1|t)
+                                                                                                                                     k=0
+(like fC ∈ RnC ), and other not directly controllable inputs or ex-
+                                                                                                                 subj. to: T i (t + k + 1|t) ≤ T CRIT ,                       k ∈ {0, . . . , N − 1},
+ternal factors (e.g., the ambient conditions), denoted with vec-
+tors w ∈ RnC and e ∈ RnC respectively. While α(·) is usually                                                                        Pmin ≤ PC,i (t + k|t) ≤ Pmax , k ∈ {0, . . . , N − 1},
+linear, β(·) is not, although with some change of coordinates                                                                                                                         (4)
+the thermal model can be considered linear. However, we do                                          where the power consumption bounds are given as follows to
+not further explicit this reasoning here, because we pursue a                                       account for the worst-case scenario of the workload:
+distributed approach also at the modeling level (i.e., not just de-
+composing the optimization problem), and some of these con-                                                                     Pmin B max               min           g( f, w)
+                                                                                                                                              w∈W f ∈[ fmin , fmax ]
+cepts are presented later on concerning the proposed solution.                                                                                                                                  (5)
+                                                                                                                               Pmax B min                max           g( f, w).
+   The above approach is usually referred to as centralized be-                                                                               w∈W f ∈[ fmin , fmax ]
+cause the decision variables (i.e., the frequencies assigned to                                     Compared to the formulation (2) the advantage of (4) is that,
+each core) result from the solution of a unique problem run-                                        after the input transformation, the chip thermal model can be
+ning on a single processor. However, the complexity of problem                                      considered reasonably linear. Indeed, almost all the nonlinear-
+(1) does not scale well with the number of cores (Christofidesa                                     ity is contained in the algebraic function g(·), because, apply-
+et al., 2012). For this reason, in the following, we provide a                                      ing thermodynamic first principles, the temperature dynamics
+distributed reformulation characterized by a set of local con-                                      is linear w.r.t. the power balance. In particular, see (Bartolini
+trollers, each one supervising the temperature of one core or                                       et al., 2012), the discrete-time discrete-space model included as
+a group of cores. Choosing Q = InC and assuming to use a                                            equality constraint in (4) is a linear time-invariant (LTI) system
+controller for each core i, we can consider a local optimization                                    having the following structure:
+problem of the form
+                                                                                                             xi (t + 1) = Ai xi (t) + Bi PC,i (t) T amb (t) T n,i (t) >
+                                                                                                                                                                    
+                                                                                                                                                                        (6)
+                                 N−1
+                                 X                                                                           T i (t) = Ci xi (t)
+           min                          | fT,i (t + k|t) − fC,i (t + k|t)|2
+fC,i (t|t),..., fC,i (t+N−1|t)                                                                      where xi is the state, Ai , Bi , and Ci are matrices of appropriate
+                                  k=0
+             subj. to: T i (t + k + 1|t) ≤ T CRIT ,                   k ∈ {0, . . . , N − 1},       dimension, T amb is the ambient temperature, and T n,i are the
+                                                                                                    temperatures of neighbor cores that influence the temperature
+                                 fmin ≤ fC,i (t + k|t) ≤ fmax ,       k ∈ {0, . . . , N − 1},
+                                                                                                    of the i-th core. These neighbors are usually selected according
+                                                                                          (2)       to the chip floorplan, but the discretization sampling time needs
+                                                                                                    to be considered as well.
+where T i is the temperature representing the i-th core’s thermal
+                                                                                                       In the general framework, the local MPC selects at each time
+status. Although the local problems appear to be independent,
+                                                                                                    step t the sequence of powers PC,i (t), . . . PC,i (t + N − 1) that min-
+they are actually coupled since the temperature of each core
+                                                                                                    imizes the cost and meets temperature constraints defined by
+influences the thermal state of the neighbors.
+                                                                                                    problem (4) over an horizon of N time steps, using model (6) to
+   Following (Bartolini et al., 2012), in this work we consider                                     predict the temperature evolution over such horizon given the
+a slightly modified formulation of problem (2) where the target                                     state at time t. The first element of the sequence is then ap-
+and commanded frequencies ( fT,i and fC,i ) are replaced with the                                   plied and, repeating the procedure at the next time step, based
+target and commanded power consumptions, denoted respec-                                            on the new state measurement and moving forward the predic-
+tively with PT,i and PC,i . In general, the power consumption Pi                                    tion, in a typical receding horizon fashion. An important aspect
+of each core i can be expressed as a nonlinear function depend-                                     to note is that parameters wi , particularly the workload, usually
+ing on the core frequency fi and other measurable parameters                                        are not fully known over the prediction horizon. The design of
+wi related to core voltages and workloads. In particular, it holds                                  the controller must account for these issues. This unpredictabil-
+that                                                                                                ity can be handled assuming low variability between sampling
+                           Pi = g( fi , wi ),                  (3)                                  instants, that is, choosing wi (t) = wi (t − 1). As regards the num-
+where g(·, wi ) is assumed to be known and invertible in                                            ber of inputs and the order of the model, which characterize its
+[ fmin , fmax ], for all wi ∈ W, where W is the range of all possi-                                 complexity, they can be set according to experimental tests and
+ble workloads and voltages.                                                                         physics-based considerations (Bartolini et al., 2012). In spite of
+                                                                                                    the noticeable literature related to problems (1), (2), and even
+   By inverting the static map (3) with known wi , the power
+                                                                                                    (4), to the best of the authors’ knowledge, the following essen-
+commands can be translated into frequencies, which are the ac-
+                                                                                                    tial issues have not been entirely addressed, and they should be
+tual MPSoC control inputs. We emphasize that the map g(·, wi )
+                                                                                                    more rigorously assessed to obtain more effective control solu-
+is assumed to be known, as its identification is not the focus
+                                                                                                    tions.
+of this work. However, its definition is not a trivial task for
+MPSoC thermal control (we refer to (Bartolini et al., 2012) and                                         • Feasibility of the control problem must be verified over
+references therein for details). Therefore, the prototype of the                                          different prediction horizons, taking into account that the
+                                                                                                4
+     constraint on maximum temperature must be met over all                                     dV                      V
+     the die, not only for the points considered in the spatial
+     discretization. Here, we leverage the PDE thermal model
+     properties to draw general results, which are not influ-
+     enced by potential side-effects due to time- and space-                                                                         t
+     discretization adopted in control-oriented modeling.
+
+  • Rules for model discretization must be stated. A pre-                                                          Ωτ
+    diction model should be simple, yet accurate, to limit                                       Γτ
+    the computational effort and capture the die temperatures.
+                                                                                           Figure 2: Parabolic cylinder for the 2D volume V.
+    Discretization allows model simplification, but accuracy is
+    penalized. In this paper, we exploit the structural proper-
+    ties of thermal systems to capture the points where the die           like the Porous Medium Equation. However, considering the
+    temperature attains its maximum, keeping the model and                transmission speed of the heat in silicon and the small sizes of
+    problem complexity as low as possible.                                chips, the classical linear PDE is a valid approximation.
+
+                                                                             In the following, we mention a fundamental property of ther-
+3. Feasibility properties in the PDE framework                            mal systems that allows to infer where the maximum tempera-
+                                                                          ture occurs in the absence of heat sources. This result, known
+In this section, we present properties useful for designing a reli-
+                                                                          as Maximum Principle, will be useful for the successive proofs.
+able and efficient controller for thermal systems subject to uni-
+form maximum temperature constraints. Firstly, we use such                   Maximum Principle (Evans, 1998; Strauss, 1992): For a
+results to simplify the control problem formulation, reduce the           heat equation of the form (7), consider the parabolic cylinder
+number of constraints, and prove control feasibility. To gen-             Ωτ and the parabolic boundary Γτ (both portrayed in Fig. 2)
+erally treat the whole class of thermal systems, independently            respectively defined as:
+of time- and space-discretization or other approximations, we
+model heat conduction in continuous-time for a generic open                   Ωτ := V × (0, τ],              Γτ := Ω̄τ \ Ωτ = V̄ × [0, τ] \ Ωτ ,   (9)
+volume V using the following PDE:
+                                                                          where (·)¯ indicates the closure of a set. Let T (x, t) be the solu-
+                                                                          tion to the heat equation for q(x, t) = 0, and suppose that T (x, t)
+     ∂T (x,t)
+    
+     ρc ∂t − α∇2 T (x, t) = q(x, t), (x, t) ∈ V × [0, τ),
+                                                                          is sufficiently smooth, i.e., T (x, t) ∈ C2 (Ωτ ) ∩ C(Ω̄τ ). Then,
+    
+    
+      T (x, 0) = T 0 (x),
+    
+                                        x ∈ V,                 (7)
+    
+    
+    
+    
+    T (x, t) = T ∂V (x, t),
+    
+                                       (x, t) ∈ ∂V × [0, τ),               1. (weak maximum principle):
+
+where the first line is the well-known heat equation, α is the                  max T (x, t) = max T (x, t), i.e., Γτ ∩[argmax T (x, t)] , ∅.
+                                                                               (x,t)∈Ω̄τ              (x,t)∈Γτ                      (x,t)∈Ω̄τ
+material conductivity, ρ its density, and c its specific heat. In
+addition, ∂T (x, t)/∂t is the temperature variation over time, ∇2 T         2. (strong maximum principle): if V is connected and there
+denotes the divergence of the temperature gradient (Laplacian),                exists a point (xm , tm ) ∈ Ωτ such that,
+while [0, τ) is the time interval, and q is the thermal power gen-
+erated by internal sources. The second and third equations de-                 T (xm , tm ) = max T (x, t), i.e., Ωτ ∩ [argmax T (x, t)] , ∅,
+fine the initial temperature and conditions on the boundary of                                   (x,t)∈Ω̄τ                         (x,t)∈Ω̄τ
+
+the volume ∂V, respectively. These equations are usually given
+as Dirichlet boundary conditions (DBCs), where T (x, t) is com-                then T (x, t) is constant in Ω̄τ .
+pletely known on the boundary (i.e., for all x ∈ ∂V and all
+t ≥ 0). Such conditions need to be set according to the Third             In other words, the maximum temperature is found at the
+Principle of Thermodynamics, i.e., forcing the temperature evo-           boundaries of the parabolic cylinder.
+lution to be always positive. Hence, expressing the temperature
+in Kelvin degrees, the following additional constraints have to
+be considered:                                                            3.1. Constraint reduction
+                T 0 (x) ≥ 0,    ∀x ∈ V,                                     The key target of the predictive controller is to limit the tem-
+                                                               (8)
+            T ∂V (x, t) ≥ 0,    ∀(x, t) ∈ ∂V × [0, τ).                    perature of the volume V under a specified threshold. This
+                                                                          would lead to an optimization problem with an infinite num-
+Remark 1. It is also worth noting that the classical Fourier-             ber of constraints, one for each infinitesimal volume element.
+based heat equation, used in this work to model thermal sys-              Starting from the maximum principle, we show how to reduce
+tems, assumes an infinite speed of heat propagation. To account           constraints to a finite number, making the controller imple-
+for the boundedness of the propagation speed, we should use               mentable, and reducing its complexity.
+hyperbolic instead of parabolic equations, considering second-              The next result generalizes the Maximum Principle for the
+order time derivative, or use a nonlinear parabolic equation              scenarios where the heat equation is affected by n s heat sources.
+                                                                      5
+Proposition 1. For problem (7), (8), suppose that q(x, t) , 0
+only if x ∈ V s = ni=1
+                     Ss
+                          V s,i , where V s,i ⊂ V is a compact con-
+nected set, for all i ∈ {1, . . . , n s }. Then, the maximum tempera-
+
+
+
+
+                                                                                                      [K]
+
+
+
+
+                                                                                                                                                                    [K]
+ture is found in Γτ (see (9)) or in V s × [0, τ).
+
+Proof. Since (7) is a Cauchy problem, it admits a unique solu-
+tion T̄ (x, t). Consider now the Cauchy problem restricted to the
+volume outside the heat sources belonging to V s :
+                                                                                                    Figure 3: Two sources simulation: a) 20W per source; b) 0W per source.
+    ρc ∂T
+   
+       ∂t (x, t) − α∇ T (x, t) = 0,                 x ∈ V \ V s , t ∈ [0, τ),
+   
+                       2
+   
+   
+   T (x, 0) = T 0 (x),                             x ∈ V \ Vs ,
+   
+   
+   
+   
+                                                                                       (10)       3.2. Feasibility
+    T (x, t) = T ∂V (x, t),                         x ∈ ∂V, t ∈ [0, τ),
+   
+   
+   
+   
+   
+   
+   T (x, t) = T̄ (x, t),                                                                         A fundamental requirement for MPC schemes is recursive fea-
+                                                    x ∈ ∂V s , t ∈ [0,τ).
+   
+   
+                                                                                                  sibility, i.e., if a control input sequence meeting the constraints
+Applying the maximum principle, the highest temperature is at                                     exists at time t = 0, then it will also exist for all t > 0. In
+t = 0 or on ∂V ∪ ∂V s , i.e.:                                                                     the MPC literature, such property is enforced by using ade-
+                                                                                                  quate prediction horizons, terminal cost, invariant terminal sets,
+              max T̄ (x, t) =                          max               T̄ (x, t),               etc. (Bemporad and Morari, 1999; Rawlings and Mayne, 2009).
+         (x,t)∈V\V s ×[0,τ)             (x,t)∈{V\V s ×{0}}∪{{∂V∪∂V s }×[0,τ)}                     However, these indirect methods come with some limitations,
+                                                                                                  since they augment the controller complexity (Gondhalekara
+hence:                                                                                            et al., 2009; Löfberg, 2011). In this subsection, our aim is
+                                                                                                  to prove that for both the centralized problem (1) and the dis-
+         max T̄ (x, t) =                          max                     T̄ (x, t).              tributed problems (2), (4) we can find feasible solutions that do
+      (x,t)∈Ω̄τ                   (x,t)∈{V×{0}}∪{∂V×[0,τ)}∪{V s ×[0,τ)}
+                                                                                                  not rely on accurate model knowledge and are effective for any
+                                                                                                  initial temperature distribution in the admissible set. In this per-
+                                                                                                  spective, we propose a reasonable requirement for the boundary
+   We present an immediate consequence of the above proposi-                                      conditions.
+tion that will be useful for control design.
+                                                                                                  Assumption 1. For the problem (7), (8), it holds that:
+Corollary 1. Consider problem (7), (8) with n s heat sources
+                                                                                                    • T 0 (x) ≤ T CRIT , for all x ∈ V;
+as in Proposition 1, and suppose that the initial and boundary
+temperatures are lower than T CRIT . Then, the solution T (x, t)                                    • T ∂V (x, t) ≤ T CRIT , for all (x, t) ∈ ∂V × [0, τ).
+satisfies T (x, t) ≤ T CRIT , for all x ∈ V, if and only if the maxi-
+mum temperature on sources is always lower than T CRIT .                                             The first step in our development is captured by the following
+                                                                                                  result, obtained in the absence of internal heat sources.
+   Fig. 3 illustrates the temperature distribution in two subse-
+quent time instants. In Fig. 3-(a) the maximum temperatures                                       Proposition 2. For the problem (7), (8), let Assumption 1 hold,
+are attained on the two sources, in which we applied a 20W                                        and suppose that
+power. Then, after removing powers (see Fig. 3-(b)), the max-
+imum temperature moves to a middle point, not corresponding                                                      q(x, t) = 0,        ∀(x, t) ∈ V × [0, τ).                (13)
+to any sources, but with a magnitude far lower than the initial
+one. The main consequence of the propositions above is that                                       Then, it holds that T (x, t) ≤ T CRIT , for all (x, t) ∈ V × [0, τ).
+constraints violations will happen on sources first, provided that
+                                                                                                  Proof. The result follows from Corollary 1 by letting V s = ∅.
+the boundary temperatures and the initial condition are feasible
+(i.e., below the temperature threshold). According to this result,
+and with the further assumption that each source can be treated                                      In the MPC context, the above statement implies that if the
+as an isolated point (usually reasonable in MPSoCs), i.e.:                                        constraints are not violated at a given time, then the null in-
+                       ns
+                       [                                                                          put action (i.e., zeroing all the sources) always ensures con-
+             Vs =             x s,i ,       x s,i ∈ V, ∀i ∈ {1, . . . , n s },         (11)       straint satisfaction. This way, feasibility of the centralized con-
+                        i=1                                                                       trol problem (1) is guaranteed for any prediction horizon.
+
+it follows that we can convert the infinite-dimensional con-                                      Remark 2. A physical interpretation of this property is given
+straints into a finite-dimensional formulation given by:                                          recalling that, according to the Second Principle of Thermody-
+                                                                                                  namics, heat flow cannot be directed as the temperature gra-
+                  T (x s,i , t) ≤ T CRIT ,           ∀i ∈ {1, . . . , n s }.           (12)       dient. Hence, no inductive storage elements can be present in
+                                                                                                  thermal systems and, consequently, no free resonant or double
+                                                                                                  integrative behavior can arise in the absence of heat sources.
+                                                                                              6
+   For what concerns the feasibility of decentralized/distributed                                                                                   TCRIT
+solutions, a crucial point is to define the “perimeter” of the local                           ∆TCRIT                                               TCRIT
+controllers and the information available to each of them. By
+Proposition 1, the requirement to prevent temperatures larger                                                                                       TEQ
+than T CRIT all over the system can be achieved by preventing
+over-temperature on the sources (assuming suitable initial and                         Figure 4: Graphical interpretation of the new bound T̄CRIT
+boundary conditions). Then, following the formulation of (4),
+a local controller is employed for each source x s, i in (11): each
+controller can read its own source temperature and act on its                 where qmin (x) is the minimum power which can be dissipated
+local power, while it has to comply with the local constraint                 in any source, and T ∂V,max (x) is the largest ambient tempera-
+T (x s,i , t) ≤ T CRIT .                                                      ture that can be experienced by the chip on its boundary. Ac-
+   At this stage, no information on the rest of the system is con-            cording to its definition, T EQ (x) corresponds to the steady-state
+sidered available, i.e., we consider a decentralized control sce-             temperature distribution for the system (7) under minimum
+nario. In such scenario, the previous result for the centralized              power consumption and highest ambient temperature. Obvi-
+problem (1) suggests that shutting down a single core should                  ously, T EQ (x) < T CRIT , for all x ∈ V̄ is guaranteed by a proper
+guarantee no over-temperature for that source, assuming that                  sizing of the chip, otherwise the thermal constraints could not
+the others have no over-temperature as well. In other words,                  be met. In addition, by Proposition 1, it follows that the maxi-
+whenever a core is approaching dangerous temperature values,                  mum value of T EQ (x) is located on sources or boundaries, i.e.:
+the local decision of reducing its power should be enough to                                 (                  )
+prevent local constraint violation, without requiring the reduc-                               arg max T EQ (x) ∩ {V s ∪ ∂V} , ∅.
+tion of power of all the other cores, provided that each of them                                    x∈V̄
+is meeting its local thermal bound. This property, crucial for
+decentralized feasibility, holds true as stated in the following              Then, defining
+proposition.
+                                                                                               ∆T CRIT B min T CRIT − T EQ (x) ,
+                                                                                                                              
+                                                                                                                                                     (16)
+                                                                                                               x∈V̄
+Proposition 3. Consider problem (7), (8), with heat sources
+defined as in (11). Let Assumption 1 hold, and suppose that                   it results
+            q(x, t) = 0,      ∀(x, t) ∈ {V\V s } × [0, τ).        (14)                     ∆T CRIT = min              T CRIT − T EQ (x) > 0.
+                                                                                                                                       
+                                                                                                                                                     (17)
+                                                                                                           x∈∂V∪V s
+Then, for each source x s,i ∈ V s , the local decision of imposing
+q(x s,i , t) = 0, t ∈ [0, τ), guarantees T (x s,i , t) ≤ T CRIT for all       At this point, a crucial modification of the temperature bound
+t ∈ [0, τ) if T (x s, j , t) ≤ T CRIT for all of the other sources j ∈        needs to be introduced. We define the constraint T̄ CRIT (x) as
+{1 . . . n s }, j , i, and all t ∈ [0, τ).                                    follows
+
+Proof. As soon as q(x s, i , t) is zeroed in a source x s, i , this be-                    T̄ CRIT (x) B T EQ (x) + ∆T CRIT ,         x ∈ V̄.        (18)
+comes equivalent to a no-source point in V, then the result fol-
+lows from Proposition 1.                                                      The meaning of this new bound is graphically represented in
+                                                                              Fig. 4, for a simple one-dimensional thermal system. Note that
+   In the analysis above, the possibility of imposing zero power              the new bound T̄ CRIT (x) is tighter than T CRIT , but this restric-
+on sources is a key element to achieve important properties                   tion is fundamental for feasibility in real scenarios. Firstly, we
+in the path toward the feasibility of both centralized and dis-               modify Assumption 1 to ensure desirable boundary conditions.
+tributed control problems (1), and (4). In real chips, it is hard
+and possibly harmful to have a sudden zeroing of the core power               Assumption 2. For the problem (7), (8), it holds that:
+consumption (i.e., abruptly halting the core activities). The
+standard procedure is to slow down the clock frequency of the                   • T 0 (x) ≤ T̄ CRIT (x), for all x ∈ V;
+cores to a lower limit fmin , thus reducing the source powers to a              • T ∂V (x, t) ≤ T̄ CRIT (x), for all (x, t) ∈ ∂V × [0, τ).
+value which can be upper bounded, considering the worst-case
+scenario for wi . Here, we refer to this upper bound of the mini-               The following results are generalizations of Propositions 2
+mal source power as qmin .                                                    and 3.
+   This situation cannot be covered by the results of Proposi-
+tions 2 and 3. However, taking inspiration from them, and in-                 Proposition 4. For the problem (7), (8), let Assumption 2 hold,
+troducing a suitable thermal constraint review, similar results               and suppose that
+with non-zero minimum power can be obtained as shown in
+                                                                                           q(x, t) = qmin (x),          ∀(x, t) ∈ V × [0, τ).        (19)
+the following. Define T EQ (x) as the solution of the following
+Cauchy problem                                                                Then, it holds that T (x, t) ≤ T̄ CRIT (x), for all (x, t) ∈ V × [0, τ).
+                 
+                 −α∇2 T (x) = qmin (x), x ∈ V,
+                 
+                                                                             Proof. Without loss of generality, suppose that T ∂V (x, t) =
+                                                             (15)
+                 T (x) = T ∂V,max (x),    x ∈ ∂V,                            T ∂V,max (x) as in (15), for all (x, t) ∈ ∂V × [0, τ). Applying
+                 
+                 
+
+                                                                          7
+the superposition principle, we can rewrite the heat equation                             Proof. For t ∈ [t0 , t0 + ∆], define ū0 (·) as follows:
+ρcṪ (x, t) − α∇2 T (x, t) = qmin (x) as follows                                                     
+                                                                                                     ū(t),
+                                                                                                                                                t ∈ [t0 , ∆)
+                                                                                            ū (t) = 
+                                                                                              0
+                                                                                                     
+                          ∂∆T                                                                        [qmin (x s,1 ), . . . , qmin (x s,ns )]> , t ∈ [∆, t0 + ∆].
+                                                                                                                                                                        (24)
+                     ρc       (x, t) − α∇2 ∆T (x, t) = 0,                    (20)
+                                                                                                     
+                           ∂t
+where ∆T (x, t) B T (x, t) − T EQ (x). The following bound-                               The result follows from Proposition 4.
+ary conditions hold: ∆T 0 (x) ≤ ∆T CRIT , for all x ∈ V and                               Proposition 7. Decentralized Feasibility.
+∆T ∂V (x, t) ≤ ∆T CRIT , for all (x, t) ∈ ∂V × [0, τ). Note that                          Consider problem (7), (8), with heat sources defined as in (11).
+system (20) has the same structure of (7). Applying the Max-                              Let Assumption 2 hold with τ = ∞ for simplicity, and suppose
+imum Principle, we obtain ∆T (x, t) ≤ ∆T CRIT , and T (x, t) ≤                            that
+T EQ (x) + ∆T CRIT = T̄ CRIT (x) for all (x, t) ∈ V × [0, τ).
+                                                                                                 q(x, t) = qmin (x),          ∀(x, t) ∈ {V\V s } × [0, ∞).              (25)
+Proposition 5. Consider problem (7), (8), with heat sources
+defined as in (11). Let Assumption 2 hold, and suppose that                               For all i ∈ {1, . . . , n s }, define the control input ui (t) B q(x s,i , t)
+                                                                                          and consider the constraints (12). Suppose that for a generic
+       q(x, t) = qmin (x),          ∀(x, t) ∈ {V\V s } × [0, τ).             (21)
+                                                                                          source i ∈ {1, . . . , n s } there exist ∆i > 0 and a controller ūi (·)
+Then, for each source x s,i , the local decision of imposing                              such that the local decision of imposing ui (t) = ūi (t), for all
+q(x s,i , t) = qmin (x s,i ), t ∈ [0, τ), guarantees T (x s,i , t) ≤                      t ∈ [0, ∆i ], ensures T (x s,i , t) ≤ T̄ CRIT (x s,i ) over [0, ∆i ] as long as
+T̄ CRIT (x s,i ), for all t ∈ [0, τ), as long as T (x s, j , t) ≤ T̄ CRIT (x s, j )       T (x s, j , t) ≤ T̄ CRIT (x s, j ), for all other sources j ∈ {1 . . . n s }, j , i,
+for all other sources j ∈ {1 . . . n s }, j , i, and all t ∈ [0, τ).                      and all t ∈ [0, ∆i ]. Then, for any t0 ∈ [0, ∆i ] it is possible to
+                                                                                          compute a controller ū0i (·) such that:
+Proof. As in the proof of Proposition 4, suppose that T ∂V (x, t) =
+                                                                                            1. if ui (t) = ūi (t) for t ∈ [0, t0 ) and ui (t) = ū0i (t) for t ∈
+T ∂V,max (x) as in (15), for all (x, t) ∈ ∂V × [0, τ). By defining
+                                                                                               [t0 , t0 + ∆i ], then the local constraint T (x s,i , t) ≤ T̄ CRIT (x s,i )
+∆T (x, t) B T (x, t) − T EQ (x) and ∆q(x, t) B q(x, t) − qmin (x)
+                                                                                               is satisfied over [0, t0 + ∆i ] if T (x s, j , t) ≤ T̄ CRIT (x s, j ), for all
+(where ∆q(·), q(·) and qmin (·) can be non-zero in x s,i , i ∈
+                                                                                               other sources j ∈ {1 . . . n s }, j , i, and all t ∈ [0, t0 + ∆i ];
+{1, . . . , n s }), the temperature dynamics can be rewritten as fol-
+lows, again exploiting the superposition principle                                          2. the local control strategy applied to the source i does not
+                                                                                               prevent the other sources from meeting their local con-
+                     ∂∆T                                                                       straint T (x s, j , t) ≤ T̄ CRIT (x s, j ) exploiting the same strategy;
+                ρc       (x, t) − α∇2 ∆T (x, t) = ∆q(x, t).                  (22)
+                      ∂t                                                                    3. ū0i (·) can be selected in a decentralized way, i.e., without
+                                                                                               any information on the variables and the controllers of the
+This equation has the same structure of (7), thus it inherits
+                                                                                               other nodes.
+all of its features. In addition, according to (18), the bound
+T̄ CRIT (x) is mapped into a constant threshold ∆T CRIT . There-                          Proof. For t ∈ [t0 , t0 + ∆i ], define ū0i (·) as follows:
+fore, as soon as q(x s,i , t) = qmin (x s,i ) is imposed in a source point
+x s,i , ∆q(x s,i , t) is zeroed, and this point becomes equivalent to a
+                                                                                                                  
+                                                                                                                  ūi (t),
+                                                                                                                                 t ∈ [t0 , ∆i )
+                                                                                                       ūi (t) = 
+                                                                                                         0
+                                                                                                                  
+no-source point in V for (22). Then, according to Proposition 1,                                                                                                        (26)
+                                                                                                                  qmin (xi,1 ), t ∈ [∆i , t0 + ∆i ],
+                                                                                                                  
+the maximum of ∆T (x, t) occurs on the remaining sources x s, j ,
+ j ∈ {1 . . . n s }, j , i or at the initial condition, or on the bound-                  which is decentralized and ensures feasibility in view of Propo-
+aries. In these regions, ∆T (x, t) is always lower than ∆T CRIT by                        sition 5. Concerning point 2, by Proposition 4 it follows that
+assumption, therefore the result follows.                                                 all of the local controllers can apply ui (t) = qmin (x s,i ), for all
+                                                                                          t ∈ [t0 , t0 + ∆i ], guaranteeing feasibility. Moreover, consider-
+   With the above results at hand, the feasibility properties of
+                                                                                          ing a generic j ∈ {1 . . . n s } and defining two disjointed subsets
+the centralized and distributed problems (1) and (4) are formally
+                                                                                          of sources, S 0 and S s , not including j, but covering all of the
+stated as follows.
+                                                                                          sources (i.e., S 0 = {n : n ∈ {1 . . . n s }, n , j}, S s = {m : m ∈
+Proposition 6. Centralized Feasibility.                                                   {1 . . . n s }, m , j}, S 0 ∩S s = ∅, S 0 ∪S s = {1 . . . j−1, j+1 . . . n s }),
+Consider problem (7), (8), with heat sources defined as in (11).                          if all the sources in S 0 apply un (t) = qmin (x s,n ), for all t ∈
+Let Assumption 2 hold with τ = ∞ for simplicity, and suppose                              [t0 , t0 + ∆i ], and those in S s meet their own local constraints
+that                                                                                      T (x s,m , t) ≤ T̄ CRIT (x s,m ), for all t ∈ [t0 , t0 +∆i ], then, in the source
+          q(x, t) = qmin (x),   ∀(x, t) ∈ V × [0, ∞).       (23)                           j it is possible to apply u j (t) = qmin (x s, j ), for all t ∈ [t0 , t0 + ∆i ],
+                                                                                          guaranteeing T (x s, j , t) ≤ T̄ CRIT (x s, j ), for all t ∈ [t0 , t0 +∆i ]. Thus,
+Consider the control input u(t) B [q(x s,1 , t), . . . , q(x s,ns , t)] ∈                 also point 2 is proven.
+Rns and suppose that there exist a scalar ∆ > 0 and a controller
+ū(·) such that the constraints (12) are satisfied for t ∈ [0, ∆] if                         It is further to remark that the above results hold for any pos-
+u(t) = ū(t), for all t ∈ [0, ∆]. Then, for any t0 ∈ [0, ∆], it is                        itive prediction horizon, which can be selected arbitrarily small
+possible to compute a controller ū0 (·) such that the constraints                        without impairing feasibility. Hence, there is room to preserve
+(12) are satisfied over [0, t0 + ∆] if u(t) = ū(t) for t ∈ [0, t0 ) and                  feasibility until the current temperature reaches the bound, both
+u(t) = ū0 (t) for all t ∈ [t0 , t0 + ∆].                                                 in the centralized and distributed approach.
+                                                                                      8
+   Another relevant point to highlight is the use of T̄ CRIT (x) ≤             control strategy described in the previous section, each local
+T CRIT instead of T CRIT . This is not just a technical point related          controller needs a thermal model of the core to predict future
+to the available theoretical tools, but it accounts for possible               temperatures and a framework to exchange information with
+practical troubles in the thermal behavior. As a matter of fact,               the neighbor cores. In this respect, designing the local thermal
+when a core (or any heat source) needs an indirect path through                model is a crucial task: it must be simple to limit the compu-
+its neighbors to expel its heat and keep a safe temperature (i.e.,             tational burden yet accurate enough to minimize temperature
+it has no direct path toward the external ambient that is efficient            prediction errors and meet the feasibility properties of the orig-
+enough), the neighbors are required to keep temperature lower                  inal system. Indeed, whereas the linear, continuous-time PDE
+than the maximum, to give room to the heat flow coming from                    model presented in the previous section always ensures feasi-
+the above-mentioned core. Clearly, this characteristic strongly                bility, no similar features exist, in general, for its discrete-time
+depends on the considered system’s layout and thermal resistiv-                discrete-space approximations. The following assumptions are
+ity and should be carefully addressed in the multicore design.                 made to design the local models (Bartolini et al., 2012):
+
+                                                                                 • as mentioned in Section 2, a function of the form Pi =
+3.3. Model-free temperature capping control                                        g( fi , wi ) as in (3) maps the frequency fi and the workload
+                                                                                   wi of each core i into the corresponding power consump-
+   The above results guarantee feasibility by applying minimum                     tion. It follows that the thermal model used for prediction
+power consumption at each core. No accurate thermal model                          in the i-th local controller is linear;
+knowledge is required to define the considered control strat-
+egy. The centralized feasibility of Proposition 6 is essentially                 • according to the literature on MPSoCs, a second-order
+based on the observation that, by switching all the cores to the                   model is sufficiently rich to capture the main dynamics of
+minimum power, the maximum temperature along the chip will                         each core;
+never increase. The distributed feasibility of Proposition 7 al-
+lows to recover this property locally to each source, without                    • each local controller is only affected by the North, South,
+needing any information exchange but just assuming, in a local                     East, and West adjacent cores (if present), according to
+controller, that all of the others are working correctly. This can                 heat diffusion and sampling time considerations. By (7),
+be achieved at the cost of replacing the uniform bound T CRIT                      interaction among cores is directly proportional to time in-
+with the variable bound T̄ CRIT (x).                                               tervals and inversely related to spatial distance. Thus, if
+   At first glance, these results could seem of little practical in-               the discretization time is short enough, it can be assumed
+terest, since they just provide the trivial solution of switching to               that the thermal state of a core between two sampling in-
+minimum power the cores to meet the temperature constraints,                       stants will be mainly affected by its closest neighbor, its
+but they do not define any algorithm to find other feasible so-                    thermal power, and the ambient temperature.
+lutions which maximize the computing power, as reported in
+problems (1) and (4). To this aim, in the following, algorithms                To obtain an accurate finite-dimensional discrete-time model
+based on approximated discretized models will be presented,                    from the original heat equation (7), we adopt system identifi-
+also exploiting information exchange between controllers for                   cation tools. According to the assumptions above, the struc-
+the distributed case. Nevertheless, the above feasibility results              ture selected for the identification of the core local model is a
+play a fundamental role for practical applications. Indeed, by                 second-order Multi-Input Single-Output (MISO) system
+using algorithms based on approximated discrete models, tem-
+perature constraint violation in the real system could be expe-                 T̂ i (t) = a1,i T i (t−1)+a2,i T i (t−2)+b>1,i ui (t−1)+b>2,i ui (t−2) (27)
+rienced. This inconvenience can be prevented, according to
+the above feasibility results, by adding an ultimate model-free                where T̂ i is the temperature prediction, T i is the measured
+decentralized temperature capping control layer on each local                  temperature of the i-th core in its hottest point, ui B
+i-th source. As soon as T (x s,i , t) approaches T̄ CRIT (x s,i ), this        [PC,i T amb T n,i ]> is the vector of inputs, where PC,i is the power
+control layer has to override the optimizing controller and im-                consumed by the core, T amb is the ambient temperature, while
+pose q(x s,i , t) = qmin (x s,i ) for a suitable time interval to obtain       T n,i B [T n1,i · · · T nq,i ]> are the temperatures of the q cores
+T (x s,i , t) sufficiently lower than T̄ CRIT (x s,i ).                        adjacent to i. Scalars a1,i , a2,i and vectors b1,i , b2,i are to be de-
+                                                                               termined with the identification process, based on the available
+                                                                               output T i and inputs ui , with the aim of minimizing a prede-
+4. Finite-dimensional discrete-time modeling oriented to                       fined objective function, possibly under constraints. Define the
+   distributed MPC                                                             prediction error ei (t) B T i (t) − T̂ i (t). Then, exploiting (27), we
+                                                                               adopt an H∞ -like identification problem formulated as
+   In the remainder of this work, we focus on the distributed
+control problem (4). For each core, we implement a local,                                                                    M
+                                                                                                                             X
+discrete-time MPC controller that supervises its temperature.                                         min                          sk
+                                                                                           s1 ,...,s M ,ai1 ,ai2 ,bi1 ,bi2
+The objectives are to ensure feasibility through the results of                                                              k=1
+                                                                                                                                                    (28)
+Section 3 and to maximize performance. To pursue the latter                                 subj. to: ei (t − k) ≥ −sk 
+                                                                                                                        k ∈ {1, . . . , M},
+                                                                                                                       
+goal, in contrast to the ultimate model-free temperature capping                                      s ≥0        k
+                                                                                                                       
+
+                                                                           9
+where M denotes the time window selected for the identifica-                                 where d(t) is available for measurement, assuming that at the
+tion. The model parameters computed from (28) ensure T̂ i ≥ T i                              discrete-time instant t each core i can communicate T i (t) with
+at all times. This result is instrumental in achieving robust                                its neighbors.
+and reliable thermal control since overestimated temperatures                                   In the following, we check recursive feasibility for problem
+reflect more aggressive control actions, preventing the system                               (30) by ensuring that, for a feasible initial state x(t) and a dis-
+from hitting critical temperatures.                                                          turbance d(t) ranging in a compact set D, it is possible to find
+                                                                                             PC (t + 1) such that:
+4.1. Feasibility check for the discretized model                                                E(Ax(t) + B1 PC∗ (t) + B2 d(t)) + FPC (t + 1) ≤ G(d(t)),         (32)
+   The local model obtained in the previous section is simple                                where, for simplicity, we assumed that the disturbance d(·) is
+and can provide good accuracy (as shown in Section 6). Unfor-                                constant over {t, t+1}, thus the constraints (30) can be applied in
+tunately, the feasibility properties of the physical system (mod-                            t +1 as Ex(t +1)+ FPC (t +1) ≤ G(d(t)). Exploiting (32), we can
+eled by the heat equation) are not necessarily preserved for the                             thus verify if there exist x(t), d(t) such that (30) is recursively
+identified model. Therefore, it is crucial to verify the control                             feasible. Equivalently, it is possible to invoke Farkas’ Lemma
+feasibility of each discrete local model. To do so, we resort                                as in (Löfberg, 2011) to ensure that there is no vector y(t) such
+to the concept of recursive feasibility and the approach to ver-                             that the following conditions are verified:
+ify it, reported in Löfberg (2011). According to the definition,
+recursive feasibility is guaranteed if, for every initially feasi-                                y(t) ≥ 0           y(t)> F = 0
+                                                                                                                                                                 (33)
+ble condition (in our case, the core state, ambient, and neigh-                                   y(t) [G(d(t)) − E(Ax(t) + B1 PC∗ (t) + B2 d(t))] < 0.
+                                                                                                      >
+
+bors thermal status), applying the optimal control input does not
+steer the system to an operational point where the control prob-                             Therefore, starting from a feasible state x(t), with admissible
+lem becomes unfeasible. It is well known that such property is                               disturbances d(t) ∈ D, and applying PC∗ (t), if there exists y(t)
+affected by the prediction horizon N. According to the proper-                               satisfying (33), the control problem is unfeasible at the time
+ties of thermal systems described in Section 3, the subsequent                               instant t + 1. According to (Löfberg, 2011), we define the fol-
+analysis is carried out for N = 1, as we would like the identi-                              lowing two-level optimization problem (with an outer problem
+fied model to match the feasibility properties of the underlying                             containing an inner one in the constraints) to check the consis-
+physical system.                                                                             tency of Farkas’ Lemma conditions
+   Firstly, we express the discrete-time model of each core i in                                             min y> [G(d) − E(Ax + B1 PC∗ + B2 d)]             (34a)
+                                                                                                             y,x,d
+the following state-space observable canonical form
+                                                                                                     subj. to: y ≥ 0,              y> F = 0,                   (34b)
+         x1,i (t + 1)
+     "                #    "           #"         # " >#
+                             a1,i 1 x1,i (t)            b                                                            x ∈ X,        d ∈ D,                      (34c)
+                         =                          + 1,i     u (t)
+         x2,i (t + 1)        a2,i 0 x2,i (t)            b>2,i i
+                               "          #                                                                          PC∗ = arg min PC2 + H(t)PC                (34d)
+                                                                                                                               PC
+                                 x (t)
+                         = Ai 1,i           + B1,i PC,i (t) + B2,i di (t),       (29)                                subj. to: Ex + FPC ≤ G(d),                (34e)
+                                 x2,i (t)
+                                    i " x (t)#
+                                                                                             where X is the set of allowed values for x(t), and the cost
+                           h
+                 T i (t) = 1 0 1,i              ,
+                           | {z } x2,i (t)                                                   function of the outer problem is the third condition of Farkas’
+                               C                                                             Lemma applied to our problem. Notice that, in this context, it is
+                                                                                             simple to determine D, since the ambient temperature can be as-
+where x1,i is the core temperature T i (available from measure-
+                                                                                             sumed contained in an interval of the form [T amb,min , T amb,max ],
+ments), while x2,1 a second state completing the second-order
+                                                                                             while the temperatures of the neighbor cores are constrained to
+system description, but with no physical interpretation. Also,
+                                                                                             be less than the corresponding critical thresholds. This way, we
+we split the input vector ui into the control input PC,i and the
+                                                > >                                          can define D as follows:
+other contributions, collected in di B [T amb T n,i ] .                                             n
+  For simplicity, in the following we drop the subindex i denot-                               D B d = [T amb T n1 · · · T nq ]> : T amb,min ≤ T amb ≤ T amb,max ,
+ing the specific core. Using (29), we can study the feasibility of                                                                                             o
+                                                                                                          T amb,min ≤ T n j ≤ T̄ CRIT,n, j , j ∈ {1, . . . , q} .
+optimization problem (4), with N = 1, analyzing the following
+quadratic problem                                                                                                                                                 (35)
+                                                                                             Concerning X, x1 corresponds to the core temperature, thus its
+                           min PC2 + H(t)PC                                                  bounds are given by an interval of the form [T amb,min , T̄ CRIT ],
+                            PC
+                                                                                 (30)
+                    subj. to: Ex(t) + FPC ≤ G(d(t)),                                         while the bounds for x2 are such that x1 at the next time sample
+                                                                                             is lower than T̄ CRIT :
+where H(t) B −2PT (t), and                                                                          n
+                                                                                              X B x B [x1 x2 ]> ∈ R2 : T amb,min ≤ x1 ≤ T̄ CRIT ,
+                                                                                                                 " #                                        )
+                                                                                                                   P
+                                                                  
+           CA           CB1            T̄ CRIT − CB2 d
+                                                                                                 a1 x1 + x2 + b>1 C ≤ T̄ CRIT , ∀PC ∈ [Pmin , Pmax ], ∀d ∈ D .
+   E B 01×2  , F B  1  , G(d) B         Pmax          ,   (31)                                d
+                                                                  
+              01×2                −1                       −Pmin                                                                                           (36)
+                                                 
+
+                                                                                        10
+Replacing the inner convex problem, defined by (34d), (34e),               or with a fully conservative MPC solution. Both strategies have
+with the corresponding Karush-Kuhn-Tucker optimality condi-                pros and cons.
+tions, we obtain the following equivalent problem                             The model-free strategy, not being driven by the model, re-
+                                                                           sults completely immune to uncertainties and unpredictabili-
+           min y> [G(d) − E(Ax + B1 PC + B2 d)]              (37a)         ties, guaranteeing feasibility, provided that a continuous-time
+         y,x,d,λ,PC
+
+        subj. to: y ≥ 0,       y> F = 0,   y> 13 = 1         (37b)         implementation of the control strategy is assumed. However,
+                                                                           this solution has two main limitations: (i) it strongly impacts
+                      x ∈ X,   d ∈ D,                        (37c)         performance due to the intense control chattering between the
+                      2PC + H(t) + λ F = 0,
+                                    >
+                                               λ ≥ 0,        (37d)         desired power and the minimum power, which may also lead to
+                      G(d) − Ex − FPC ≥ 0,                   (37e)         premature failure of the processor; (ii) it needs a safety margin
+                      λ> [G(d) − Ex − FPC ] = 0,             (37f)         on T̄ CRIT to avoid exceeding the critical temperature during the
+                                                                           sampling interval if a discrete-time implementation is consid-
+where λ is the vector of Lagrange multipliers associated with              ered. Note that a discrete-time solution fits well with MPSoC
+inequality constraints of the inner problem, and a normalization           digital technology and that the safety margin must be increased
+constraint on y has been added for numerical reasons.                      with the sampling time value. However, assuming a hardware-
+   If Farkas’ conditions hold, then recursive feasibility is not           based thermal capping solution, the sampling time of such part
+guaranteed. Indeed, finding a negative (even local) solution to            can be taken very small, and, in turn, the temperature margin
+the problem above, implies that there exists a feasible initial            can be thin.
+condition which, after the optimal input is provided, moves to a              On the other hand, we can adopt a local MPC controller
+point where feasibility can no longer be achieved for the future           for each core that, exploiting the identified model of the core
+steps. This case would stand in clear contrast with the proper-            and predicting its temperature behavior, guarantees more ac-
+ties of thermal systems, which have been analyzed in Section 3.            curate and chattering-free performance compared to the previ-
+Therefore, if this situation occurs with a set of identified model         ous solution. However, feasibility cannot be ensured due to
+parameters, the corresponding model has to be discarded, and               unavoidable uncertainties on the model and future workload.
+a new identification process must be executed, taking different            Besides, as in the model-free solution, time discretization im-
+exciting traces, inputs, model order, or sampling time, until the          poses a safety margin on T̄ CRIT to prevent constraint violations
+Farkas’ condition is violated, i.e., feasibility is ensured. Note          between two sampling instants. It is worth noting that this so-
+that, intuitively, recursive feasibility is expected to be achieved        lution appears hard to be implemented on hardware. Therefore,
+by increasing the model order and reducing the sampling time,              it needs a larger sampling time and a significantly larger margin
+since the resulting discrete-time models become a better ap-               that strongly affects performance. Indeed, as the temperature
+proximation of the original PDE.                                           threshold decreases, also power consumption and core speed
+   With such iterative procedure, the model used in each lo-               reduce as well. As an illustrative example, consider a scenario
+cal MPC controller “ideally” ensures a feasible control solu-              in which all cores have a temperature close, but not equal, to
+tion that prevents T̄ CRIT constraint violations. However, many            the limit decreased by the safety margin, namely τMPC . Each
+issues make such an ideal thermal capping method not straight-             local controller would exploit the discrete model of the core to
+forwardly applicable in real-world applications: (i) the obtained          define the optimal control action that keeps the future tempera-
+discrete models are approximations of the actual continuous-               ture close to τMPC , according to the information of the current
+time system, (ii) the workload of a core is unpredictable and,             temperature of the core and its neighbors. However, during the
+even though the variations between two-time steps are usu-                 sampling interval, the temperature of all the cores varies, pos-
+ally limited, there may be cases for which significant variations          sibly determining an overestimation of the control actions and,
+cause wrong predictions, (iii) the identification procedure uses a         as a consequence, triggering thermal emergencies.
+set of data collected from the physical system that may not cap-              As shown in Fig. 5, our solution adopts a hierarchical ar-
+ture all possible behaviors, causing unexpected outputs (even if           chitecture in both the methods above. Indeed, such strategies
+we considered a conservative approach we could not guarantee               cooperate to exploit the benefits of both. The higher layer,
+the absence of constraint violations), (iv) the behavior of the            namely the MPC layer, addresses the thermal capping issue,
+system temperature in between the sampling time is unobserv-               maximizing performance by exploiting the previously men-
+able. Therefore, although we build feasible and conservative               tioned distributed MPC scheme. The lower one, namely the
+(in terms of constraints) models, the feasibility for the actual           safety layer, guarantees control feasibility, the imposition of the
+system is not guaranteed. In the next section, we present a con-           bound T̄ CRIT , and the reduction of the MPC margin, favoring
+trol solution that guarantees feasibility and robustness to model          better performance.
+uncertainties in any circumstance.
+                                                                           5.1. MPC layer
+5. Two-layer distributed control                                              The MPC layer is a discrete-time software layer designed
+                                                                           with a distributed structure. Such configuration has the twofold
+  The challenges related to model uncertainties and workload               benefit of improving the computational efficiency of the control
+unpredictability can be addressed either with a model-free tem-            algorithm (as the computational burden is distributed among
+perature capping control strategy, as proposed in Section 3.3,             cores) and the system reliability (as the breakdown of one core
+                                                                      11
+                                                                        Chip             w1,...,8             freq
+                                                                                                                2
+                                                                                                                                 NEIGH,1
+                                                                                                                                           Lin.Model
+                                                                                                                                 TAMB                  PC,1
+                                                                       Manager           f T1,...,8           Pow
+                                           MPSoC                                                                     PT1,...,8    PT,1
+                                                                                                                                            Optim.
+                                                                                                                                            MPC 1
+
+
+                                                                                           Safety
+
+                                             Cache L2
+
+                                                        Cache L2
+                                  CORE 1                           CORE 2                                                         PT,8
+                                                                                                                                           Lin.Model
+                                                                                              τSWITCH,LOW                        TAMB                  PC,8
+                                                                                         T1                 1e10                            Optim.
+                                  CORE 3                           CORE 4                                    PMIN
+                                                                                                                                 NEIGH,8    MPC 8
+
+                                                                                                      τSWITCH                    Sampling Time = 10ms
+                                             Cache L2                       T1,...,8                                                       MPC
+                                                        Cache L2
+                                                                                              τSWITCH,LOW
+                                  CORE 5                           CORE 6                                   1e10
+                                                                                         T8                  PMIN
+                                                                                                      τSWITCH                              Min
+                                  CORE 7                           CORE 8
+                                                                                         Sampling Time = 100us
+                                                                            fC1,...,8                                    Pow
+                                                                                                                           2
+                                                                                                                                   PC1,...,8
+                                                                                                                         freq
+
+                                                                        Figure 5: Control architecture.
+
+
+does not compromise the whole system performance). Each                                        control strategy is adopted, as proposed in Section 3.3. Dur-
+controller uses the local model identified in Section 4 to predict                             ing nominal operation, the MPC layer keeps the temperature
+the future temperature of the core and solves the optimization                                 of each i-th core below τMPC,i . However, if such constraint is
+problem shown in (4) to obtain the best control decisions that                                 violated and the i-th core temperature reaches T̄ CRIT,i , the cor-
+keep the i-th core temperature, T i , close to the bound. We called                            responding hysteresis controller bypasses the MPC layer, im-
+this bound τMPC,i to highlight that each i-th controller has a dif-                            mediately providing to the core the minimum power, Pmin , until
+ferent bound that may differ from T̄ CRIT,i . It is reasonable to                              the temperature decreases to a given lower value, τSWITCH,LOW,i ,
+expect τMPC,i < T̄ CRIT,i due to safety margins introduced to pre-                             according to the hysteresis mechanism.
+vent overtemperatures between two sampling instants. A dis-                                        In Section 3 we proved that a set of local continuous-time
+cussion on how to determine the value of τMPC,i is reported in                                 regulators ensures feasibility, keeping the temperature below
+Section 5.3.                                                                                   T̄ CRIT,i . However, the clock-driven nature of MPSoCs imposes
+   An implementation issue for the MPC layer concerns the es-                                  the use of a discrete-time controller. As a result, to avoid tem-
+timation of the state x2 , which, as already mentioned, is not                                 perature violations during the sampling intervals, it is necessary
+available from measurements (whereas x1 corresponds to the                                     to provide a margin, i.e., to decrease the critical temperature
+temperature sensed on the core). Due to the complete observ-                                   T̄ CRIT,i to a value τSWITCH,i , depending on the selected sampling
+ability of the model, we can estimate the unknown state by stor-                               period. Nevertheless, since the safety layer is implemented in
+ing past control inputs and temperatures, following a dead-beat                                hardware, the sampling time can be extremely small (few mi-
+observer approach. From (29), we have                                                          croseconds). An effective choice of τSWITCH,i can be obtained
+                                          "          #                                         inverting the discrete models (29) of each core, and subtract-
+                                        > PC (t − 1)
+               x2 (t) = a2 T (t − 1) + b2              .                                       ing from T̄ CRIT the maximum temperature increase occurred in
+                                            d(t − 1)                                           a single sample interval in the worst-case scenario (i.e., criti-
+   With the core temperature sensor reading, the estimation                                    cal neighbor temperature, maximum ambient temperature, and
+above, the identified model parameters, and information about                                  maximum input power). Next to the upper threshold, the lower
+its neighbors, each core can solve the following problem                                       threshold, τSWITCH,LOW,i , must be defined to deactivate the layer
+                                                                                               and resume the nominal behavior. Such value is lower than
+        min |PT,i (t) − PC,i (t)|2                                                             τMPC,i to make the system restart from a feasible state. In this
+         PC,i (t)
+                                                                                               regard, we set τSWITCH,LOW,i = τMPC,i − ∆ where ∆ is a small ar-
+              x (t + 1)
+            "              #        "          #
+                                      x (t)                                                    bitrary value. This way, we obtain a hardware-based, discrete-
+   subj. to: 1,i             = Ai 1,i            + B1,i PC,i (t) + B2,i di (t)
+              x2,i (t + 1)            x2,i (t)                                                 time, hysteresis-based controller capable of guaranteeing feasi-
+                              "
+                                x (t + 1)
+                                               #                                               bility.
+            T i (t + 1) = C 1,i                  ≤ τMPC,i ,
+                                x2,i (t + 1)
+                                                                                               5.3. τMPC,i threshold
+                    Pmin ≤ PC,i (t|t) ≤ Pmax .                                                    In the proposed hierarchical solution, the combined use of
+                                                                                  (38)         a safety and an MPC layer improves the global system perfor-
+                                                                                               mance and guarantees feasibility. This result, a key point for
+                                                                                               manufacturers whose profit is strictly related to performance,
+5.2. Safety layer                                                                              can be obtained by suitably selecting τ MPC,i . In this regard, a
+   The safety layer includes a set of hardware-based hystere-                                  trade-off needs to be pursued, as explained in what follows.
+sis controllers, one for each core, completely independent from                                In principle, setting τMPC,i = τSWITCH,i would maximize per-
+the MPC layer. At this level, a model-free temperature capping                                 formance. Indeed, the higher is the temperature limit, the
+                                                                                         12
+more power can be allocated by the controller to increase the                                                                                        -
+                                                                                                                                                     +
+                                                                                                                                                         TE
+core speed. However, uncertainties would cause frequent in-                                                                                              RCu,v
+                                                                                                                                    CCu
+terventions of the safety controller that would set the power to                                                                                             RCu,h
+the minimum value and contribute to performance degradation.
+                                                                                                                                    RCu,h            TCu,k RCu,h
+Thus, a margin between τMPC,i and τSWITCH,i must be provided.                                                                        RCu,h
+The greater the margin, the more conservative the controller                                                                                                 RSi,h
+                                                                                                                                           RSi,v
+becomes, again impairing performance (since the local MPC                                                                                   TSi,k                RSi,h
+would maintain the core speed to a lower level w.r.t. what                                                                          RSi,h
+strictly necessary). In our analysis, we consider as maximum                                                                            RSi,h                    CSi
+margin the one preventing the use of the safety layer. In this                                                                                  Pk
+case, the local MPC controller is completely conservative, and
+we denote the corresponding maximum temperature threshold                                             Figure 6: Chip thermal simulator.
+as τMPC,CONS,i .
+   The central idea to improve performance is to select
+τMPC,CONS,i < τMPC,i < τSWITCH,i , i.e., to design a less conserva-            Remark 4. The rigorous solution of (39) would require an
+tive MPC controller, leaving the safety layer to manage critical               infinite number of simulations for computing the integral in
+situations. Indeed, it is reasonable to expect a smaller perfor-               the objective function (one for each τMPC,i value, and for each
+mance degradation from limited use of the safety layer rather                  benchmark). To reasonably address this issue, we search the
+than having a completely conservative/robust MPC layer. To                     τMPC,CONS,i preventing the intervention of the ultimate capping
+this aim, a trade-off problem between the conservativeness of                  controller, then we solve the optimization problem for a discrete
+the MPC controller and the frequency of the safety controller’s                set of value in the interval [τMPC,CONS,i , T̄ CRIT,i ].
+activation must be solved. Due to the significant number of
+factors affecting the controller, as external inputs and the al-               6. Simulation results
+ready cited model uncertainties, rigorous analytical estimation
+of τMPC,i is difficult. Therefore, we propose two empirically-                    In this section, we report significant simulation results.
+based methods to impose this margin.                                           Firstly, we provide some information on the accurate model
+   A first simple method consists of running typical bench-                    used to emulate the real system thermal behavior. Then, we
+marks, e.g., PARSEC (Bienia et al., 2008), and calibrating                     summarize the design steps to build the two-layer controller.
+τMPC,i as the value that reduces the violations of τSWITCH,i un-               Finally, we show its effectiveness for a typical benchmark.
+der an arbitrarily predetermined percent of time. This solution                   Fig. 6 shows the plant used for simulations. We adopted as
+lets the user the freedom of choosing the degree of exploita-                  a reference the chip layout of the Enterprise Xeon R Proces-
+tion of the safety layer. However, if the goal is maximizing                   sor presented in (Rusu et al., 2010), doubling it to obtain an
+the computing performance, an optimization problem should                      8-core chip. According to (Paci et al., 2006), we performed
+be formulated and solved. In this respect, the second proposed                 thermal simulations by using a finite element approach. We di-
+approach searches for the τMPC,i that maximizes an objective                   vided the chip into two layers, representing the silicon and the
+function given by the integral of the core frequencies, under the              heat spreader, and each of them into cells (with 360 cells per
+constraint τMPC,i ∈ [τMPC,CONS,i , T̄ CRIT,i ], that is:                       layer). To each cell, we associated a small thermal system com-
+                                                                               posed by a thermal resistor for the vertical thermal dissipation
+                 nC Z tB
+                 X                                                             (RSi,v = 1.6K/W, RCu,v = 290K/W)1 , four resistors for the hori-
+        max                fC,i (τMPC,i ) dt                    (39a)
+        τMPC,i         0
+                                                                               zontal thermal dissipation (RSi,h = 22.9K/W, RCu,h = 1.2K/W),
+                 i=1
+                                                                               a thermal capacitance (CSi = 1×10−3 J/K, CCu = 1.2×10−2 J/K)
+   subj. to: τMPC,CONS,i ≤ τMPC,i ≤ T̄ CRIT,i   i ∈ {1, . . . , nC },          and, exploiting the analogy with the electrical framework, a cur-
+                                                                  (39b)        rent generator and a voltage generator, depending on the layer.
+                                                                               The former represents the power dissipated by the active sili-
+where nC is the number of cores, fC are the corresponding
+                                                                               con, while the latter is associated with the heat spreader’s ambi-
+frequencies, and [0, tB ] is the benchmarks’ time interval. We
+                                                                               ent temperature. The network associated with the chip is shown
+solved the problem for each benchmark, and we selected the
+                                                                               in Fig. 6. The resulting model is
+optimal values τMPC,i as the average of each problem’s result.
+                                                                                                                     q
+Remark 3. The MPC controller imposes constraints on tem-                                     Pk    T Cu,k − T Si,k X T Si,n,i − T Si,k
+                                                                                   Ṫ Si,k =     +                +
+perature predictions obtained with the identified model, not                                 CSi     CSi RSi,v      i=1
+                                                                                                                        CSi RSi,h
+on the real temperature of the core. As a result, the actual                                                                    q
+                                                                                               T Si,k − T Cu,k T Cu,k − T amb X T Cu,n,i − T Cu,k
+core temperature can be lower than τSWITCH,i even if τMPC,i >                      Ṫ Cu,k =                  +              +
+τSWITCH,i . This fact motivates the use of T̄ CRIT,i as an up-                                   CCu RSi,v       CCu RCu,v     i=1
+                                                                                                                                   CCu RCu,h
+per bound in (39b). In case τMPC,i > τSWITCH,i , we set the                                                                                     (40)
+lower layer of the local safety controller as τSWITCH,LOW,i =
+τSWITCH,i − ∆ to avoid a deactivation threshold greater than the                   1 Border cells have lower resistance values to simulate lateral heat dissipa-
+
+activation one.                                                                tion.
+
+                                                                          13
+                                                                                              Frequency [MHz] Temperature[K]
+                                                                                                                               359.6
+                               Iterations
+                                                           Conservative
+           TCRIT         Model              Safety Layer    MPC Layer     MPC Layer
+         Deﬁnition    Identiﬁcation
+                                             Threshold      Threshold     Threshold                                            359.4
+                                               τSWITCH       τMPC,CONS       τMPC
+
+
+                                                                                                                               359.2
+         Figure 7: Scheme of the control design and implementation steps.
+
+                                                                                                                               3000
+where T Si,n,i and T Cu,n,i , i ∈ {1, . . . , q} are respectively the neigh-
+bors of the k-th silicon and copper cell.                                                                                      2500
+The admissible power consumption of each core ranges from                                                                      2000
+Pmin = 4.38W to Pmax = 25W, corresponding to frequencies
+fmin = 1.6GHz and fmax = 2.97GHz respectively. The idle                                                                        1500
+                                                                                                                                           1.68      1.69     1.7      1.71     1.72          time [s]
+power, i.e., the power consumed when the core is on but not
+running any workload, is PIDLE = 0.25W. The power dissi-                                                                              Figure 8: Response with only safety layer controller.
+pated by the caches is the 30% of the power consumed by the
+cores directly connected to them. Fig. 7 shows the control de-                                                                  0,8
+
+
+
+
+                                                                                              Improvements [%]
+sign steps listed below                                                                                                         0,6
+
+    1. We defined T̄ CRIT,i as shown in Fig. 4, where T EQ has been                                                             0,4
+       obtained by applying to each core the minimum power.                                                                     0,2
+    2. We identified the prediction models of each core per-                                                                    0,0
+       forming the iterative procedure of Section 4.                                                                           -0,2
+    3. We defined τSWITCH,i in the safety layer by inverting the                                                               -0,4
+       local model.                                                                                                            -0,6
+    4. We determined τMPC,CONS,i (the conservative MPC                                                                         -0,8
+       threshold) by running a set of benchmarks on the sys-
+       tem supervised by the two-layer controller. For each
+                                                                                              τMPC,CONS +0.1                                  +0.4    +0.7     +1.0    +1.3    +1.6    +1.9    τMPC
+                                                                                                                                  Figure 9: Performance comparison with different τMPC .
+       benchmark and core, we set as initial threshold τMPC,i =
+       τSWITCH,i , and we decreased the MPC threshold of the
+       same amount until core temperatures remained confined                               we adopted the local solver Ipopt, started from different initial
+       below τSWITCH,i .                                                                   conditions, and a more rigorous global solver (bmibnb). In both
+    5. We solved the optimization problem to find τMPC,i                                   cases, we obtained a positive objective function value equal to
+       and maximize performance. Starting from τMPC,i =                                    10.5, corresponding to the optimal vector y∗ = [0 0.5 0.5]> .
+       τMPC,CONS,i , we increased all the τMPC,i simultaneously2 ,                         Therefore, according to the discussion reported in Section 4.1,
+       looking for the values that maximize the integral of the                            we can state the identified model satisfies the feasibility prop-
+       cores frequencies, then we averaged the results of all the                          erties of the original PDE, and can be then profitably used for
+       benchmarks.                                                                         control purposes.
+According to the previous points, we set T̄ CRIT = [358.89,                                   Then, we proceeded inverting the model to obtain
+359.07, 359.80, 360.00, 359.74, 359.95, 359.29, 359.47]K. As                               τSWITCH = [358.63, 358.80, 359.53, 359.73, 359.47, 359.68,
+an example, we report below the model of the form (29) for                                 359.02, 359.20]K, whereas by iteratively decreasing the τMPC
+core 3, obtained from the identification procedure with sam-                               until no safety layer interventions were detected 3 , we deter-
+pling time 1ms:                                                                            mined the conservative MPC thresholds τMPC,CONS = [357.83,
+                                                                                           358.00, 358.73, 358.93, 358.67, 358.88, 358.22, 358.40]K.
+    T 3 (t + 1)
+"               # "            #"        #
+                    1.5       1 T 3 (t)                                                    Fig. 8 shows the temperature response of core 3 when only the
+                 =
+    x2,3 (t + 1)   −0.5       0 x2,3 (t)                                                   safety layer is active. As expected, the temperature is bounded
+                                                         PC,3 (t) 
+                                                                         
+                                                                                           below T CRIT = 360K.
+                                                          T (t)                         The procedure to define τMPC is similar to the one used for
+   3.2 × 10−2 −6.0 3.4 × 10−4 −3.9 × 10−5 3.9 × 10−5  amb 
+     "                                              #
++                                                            T (t)  .                    τMPC,CONS . We set τMPC = τMPC,CONS , then we iteratively in-
+  −3.0 × 10−2 6.0 2.0 × 10−4 −3.6 × 10−5 3.8 × 10−4  1 
+                                                             T 4 (t)                 creased its value by 0.1K. For each simulation, we stored the
+                                                                T 5 (t)                    integral of the frequency as performance metric.
+We checked feasibility of the obtained system by solving prob-                                In Fig. 9 we compared the performance w.r.t. the chosen
+lem (37) with D given by (35), with T amb,min = 293K and                                   τMPC , which is indicated as a τMPC,CONS offset, owing to space
+T amb,max = 330K, and X defined as in (36). We solved the                                  limitation. The plots shown in Fig. 9 correspond to the average
+problem using the tool YALMIP (Löfberg, 2004). In particular,                             values obtained over the tests with different benchmarks. As
+                                                                                           result of the optimization problem, τMPC = [358.63, 358.80,
+   2 Increasing τ
+                  MPC,i by different values is impractical because of the signifi-
+cant amount of possibilities it would determine.                                             3 At each iteration τ
+                                                                                                                                               MPC,CONS is decreased by 0.1K.
+
+                                                                                      14
+359.53, 359.73, 359.47, 359.68, 359.02, 359.20]K that is equal
+to τSWITCH . As already mentioned, these values could also be
+greater due to the model conservativeness obtained with the                                                 360
+
+
+
+
+                                                                                          Temperature [K]
+identification procedure. The improvements in performance are
+about 1% on average. The lower hysteresis threshold of the
+                                                                                                            359
+switch controllers, τSWITCH,LOW , is equal to τSWITCH − 0.1K.
+For what concerns the online solution of problem (38) in the
+MPC layer, we leveraged the core thermal model properties and                                               358
+its low dimensionality to design a simple strategy:                                                           1.6            1.8       2      2.2      2.4      2.6      2.8
+
+  1. Set PC,i = PT,i 4 , and use the model to predict T i (t + 1) =                                                30
+
+
+
+
+                                                                                                  Power [W]
+     x1,i (t + 1).                                                                                                 20
+  2. If T i (t + 1) ≤ τMPC,i then keep PC,i = PT,i and compute the
+     corresponding core frequency using (3).                                                                       10
+  3. If, T i (t + 1) > τMPC,i , with PC,i = PT,i , set PC,i so that
+                                                                                                                    0
+     T i (t + 1) = τMPC,i by using (29), i.e.,                                                                      1.6      1.8       2      2.2      2.4      2.6      2.8
+
+                     τMPC,i − a1,i x1,i (t) − x2,1 (t) − B2,i (1, :)di (t)
+
+
+
+                                                                                              Frequency [GHz]
+                                                                                                                    3
+            PC,i =
+                                          B1,i (1, 1)
+                                                                                                                2.5
+where round brackets indicate the entries of the matrices B1
+and B2 , and : denotes all the row/column elements. Applying                                                        2
+the procedure above in Matlab/Simulink, the solution to each
+core MPC problem can be computed in just 3µs on a PC with                                                           1.6      1.8       2      2.2      2.4      2.6      2.8
+an i7 8th gen. CPU. Therefore, it could be deployed on many-                                                       10
+                                                                                                  Workload [CPI]
+
+
+
+
+core systems without impacting significantly on the cores com-
+putational effort, which could be directed to carry out the ap-
+plications’ specific workload. Fig. 10 shows the response of                                                        5
+core 3 when Fluidanimate, a Parsec benchmark related to sim-
+ulation (via Smoothed Particle Hydrodynamics method) of in-
+                                                                                                                    0
+compressible fluids for interactive animation purposes (Bienia                                                      1.6      1.8       2      2.2      2.4      2.6      2.8
+et al., 2008) is assigned to the controlled system. The tem-                                                                                time [s]
+perature is perfectly bounded below T̄ CRIT,3 = 359.80K, and
+the safety layer intervenes only when the temperature crosses
+τSWITCH,3 = 359.53K, setting the frequency to 1.6GHz. Fig. 11
+                                                                                                                   Figure 10: Simulation results for benchmark Fluidanimate.
+shows the simulation results, with the same application bench-
+mark, for core 3 when different MPC thresholds were applied:
+the τMPC that maximizes the performance (τMPC,MAX ), the τMPC                          6.1. Comparison with other solutions.
+that reduces the violation under the 0.1% (τMPC,0.1% ) and the
+                                                                                          We conclude this Section with some considerations where we
+completely conservative τMPC = τMPC,CONS . It can be noticed
+                                                                                       compare the proposed approach with some of the recent works,
+how, even though the safety layer intervenes more frequently
+                                                                                       mentioned in Section 1. We remark that our two-layer solu-
+than in the other cases, the frequency for (τMPC,MAX ) is the high-
+                                                                                       tion formally guarantees feasibility, thanks to the safety layer,
+est on average.
+                                                                                       also in case of heavy model uncertainties. Moreover, the MPC
+We validated our control strategy with several Parsec bench-
+                                                                                       layer is verified to ensure recursive feasibility for the consid-
+marks. Owing to space constraints, here we report results for
+                                                                                       ered system model. To the best of our knowledge, none of the
+another scenario, corresponding to Bodytrack, a computer vi-
+                                                                                       works presented in the literature has fully addressed such is-
+sion application. Figs. 12, 13 show the corresponding results.
+                                                                                       sues. Also, the proposed model does not require any central-
+Again, the ability of the two layer solution to keep the core tem-
+                                                                                       ized step, with the safety layer being decentralized (only local
+perature under the critical threshold is confirmed, with the help
+                                                                                       temperature information is needed), and the MPC layer fully
+of the safety layer when needed, while applying the requested
+                                                                                       distributed (only local information exchange among neighbours
+power and frequency, whenever the thermal conditions allow it
+                                                                                       core is needed). Other recent solutions in the MPC framework
+(see the first and third plots in Fig. 12). Also, the speculative
+                                                                                       requires some sort of centralized coordination (Camponogara
+strategy to select a less conservative MPC thresholds pays off
+                                                                                       et al., 2021), (Wang et al., 2016), or adopt a fully centralized
+even in this condition, as shown in Fig. 10.
+                                                                                       approach (Wang et al., 2019). Compared to machine learning-
+                                                                                       based approaches (Mandal et al., 2019), (Das et al., 2014), our
+    4 We assume the target P
+                              T,i is within the power bounds, if not, it can be
+                                                                                       approach can be implemented online with less complexity, and
+saturated before solving the problem.                                                  it does not require extensive offline exploration to guide an ef-
+                                                                                  15
+                      360                                                                              360
+   Temperature[K]
+
+
+
+
+                      359                                                                              359
+                      358
+                                                                         τMPC, MAX                     358
+                      357                                                τMPC, 0.1%
+                                                                         τMPC, CONS
+                                                                                                       357
+                     3000                                          ZOOM                               3000
+   Frequency [MHz]
+
+
+
+
+                     2500                                                                             2500
+                                                                2.19    2.2
+                     2000
+                                                                                                      2000
+
+                        1.6       1.8         2         2.2       2.4         time [s]                       5         5.5           6           6.5           7
+
+Figure 11: Performance comparison with benchmark Fluidanimate and three                       Figure 13: Performance comparison with benchmark Bodytrack and three dif-
+different τMPC .                                                                              ferent τMPC .
+
+
+
+                                                                                                 These achievements have been exploited to design a two-
+                                                                                              layer control architecture which, adopting time- and space-
+                                                                                              discretized approximated modeling (and discrete-time control
+                                                                                              actuation), ensures robust feasibility preserves performance as
+                                                                                              much as possible and keeps the controller complexity at a treat-
+                                                                                              able level. To this aim, a distributed MPC layer manages the
+                                                                                              chip temperature maximizing performance, while a safety layer
+                                                                                              (a set of hysteresis controllers) guarantees feasibility.
+                                                                                                 From the practical application’s viewpoint, we provided a
+                                                                                              step-by-step empirical tuning procedure for the proposed con-
+                                                                                              trol solutions. Specifically, we described a method to derive
+                                                                                              a tradeoff between the frequency of intervention of the safety
+                                                                                              layer and the temperature bound of the MPC controllers. Com-
+                                                                                              pared to a completely conservative solution, which would al-
+                                                                                              ways avoid safety intervention, we obtained up to 1% of perfor-
+                                                                                              mance enhancement.
+                       Figure 12: Simulation results for benchmark Bodytrack.
+
+                                                                                              References
+ficient runtime manager (Gupta et al., 2017).                                                 Bambini, G., Balas, R., Conficoni, C., Tilli, A., Benini, L., Benatti, S., Bar-
+                                                                                                 tolini, A., 2020. An open-source scalable thermal and power controller for
+                                                                                                 HPC processors, in: 2020 IEEE 38th International Conference on Computer
+7. Discussion and future works                                                                   Design (ICCD), IEEE. pp. 364–367.
+                                                                                              Bartolini, A., Cacciari, M., Tilli, A., Benini, L., 2012. Thermal and energy man-
+                                                                                                 agement of high-performance multicores: Distributed and self-calibrating
+   In this work, we have exploited the features of a PDE-                                        model-predictive controller. IEEE Trans. Parallel Distrib. Syst 24(1), 170–
+based thermal model, describing heat conduction phenomena,                                       183.
+                                                                                              Bemporad, A., Morari, M., 1999. Robust model predictive control: A survey’,
+to study the feasibility of predictive controllers for manag-                                    in: Garulli, A., Tesi, A., Vicino, A. (Eds.), Robustness in identification and
+ing Multiprocessors Systems-on-Chip temperature. Infinite-                                       control, Lecture Notes in Control and Information Sciences. Springer, p.
+dimensional PDE description is crucial to avoid possible side                                    207226.
+effects related to time and space discretization. In this context,                            Bemporad, A., Morari, M., Dua, V., Pistikopoulos, E., 2002. The explicit linear
+                                                                                                 quadratic regulator for constrained systems. Automatica 38, 3–20.
+we showed that predictive controllers are intrinsically feasible                              Bienia, C., Kumar, S., Singh, J.P., Li, K., 2008. The parsec benchmark suite:
+when applied to whatever thermal system for any prediction                                       Characterization and architectural implications. Proc. of the 17th Interna-
+horizon greater than or equal to zero. The proof of such a result                                tional Conference on Parallel Architectures and Compilation Techniques .
+relies on the Maximum Principle, which is also instrumental in                                Camponogara, E., Scherer, H., Biegler, L., Grossmann, I., 2021. Hierarchical
+                                                                                                 decompositions for mpc of resource constrained control systems: applica-
+deriving a rule for reducing the number of constraints from infi-                                tions to building energy management. Optimization and Engineering 22,
+nite to finite, greatly simplifying the controller design. Despite                               187–215.
+the final results looking quite intuitive, in the authors’ opinion,                           Christofidesa, P., Scattolini, R., de la Peña, D., Liu, J., 2012. Distributed model
+                                                                                                 predictive control: A tutorial review and future research directions. Com-
+the presented study is helpful to provide a rigorous confirma-                                   puters & Chemical Engineering 0, 56–65.
+tion of the intuition and revise the non-oscillating properties of                            Coskun, A.K., Ayala, J.L., Atienza, D., Rosing, T.S., Leblebici, Y., 2009. Dy-
+thermal systems in an MPC context.                                                               namic thermal management in 3d multicore architectures, in: Proceedings
+
+                                                                                         16
+   of the Conference on Design, Automation and Test in Europe, European                     tion in embedded systems. IEEE Transactions on Computer-Aided Design
+   Design and Automation Association. pp. 1410–1415.                                        of Integrated Circuits and Systems 35, 877–890.
+Das, A., Shafik, R.A., Merrett, G.V., Al-Hashimi, B.M., Kumar, A., Veeravalli,           Skadron, K., Abdelzaher, T., Stan, M.R., 2002. Control-theoretic techniques
+   B., 2014. Reinforcement learning-based inter-and intra-application thermal               and thermal-rc modeling for accurate and localized dynamic thermal man-
+   optimization for lifetime improvement of multicore systems, in: Proceed-                 agement. the 8th International Symposium on High-Performance Computer
+   ings of the 51st Annual Design Automation Conference, pp. 1–6.                           Architecture, Anheim, CA, USA , 17–28.
+Dey, S., Singh, A.K., McDonald-Maier, K.D., 2019. P-EdgeCoolingMode: an                  Strauss, W.A., 1992. Partial Differential Equations: An Introduction. Wiley.
+   agent-based performance aware thermal management unit for DVFS enabled                Tilli, A., Garone, E., Cacciari, M., Bartolini, A., 2012. Thermal models char-
+   heterogeneous MPSoCs. IET Computers & Digital Techniques 13, 514–523.                    acterization for reliable temperature capping and performance optimization
+Evans, L.C., 1998. Partial Differential Equations. American Mathematical                    in multiprocessor systems on chip. Proc. of American Ctrl. Conf.,Montreal,
+   Society.                                                                                 Canada, , 4721–4726.
+Gondhalekara, R., Imura, J., Kashima, K., 2009. Controlled invariant feasibility         Tsai, T.H., Chen, Y.S., 2014. A thermal-throttling server in 3d multicore chips,
+   - a general approach to enforcing strong feasibility in mpc applied to move-             in: Proceedings of the 29th Annual ACM Symposium on Applied Comput-
+   blocking. Automatica 45(12), 2869–2875.                                                  ing, ACM. pp. 1425–1430.
+Gupta, U., Patil, C.A., Bhat, G., Mishra, P., Ogras, U.Y., 2017. Dypo: Dynamic           Wang, H., Guo, X., Tan, S.X.D., Zhang, C., Tang, H., Yuan, Y., 2019. Leakage-
+   pareto-optimal configuration selection for heterogeneous mpsocs. ACM                     aware predictive thermal management for multicore systems using echo
+   Transactions on Embedded Computing Systems (TECS) 16, 1–20.                              state network. IEEE Transactions on Computer-Aided Design of Integrated
+Hamann, H.F., Weger, A., Lacey, J.A., Hu, Z., Bose, P., Cohen, E., Wakil,                   Circuits and Systems 39, 1400–1413.
+   J., 2007. Hotspot-limited microprocessors: Direct temperature and power               Wang, H., Ma, J., Tan, S.X.D., Zhang, C., Tang, H., Huang, K., Zhang,
+   distribution measurements’. IEEE Journal of Solid-State Circuits 4, 56–65.               Z., 2016. Hierarchical dynamic thermal management method for high-
+Iranfar, A., Kamal, M., Afzali-Kusha, A., Pedram, M., Atienza, D., 2017. Thes-              performance many-core microprocessors. ACM Transactions on Design
+   pot: Thermal stress-aware power and temperature management for multipro-                 Automation of Electronic Systems (TODAES) 22, 1–21.
+   cessor systems-on-chip. IEEE Transactions on Computer-Aided Design of                 Wang, Y., Ma, K., Wang, X., 2009. Temperature-constrained power control for
+   Integrated Circuits and Systems 37, 1532–1545.                                           chip multiprocessors with online model estimation. Proc. of the 36th annual
+Kadin, M., Reda, S., Uht, A., 2009. Central vs. distributed dynamic thermal                 international symposium on Computer architecture, Austin, TX, USA, .
+   management for multi-core processors: which one is better? ACM Great                  Wang, Z., Zhu, X., McCarthy, C., Ranganathan, P., Talwar, V., 2008. Feed-
+   Lakes Symposium on VLSI, New York, NY, USA , 137–140.                                    back control algorithms for power management of servers. 3rd International
+Kang, K., Kim, J., Yoo, S., Kyung, C.M., 2011. Runtime power management of                  Workshop on Feedback Control Implementation and Design in Computing
+   3-d multi-core architectures under peak power and temperature constraints.               Systems and Networks, Annapolis, MD .
+   IEEE Transactions on Computer-Aided Design of Integrated Circuits and                 Zanini, F., Atienza, D., Benini, L., Micheli, G.D., 2009. Multicore thermal
+   Systems 30, 905–918.                                                                     management with model predictive control. Proc. of the 19th European Con-
+Ladenheim, S., Chen, Y.C., Mihajlović, M., Pavlidis, V.F., 2018. The mta:                  ference on Circuit Theory and Design , 90–95.
+   An advanced and versatile thermal simulator for integrated systems. IEEE
+   Transactions on Computer-Aided Design of Integrated Circuits and Systems
+   37, 3123–3136.
+Liu, Z., Tan, S.X.D., Huang, X., Wang, H., 2014. Task migrations for dis-
+   tributed thermal management considering transient effects. IEEE Transac-
+   tions on Very Large Scale Integration (VLSI) Systems 23, 397–401.
+Löfberg, J., 2004. Yalmip: A toolbox for modeling and optimization in matlab,
+   in: Proceedings of the CACSD Conference, Taipei, Taiwan.
+Löfberg, J., 2011. Oops! i cannot do it again: Testing for recursive feasibility
+   in mpc. Automatica 48(3), 550–555.
+Mallik, D., Mahajan, R., Wakharkar, V., 2008. Flip chip packaging for
+   nanoscale silicon logic devices: Challenges and opportunities, in: Morris,
+   J.E. (Ed.), Nanopackaging: nanotechnologies and electronics packaging.
+   Springer, pp. 491–516.
+Mandal, S.K., Bhat, G., Patil, C.A., Doppa, J.R., Pande, P.P., Ogras, U.Y., 2019.
+   Dynamic resource management of heterogeneous mobile platforms via imi-
+   tation learning. IEEE Transactions on Very Large Scale Integration (VLSI)
+   Systems 27, 2842–2854.
+McKeown, M., Lavrov, A., Shahrad, M., Jackson, P.J., Fu, Y., Balkind, J.,
+   Nguyen, T.M., Lim, K., Zhou, Y., Wentzlaff, D., 2018. Power and energy
+   characterization of an open source 25-core manycore processor., in: HPCA,
+   pp. 762–775.
+Paci, G., Morari, M., Dua, V., Pistikopoulos, E., 2006. Exploring temperature-
+   aware design in low-power mpsocs. Design, Automation and Test in Europe
+   Conference , 1–6.
+Pagani, S., Manoj, P.S., Jantsch, A., Henkel, J., 2018. Machine learning for
+   power, energy, and thermal management on multicore processors: A survey.
+   IEEE Transactions on Computer-Aided Design of Integrated Circuits and
+   Systems 39, 101–116.
+Rawlings, J., Mayne, D., 2009. Model Predictive Control: Theory and Design.
+   Nob Hill Publishing, Madison, Wisconsin.
+Rusu, S., Tam, S., Muljono, H., Stinson, J., Ayers, D., Chang, J., Varada, R.,
+   Ratta, M., Vora, S., 2010. A 45 nm 8-core enterprise xeon R processor. IEEE
+   Journal of solid-state circuits 45, 7–14.
+Scherer, H., Camponogara, E., Normey-Rico, J., Álvarez, J.D., Guzmán, J.L.,
+   2015. Distributed mpc for resource-constrained control systems. Optimal
+   Control Applications and Methods 36, 272–291.
+Shafik, R.A., Yang, S., Das, A., Maeda-Nunez, L.A., Merrett, G.V., Al-
+   Hashimi, B.M., 2015. Learning transfer-based adaptive energy minimiza-
+
+
+                                                                                    17
+

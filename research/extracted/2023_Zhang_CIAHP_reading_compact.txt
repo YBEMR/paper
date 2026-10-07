@@ -1,0 +1,915 @@
+| Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+
+| Contents lists available at ScienceDirect
+
+
+| Sustainable Computing: Informatics and Systems
+| journal homepage: www.elsevier.com/locate/suscom
+
+
+
+
+Multi-exit DNN inference acceleration for intelligent terminal with
+heterogeneous processors
+Jinghui Zhang a , Weilong Xin b , Dingyang Lv a , Jiawei Wang c , Guangxing Cai a , Fang Dong a ,∗
+a
+| School of Computer Science and Engineering, Southeast University, Nanjing, 211189, China
+b
+| College of Software Engineering, Southeast University, Nanjing, 211189, China
+c
+| School of Cyber Science and Engineering, Southeast University, Nanjing, 211189, China
+
+
+
+ARTICLE | INFO | ABSTRACT
+
+Keywords: | Recently, there has been a burgeoning popularity in the deployment of deep learning vision applications upon
+Heterogeneous processor | terminal devices. However, as the number of layers in deep neural networks (DNNs) and structural complexity
+Multi-exit DNN | increase, although the performance of DNN in handling computer vision tasks has become powerful, model
+Inference acceleration
+| inference tasks on computation resource constrained intelligent terminal devices are frequently incapable
+Intelligent terminal device
+| of meeting latency requirement. A commonly adopted solution to inference acceleration presents multi-exit
+| DNNs to reduce latency via the provision of early exits. However, existing methods do not fully utilize the
+| potential of heterogeneous processors (GPU/CPU) on intelligent terminal devices to cooperatively accelerate
+| multi-exit DNN inference in parallel. Furthermore, the impact of complex image and video input on multi-
+| exit DNNs, as well as the effects of different power consumption modes on processors within intelligent
+| terminal devices, remain inadequately explored. To address these issues, we comprehensively considered the
+| computing performance of heterogeneous processors in different power consumption modes, the structure
+| and characteristic of multi-exit DNNs in inference acceleration, and proposed the Collaborative Inference
+| Acceleration mechanism for intelligent terminal with Heterogeneous Processors (CIAHP). CIAHP includes a
+| deep neural network computation time prediction model and a multi-exit DNN task allocation algorithm with
+| heterogeneous processors. Our experiments demonstrate that CIAHP performs multi-exit DNN inference 2.31×
+| faster than CPU alone, and is 1.23× faster than GPU alone when processing complex image samples.
+
+
+
+1. Introduction | Several investigations have employed device-edge-cloud synergistic
+| inference to meet real-time requirements of inference tasks in image
+| In recent years, deep learning has achieved significant breakthrou- | classification and object detection [8–11]. However, the emergence
+ghs in a variety of fields. The widespread use of deep neural net- | of privacy policies, such as the General Data Protection Regulation
+works (DNNs) has facilitated great improvements in performance for | (GDPR) [12], has restricted the upload of data to cloud servers, in-
+computer vision (CV) tasks such as image classification [1], video
+| cluding images and videos, making the aforementioned approaches
+analytics [2], object detection [3,4] and virtual/augmented reality [5].
+| are no longer applicable under the premise of privacy preservation.
+As shown in Fig. 1, different from training task which update model
+parameters with train set and category labels, DNNs in inference tasks | Meanwhile, advancements in the Internet of Things (IoT) [7] and DNN
+interpret input samples and generate results without updating their | have facilitated the development of intelligent terminal devices, includ-
+parameters. Even lightweight Convolutional Neural Networks like Mo- | ing smartphones and autonomous cars [13], enabling local inference
+bileNet [6], explicitly designed for mobile devices, still necessitate a | capabilities gradually emerging as a new trend. For example, driverless
+substantial computational budget, requiring 569 million floating-point | cars need to perform local inference in order to detect and avoid obsta-
+operations. Moreover, the challenge becomes more acute when con- | cle [14]. However, numerous resource-constrained intelligent terminal
+sidering real-time applications. Real-time performance is paramount, | device, (e.g. Jetson Nano, Raspberry Pi) lack the computing capacity
+particularly in scenarios such as autonomous driving [7], where cap- | required to perform real-time inference for deep learning tasks [15].
+tured scenes or images are subject to rapid changes. As a result, low | To address this challenge, several methods have been developed to
+latency and high precision must be ensured when performing the
+| accelerate DNN inference on resource-constrained terminal devices. A
+inference task of DNN.
+
+
+| ∗ Corresponding author.
+| E-mail address: fdong@seu.edu.cn (F. Dong).
+
+https://doi.org/10.1016/j.suscom.2023.100906
+Received 27 February 2023; Received in revised form 14 July 2023; Accepted 8 August 2023
+Available online 22 August 2023
+2210-5379/© 2023 Elsevier Inc. All rights reserved.
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+
+
+
+| Fig. 3. The computational latency of the GPU/CPU on different size of fully connected
+| layer. (𝑥 × 512 × 10).
+
+
+
+
+| Fig. 1. The object detection inference task of DNN. | in various clock rates and latency for intelligent terminal devices, it
+| has also led to a change in processor performance. However, traditional
+| multi-exit DNNs fail to leverage the potential benefits of heterogeneous
+| processors on the device when solely relying on the GPU. This leads
+| to higher inference latency, particularly for complex inputs, as the
+| CPU remains idle during inference process for branch exit networks
+| or backbone networks executed by the GPU. Furthermore, most of the
+| current research fails to take into account the impact of changes in
+| power consumption modes for terminal devices. In order to improve the
+| inference efficiency of terminal devices, the inference execution needs
+| to be sensibly allocated between the GPU and CPU for each network
+| layer in different power consumption modes.
+| To achieve such objective, this paper intends to exploit hetero-
+| geneous processors (CPU/GPU) on the intelligent terminal device to
+| jointly process the multi-exit DNN inference task. Specifically, we
+| aim to design a multi-exit DNN inference acceleration mechanism
+| utilizing heterogeneous processors of intelligent terminal devices to
+| reduce the inference latency and alleviate the high latency problem
+| caused by multi-exit DNNs when confronted with complex samples.
+| In the meantime, the traditional approach to multi-exit DNN inference
+| acceleration suffers from many limitations: (1) The existing research
+| on multi-exit DNNs focuses primarily on the design of branch struc-
+| tures and confidence thresholds [21], but fails to address the issue
+| of increased latency resulting from complex inputs. (2) Research on
+| inference acceleration on intelligent terminal devices has overlooked
+| Fig. 2. The illustration of a multi-exit DNN.
+| the performance characteristics of multiple processors [8], resulting in
+| suboptimal utilization of the computing performance of each processor.
+| (3) Current efforts often ignore the real-time power consumption mode
+prevalent approach involves the use of multi-exit DNNs on intelligent | of intelligent terminal devices [22], even though the performance
+terminal devices, as proposed by Laskaridis et al. (2020) and Dong et al. | of processors varies depending on the power consumption mode. In
+(2022) [16,17]. As shown in Fig. 2, by integrating multiple classifiers | order to build a multi-exit DNN inference acceleration mechanism for
+consisting mainly of fully connected network layers as branch exit net- | heterogeneous processors, the inference latency of each network layer
+works to the shallow neural network layers, a portion of the inference | on different processors needs to be considered, as well as the impact on
+tasks can achieve high confidence above the threshold via shallow exits | performance due to the different power consumption modes of terminal
+and complete early with an acceptable accuracy. Consequently, the | devices. Furthermore, the cost of intermediate data transfers between
+DNN inference task is completed ahead of schedule, enabling lower | the GPU and CPU should also be taken into consideration.
+latency for images classification tasks. | We propose the Collaborative Inference Acceleration mechanism for
+| Currently, most intelligent terminal devices employ heterogeneous | intelligent terminal with Heterogeneous Processors (CIAHP) in this pa-
+processors, including multiple CPUs and GPUs [18]. As depicted in | per, aimed at improving the computing efficiency of intelligent terminal
+Fig. 3, when the CPU and GPU of intelligent terminal devices pro- | devices, effectively reducing the latency of multi-exit DNN inference
+cess computational tasks for certain fully connected layers, there is | tasks. The main contributions of this paper are as follows:
+negligible disparity in computing efficiency [19,20]. Both processors
+provide similar resource efficiencies when executing inference process | • We construct a deep neural network computation time prediction
+of fully connected network layers. Accordingly, assigning the execution | model based on heterogeneous processors, which takes into ac-
+of inference of fully connected network layers to the CPU does not | count the power consumption mode of the intelligent terminal
+result in a significant increase in latency. Based on the aforementioned | device and the parameter information of each neural layer.
+finding, inference process for branch exit networks and backbone net- | • To design a multi-exit DNN task allocation algorithm with hetero-
+works can be performed simultaneously on the GPU and the CPU to | geneous processors, we consider comprehensively the computing
+improve overall computing efficiency on intelligent terminal devices. In | time of DNNs, the structure of multi-exit DNNs, the classification
+the meantime, there are often multiple power consumption modes on | ability of each branch exit, and the size of the intermediate data
+intelligent terminal devices. Different power consumption modes result | generated by each network layer.
+
+| 2
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+
+| • A series of experiments were conducted to evaluate the perfor- | a novel multi-exit DNN architecture. By integrating multiple classifiers
+| mance of CIAHP on heterogeneous processors. The results demon- | as exits between the neural network layers, a proportion of the sample
+| strated that CIAHP outperformed existing methods by achieving | can be exited early through a shallow exit. The inference process of a
+| noteworthy reductions in inference latency, while concurrently | multi-exit DNN basically contains two primary components: the back-
+| maintaining high accuracy levels. | bone and the branch. For the input image data, the multi-exit DNN first
+| performs the inference computation of the backbone network. When
+2. Related work | the image data reaches the entry point of the branch exit network, the
+| inference computation of the backbone network is suspended and the
+2.1. Acceleration technology based on heterogeneous processors | branch exit network is executed. The branch exit network outputs the
+| classification results of images and provides a confidence level. If the
+| The rapid progressions in deep learning technology, alongside the | confidence level reaches a threshold, the image data can exit early,
+extensive proliferation of intelligent terminal devices, have made it | otherwise it returns to the backbone network. This approach allows for
+necessary to deploy deep learning applications on these devices. Re- | the completion of the inference task ahead of schedule, ensuring timely
+garding the hardware configuration of terminal devices, the prevailing | completion of the image classification task.
+approach currently focuses on accelerating GPU execution, such as | Researchers have proposed the deployment of multi-exit DNNs in
+NVIDIA’s cuDNN [23]. Additionally, some devices offer domain-specific | different locations within the ‘‘device-edge-cloud’’ in a distributed man-
+computing processors, like Google’s Tensor Processing Unit (TPU) [24], | ner, thereby enabling collaborative inferences by multiple devices to
+which have demonstrated significant computational power for specific | reduce the latency of the model and network delay [16,17,30–34].
+tasks like image analysis. In the meantime, terminal devices come | However, there are still several shortcomings in existing work on multi-
+equipped with heterogeneous processors (GPU/CPU) [18]. To make | exit DNNs. For example, when it comes to a complex sample input,
+full use of the computing efficiency of all processors and satisfy the | the sample cannot exit from the shallow exits early. As a result, the
+performance requirements of deep learning applications on these de- | device perform inference computation for all the backbone networks
+vices, numerous methods have been proposed to exploit the potential | and branch exit networks. This not only fails to achieve the desired
+of heterogeneous processors on intelligent terminal devices for such | effect but also leads to unpredictable inference latency [35]. Thor-
+applications. | ough analysis of this scenario and the optimization of multi-exit DNN
+| EunJin et al. [25] proposed a TensorRT-based framework that sup- | execution mode are pivotal in enhancing the efficiency of inference
+ports a variety of optimization parameters to enhance the performance | tasks.
+of deep learning applications on NVIDIA Jetson embedded platforms | The above methods, however, fail to fully utilize processors on
+with heterogeneous processors. Yecheng et al. proposed DART frame- | the intelligent terminal device and neglect the coordination of hetero-
+work [26], which ensures timing constraints for real-time DNN in- | geneous processors. Currently, when multi-exit DNNs are applied to
+ference tasks while minimizing response time. It aims to improve | complex samples, the inference path covers all backbone and branch
+the utilization of heterogeneous CPU and GPU cores to maximize | networks, resulting in an increase in inference latency [35]. Moreover,
+the throughput of best-effort DNN application. The majority of these | none of the above methods take into account the impact of different
+approaches utilize pipeline to increase the throughput of DNN tasks | power consumption modes on computing performance.
+on the intelligent terminal device based on heterogeneous processors.
+Any change in the performance of a processor in pipeline will result in | 3. Preliminaries
+sub-optimal overall efficiency, especially for devices where the power
+consumption mode can change frequently. Joo et al. [27] introduced | Based on terminal device with different power consumption modes,
+BAND, a mobile inference system that coordinates multi-DNNs work- | we first discusses the factors influencing the execution time of DNN
+loads on heterogeneous processors. BAND pre-divides a DNN into a | inference and develop a DNN computation time prediction model based
+set of sub-graphs while taking into account operator dependency. At | on heterogeneous processors. In order to maximize the efficiency of the
+runtime, BAND dynamically selects a schedule from multiple possible | CPU and GPU, we then analyzed the execution characteristics of DNNs
+schedules according to the target of a pluggable scheduling policy. | on heterogeneous processors. Based on the time prediction model, we
+This flexibility enables lower latency for applications involving multiple | propose a multi-exit DNN inference acceleration algorithm, the details
+DNNs. Nevertheless, the applicability of the BAND framework is limited | of which are elaborated in Section 4.
+to multi-DNNs workflow scenarios, and it is not suitable for accelerating
+the inference task of a single DNN. Lane et al. [28] proposed DeepX, | 3.1. Deep neural network computation time prediction model
+which employs CPUs and GPUs to co-process a DNN inference task.
+DeepX divides the deep learning model into multiple modules that | Several factors affect the computation time of the neural network
+are executed on the GPU and CPU according to the characteristics of | on the intelligent terminal device, including the computational com-
+each module. However, despite DeepX’s consideration of collaborative | plexity of network layers, the power consumption mode of intelligent
+processing on heterogeneous processors, its synchronous collaboration | terminal device, and the type of processor. To illustrate how to predict
+between CPUs and GPUs only utilizes one processor for a task at a time, | computation time, we use a convolutional neural network (CNN) as an
+leaving the rest of the processors idle and not fully leveraging their | example.
+performance. At the same time, most of these approaches do not take
+| CNN includes convolutional network layers, pooling network layers,
+into account the impact of the device’s power consumption mode on the
+| and fully connected network layers. Research indicates that these three
+performance of the processors. This makes the processor less efficient
+| types of network layers account for a significant portion of the inference
+at handling DNN inference tasks.
+| time of AlexNet when computed solely on GPUs (96.4%) or CPUs
+| (95.7%) [36]. Therefore, the main objective is to optimize these three
+2.2. Acceleration technology based on multi-exit DNN
+| network layers. The floating-point arithmetic (FLOPs) of each network
+| layer are calculated as Eq. (1), Eq. (2) and (3), where 𝐹 𝐿𝑂𝑃 𝑠_𝐶𝑂𝑁𝑉 ,
+| As the number of layers in deep neural networks increases, there is a
+| 𝐹 𝐿𝑂𝑃 𝑠_𝑃 𝑂𝑂𝐿, 𝐹 𝐿𝑂𝑃 𝑠_𝐹 𝐶 are the calculation amount of convolu-
+generally observed enhancement in their capacity to learn and express
+| tional layer, pooling layer and fully connected layer respectively.
+features. However, this also leads to higher model complexity and
+increased computation time and energy consumption during forward | 𝐹 𝐿𝑂𝑃 𝑠_𝐶𝑂𝑁𝑉 = [(𝐶𝑖𝑛 × 𝑘𝑤 × 𝑘ℎ )+
+| (1)
+propagation. To address this issue, Teerapittayanon et al. [29] proposed | (𝐶𝑖𝑛 × 𝑘𝑤 × 𝑘ℎ − 1)] × 𝐶𝑜𝑢𝑡 × 𝑊 × 𝐻
+
+| 3
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+Table 1
+Notations of computation time prediction model.
+Symbol | Description
+𝑒 | power consumption mode of the intelligent terminal device
+𝑊 ,𝐻 | width and height of the feature map
+𝐶𝑖𝑛 , 𝐶𝑜𝑢𝑡 | number of input and output channels for network layer
+𝑘𝑤 , 𝑘ℎ | width and height of the convolution kernel
+𝑝𝑤 , 𝑝ℎ | width and height of the pooling kernel
+𝐹𝑤 , 𝐹ℎ | number of input and output neurons of the fully connected layer
+𝜃 | parameter quantity information
+𝑐𝑝𝑢_𝑚𝑜𝑑𝑒 | binary variable, 1 for CPU and 0 for GPU
+
+
+
+
+| Fig. 4. The inference latency ratio of different processors at each network layer on
+𝐹 𝐿𝑂𝑃 𝑠_𝑃 𝑂𝑂𝐿 = 𝐶𝑖𝑛 × 𝑝𝑤 × 𝑝ℎ | (2) | Jetson Nano.
+
+
+𝐹 𝐿𝑂𝑃 𝑠_𝐹 𝐶 = 2𝐹𝑖𝑛 × 𝐹𝑜𝑢𝑡 , | (3)
+| 4. Methodology
+where, 𝐶 is the number of channels, 𝐾 is the size of the convolution
+kernel, and 𝐹 is the number of neurons in the fully connected layer. It | Leveraging the computation time prediction model conceived in
+is assumed that the height and width of each kernel are generally same. | the preceding section, the objective of this section is to contrive an
+| In addition to the FLOPs, factors that affect the inference time | innovative methodology to efficiently distribute multi-exit DNN in-
+include: the power consumption mode, the type of processor and | ference tasks amidst heterogeneous processors. This section is com-
+the parameter information of model. Even if the FLOPs of models | posed of three subsections, namely the multi-exit DNN model, problem
+are the same, the execution time of different processor types varies | formulation, and acceleration algorithm.
+due to different power consumption modes. There are often multiple
+power consumption modes and two processor types on intelligent ter- | 4.1. Multi-exit DNN model
+minal devices. Power consumption modes can be broadly divided into
+low-power mode and high-power mode. Different power consumption | Table 2 details the relevant parameters of the multi-exit DNN model.
+modes result in various clock rates and latency for intelligent terminal | In the architectural design of the multi-exit DNN, auxiliary exit net-
+devices. Different types of processors have different resource efficiency. | works are integrated within the DNN, which is shown in Fig. 5. The
+Therefore, power consumption mode and processor type need to be | architecture is divided into two distinctive divisions: the backbone
+considered in order to build the computation time prediction model. | and the ancillary branches. The backbone architecture is composed of
+| 𝑛 modules 𝐿 = 𝑙1 , 𝑙2 , 𝑙3 , … , 𝑙𝑛−1 , 𝑙𝑛 , with each module encompassing
+Table 1 lists the key notations used in the computation time prediction
+| multiple network layers. With the exception of the 𝑙𝑛 module, which
+model.
+| predominantly comprises fully connected layers, the remaining mod-
+| According to the above analysis, the definition of the deep neural
+| ules primarily consist of convolutional and pooling layers. The ancillary
+network computation time prediction model on heterogeneous proces-
+| branch exit network is interspersed amidst neighboring blocks, where
+sors is as follows:
+| each branch exit network is composed of a combination of pooling and
+𝑦𝑡 (𝑓 (𝐶𝑖𝑛 , 𝐶𝑜𝑢𝑡 , 𝐹𝑖𝑛 , 𝐹𝑜𝑢𝑡 , 𝑘𝑤 , 𝑝𝑤 ), 𝑒, 𝜃, 𝑐𝑝𝑢_𝑚𝑜𝑑𝑒), | (4) | fully connected layers. As represented in Fig. 5, the multi-exit DNN
+| includes an aggregate of 𝑛 − 1 prospective exits, not accounting for the
+where, 𝑒 is the power consumption mode of the device, 𝜃 is the | backbone exit. The model is capable of acquiring the confidence level
+parameter information of the model, 𝑐𝑝𝑢_𝑚𝑜𝑑𝑒 is a binary variable, 1 | of a sample at the branch exit network and providing the result of the
+for CPU and 0 for GPU, 𝑓 represents the computational workload of | sample with a predetermined probability in advance. The probability
+the neural network, which is determined by the number of network | of a sample departing from the 𝑖th branch exit network is symbolized
+layers and the quantity of FLPOs per layer. | by 𝑝𝑖 , and 𝑝0 is an virtual exit set to zero. Eq. (5) designates 𝜇𝑖 as the
+| With prediction model, the execution times of the different network | probability that the input sample will abstain from exiting until the 𝑖th
+layers can be retrieved. These execution times will be used to determine | backbone network layer is executed:
+the optimal allocation strategy for the network layers. | ∏
+| 𝑖
+| 𝜇𝑖 = | (1 − 𝑝𝑗−1 ). | (5)
+| 𝑗=1
+3.2. Preliminary analysis on CPU/GPU performance comparison
+| The pertinent notations and their respective definitions are mani-
+| fested in Table 3. Decision variables embody the task distribution across
+| Initially, we use NVIDIA Jetson Nano as experimental equipment, | computational resources. Here, 𝑋𝑙𝑖 = [0, 1] and 𝑋𝑏𝑖 = [0, 1] signify that
+CIFAR-10 [37] dataset and VGG16 [38] model. The latency differences | the 𝑖th backbone network layer and the 𝑖th branch exit network are
+between different processors are shown in Fig. 4. The 𝑔𝑐_𝑟𝑎𝑡𝑖𝑜 indicates | allocated to the CPU, whereas 𝑋𝑙𝑖 = [1, 0] and 𝑋𝑏𝑖 = [1, 0] denote that
+the ratio of the time overhead of the GPU to the time overhead of the | these corresponding elements are designated to the GPU. It follows that
+CPU. When 0 < 𝑔𝑐_𝑟𝑎𝑡𝑖𝑜 < 1, the computing performance of the GPU | 𝑋𝑙𝑖 [0]⊕𝑋𝑙𝑖 [1] = 1 and 𝑋𝑏𝑖 [0]⊕𝑋𝑏𝑖 [1] = 1. In light of the analysis derived
+is better and 𝑔𝑐_𝑟𝑎𝑡𝑖𝑜 > 1 means the CPU is better. The 𝑐𝑝𝑢_𝑙𝑜𝑎𝑑 = 0% | from the previous section, it has been simplified thus: tasks associated
+indicates that no other load tasks are currently running on the device. | with the convolutional layer are designated to the GPU, implying that
+It can be observed that due to the multi-core parallel architecture of | ∀𝑖 ∈ [1, 𝑛 − 1], 𝑋𝑙𝑖 = [1, 0]. Given the overlap of the 𝑛th branch exit
+GPUs, their computational efficiency in convolutional layers is signif- | network with the final backbone network layer, it holds that 𝑋𝑙𝑛 is
+icantly higher than CPUs. Conversely, the computational efficiency of | congruent to 𝑋𝑏𝑛 .
+GPUs and CPUs in fully connected layers is not significantly different. | The identification of the power consumption mode for intelligent
+The computational efficiency of CPUs is even twice as high as that of | terminal devices, coupled with the prediction of computation latency
+GPUs in some fully connected layers. | for heterogeneous processors, necessitate immediate consideration.
+
+| 4
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+
+
+
+| Fig. 5. The illustration of multi-exit DNNs inference acceleration mechanism based on heterogeneous processor.
+
+
+Table 2 | Consequently, we utilize the deep neural network computation time
+Notations of multi-exit DNN predicated on heterogeneous processing unit. | prediction model, conceived in Eq. (4), to ascertain computation la-
+Symbol | Meaning | tency of each network layer in different processors with different power
+𝑙 = 𝑙1 , 𝑙2 , … , 𝑙𝑛−1 , 𝑙𝑛 | backbone network layers | consumption modes.
+𝐵 = 𝑏1 , 𝑏2 , … , 𝑏𝑛−1 , 𝑏𝑛 | branch exit networks | The distribution of computing tasks ought to consider not solely
+𝑃 = 𝑝0 , 𝑝1 , 𝑝2 , … , 𝑝𝑛−1 , 𝑝𝑛 | exit probability of branch exit networks | the computational latency but also the expense associated with trans-
+| 𝑏 | 𝑏 | 𝑏 | 𝑏 | mitting intermediate data between heterogeneous processors. If 𝐷𝑆𝑖
+𝐼𝑏𝑖 = {𝑓 (𝐶𝑖𝑛𝑖 , 𝐶𝑜𝑢𝑡𝑖 , 𝐹𝑖𝑛𝑖 , 𝐹𝑜𝑢𝑡𝑖 , | information of the 𝑖th branch
+| 𝑏 | 𝑏
+𝑘𝑤𝑖 , 𝑝𝑤𝑖 ), 𝜃 𝑏𝑖 } | exit network layer | denotes the size of the intermediate data engendered by the 𝑖th back-
+| 𝑙 | 𝑙 | 𝑙 | 𝑙
+| bone network layer, the ensuing delay for 𝐷𝑆𝑖 transmission from GPU
+𝐼𝑙𝑖 = {𝑓 (𝐶𝑖𝑛𝑖 , 𝐶𝑜𝑢𝑡
+| 𝑖
+| , 𝐹𝑖𝑛𝑖 , 𝐹𝑜𝑢𝑡
+| 𝑖
+| , | information of the 𝑖th backbone | 𝐷𝑆
+| 𝑙 | 𝑙 | to CPU is characterized as: 𝑡𝑑2ℎ
+| 𝑏
+| = 𝐵𝑊 𝑖 , while the delay for the
+𝑘𝑤𝑖 , 𝑝𝑤𝑖 ), 𝜃 𝑙𝑖 } | network layer | 𝑖 | 𝑝𝑐𝑖𝑒
+| 𝐷𝑆
+𝑡𝑐𝑝𝑢 | computation time of 𝑖th backbone | converse, from CPU to GPU, is: 𝑡ℎ2𝑑
+| 𝑏
+| = 𝐵𝑊 𝑖 . It is assumed by default
+𝑙𝑖
+| 𝑖 | 𝑝𝑐𝑖𝑒
+| network layer on CPU | that 𝑡𝑑2ℎ
+| 𝑏
+| = 𝑡ℎ2𝑑
+| 𝑏
+| = 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏
+| .
+| 𝑖 | 𝑖 | 𝑖
+𝑡𝑔𝑝𝑢
+𝑙𝑖
+| computation time of 𝑖th backbone
+| network layer on GPU | 4.2. Problem formulation
+𝑡𝑐𝑝𝑢
+𝑏
+| computation time of 𝑖th branch
+| 𝑖
+| exit network on CPU | Presuming the current inference task is undergoing execution at the
+𝑡𝑔𝑝𝑢
+𝑏
+| computation time of 𝑖th branch | 𝑖th backbone network layer and will conclude at the corresponding
+| 𝑖
+| exit network on GPU | 𝑖th branch exit network, its optimal execution duration is depicted in
+𝐷𝑆𝑖 | size of intermediate data of the 𝑖th | Eq. (6). The function 𝑔(𝐿𝑖 ) embodies the cumulative execution duration
+| backbone network layer | under the optimal allocation strategy from the first network layer
+𝐵𝑊𝑝𝑐𝑖𝑒 | PCIe bandwidth between | through to the 𝑖 − 1th network layer.
+| CPU and GPU
+𝜇𝑖 | execution probability of 𝑖th
+| 𝑡𝑎𝑟𝑔𝑒𝑡𝑏𝑖 = min{𝑔(𝐿𝑖 ) + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑙 ,𝑏 + 𝑡𝑙𝑖 + 𝑡𝑏𝑖 } | (6)
+| 𝑖−1 𝑖
+| backbone network layer
+| 𝑡𝑡𝑟𝑎𝑛𝑠 | 𝑡𝑟𝑎𝑛𝑠
+| 𝑙 ,𝑏 = 𝑡𝑙 | + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏 | (7)
+| 𝑖−1 𝑖 | 𝑖−1 | 𝑖
+
+
+| 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑙 | =(𝑋𝑙𝑖 [0] ⊕ 𝑋𝑙𝑖−1 [0]) × (𝑡ℎ2𝑑
+| 𝑙 | × 𝑋𝑙𝑖−1 [1] + 𝑡𝑑2ℎ
+| 𝑙 | × 𝑋𝑙𝑖−1 [0]) | (8)
+Table 3 | 𝑖−1 | 𝑖−1 | 𝑖−1
+
+Notations of decision.
+Symbol | Description | 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏 | =(𝑋𝑙𝑖 [0] ⊕ 𝑋𝑏𝑖 [0]) × (𝑡ℎ2𝑑
+| 𝑖 | × 𝑋𝑏𝑖 [1] + 𝑡𝑑2ℎ
+| 𝑖 | × 𝑋𝑏𝑖 [0]), | (9)
+| 𝑖
+𝑋𝐿 | computing task allocation of all backbone network layers | herein, 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑙𝑖−1
+| denotes the intermediate data transfer overhead incurred
+𝑋𝑙𝑖 | computing task allocation of 𝑖th backbone network layer
+| between the 𝑖 − 1th backbone network layer and the 𝑖th backbone
+𝑋𝐵 | computing task allocation of all branch exits
+𝑋𝑏𝑖 | computing task allocation of 𝑖th branch exit | network layer. 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖
+| signifies the intermediate data transfer overhead
+| between the 𝑖th backbone exit point and the branch exit network.
+| 𝑡𝑙𝑖 represents the computation overhead associated with the 𝑖th back-
+| bone network layer, while 𝑡𝑏𝑖 represents the computation overhead
+| attributable to the 𝑖th branch exit network.
+
+| 5
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+
+| Eq. (10) illustrates the optimization goal of the multi-exit DNN as
+the aggregate of the anticipated execution times, denoted by 𝑡𝑎𝑟𝑔𝑒𝑡𝑏𝑖 .
+
+| ∑
+| 𝑛
+𝑇 𝑎𝑟𝑔𝑒𝑡1 = min | (𝜇𝑖 × 𝑝𝑖 × 𝑡𝑎𝑟𝑔𝑒𝑡𝑏𝑖 )
+| 𝑖∈[1,𝑛]
+| 𝑖=1
+| (10)
+𝑠.𝑡. | 𝑋𝑙𝑖 [0] ⊕ 𝑋𝑙𝑖 [1] = 1
+| 𝑋𝑏𝑖 [0] ⊕ 𝑋𝑏𝑖 [1] = 1
+| Confronted with a multi-exit DNN encompassing 𝑛 branch exit net-
+works, the solution space of Eq. (10) escalates exponentially to 𝑂(2𝑛 ).
+Such complexity is unacceptable for tasks sensitive to latency.
+
+4.3. Acceleration algorithm | Fig. 6. The illustration of multi-exit DNNs task execution.
+
+
+| Based on the preliminary experimental results presented in the
+previous section, this section proposes a heuristic pruning algorithm
+with the structure of multi-exit DNN and the prior exit probability 𝑃 .
+This algorithm effectively discards a majority of potential strategy com-
+binations and efficiently identifies the optimal task allocation strategy.
+The heuristic pruning algorithm is displayed in Algorithm 1, and its
+time complexity is 𝑂(𝑛), facilitating the determination of the optimal
+strategy for task allocation.
+
+Algorithm 1 multi-exit DNN task allocation algorithm based on
+heterogeneous processor
+Input: Information of backbone network layers and branch exit net-
+| works 𝐼𝑙 , 𝐼𝑏 ; power consumption mode 𝑒; exit probability of branch
+| exits 𝑝; transmission delay of intermediate data 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝐵
+| .
+Output: Task allocation status of branch exit networks 𝑋𝐵 .
+1: for 𝐼𝑙𝑖 ∈ 𝐼𝐿 do
+2: | Compute 𝑡𝑐𝑝𝑢  𝑙𝑖
+| and 𝑡𝑔𝑝𝑢
+| 𝑙𝑖
+| with Eq. (4).
+3: end for
+4: for 𝐼𝑏𝑖 ∈ 𝐼𝐵 do
+5: | Compute 𝑡𝑐𝑝𝑢  𝑏𝑖
+| and 𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| with Eq. (4).
+6: end for
+7: for 𝑖 = 1, 2, ..., 𝑛 do
+| 𝑔𝑝𝑢
+| 𝑡𝑏
+8: | if 𝑡𝑐𝑝𝑢
+| 𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖
+| ≤ | 𝑖
+| 𝑝𝑖
+| ∥ 𝑡𝑐𝑝𝑢
+| 𝑏
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏
+| ≤ 𝑡𝑔𝑝𝑢
+| 𝑏
+| + (1 − 𝑝𝑖 ) × 𝑡𝑔𝑝𝑢
+| 𝑙
+| then
+| 𝑖 | 𝑖 | 𝑖 | 𝑖+1
+9: | 𝑋𝑏𝑖 ← [0, 1]
+10: | else
+11: | 𝑋𝑏𝑖 ← [1, 0]
+12: | end if
+13: end for
+14: return 𝑋𝐵
+
+
+| Fig. 7. The exit network execution on different processors.
+| By default, the inference tasks of the backbone network layer are
+consigned to the GPU. In Fig. 6, we define the start time as the moment
+when the 𝑖th exit point is reached, subsequent to the computation of the
+𝑖th backbone network layer, and the end time as the instance when the | When 𝑡𝑐𝑝𝑢𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖
+| > 𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| , we need to discuss the relationship between
+𝑖 + 1th backbone network layer has been computed. 𝑇𝑐𝑢𝑡 indicates the | 𝑡𝑐𝑝𝑢
+| 𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠 and 𝑡𝑔𝑝𝑢 .
+| 𝑏𝑖 | 𝑙𝑖+1
+time interval between the end and start times. | (1) 𝑡𝑐𝑝𝑢
+| 𝑏
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏
+| ≤ 𝑡𝑔𝑝𝑢
+| 𝑙
+| :
+| 𝑖 | 𝑖 | 𝑖+1
+| ① For 𝑋𝑏𝑖 = [0, 1], with the CPU executing the inference tasks
+for the 𝑖th branch exit network, the GPU may persist in performing
+| 01
+| 𝑇𝑐𝑢𝑡 | 10
+| − 𝑇𝑐𝑢𝑡 =𝑝𝑖 × (𝑡𝑐𝑝𝑢
+| 𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖 | − 𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| ) − (1 − 𝑝𝑖 ) × 𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| (12)
+the inference tasks for the 𝑖 + 1th backbone network. As depicted in | =𝑝𝑖 × (𝑡𝑐𝑝𝑢
+| 𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖 | ) − 𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| 01 = 𝑝 × (𝑡𝑐𝑝𝑢 + 𝑡𝑡𝑟𝑎𝑛𝑠 ) + (1 − 𝑝 ) × max 𝑡𝑐𝑝𝑢 + 𝑡𝑡𝑟𝑎𝑛𝑠 , 𝑡𝑔𝑝𝑢 .
+Fig. 7(a), 𝑇𝑐𝑢𝑡 | 𝑖 | 𝑏𝑖 | 𝑏𝑖 | 𝑖 | 𝑏𝑖 | 𝑏𝑖 | 𝑙𝑖+1 | 𝑔𝑝𝑢
+| 𝑡𝑏
+| ② For 𝑋𝑏𝑖 = [1, 0], the GPU is restricted to executing the inference | As shown in Eq. (12). When 𝑡𝑐𝑝𝑢
+| 𝑏
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏
+| ≤ | 𝑖
+| 𝑝𝑖
+| 01 − 𝑇 10 < 0, and
+| , 𝑇𝑐𝑢𝑡 | 𝑐𝑢𝑡
+| 𝑖 | 𝑖
+tasks of the branch exit network and the backbone network in sequence. | 𝑔𝑝𝑢
+| 𝑡𝑏
+| 10 = 𝑝 × 𝑡𝑔𝑝𝑢 + (1 − 𝑝 ) × (𝑡𝑔𝑝𝑢 + 𝑡𝑔𝑝𝑢 ).
+As illustrated in Fig. 7(b), 𝑇𝑐𝑢𝑡 | 𝑖 | 𝑖
+| when 𝑡𝑐𝑝𝑢
+| 𝑏
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏
+| >  𝑝𝑖
+| 01 − 𝑇 10 > 0.
+| , 𝑇𝑐𝑢𝑡 𝑖
+| 𝑐𝑢𝑡
+| 𝑏 | 𝑏  𝑖 | 𝑙 | 𝑖 | 𝑖+1 | 𝑖 | 𝑖
+| 𝑐𝑝𝑢  𝑡𝑟𝑎𝑛𝑠 | 𝑔𝑝𝑢
+| (2) 𝑡𝑏 + 𝑡𝑏 | > 𝑡𝑙 :
+01
+𝑇𝑐𝑢𝑡 | 10
+| − 𝑇𝑐𝑢𝑡 =𝑝𝑖 × (𝑡𝑐𝑝𝑢
+| 𝑏
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏 | − 𝑡𝑔𝑝𝑢
+| 𝑏
+| )+ | 𝑖 | 𝑖 | 𝑖+1
+| 𝑖 | 𝑖 | 𝑖
+| (11) | 01
+| 𝑇𝑐𝑢𝑡 | 10
+| − 𝑇𝑐𝑢𝑡 =(𝑝𝑖 + 1 − 𝑝𝑖 ) × (𝑡𝑐𝑝𝑢 + 𝑡𝑡𝑟𝑎𝑛𝑠 − 𝑡𝑔𝑝𝑢 ) − (1 − 𝑝𝑖 ) × 𝑡𝑔𝑝𝑢
+| (1 − 𝑝𝑖 ) × (max{𝑡𝑐𝑝𝑢
+| 𝑏
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏 | , 𝑡𝑔𝑝𝑢
+| 𝑙
+| } − 𝑡𝑔𝑝𝑢
+| 𝑏
+| − 𝑡𝑔𝑝𝑢
+| 𝑙
+| ) | 𝑏 | 𝑏 | 𝑖𝑏  𝑖 | 𝑖 | 𝑙 | 𝑖+1
+| (13)
+| 𝑖 | 𝑖 | 𝑖+1 | 𝑖 | 𝑖+1
+| =𝑡𝑐𝑝𝑢 + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏 | − 𝑡𝑔𝑝𝑢 − (1 − 𝑝𝑖 ) × 𝑡𝑔𝑝𝑢
+| When 𝑡𝑐𝑝𝑢
+| 𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖
+| ≤ 𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| , max{𝑡𝑐𝑝𝑢
+| 𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖
+| , 𝑡𝑔𝑝𝑢
+| 𝑙𝑖+1
+| } ≤ max{𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| , 𝑡𝑔𝑝𝑢
+| 𝑙𝑖+1
+| } < | 𝑏𝑖 | 𝑖 | 𝑏 | 𝑖 | 𝑙 | 𝑖+1
+
+𝑔𝑝𝑢 | 𝑔𝑝𝑢 | 01 | 10
+𝑡𝑏 + 𝑡𝑙 , and 𝑇𝑐𝑢𝑡 < 𝑇𝑐𝑢𝑡 . It is more appropriate to place the inference | As shown in Eq. (13). When 𝑡𝑐𝑝𝑢 | 𝑏𝑖
+| + 𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏𝑖
+| ≤ 𝑡𝑔𝑝𝑢
+| 𝑏𝑖
+| + (1 − 𝑝𝑖 ) × 𝑡𝑔𝑝𝑢
+| 𝑙𝑖+1
+| ,
+𝑖 | 𝑖+1 | 𝑐𝑝𝑢 | 𝑔𝑝𝑢 | 𝑔𝑝𝑢
+task of the 𝑖th branch exit network on the CPU. | 01 | 10 | 𝑡𝑟𝑎𝑛𝑠
+| 𝑇𝑐𝑢𝑡 − 𝑇𝑐𝑢𝑡 ≤ 0, and when 𝑡𝑏 + 𝑡𝑏 | 01 − 𝑇 10 > 0.
+| > 𝑡𝑏 + (1 − 𝑝𝑖 ) × 𝑡𝑙 , 𝑇𝑐𝑢𝑡
+| 𝑖 | 𝑖 | 𝑖 | 𝑖+1 | 𝑐𝑢𝑡
+
+
+| 6
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+
+
+
+| Fig. 9. NVIDIA Jetson Nano.
+| Fig. 8. CIFAR-10 dataset.
+
+
+Table 4
+The relevant parameters of Jetson Nano.
+Property | High power | Low power
+Power | 10 W | 5 W
+Number of CPU cores | 4 | 2
+Maximum clock frequency of CPU (MHz) | 1479 | 918
+Maximum clock frequency of GPU (MHz) | 921 | 640
+
+
+
+
+| As a conclusion, when 𝑡𝑐𝑝𝑢
+| 𝑏
+| +𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏
+| ≤ 𝑡𝑔𝑝𝑢
+| 𝑏
+| +(1−𝑝𝑖 )×𝑡𝑔𝑝𝑢
+| 𝑙
+| or 𝑡𝑐𝑝𝑢
+| 𝑏
+| +𝑡𝑡𝑟𝑎𝑛𝑠
+| 𝑏
+| ≤
+𝑔𝑝𝑢 | 𝑖 | 𝑖 | 𝑖 | 𝑖+1 | 𝑖 | 𝑖
+𝑡𝑏
+𝑖
+𝑝𝑖
+| , it is more appropriate to place the inference task of the 𝑖th branch
+| Fig. 10. The system architecture.
+exit network on the CPU. Otherwise, it is more appropriate to place the
+inference task of the 𝑖th branch exit network on the GPU.
+| Table 5
+| The exit probability of branch exits.
+5. Experiment
+| Model | 𝑃 = 𝑝0 , 𝑝1 , 𝑝2 , … , 𝑝𝑛−1 , 𝑝𝑛
+| ME-AlexNet | 𝑃 = 0, 0.7661, 0.7449, 0.6156, 0.6448, 0.8791
+| To verify the effectiveness of the CIAHP, a series of comparisons
+| ME-VGG | 𝑃 = 0, 0.8223, 0.8295, 0.6810, 0.7104, 0.9136
+were made with baselines. This section first presents the settings used
+for experiment. Then, we changed the traditional DNNs to multi-exit
+DNNs and used the test set to obtain the estimated prior exit probabil-
+ity. We perform a series of experiments on model inference tasks using | Upon completion of tasks, the worker transmits the results to the result
+a terminal device, considering various power consumption modes. The | collector. The latter module is responsible for processing statistical
+average value derived from these experiments is considered as the ob- | tasks, collecting inference latency, and recording recognition results.
+tained experimental outcomes. Finally, we analyzed the experimental | We used AlexNet [1] and VGG16 [38] models and designed simpli-
+results and gave the corresponding conclusions. | fied Multi-Exit variants of AlexNet (ME-AlexNet) and VGG (ME-VGG)
+| based on the CIFAR-10 dataset. Both ME-AlexNet and ME-VGG are
+5.1. Setup | furnished with five branch exits each. Table 5 illustrates the estimated
+| prior exit probability 𝑃 of each branch exit, ascertained using the test
+5.1.1. Datasets and training model | set.
+| For this investigation, we selected the CIFAR-10 dataset [37] as
+illustrated in Fig. 8. This dataset comprises 60,000 RGB images in total, | 5.1.2. Compared methods
+with 50,000 serving as training images, and the remaining 10,000 as | Firstly, we compared and analyzed the inference latency and ac-
+testing images. These test images serve as input samples to substantiate | curacy of traditional DNNs and multi-exit DNNs to demonstrate the
+the effectiveness of CIAHP. | effectiveness of the multi-exit architecture. Secondly, we evaluated the
+| To verify the efficacy of CIAHP, we employed the NVIDIA Jetson | acceleration performance of disparate inference algorithms predicated
+Nano equipped with heterogeneous processor. As depicted in Fig. 9, | on multi-exit DNNs. Lastly, we assessed the efficiency of various infer-
+the NVIDIA Jetson Nano is fitted with a Maxwell GPU, a quad-core | ence algorithms utilizing complex image data as input, thereby affirm-
+ARM Cortex-A57 64-bit CPU, 4 GB of LPDDR4 memory, and a 16 GB | ing the acceleration performance of the CIAHP algorithm predicated on
+external SD card. This intelligent terminal device operates in two power | complex input.
+consumption modes, specifically 10 W and 5 W, which offer diverse | Specifically, we compared and analyzed the performance of four
+computational capabilities for CPUs and GPUs. Table 4 exhibits the | algorithms that disregard heterogeneous processor cooperation. These
+pertinent parameters of Jetson Nano. | include: (1) CPU-Only. Place all tasks on the CPU. (2) GPU-Only. Place
+| The PyTorch deep learning framework was employed to fabricate | all tasks on the GPU. (3) 0-1 pattern. A part of the image recognition
+the experimental system, as portrayed in Fig. 10. This system encapsu- | task is executed on the CPU and the other part is executed on the GPU.
+lates three modules: task scheduler, task workers, and result collector. | (4) DeepX [28]. DeepX divides the deep learning model into multiple
+The task scheduler oversees task distribution amongst CPUs and GPUs. | modules that are executed on the GPU and CPU in synchronous manner
+The task workers, both CPU and GPU, execute inference tasks, and po- | according to the characteristics of each module, which only utilizes one
+tential intermediate data transfer might occur between these workers. | processor for a task at a time. Our experiments are conducted in both
+
+| 7
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+Table 6
+The complexity distribution of test data set.
+Model | b1 | b2 | b3 | b4 | b5
+ME-AlexNet | 7661 | 1379 | 266 | 163 | 375
+ME-VGG | 8223 | 1297 | 198 | 110 | 141
+
+
+
+
+| Fig. 13. Acceleration performance comparison of each algorithm using multi-exit DNN.
+
+
+
+Fig. 11. Comparison of inference performance between multi-exit DNN models and
+traditional models (low-power).
+
+
+
+
+| Fig. 14. Comparison of average inference latency and inference latency of complex
+| samples.
+
+
+
+
+Fig. 12. Comparison of inference performance between multi-exit DNN models and
+traditional models (high-power).
+
+
+
+
+high and low power consumption modes, and the final results are the
+average inference latency across multiple tasks.
+
+5.2. Experimental results and analysis
+
+5.2.1. The exit distribution of data | Fig. 15. Acceleration performance comparison of acceleration algorithms with complex
+| samples (low-power).
+| Initially, we undertook an analysis of the complexity distribution
+of the test set. Table 6 enumerates 𝑏1 , 𝑏2 , … , 𝑏5 , denoting the five exits
+of the model, arranged in ascending order from the shallowest to the
+deepest layers. A majority of the samples were found to exit at the
+shallowest exits, whereas only a handful were found to exit at the final
+layer, which the model identifies as complex samples. As demonstrated
+in the ensuing experimental results, these complex samples encompass
+the entirety of the backbone network as well as all branch exit net-
+works, hence yielding the relatively higher inference latency compared
+to other samples. Contrary to Table 5, which represents the probability
+of samples exiting at the corresponding exit, Table 6 showcases the
+complexity distribution of the samples in the test set.
+| Fig. 16. Acceleration performance comparison of acceleration algorithms with complex
+5.2.2. Performance comparison | samples (high-power).
+
+| Initially, we performed a comparison between multi-exit neural
+networks and conventional neural networks, focusing on their respec-
+tive inference latency under various power consumption modes. Sub- | a speedup of 3.0× and 5.0× for AlexNet and VGGNet, respectively.
+sequently, we evaluated the effectiveness of the CIAHP algorithm. | Similar results are observed under the high-power mode. The results
+Further, we conducted a separate analysis for instances where complex | are displayed in Fig. 11 and Fig. 12. The multi-exit architecture also
+samples were input, and we validated the acceleration impact conferred | marginally enhances the accuracy of the traditional models, as depicted
+by the application of the CIAHP algorithm. | in Table 7.
+| The impact of multi-exit architecture: Under the low-power | The effectiveness of the CIAHP: We compared the acceleration
+mode, ME-AlexNet and ME-VGG are capable of extracting sufficient | performance of CIAHP and traditional acceleration algorithms using
+features for most samples at the shallow layers of the network, thereby | multi-exit DNN. According to Fig. 13, CIAHP exhibits the highest
+enabling early termination of the inference process. This results in | performance. Inference latency is lower in CIAHP due to the fact that
+
+| 8
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+| Table 7 | processors proposed in this paper can ensure the stable operation of
+| Comparison of the accuracy of different models.
+| devices under a variety of power consumption modes. Compared to
+| Model | Accuracy | traditional inference acceleration mechanisms, this mechanism reduces
+| AlexNet | 75.68% | the average inference latency and effectively alleviates the performance
+| ME-AlexNet | 76.18%
+| degradation of multi-exit DNNs with complex inputs. However, our
+| VGG | 82.86%
+| ME-VGG | 83.22%
+| methodology fails to consider the memory resource competition be-
+| tween the GPU and CPU, thereby resulting in a decline in the efficiency
+| of inference. Considering the utilization of memory and the competition
+| for memory between GPUs and CPUs in inference tasks, would be
+GPUs and CPUs can be used in parallel to perform inference tasks. In | promising research directions.
+comparison to the Gpu-Only and DeepX approaches, the CIAHP frame-
+work demonstrates a speedup of 1.2× and 1.1× on the ME-AlexNet | CRediT authorship contribution statement
+model, respectively. However, because the multi-exit DNN allows most
+samples to exit early, there is no obvious difference between CIAHP | Jinghui Zhang: Conceptualization, Methodology. Weilong Xin:
+and GPU-Only when comparing the acceleration effect for ME-VGG. | Visualization, Software, Writing – review & editing. Dingyang Lv:
+| The impact of complex samples: We examined the time overhead | Visualization, Software. Jiawei Wang: Writing – review & editing.
+of different acceleration algorithms when processing complex samples. | Guangxing Cai: Methodology, Software, Writing – original draft. Fang
+As shown in Fig. 14(a), the inference latency of the models (cpl_ME- | Dong: Supervision, Resources, Funding acquisition.
+AlexNet and cpl_ME-VGG) whose input is complex samples increases
+sharply compared with the average inference latency in low-power | Declaration of competing interest
+mode. Because all backbone networks and branch networks are covered
+by the inference path for complex samples. As shown in Fig. 14(b), | The authors declare that they have no known competing finan-
+there are similar results in high power mode. | cial interests or personal relationships that could have appeared to
+| Based on the complex samples mentioned in Table 6, this paper | influence the work reported in this paper.
+evaluates the inference performance of the CIAHP algorithm and other
+algorithms. The results are shown in Fig. 15 and Fig. 16. Compared | Data availability
+to GPU-Only, CIAHP improves performance by approximately 12.4%
+and 11.1% on ME-AlexNet and ME-VGG respectively, similar results | The authors do not have permission to share data.
+are observed in the high-power mode. In the same way, compared
+to DeepX, CIAHP improves performance by approximately 12.2% and | Acknowledgments
+11.0% on ME-AlexNet and ME-VGG respectively. CIAHP accounts for
+the collaborative nature of heterogeneous processors, thereby allowing | This work is supported by National Natural Science Foundation of
+the inference tasks of the backbone and branches of a multi-exit DNN | China under Grants No. 61972085, 62232004, Jiangsu Provincial Key
+to be executed simultaneously by the GPU and CPU. The latency caused | Laboratory of Network and Information Security, China under Grants
+by complex samples can be offset due to the ability of heterogeneous | No. BM2003201, Key Laboratory of Computer Network and Informa-
+processors to perform tasks in parallel. | tion Integration of Ministry of Education of China under Grants No.
+| DeepX demonstrates the capability to allocate processors based on | 93K-9, the University Synergy Innovation Program of Anhui Province,
+the distinctive attributes of various network layers. Consequently, this | China No. GXXT-2020-012, and partially supported by Collaborative
+approach yields superior acceleration compared to GPU-Only. Never- | Innovation Center of Novel Software Technology and Industrialization,
+theless, DeepX facilitates the acceleration of inference tasks on hetero- | the Fundamental Research Funds for the Central Universities, CCF-
+geneous processors through a synchronous procedure, wherein only a | Baidu Open Fund, China (No. 2021PP15002000) and Future Network
+single processor carries out an inference task at any given moment, | Scientific Research Fund Project, China (FNSRFP-2021-YB-02). We also
+rendering the remaining processors inactive. Therefore, CIAHP exhibits | thank the Big Data Computing Center of Southeast University for
+a distinct advantage over DeepX in terms of the attained speedup results | providing the experiment environment and computing facility.
+for inference tasks. However, this advantageous trend exhibits a dimin-
+ishing pattern when applied to AlexNet, and VGGNet, respectively. To | References
+validate this trend, we conducted a supplementary experiment utilizing
+the LeNet model [39], which exhibits a notably simpler architecture | [1] A. Krizhevsky, I. Sutskever, G.E. Hinton, Imagenet classification with deep
+when compared to AlexNet and VGG. The experimental findings indi- | convolutional neural networks, Commun. ACM 60 (6) (2017) 84–90.
+| [2] Q. Zhang, H. Sun, X. Wu, H. Zhong, Edge video analytics for public safety: A
+cate a significant superiority of CIAHP over DeepX in terms of LeNet
+| review, Proc. IEEE 107 (8) (2019) 1675–1696.
+acceleration. This phenomenon can be attributed to inter-processor | [3] G.V. Reddy, K. Deepika, L. Malliga, D. Hemanand, C. Senthilkumar, S. Gopalakr-
+communication, as the complexity of the model increases, resulting in | ishnan, Y. Farhaoui, Human action recognition using difference of Gaussian and
+elevated costs and frequency of communication among processors in | difference of wavelet, Big Data Min. Anal. 6 (3) (2023) 336–346.
+CIAHP. | [4] S. Khetavath, N.C. Sendhilkumar, P. Mukunthan, S. Jana, S. Gopalakrishnan, L.
+| Malliga, S.R. Chand, Y. Farhaoui, An intelligent heuristic manta-ray foraging
+| optimization and adaptive extreme learning machine for hand gesture image
+6. Conclusions | recognition, Big Data Min. Anal. 6 (3) (2023) 321–335.
+| [5] D. Chatzopoulos, C. Bermejo, Z. Huang, P. Hui, Mobile augmented reality survey:
+| In this paper, the problem of inference acceleration based on het- | From where we are to where we go, IEEE Access 5 (2017) 6917–6950.
+| [6] A.G. Howard, M. Zhu, B. Chen, D. Kalenichenko, W. Wang, T. Weyand, M.
+erogeneous processors is investigated. We propose CIAHP, a heuristic-
+| Andreetto, H. Adam, Mobilenets: Efficient convolutional neural networks for
+guided inference acceleration mechanism for intelligent terminal de- | mobile vision applications, 2017, arXiv preprint arXiv:1704.04861.
+vices with heterogeneous processors. The CIAHP consists of two stages, | [7] X. Xu, H. Li, W. Xu, Z. Liu, L. Yao, F. Dai, Artificial intelligence for edge service
+including the deep neural network computation time prediction model | optimization in internet of vehicles: A survey, Tsinghua Sci. Technol. 27 (2)
+and the multi-exit DNN task allocation algorithm based on heteroge- | (2022) 270–287, http://dx.doi.org/10.26599/TST.2020.9010025.
+| [8] Z. Huang, F. Dong, D. Shen, J. Zhang, H. Wang, G. Cai, Q. He, Enabling low
+neous processors. An optimal task allocation strategy can be promptly | latency edge intelligence based on multi-exit DNNs in the wild, in: 2021 IEEE
+identified using the CIAHP. Experiments have shown that the multi- | 41st International Conference on Distributed Computing Systems, ICDCS, 2021,
+exit DNN inference acceleration mechanism based on heterogeneous | pp. 729–739.
+
+
+| 9
+
+J. Zhang et al. | Sustainable Computing: Informatics and Systems 40 (2023) 100906
+
+
+[9] S. Teerapittayanon, B. McDanel, H.-T. Kung, Distributed deep neural networks | [25] E. Jeong, J. Kim, S. Ha, TensorRT-based framework and optimization methodol-
+| over the cloud, the edge and end devices, in: 2017 IEEE 37th International | ogy for deep learning inference on jetson boards, ACM Trans. Embedded Comput.
+| Conference on Distributed Computing Systems, ICDCS, IEEE, 2017, pp. 328–339. | Syst. (TECS) 21 (5) (2022) 1–26.
+[10] A. Kalay, A. Fisne, Poster: Edge computing for deep learning-based sensor multi- | [26] Y. Xiang, H. Kim, Pipelined data-parallel CPU/GPU scheduling for multi-DNN
+| target detection, in: 2022 IEEE/ACM 7th Symposium on Edge Computing, SEC, | real-time inference, in: 2019 IEEE Real-Time Systems Symposium, RTSS, IEEE,
+| IEEE, 2022, pp. 286–288. | 2019, pp. 392–405.
+[11] J. Jeon, J.-K. Kang, Y. Kim, Filter pruning method for inference time acceleration | [27] J.S. Jeong, J. Lee, D. Kim, C. Jeon, C. Jeong, Y. Lee, B.-G. Chun, Band: coordi-
+| based on YOLOX in edge device, in: 2022 19th International SoC Design
+| nated multi-DNN inference on heterogeneous mobile processors, in: Proceedings
+| Conference, ISOCC, IEEE, 2022, pp. 354–355.
+| of the 20th Annual International Conference on Mobile Systems, Applications
+[12] P. Regulation, General data protection regulation, Intouch 25 (2018) 1–5.
+| and Services, 2022, pp. 235–247.
+[13] A. Heidari, N.J. Navimipour, M.A.J. Jamali, S. Akbarpour, A green, secure, and
+| [28] N.D. Lane, S. Bhattacharya, P. Georgiev, C. Forlivesi, L. Jiao, L. Qendro, F.
+| deep intelligent method for dynamic IoT-edge-cloud offloading scenarios, Sustain.
+| Comput. Inf. Syst. (2023) 100859. | Kawsar, Deepx: A software accelerator for low-power deep learning inference
+[14] N. Sanil, V. Rakesh, R. Mallapur, M.R. Ahmed, et al., Deep learning techniques | on mobile devices, in: 2016 15th ACM/IEEE International Conference on
+| for obstacle detection and avoidance in driverless cars, in: 2020 International | Information Processing in Sensor Networks (IPSN), IEEE, 2016, pp. 1–12.
+| Conference on Artificial Intelligence and Signal Processing, AISP, IEEE, 2020, | [29] S. Teerapittayanon, B. McDanel, H.-T. Kung, Branchynet: Fast inference via early
+| pp. 1–4. | exiting from deep neural networks, in: 2016 23rd International Conference on
+[15] C. Hu, W. Bao, D. Wang, F. Liu, Dynamic adaptive DNN surgery for inference | Pattern Recognition, ICPR, IEEE, 2016, pp. 2464–2469.
+| acceleration on the edge, in: IEEE INFOCOM 2019-IEEE Conference on Computer | [30] H. Wang, G. Cai, Z. Huang, F. Dong, ADDA: Adaptive distributed DNN inference
+| Communications, IEEE, 2019, pp. 1423–1431. | acceleration in edge computing environment, in: 2019 IEEE 25th International
+[16] S. Laskaridis, S.I. Venieris, M. Almeida, I. Leontiadis, N.D. Lane, SPINN: syn- | Conference on Parallel and Distributed Systems, ICPADS, IEEE, 2019, pp.
+| ergistic progressive inference of neural networks over device and cloud, in: | 438–445.
+| Proceedings of the 26th Annual International Conference on Mobile Computing | [31] E. Li, L. Zeng, Z. Zhou, X. Chen, Edge AI: On-demand accelerating deep neural
+| and Networking, 2020, pp. 1–15. | network inference via edge computing, IEEE Trans. Wireless Commun. 19 (1)
+[17] F. Dong, H. Wang, D. Shen, Z. Huang, Q. He, J. Zhang, L. Wen, T. Zhang, | (2019) 447–457.
+| Multi-exit DNN inference acceleration based on multi-dimensional optimization
+| [32] S. Nath, J. Wu, Deep reinforcement learning for dynamic computation offloading
+| for edge intelligence, IEEE Trans. Mob. Comput. (2022).
+| and resource allocation in cache-assisted mobile edge computing systems, Intell.
+[18] D. Kang, J. Oh, J. Choi, Y. Yi, S. Ha, Scheduling of deep learning applications
+| Converg. Netw. 1 (2) (2020) 181–198.
+| onto heterogeneous processors in an embedded device, IEEE Access 8 (2020)
+| [33] G.S. Rahman, T. Dang, M. Ahmed, Deep reinforcement learning based computa-
+| 43980–43991.
+| tion offloading and resource allocation for low-latency fog radio access networks,
+[19] F. Zhang, J. Zhai, B. Wu, B. He, W. Chen, X. Du, Automatic irregularity-
+| aware fine-grained workload partitioning on integrated architectures, IEEE Trans. | Intell. Converg. Netw. 1 (3) (2020) 243–257.
+| Knowl. Data Eng. 33 (3) (2019) 867–881. | [34] R. Bi, Q. Liu, J. Ren, G. Tan, Utility aware offloading for mobile-edge computing,
+[20] Y. Kim, J. Kim, D. Chae, D. Kim, J. Kim, 𝜇Layer: Low latency on-device inference | Tsinghua Sci. Technol. 26 (2) (2020) 239–250.
+| using cooperative single-layer acceleration and processor-friendly quantization, | [35] M. Zhou, B. Zhou, H. Wang, F. Dong, W. Zhao, Dynamic path based DNN
+| in: Proceedings of the Fourteenth EuroSys Conference 2019, 2019, pp. 1–15. | synergistic inference acceleration in edge computing environment, in: 2021 IEEE
+[21] S. Zhang, W. Cui, Q. Chen, Z. Zhang, Y. Guan, J. Leng, C. Li, M. Guo, | 27th International Conference on Parallel and Distributed Systems, ICPADS,
+| PAME: precision-aware multi-exit DNN serving for reducing latencies of batched | 2021, pp. 567–574.
+| inferences, in: Proceedings of the 36th ACM International Conference on | [36] Y. Jia, Learning Semantic Image Representations at a Large Scale, University of
+| Supercomputing, 2022. | California, Berkeley, 2014.
+[22] W. Ju, W. Bao, D. Yuan, L. Ge, B.B. Zhou, Learning early exit for deep | [37] A. Krizhevsky, G. Hinton, et al., Learning Multiple Layers of Features from Tiny
+| neural network inference on mobile devices through multi-armed bandits, in: | Images, Toronto, ON, Canada, 2009.
+| 2021 IEEE/ACM 21st International Symposium on Cluster, Cloud and Internet | [38] K. Simonyan, A. Zisserman, Very deep convolutional networks for large-scale
+| Computing (CCGrid), 2021, pp. 11–20.
+| image recognition, 2014, arXiv preprint arXiv:1409.1556.
+[23] S. Chetlur, C. Woolley, P. Vandermersch, J. Cohen, J. Tran, B. Catanzaro, E.
+| [39] Y. LeCun, L. Bottou, Y. Bengio, P. Haffner, Gradient-based learning applied to
+| Shelhamer, cudnn: Efficient primitives for deep learning, 2014, arXiv preprint
+| document recognition, Proc. IEEE 86 (1998) 2278–2324.
+| arXiv:1410.0759.
+[24] N.P. Jouppi, C. Young, N. Patil, D. Patterson, G. Agrawal, R. Bajwa, S. Bates,
+| S. Bhatia, N. Boden, A. Borchers, et al., In-datacenter performance analysis
+| of a tensor processing unit, in: Proceedings of the 44th Annual International
+| Symposium on Computer Architecture, 2017, pp. 1–12.
+
+
+
+
+| 10

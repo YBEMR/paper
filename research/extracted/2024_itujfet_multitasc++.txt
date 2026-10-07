@@ -1,0 +1,1677 @@
+                                                                      ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+             MultiTASC++: A CONTINUOUSLY ADAPTIVE SCHEDULER FOR EDGE‑BASED
+                              MULTI‑DEVICE CASCADE INFERENCE
+
+                         Sokratis Nikolaidis1 , Stylianos I. Venieris2 , Iakovos S. Venieris1
+         1
+           National Technical University of Athens, Athens, Greece, 2 Samsung AI Center, Cambridge, UK
+
+                     NOTE: Corresponding author: Sokratis Nikolaidis, sokratisnikolaidis@mail.ntua.gr
+
+
+
+Abstract – Cascade systems, consisting of a lightweight model processing all samples and a heavier, high‑
+accuracy model re ining challenging samples, have become a widely‑adopted distributed inference approach to
+achieving high accuracy and maintaining a low computational burden for mobile and IoT devices. As intelligent
+indoor environments, like smart homes, continue to expand, a new scenario emerges, the multi‑device cascade.
+In this setting, multiple diverse devices simultaneously utilize a shared heavy model hosted on a server, often si‑
+tuated within or close to the consumer environment. This work introduces MultiTASC++, a continuously
+adaptive multi‑tenancy‑aware scheduler that dynamically controls the forwarding decision functions of
+devices to optimize system throughput while maintaining high accuracy and low latency. Through extensive
+experimentation in diverse device environments and with varying server‑side models, we demonstrate the
+scheduler’s ef icacy in consistently maintaining a targeted satisfaction rate while providing the highest available
+accuracy across different device tiers and workloads of up to 100 devices. This demonstrates its scalability and
+ef iciency in addressing the unique challenges of collaborative DNN inference in dynamic and diverse IoT
+environments.
+Keywords – Cascade, DNN inference, edge computing, multi‑tenancy, scheduler
+1.   INTRODUCTION                                                             ten in the form of a dedicated AI hub designed to
+                                                                              assist nearby devices [2]. Within this framework,
+In the last few years, there have been notable ad‑
+                                                                              cascade architectures have emerged as a notable de‑
+vancements in the realm of on‑device execution for
+                                                                              ployment approach [4, 5, 6, 7, 8, 9]. These architec‑
+Deep Learning (DL) inference tasks [1]. Concur‑
+                                                                              tures capitalize on the inherent variability in sample
+rently, the proliferation of indoor intelligent en‑
+                                                                              dif iculty, opting to process only the more challeng‑
+vironments [2], encompassing smart homes and
+                                                                              ing cases with a robust server‑based model, while
+of ices, presents an opportunity for DL to facili‑
+                                                                              delegating the processing of simpler samples, which
+tate novel applications across a diverse range of
+                                                                              typically constitute the majority of the data stream,
+smart devices like IoT cameras and AI speakers.
+                                                                              to on‑device execution using a lightweight model. A
+However, due to their compact form‑factor and
+                                                                              substantial body of research has delved into cascade
+energy‑consumption constraints, the majority of
+                                                                              architectures, with a primary focus on re ining the
+these devices fall within the low‑end of the com‑
+                                                                              forwarding decision criteria and optimizing the se‑
+putational spectrum. Unlike high‑end smartphones
+                                                                              lection of model pairs to enhance overall ef icacy.
+equipped with robust processors and accelerators
+such as GPUs and NPUs [3], low‑end devices lack
+the capability to deploy state‑of‑the‑art Deep Neu‑                           Despite the advancements made, the prevailing fo‑
+ral Networks (DNNs). Consequently, they resort to                             cus of existing work has been con ined to scenar‑
+lightweight models, albeit with lower accuracy.                               ios where a single device utilizes the server at any
+                                                                              given moment. This assumption is no longer appli‑
+Considering the drawbacks associated with of load‑                            cable in the context of emerging intelligent environ‑
+ing data to the cloud for inference, such as increased                        ments, where multiple devices concurrently under‑
+bandwidth usage, latency, and privacy concerns, an                            take DL inference tasks with the support of a shared
+alternative strategy has been gaining ground. This                            AI hub [10]. This scenario introduces the novel set‑
+new strategy involves placing the server within or                            ting of multi‑device cascade, wherein multiple de‑
+in close proximity to the consumer environment, of‑                           vices utilize the same model on a shared edge‑based
+
+                                                     © International Telecommunication Union, 2024
+     Some rights reserved. This work is available under the CC BY-NC-ND 3.0 IGO license: https://creativecommons.org/licenses/by-nc-nd/3.0/igo/.
+                  More information regarding the license and suggested citation, additional permissions and disclaimers is available at:
+                                                  https://www.itu.int/en/journal/j-fet/Pages/default.aspx
+                              Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+server. A system operating in this mode must ex‑                         • A system model of the multi‑device cascade ar‑
+hibit scalability with regard to the number of de‑                         chitecture. By expanding the cascade archi‑
+vices, effectively balancing rapid response times and                      tecture to accommodate multiple devices, our
+high accuracy across the devices. Conventional ap‑                         parametrization exposes the tunable parame‑
+proaches, which treat each model cascade indepen‑                          ters and enables system designers to systemat‑
+dently, would either lead to brute‑forcing inference                       ically investigate its trade‑offs.
+requests through the server’s resources, resulting
+in system overload, or force all devices to resort to                    • A new multi‑tenancy‑aware scheduler opti‑
+on‑device execution, nullifying any accuracy advan‑                        mized for the multi‑device cascade architec‑
+tages. Consequently, there is a pressing need for in‑                      ture. With its enhanced approach of re‑
+novative methods explicitly tailored to address the                        con iguring the forwarding decision functions,
+challenges posed by a multi‑device cascade.                                we consider each device’s latency require‑
+                                                                           ments independently leading to more effective,
+In this setting, the current state‑of‑the‑art work,                        device‑tailored adaptation. We further intro‑
+MultiTASC [11], introduced a multi‑tenancy‑aware                           duce the continuous, rather than in discrete
+scheduling approach for multi‑device cascades.                             steps, tuning of the decision functions, result‑
+MultiTASC proposed a scheme where forwarding                               ing in iner‑grained adaptability. Lastly, we
+decision functions can be dynamically recon igured                         introduce server model switching, where the
+at runtime, providing the adaptability missing from                        server‑side model can be dynamically swapped
+prior cascade architectures. The decision to mod‑                          for another with a different latency‑accuracy
+ify the forwarding functions would be based on the                         trade‑off. In this manner, we add a new de‑
+monitoring of the server‑hosted model’s batch size,                        sign dimension in the multi‑device cascade ar‑
+regarded as a metric for the server’s load. As such,                       chitecture, further increasing its adaptability.
+the scheduler would tune the decision functions
+when the running batch size deviated from a prede‑                  In the following section, we present the current
+ ined optimal value that was calculated during ini‑                 state of AI‑focused edge computing and discuss re‑
+tialization.                                                        lated work. In Section 3, we describe the system
+                                                                    architecture in the multi‑device cascade setting as
+Despite its improvements over conventional cas‑                     well as our formulation of the target problem. Sec‑
+cade systems, MultiTASC resulted in an overly re‑                   tion 4 presents the novel MultiTASC++ scheduler
+laxed policy before a certain number of devices was                 and its internal design, followed by the experimen‑
+reached and an excessively strict one after the in‑                 tal evaluation in Section 5. We conclude with Sec‑
+ lux of requests became considerably high. Further‑                 tion 6, where we summarize the proposed approach
+more, when run across multiple independent runs,                    and outline possible avenues for future research.
+the observed system behavior demonstrated notice‑
+able variance, indicating that a more ine‑grained                   2.     RELATED WORK
+monitoring approach was needed to ensure a robust                   2.1 On‑device DNN inference
+deployment.
+                                                                    In recent years, there has been an explosion of Ar‑
+In this work, we propose MultiTASC++, a con‑                        ti icial Intelligence (AI) applications and services
+tinuously adapting multi‑tenancy‑aware scheduler                    thanks to signi icant advancements in DL. These ap‑
+speci ically designed to address the challenges in‑                 plications span a wide range, from personal assis‑
+herent in deploying multi‑device cascade architec‑                  tants and recommendation systems to autonomous
+ture in high‑demand, AI‑enabled indoor spaces.                      vehicles and healthcare diagnostics. Furthermore,
+Building upon the strengths of MultiTASC, we retain                 the widespread adoption of mobile computing and
+the dynamically recon igurable forwarding func‑                     the Internet of Things (IoT) has led to billions of
+tions across client devices, aiming to control the                  interconnected mobile and IoT devices, collectively
+server’s inference request rate at runtime. Depart‑                 generating an immense volume of data at the net‑
+ing from MultiTASC, we introduce a new method for                   work edge [12]. This has created the need to push
+tuning the decision functions that allows for more                  the execution of DNN applications at the edge of the
+ ine‑grained and continuous adaptation. The key                     network leading to a substantial surge in the de‑
+contributions of this paper are the following:                      ployment of DL models on resource‑constrained
+
+
+
+                                        ©International Telecommunication Union, 2024                                                      27
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+                                       Server
+
+
+
+                                                 Fig. 1 – Example of an AI‑driven smart of ice
+
+
+devices [1]. Although on‑device training of DL                                   ers). These devices lack the processing power to
+models remains a challenging endeavor due to the                                 support high‑accuracy, computationally‑intensive
+limited computational resources and memory                                       models, driving the need for distributed collabora‑
+constraints of such devices, signi icant progress has
+                                                                                 tive inference approaches.
+been made in on‑device inference. Several
+techniques have been proposed to enable ef icient                                2.2 Distributed collaborative inference
+on‑device inference, including:
+                                                                                 Distributed collaborative inference systems lever‑
+Lightweight model design:             One approach                               age a central server to assist mobile and embed‑
+to enable on‑device inference is the design of                                   ded devices in performing DL inference tasks. No‑
+lightweight DL models. Models like MobileNetV2                                   tably, the server can be strategically placed at the
+[13], Ef icientNet‑Lite [14] and NasNet‑Mobile                                   network edge, close to the devices, to minimize la‑
+[15] have been speci ically crafted to achieve high                              tency and optimize real‑time processing. Two pri‑
+accuracy while minimizing computational and                                      mary schemes have emerged in this domain: of‑
+memory requirements.                                                              loading and cascading.
+Model quantization: Quantization techniques [16]
+reduce the precision of model weights and activa‑
+tions, effectively decreasing memory and computa‑
+                                                                                 A. Of loading
+tional demands without substantial loss in accuracy.                             Of loading techniques aim to distribute the compu‑
+Model pruning: Pruning methods, such as chan‑                                    tational load between the device and the server. In
+nel pruning [17], aim to reduce the size of DNNs                                 this scheme, the DNN is divided into two parts, with
+by removing unimportant neurons, thereby reduc‑                                  the initial part executed on the device and the latter
+ing computational overhead.                                                      part on the server. One standout contribution in this
+Knowledge distillation: Knowledge distillation                                   domain is the Neurosurgeon [20] framework, which
+[18] involves training a smaller, more ef icient                                 focuses on the selection of a singular split point for
+model to mimic the predictions of a larger, complex                              of loading Convolutional Neural Networks (CNNs)
+model. This allows for the transfer of knowledge                                 from devices to servers, with the objective of opti‑
+from larger models to smaller ones.                                              mizing either latency or energy consumption. Later
+Optimized scheduling: Scheduling and runtime                                     work such as [21, 22] explore the trade‑off between
+optimization techniques [19] help allocate compu‑                                latency and accuracy that is introduced when taking
+tational resources ef iciently, ensuring that DL infe‑                           the of loading decision. [23, 24] try to address the
+rence tasks run smoothly on constrained devices.                                 of loading dilemma in a progressive manner, requir‑
+Despite these advancements, modern intelligent                                   ing some training before deployment. Of loading
+environments like smart homes and of ices are                                    approaches have managed to alleviate some of the
+often equipped with small‑form‑factor, resource‑                                 computational burdens on the device while main‑
+constrained devices (e.g., smart cameras, AI speak‑                              taining the accuracy of a complex model.
+
+
+
+
+28                                                 ©International Telecommunication Union, 2024
+                               Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+B. Cascades                                                                                No
+
+
+                                                                                        Forwarding
+Cascade schemes involve a sequence of DNNs with                                          Decision
+                                                                                                          Yes
+progressively increasing complexity and accuracy.
+                                                                                           No
+After processing input data through a model, a for‑
+warding decision function determines whether to                                         Forwarding      Yes         Request
+                                                                                         Decision                    Queue
+continue with the current result or proceed to the
+next, more complex model. [4] is one of the irst no‑                                       No
+                                                                                                                                  Server
+                                                                                                           Yes
+table contributions on this approach. It introduces a                                   Forwarding
+                                                                                         Decision
+static technique, calculating an optimized threshold                                                                        Results
+before runtime, as well as a dynamic technique, aim‑
+ing to optimize the threshold at runtime. The for‑
+                                                                       Fig. 2 – System architecture of a multi‑device cascade [11]
+warding function in both techniques is de ined by
+analyzing the differences between the softmax re‑                    ing the server and causing protracted response
+sults. From our experiments, [4] leads to polarized                  times. However, relying solely on local execution
+execution in the majority of cases, with the data be‑                can severely compromise the overall accuracy of the
+ing processed either solely locally by the light model               system, as it misses out on the collaborative po‑
+or on the server side by the heavy model, i.e. with‑                 tential of cascaded processing. Thus, it becomes
+out a balanced split between device and server. [5]                  evident that as we navigate the intricacies of AI‑
+proposed a trainable forwarding criterion based on                   driven indoor environments, thoughtful strategies
+a neural head attached to the light model’s feature                  are paramount to harnessing the full potential of
+extractor. This approach yields great results when                   these technologies, optimizing both ef iciency and
+tested on a certain pair of CNNs but requires train‑                 accuracy.
+ing before deployment for every combination of net‑
+works. [6] investigates the use of multiple DNN                      This paper addresses the unexplored setting of
+models going beyond two element cascades, cou‑                       multi‑device cascades, where multiple devices op‑
+pled with the evaluation of various decision metrics.                erate simultaneously, sharing an edge server assist‑
+Additionally, solutions have been proposed to de‑                    ing in the execution of DL inference tasks. This
+ploy cascades under tight energy constraints [7, 8].                 paper provides a principled approach to tackling
+Most of the aforementioned work focus on the i‑                      the challenges of resource allocation and model
+mage classi ication task and don’t consider the pro‑                 selection in this complex scenario, facilitating the
+blem of dynamic adaptation at runtime. The task of                   straightforward and adaptable deployment of such
+video classi ication has also been studied [25, 26]                  an architecture.
+and lately, the irst attempts to accommodate Large
+Language Models have emerged [27].                                   3.     MULTI‑DEVICE INFERENCE CASCADE
+                                                                     In Fig. 2, we present the comprehensive system ar‑
+2.3 Multi‑device cascades                                            chitecture of a multi‑device cascade, speci ically de‑
+Previous research on cascade architectures is pre‑                   signed for executing DL inference tasks on IoT de‑
+dominantly centered around isolated scenarios,                       vices in a collaborative setting. Within this archi‑
+where a single device enjoys exclusive access to a                   tecture, all IoT devices are engaged in performing
+dedicated server. Nevertheless, this assumption no                   a common task, such as object detection, albeit they
+longer aligns with the reality of AI‑driven indoor en‑               may host different DL models tailored to their com‑
+vironments like the one in Fig. 1. The pervasive in‑                 putational capabilities and requirements. The main
+tegration of AI technologies has given rise to an ex‑                components of this system architecture include the
+panding array of AI‑powered devices, resulting in a                  following.
+pressing demand for simultaneous support from a                      IoT devices: These devices are the primary end‑
+shared server.                                                       points where the DL inference tasks are executed.
+                                                                     Each IoT device is equipped with its own DL model
+In these complex and interconnected scenarios, a                     designed to process incoming data ef iciently. These
+more nuanced examination is indispensable. Hasty                     devices generate predictions independently based
+or simplistic deployment strategies risk overload‑                   on their respective models.
+
+
+
+                                         ©International Telecommunication Union, 2024                                                      29
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+Device‑hosted models: DL models on the de‑                                       the decision function 𝑑(⋅). The output of 𝑑(⋅) is bi‑
+vices are trained on the same task, operating in‑                                nary; for 𝑑(⋅) = 0 we conclude that the model
+dependently in all other aspects. Each model can                                 is con ident and therefore the result is acceptable,
+be of different architecture, complexity and ef i‑                               whereas for 𝑑(⋅) = 1 the sample 𝑥 should be for‑
+ciency, depending on the computational resources                                 warded to the server for further processing. Denot‑
+and demands of the respective device. Thus, it is                                ing the classi ication function of the light model by
+of paramount importance that the scheduler main‑                                 𝑓𝑙 ∶ 𝒳 → [0, 1]𝐾 that yields the softmax output vec‑
+tains high performance in scenarios of device he‑                                tor of the model whose maximum value is the pre‑
+terogeneity.                                                                     dicted class, and the classi ication function of the
+Forwarding decision function: The output predic‑                                 heavy model by 𝑓ℎ ∶ 𝒳 → [0, 1]𝐾 , we formally de‑
+tions generated by each IoT device are irst given to                              ine a collaborative cascade system as:
+a forwarding decision function. This decision func‑                                                        f (x)        if    d(fl (x)) = 0
+tion assesses the con idence of the DL model’s out‑                                   cascfl ,fh ,d (x) = { l
+                                                                                                           fh (x)       if    d(fl (x)) = 1
+put on each device. If the model is suf iciently con i‑
+dent in its prediction, the result remains unchanged,
+and no further action is taken. However, if there is                             3.2 Multi‑device cascade
+uncertainty or low con idence in the prediction, the                             To capture multi‑device cascade architectures
+sample is earmarked for further analysis.                                        (Fig. 2), we expand the existing single‑device cas‑
+Server: Samples that require additional scrutiny                                 cade system representation as follows. Let 𝒟 be the
+are forwarded to a centralized server for in‑depth                               set of devices assisted by the same server. Then,
+processing. The server hosts a more accurate and                                 the multi‑device cascade system is de ined as:
+computationally‑intensive DL model capable of re‑                                                              f i (xi ) if   di (fli (xi )) = 0
+ ining the predictions made by the IoT devices.                                       cascfil ,fh ,di (xi ) = { l
+                                                                                                               fh (xi ) if    di (fli (xi )) = 1
+Request queue: The forwarded samples from all
+                                                                                                        ∀𝑖 ∈ {1, ..., |𝒟|}
+IoT devices are temporarily stored in a request
+queue at the server. This queue serves as a stag‑                                where 𝑥𝑖 ∈𝒳𝑖 is a sample processed by the i‑th de‑
+ing area where samples awaiting processing are col‑                              vice, 𝑓𝑙𝑖 the classi ication function of the DL model
+lected. The request queue ensures ef icient and or‑                              deployed on the i‑th device, 𝑓ℎ the shared heavy
+ganized data low from the IoT devices to the server.                             model on the server, and 𝑑𝑖 (𝑓𝑙𝑖 (𝑥𝑖 )) the forwarding
+Server‑hosted model: The server‑side model pro‑                                  decision function of the i‑th device. Note that the
+cesses the samples drawn from the request queue.                                 shared heavy model 𝑓ℎ , is the only variable not de‑
+This model is shared among all connected IoT de‑                                 pending on the devices.
+vices, allowing for collaborative re inement of pre‑
+dictions by leveraging the advanced ”knowledge” of                               3.3 Congestion problem
+the network.                                                                     In the case of the single‑device cascade, the server’s
+Result distribution: Finally, the results produced                               computational resources are exclusively assisting a
+by the server‑side model are distributed back to                                 single device, resulting in minimal response time
+their corresponding IoT devices as soon as they be‑                              and preservation of accuracy. However, in the area
+come available. This seamless distribution of re‑                                of IoT spaces it is increasingly important to leverage
+ ined predictions ensures that each IoT device be‑                               a server’s capabilities across multiple devices simul‑
+ne its from the improved accuracy achieved by                                    taneously, hence implementing a multi‑device cas‑
+the server.                                                                      cade. This approach paves the way towards amor‑
+                                                                                 tizing the server’s cost and maximizing its utility.
+3.1 Single‑device cascade                                                        Nonetheless, depending on the speci ic conditions,
+                                                                                 if the arrival rate of incoming requests exceeds the
+Let us consider a single IoT device running a
+                                                                                 server’s processing throughput capacity, the server
+classi ication‑based DL inference task. Let 𝑥∈𝒳
+                                                                                 becomes overwhelmed, leading to extended waiting
+be the input and 𝑦∈{1, ..., 𝐾} the classi ication la‑
+                                                                                 times for requests in the queue.
+bel produced by the model, where 𝐾 is the num‑
+ber of classes. The con idence of the given DL                                   For a given number of devices denoted by |𝒟|,
+model on its output 𝑦 can be calculated by using                                 Eq. (1) expresses the arrival rate of requests to the
+
+
+
+30                                                 ©International Telecommunication Union, 2024
+                                 Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+                            Satisfaction          Threshold                                      Updated
+                 Devices                                                    Multiplier                        Devices
+                              Rates                update                                       Thresholds
+
+
+
+
+                              Device                                                             Switch
+                  Server                                  Model Switching                                      Server
+                            Thresholds                                                           Decision
+
+                                              Scheduler
+
+
+                                      Fig. 3 – Architecture of the MultiTASC++ scheduler
+
+
+server, i.e. the rate at which results are deemed as                   3.4 Problem optimization
+unsatisfactory by the decision functions on the de‑
+vices and are therefore forwarded to the server.                       We frame the aforementioned setting as a multi‑
+                             |𝒟|    𝑖
+                                                                       objective optimization problem, seeking to maxi‑
+                                  𝑝casc
+                𝐴𝑅server = ∑                              (1)          mize accuracy and throughput subject to a latency
+                                   𝑡𝑖
+                             𝑖 = 1 inf                                 Service‑Level Objective (SLO. The following section
+where 𝑡𝑖inf is the average inference latency of a sam‑                 describes our proposed scheduler designed to ad‑
+                             𝑖
+ple on the i‑th device and 𝑝casc is the probability of a               dress it.
+                  𝑖 𝑖 𝑖
+sample giving 𝑑 (𝑓𝑙 (𝑥 )) = 1.
+                                                                       4.     PROPOSED SCHEDULER
+Given the attainable throughput 𝑇server of the server,
+we distinguish three different states:
+                                                                       To address the challenges related to request accu‑
+  • 𝐴𝑅server < 𝑇server : The processing rate of                        mulation and ef icient server resource utilization,
+    the server exceeds the arrival rate, leading to                    we introduce MultiTASC++, a multi‑tenancy‑aware
+    the server being underutilized. Forwarding a                       scheduler that dynamically adapts the arrival rate
+    greater quantity of challenging samples to the                     of samples from the assisted devices. Based on
+    server could enhance accuracy.                                     our previous work, MultiTASC, we kept the com‑
+                                                                       ponent of recon igurable forwarding decision func‑
+  • 𝐴𝑅server = 𝑇server : A state of equilibrium
+                                                                       tions to control the arrival rate and introduced four
+    is reached, where requests are promptly pro‑
+                                                                       new techniques that completely change the way
+    cessed upon arrival, preventing accumulation,
+                                                                       the thresholds are updated: i) SLO satisfaction rate
+    and ensuring full utilization of the server’s pro‑
+                                                                       updates, ii) continuous threshold recon iguration,
+    cessing power.
+                                                                       iii) threshold scaling, and iv) server model switch‑
+  • 𝐴𝑅server > 𝑇server : The rate of incoming re‑                      ing. MultiTASC++’s internal architecture is pre‑
+    quests surpasses the server’s processing ca‑                       sented in Fig. 3 where all new techniques are visible.
+    pacity. If this condition persists, it will result
+    in a substantial accumulation of requests in the                   4.1 Recon igurable forwarding decision
+    queue, leading to excessive latency.
+                                                                           function
+      𝑖
+The 𝑝casc  of the forwarding decision function is not
+static since it depends on the processing order of                     Signi icant research endeavors have been dedicated
+the samples. Therefore, this architecture involves                     to assessing the prediction con idence of DNNs, re‑
+stochastic components at runtime and could greatly                     sulting in the development of various approaches [6,
+bene it by dynamically adapting its state depending                    31]. In this work, we employ the Best‑versus‑
+on the current conditions. Since 𝑡𝑖inf and 𝑇server are                 Second‑Best (BvSB metric [32], which quanti ies
+ ixed based on the device and server‑side proces‑                      prediction con idence by computing the difference
+                             𝑖
+sors, we opt to manipulate 𝑝casc by changing the pa‑                   between the top two values in the softmax output of
+                𝑖 𝑖 𝑖                                                  the model (referred to as 𝑃1 and 𝑃2 ),as shown in
+rameters of 𝑑 (𝑓𝑙 (𝑥 )) in order to introduce adapt‑
+ability to the system.                                                 Eq. (2). These values correspond to the highest and
+
+
+
+                                           ©International Telecommunication Union, 2024                                                      31
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+                                                        Table 1 – Evaluated DNN models
+
+     Model                            Location Device                        Clock Rate Accuracy Latency FLOPs #Params
+     MobileNetV2 [13]         Low‑end Sony Xperia C5                             1.69 GHz    71.85%     31 ms       0.6 B      3.5 M
+     Ef icientNetLite0 [14] Mid‑tier Samsung A71                                 2.20 GHz    75.02%     43 ms       0.8 B      4.7 M
+     Ef icientNetB0 [14]      High‑end Samsung S20 FE                            2.73 GHz    77.04%     33 ms       0.8 B      5.3 M
+     MobileViT‑x‑small [28] High‑end Google Pixel 7                              2.85 GHz    74.64%     57 ms       1.1 B      2.3 M
+     InceptionV3 [29]         Server   Tesla T4 GPU                              585 MHz     78.29%     15 ms      11.4 B     23.8 M
+     Ef icientNetB3 [14]      Server   Tesla T4 GPU                              585 MHz     81.49%     25 ms       3.7 B     12.2 M
+     DeiT‑Base‑Distilled [30] Server   Tesla T4 GPU                              585 MHz     83.41%     14 ms       7.7 B     86.0 M
+       * See Table 1 in [1] for the detailed resource characteristics of the target mobile phones.
+
+second‑highest classes that the classi ier predicted.                            server. The SLO satisfaction rate relies signi icantly
+                                                                                 on the timely processing of samples forwarded to
+                     BvSB∣          = 𝑃 1 − 𝑃2                    (2)            the server, a factor in luenced by the volume of sam‑
+                             𝑓(𝑥)
+                                                                                 ples that the server must handle.
+Other metrics, such as top‑1 softmax or entropy can
+be implemented in the system with minimal mod‑                                   The SLO satisfaction rate is the main metric we
+i ications, potentially leading to different latency‑                            use to measure the smooth operation of the system
+accuracy trade‑offs.                                                             since a high satisfaction rate can be a good indicator
+                                                                                 of a responsive queue without congestion. By hav‑
+In contrast to the predominant approach employed                                 ing a metric that helps us understand the state of
+by most existing cascade systems, which establish                                the system during runtime, we can tune the in lux
+ ixed decision thresholds during design and main‑                                of samples with high precision by adjusting the re‑
+tain them upon deployment, our work introduces                                   con igurable forwarding decision functions of each
+an alternative approach. We adopt a dynamic recon‑                               device individually.
+ iguration scheme for the decision function to cater
+to the adaptability requirements of our target sys‑                              Each device calculates the average SLO satisfaction
+tem. The decision function 𝑑𝑖 (⋅) is de ined as shown                            rate during its inference in time windows of 𝑇 sec‑
+in Eq. (3), with adjustments facilitated by a dynamic                            onds. At the end of every time window, the satisfac‑
+scheduler that ine‑tunes its parameters at runtime.                              tion rate for that window is forwarded to the server
+                                                                                 where the appropriate recon iguration of the deci‑
+                          ⎧0 if       BvSB∣             ≥ 𝑐𝑖,𝑡                   sion function is calculated. By constantly informing
+                          {                   𝑓𝑙𝑖 (𝑥)                            the server about the satisfaction rate, we achieve a
+         𝑑 (𝑓𝑙𝑖 (𝑥)) = ⎨
+           𝑖
+                                                                  (3)
+                          {1 if       BvSB∣             < 𝑐𝑖,𝑡                   bene icial trade‑off of accuracy in order to maintain
+                          ⎩                   𝑓𝑙𝑖 (𝑥)
+                                                                                 the desired SLO satisfaction rate.
+where 𝑐𝑖,𝑡 is the decision threshold of device 𝑖 at
+time 𝑡. The per‑device decision thresholds are                                   4.3 Continuous threshold recon iguration
+exposed to our server‑residing scheduler, which
+adapts them at runtime.                                                          Every 𝑇 seconds, the device sends an SLO satisfac‑
+                                                                                 tion rate update to the scheduler. Assuming there is
+4.2 SLO satisfaction rate updates                                                a target SLO satisfaction rate value depending on the
+                                                                                 user’s needs, if the update value is below that opti‑
+Given a latency target, we introduce the SLO sat‑                                mal value, the server chooses to reduce the number
+isfaction rate metric as the percentage of samples                               of samples coming from that device. Otherwise, if
+successfully processed within the designated la‑                                 the update value is greater than the designated op‑
+tency constraint. Latency, in this context, is mea‑                              timal value, the server chooses to increase the in lux
+sured from the initiation of inference on the de‑                                of samples from that device to achieve a higher ac‑
+vice until the inal result is obtained, either by the                            curacy.
+device‑hosted model or the server‑side model in
+the cases where the sample is forwarded to the                                   MultiTASC++ leverages the information available
+
+
+
+32                                                  ©International Telecommunication Union, 2024
+                                Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+through the SLO satisfaction rate updates to view                     Algorithm 1 Multiplier Implementation
+the forwarding decision thresholds as continuous                      Input:
+variables. This allows for incredible precision in its                 1: 𝑆𝑅target         ▷ The targeted satisfaction rate
+ability to identify the optimal threshold for the situ‑                2: 𝑆𝑅update         ▷ The device’s satisfaction rate
+ation and pair of models, as well as rapid adaptation                  3: 𝑡ℎ𝑟𝑒𝑠ℎupdated           ▷ The updated threshold
+when needed. The completely revamped update                            4: 𝑚                          ▷ Previous multiplier
+rule is presented in Eq. (4) and is in stark contrast                  5: 𝑛                    ▷ Number of active devices
+to MultiTASC’s [11] update rule where the scheduler                   Output:
+had to guess the optimal in lux of samples and then                    6: 𝑡ℎ𝑟𝑒𝑠ℎ inal           ▷ Τhreshold sent to device
+use a very slow and imprecise step based approach                      7: if 𝑆𝑅target < 𝑆𝑅update then
+to converge to it.                                                     8:     𝑡ℎ𝑟𝑒𝑠ℎ inal = 𝑚 ⋅ 𝑡ℎ𝑟𝑒𝑠ℎupdated
+                                                                       9:     𝑚 = 𝑚 ⋅ (1 + 0.1𝑛 )
+       Δ𝑡ℎ𝑟𝑒𝑠ℎ = −𝑎 ⋅ (𝑆𝑅target − 𝑆𝑅update )             (4)
+                                                                      10: else
+where Δ𝑡ℎ𝑟𝑒𝑠ℎ is the amount by which the thresh‑                      11:     𝑡ℎ𝑟𝑒𝑠ℎ inal = 𝑡ℎ𝑟𝑒𝑠ℎupdated
+old will be adjusted, 𝑆𝑅t arget is the target SLO satis‑              12:     𝑚=1
+faction rate for that device, 𝑆𝑅u pdate is the SLO sa‑                13: end if
+tisfaction rate sent by the device and 𝑎 is a scaling                 satisfaction rate can’t be maintained without signi‑
+factor.                                                               ficantly dropping the accuracy, MultiTASC++ opts to
+                                                                      switch to a faster model to allow for a greater in lux
+4.4 Threshold scaling
+                                                                      of samples. On the opposite, if a faster model is be‑
+The update rule presented in Eq. (4) demonstrates                     ing used but the system is low load, resulting in un‑
+robust performance in cases where the optimal                         derutilization of the server, MultiTASC++ chooses to
+threshold is either lower or close to the initial                     switch to a heavier model to achieve a higher accu‑
+threshold of the device. However, its responsive‑                     racy without sacri icing the SLO satisfaction.
+ness diminishes when facing scenarios characte‑
+rized by substantial underutilization of server re‑                   The scheduler makes a decision by examining the
+sources, necessitating a rapid threshold increase.                    current thresholds of the devices. To switch from a
+To accommodate such cases, we introduced a scal‑                      heavy model to a faster one, every device’s thresh‑
+ing component to the threshold update. Alg. 1                         old in a single tier must be below a certain value. On
+presents the proposed approach. Following the                         the other hand, to switch from the fast model to the
+threshold update from Eq. (4), the updated thresh‑                    heavier one, every device’s threshold must be above
+old is subsequently either scaled by a multiplier 𝑚                   a certain value depending on its tier.
+(line 4) if the threshold was increased with the up‑
+date (i.e. 𝑆𝑅u pdate > 𝑆𝑅t arget), or stays the same                  Given the set of all device thresholds 𝒞 consisting
+otherwise. In the irst case, 𝑚 is then updated by                     of elements 𝑐𝑘𝑖 ∈ [0, 1], where 𝑘 is the device tier
+the rule shown in line 9 while in the second case it                  (i.e. 𝑘 ∈ 𝒦 = {𝑙𝑜𝑤, 𝑚𝑖𝑑, ℎ𝑖𝑔ℎ}) and 𝑖 ∈ 𝒟𝑘 corres‑
+is reset to 1. Since for a large number of devices the                ponds to the i‑th device in this tier, we can de ine
+multiplier is not required, we further incorporate a                  the model switch decision as follows: for 𝑆(𝒞) = −1
+penalty term (line 9) that considers the number of                    a switch to a faster model is needed, for 𝑆(𝒞) = +1 a
+devices currently active in the system, denoted by                    switch to a heavier model is needed and for 𝑆(𝒞) =
+𝑛 (line 5).                                                           0 the current model is the optimal. Formally:
+
+4.5 Server model switching
+                                                                             ⎧−1            if ∃ 𝑘 ∈ 𝒦 ∶ 𝑐𝑘𝑖 < 𝑐lower , ∀ 𝑖 ∈ 𝒟𝑘
+                                                                             {
+To further improve the adaptability of MultiTASC++,                   𝑆(𝒞) = ⎨+1            if 𝑐𝑘𝑖 > 𝑐𝑘upper , ∀𝑘 ∈ 𝒦, ∀ 𝑖 ∈ 𝒟𝑘
+we introduce the server model switching feature.                             { 0,
+                                                                             ⎩              otherwise
+Depending on the dynamic conditions, the sched‑
+uler can decide to switch to a different server‑
+hosted model whose computational cost‑accuracy                        Upper and lower limits 𝑐𝑘upper and 𝑐lower are set af‑
+trade‑off better suits the current state. For instance,               ter a thorough examination of cascade results on a
+if a heavy model is being used and the optimal SLO                    training set.
+
+
+
+                                          ©International Telecommunication Union, 2024                                                      33
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+5.     EVALUATION                                                                Models and datasets: In our experiments, we tar‑
+                                                                                 get the task of image classi ication with 1k classes.
+5.1 Experimental setup
+                                                                                 Concretely, we used the 50k‑images validation set
+To evaluate the performance of MultiTASC++, we                                   of the ImageNet dataset [35]. Table 1 presents the
+built a prototype in Python 3.9 utilizing TensorFlow                             evaluated models, as well as their accuracy and in‑
+2.9.1. The edge server component hosts an NVIDIA                                 ference latency on the different execution points.
+Tesla T4 GPU, Intel(R) Xeon(R) 2.30GHz CPU and                                   We obtained the CNN models from TensorFlow
+12GB of RAM, allowing it to run heavy, state‑of‑the‑                             Hub while the transformer models from Hugging
+art models with high accuracy within the evaluated                               Face. All models are pretrained on ImageNet’s train‑
+latency targets. On the device components’ side, we                              ing set. We deploy MobileNetV2, Ef icientNetLite0
+used mobile devices spanning three different tiers,                              and Ef icientNetB0 to the low, mid and high‑end
+namely high, mid, and low‑end, using Samsung S20                                 client devices respectively. On the server side,
+FE, Samsung A71 and Sony Xperia C5 Ultra, respec‑                                we use InceptionV3 and Ef icientNetB3 to explore
+tively. We also used the Google Pixel 7 as a high‑end
+                                                                                 the differences between a lower‑accuracy, higher‑
+device for the purpose of evaluating transformer
+                                                                                 throughput model and a higher‑accuracy, lower‑
+models. For on‑device execution, we used Tensor‑
+                                                                                 throughput model, respectively.
+Flow Lite and targeted the CPU of the respective mo‑
+bile device, as it is still the most widely‑used ap‑
+                                                                                 We also evaluated our scheduler using transformer
+proach [3, 33].
+                                                                                 models both as device and server‑hosted models.
+Different models were chosen for each tier, with the                             We deployed MobileVit‑x‑small on Google Pixel 7
+aim of having the highest accuracy possible while                                and DeiT‑Base‑Distilled on the server. As the trans‑
+taking into account the device’s computational re‑                               former architecture has only recently started gain‑
+sources. We measured the average inference la‑                                   ing traction, available models are not as ef icient
+tency of each model on the respective device across                              as their CNN counterparts on most mobile devices.
+200 runs with a batch size of 1. We followed the                                 As such, we utilize a computationally‑powerful lag‑
+same process to measure the average server infe‑
+                                                                                 ship phone, like Pixel 7, to achieve acceptable la‑
+rence latency across different batch sizes and
+                                                                                 tency. Nevertheless, as transformer models become
+used this data to conduct simulation‑based
+experiments. The experiments targeted a variety of                               more ef icient [36], they are expected to soon be‑
+scenarios and mainly focused on the SLO latency                                  come broadly deployed across mobile devices.
+target and accuracy metrics. Communication
+between the devices and the edge server                                          Evaluation settings: To assess our system across
+component was established using the AMPQ                                         deployment setups, we focused on two distinct
+protocol, following the widely‑used practice for                                 cases: i) a homogeneous scenario, which comprises
+communication between IoT devices. The protocol                                  devices of equal processing capabilities that host
+was implemented through the AMPQS‑ torm library                                  the same local model, and ii) a heterogeneous sce‑
+which allows for thread‑safe execution.
+                                                                                 nario, which comprises devices of diverse process‑
+                                                                                 ing capabilities, with each device hosting a model
+To fully take advantage of the server’s computa‑                                 tailored to its respective tier. We also conduct ex‑
+tional resources and boost throughput, it is impor‑                              periments as part of the homogeneous scenario to
+tant to use batching, i.e. processing multiple sam‑
+                                                                                 evaluate the transformer models, the server model
+ples at the same time. To avoid the latency that
+would arise from waiting for the request queue to                                switching technique, as well as a scenario that e‑
+reach a speci ic batch size, we employ dynamic                                   mulates a realistic setting of intermittent device
+batching [34]. With dynamic batching, we use the                                 participation, i.e. where devices drop in and out
+maximum batch size that is feasible with the cur‑                                during inference.
+rent request queue length. Available batch sizes are
+ℬ={1, 2, 4, 8, 16, 32, 64}. Due to diminishing re‑                               For general evaluation in the homogeneous sce‑
+turns, in some cases we use a lower maximum                                      nario, all devices are of the same tier, using Sony
+batch size, e.g. with Ef icientNetB3 a batch size of                             Xperia C5 Ultra with MobileNetV2. We selected this
+16 provides a higher throughput and lower la-                                    tier, as it represents the con iguration with the
+tency than a batch size of 32 and above.                                         minimum latency, thereby imposing the greatest
+
+
+34                                                 ©International Telecommunication Union, 2024
+                                                                             Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+                                                     SLO 100ms                                              SLO 150ms                                         SLO 200ms
+                           100                                                    100                                                      100
+Inferences below SLO (%)
+
+
+
+
+                            95                                                     95                                                       95
+
+                            90                                                     90                                                       90
+                                                                                                                                                                                          Static
+                            85                                                     85                                                       85
+                                                                                                                                                                                          MultiTASC
+                            80                                                     80                                                       80                                            MultiTASC++
+
+                            75                                                     75                                                       75
+
+
+                            70                                                     70                                                       70
+
+
+                                    0       20       40     60       80    100             0       20        40    60        80     100           0   20       40    60        80   100
+                                                 Number of Devices                                       Number of Devices                                 Number of Devices
+
+
+                                                                             Fig. 4 – SLO satisfaction rate for InceptionV3 ‑ MobileNetV2
+
+                                                  Accuracy 100ms                                         Accuracy 150ms                                     Accuracy 200ms
+                           79                                                     79                                                        79
+
+                           78                                                     78                                                        78
+
+                           77                                                     77                                                        77
+Accuracy (%)
+
+
+
+
+                                                                                                                                                                                          Light
+                           76                                                     76                                                        76
+                                                                                                                                                                                          Static
+                           75                                                     75                                                        75                                            MutiTASC
+                           74                                                     74                                                        74                                            MultiTASC++
+
+                           73                                                     73                                                        73
+
+                           72                                                     72                                                        72
+
+                           71                                                     71                                                        71
+                                    0       20       40    60        80    100             0       20       40     60       80      100           0   20       40    60        80   100
+                                                 Number of Devices                                      Number of Devices                                  Number of Devices
+
+
+                                                                                   Fig. 5 – Accuracy for InceptionV3 ‑ MobileNetV2
+
+                                                  Throughput 100ms                                       Throughput 150ms                                  Throughput 200ms
+
+                           3000                                                   3000                                                     3000
+Throughput (samples/s)
+
+
+
+
+                           2500                                                   2500                                                     2500
+
+
+                           2000                                                   2000                                                     2000
+                                                                                                                                                                                          Static
+                           1500                                                   1500                                                     1500                                           MultiTASC++
+
+                           1000                                                   1000                                                     1000
+
+
+                           500                                                    500                                                      500
+
+
+                                0                                                      0                                                     0
+                                        0    20       40     60       80    100                0    20       40     60       80      100          0   20       40     60       80   100
+                                                  Number of Devices                                      Number of Devices                                 Number of Devices
+
+
+                                                                                  Fig. 6 – Throughput for InceptionV3 ‑ MobileNetV2
+
+
+challenge on the scheduler. Additionally, it                                                                                      the dataset consisted of only 1000 samples. We fol‑
+accentuates the substantial disparity in accuracy                                                                                 lowed this approach in order to more clearly high‑
+between the device‑hosted model and the full                                                                                      light a limitation of MultiTASC [11] where the SLO
+cascade accuracy, effectively showcasing the                                                                                      satisfaction rate was below its required value due to
+cascade     architecture’s  potential.    In   the                                                                                slow convergence of the threshold recon iguration.
+heterogeneous scenario, all three tiers of devices                                                                                As shown later in Fig. 10, MultiTASC++ alleviates ef‑
+were deployed in equal percentage. Finally, to                                                                                    fectively this issue.
+assess the scheduler’s performance when using
+transformer models, we used a separate tier of                                                                                    Three different seeds were used to sample the data
+Pixel 7 devices running MobileViT‑ x‑small.                                                                                       and the average values of each metric, alongside
+                                                                                                                                  their minimum and maximum, are reported. The
+In all scenarios but one, the dataset of each device                                                                              metrics used for the evaluation are: the system
+consisted of 5000 randomly selected samples from                                                                                  throughput capturing the system’s processing rate
+the last 40000 images of ImageNet’s validation set.                                                                               in samples/s, the average accuracy across devices,
+The exception consisted of a distinct scenario where                                                                              the latency SLO satisfaction rate for 100, 150 and
+
+
+
+                                                                                               ©International Telecommunication Union, 2024                                                         35
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+                                                         SLO 100ms                                                 SLO 150ms                                        SLO 200ms
+                            100
+                                                                                    100                                                        100
+                             95
+ Inferences below SLO (%)
+
+
+
+
+                             90                                                      90                                                         90
+
+                             85
+                                                                                                                                                                                            Static
+                             80                                                      80                                                         80                                          MultiTASC
+                             75                                                                                                                                                             MultiTASC++
+                             70                                                      70                                                         70
+
+                             65
+
+                             60                                                      60                                                         60
+
+                                     0    5         10      15   20    25    30              0       5        10      15   20     25      30          0   5    10      15   20    25   30
+                                                  Number of Devices                                          Number of Devices                                Number of Devices
+
+
+                                                                             Fig. 7 – SLO satisfaction rate for Ef icientNetB3 ‑ MobileNetV2
+
+                                                   Accuracy 100ms                                             Accuracy 150ms                                   Accuracy 200ms
+                            82                                                      82                                                          82
+
+
+                            80                                                      80                                                          80
+ Accuracy (%)
+
+
+
+
+                            78                                                      78                                                          78
+                                                                                                                                                                                            Light
+                                                                                                                                                                                            Static
+                            76                                                      76                                                          76                                          MutiTASC
+                                                                                                                                                                                            MultiTASC++
+                            74                                                      74                                                          74
+
+
+                            72                                                      72                                                          72
+
+                                  0       5        10      15    20    25    30           0          5        10     15    20     25     30           0   5    10      15   20    25   30
+                                                  Number of Devices                                          Number of Devices                                Number of Devices
+
+
+                                                                                    Fig. 8 – Accuracy for Ef icientNetB3 ‑ MobileNetV2
+
+                                                   Throughput 100ms                                           Throughput 150ms                                Throughput 200ms
+                            1000                                                    1000                                                       1000
+ Throughput (samples/s)
+
+
+
+
+                            800                                                      800                                                       800
+
+
+
+                            600                                                      600                                                       600
+                                                                                                                                                                                            Static
+                                                                                                                                                                                            MultiTASC++
+                            400                                                      400                                                       400
+
+
+
+                            200                                                      200                                                       200
+
+
+
+                                 0                                                       0                                                       0
+                                      0       5     10      15    20    25    30              0          5     10     15    20    25      30          0   5    10      15   20    25   30
+                                                   Number of Devices                                          Number of Devices                               Number of Devices
+
+
+                                                                                   Fig. 9 – Throughput for Ef icientNetB3 ‑ MobileNetV2
+
+
+200 ms SLOs, and the scalability in terms of number                                                                                    we used the lowest threshold that satis ied the 1 pp
+of devices.                                                                                                                            limit. This baseline is equivalent to a set of state‑
+                                                                                                                                       of‑the‑art cascades [5, 6, 9]. We also compare with
+Baselines: As a baseline, we use Static, a sched‑                                                                                      MultiTASC [11], which constitutes the current state‑
+uler with statically selected thresholds that remain                                                                                   of‑the‑art scheduling method for multi‑device cas‑
+ ixed during runtime. To tune the static threshold,                                                                                    cades.
+we use the irst 10000 images of ImageNet’s valida‑
+tion set as our calibration set and evaluate all cas‑                                                                                  5.2 Evaluation of performance
+cade model pairs in terms of accuracy and forward‑
+ing probability. As such, we tune the threshold so                                                                                     In this section, we assess the performance of our
+that approximately 30% of samples are forwarded                                                                                        scheduler compared to Static and MultiTASC across
+to the heavy model, providing a balanced accuracy‑                                                                                     all scenarios. We set the target SLO value to 95,
+latency trade‑off. In cases where that threshold                                                                                       meaning that we aim for 95% of samples to inish
+yielded an accuracy loss of more than 1 pp com‑                                                                                        inference within the latency target, independent of
+pared to the highest achievable cascade accuracy,                                                                                      whether they are forwarded to the server or stay
+
+
+
+36                                                                                                ©International Telecommunication Union, 2024
+                                                             Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+                                                          SLO 150ms                                                      Accuracy
+                                         100                                                          82
+
+
+
+
+              Inferences below SLO (%)
+                                         95
+                                                                                                      80
+                                         90
+
+
+
+
+                                                                                       Accuracy (%)
+                                                                                                      78
+                                         85                                                                                                      Static
+                                                                                                                                                 MultiTASC
+                                         80                                                           76
+                                                                                                                                                 MultiTASC++
+                                         75
+                                                                                                      74
+                                         70
+
+                                                                                                      72
+                                         65
+
+                                               0   5    10    15   20      25   30                         0   5    10     15   20     25   30
+                                                       Number of Devices                                           Number of Devices
+
+
+                                                             Fig. 10 – Ef icientNetB3 ‑ MobileNetV2 with 1000 samples
+
+
+on the device. We do not aim for 100% so that                                                                  in accuracy. This dip occurs due to MultiTASC opting
+the system has some leeway to trade SLO satisfac‑                                                              to use batch size as a metric for congestion, which
+tion rate percentage for accuracy. Here, we high‑                                                              proves to be suboptimal. Pairing that with a static
+light a signi icant improvement introduced by Mul‑                                                             step update rule, the scheduler was neither able to
+tiTASC++. Our new scheduler allows us to set and                                                               accurately predict the state of the system nor adapt
+consistently maintain a target satisfaction rate re‑                                                           with the speed that is required in borderline system
+gardless of the prevailing conditions, addressing a                                                            states. This is mitigated in MultiTASC++, where the
+limitation present in MultiTASC.                                                                               scheduler is more accurately aware of the state of
+                                                                                                               the system through the SLO updates from the de‑
+We also set the time window 𝑇 to 1.5 s and the scal‑                                                           vices (Section 4.2), while also being able to adapt
+ing variable 𝑎 of the continuous threshold to 0.005                                                            more quickly through the techniques of continuous
+Compared to MultiTASC, the amount of variables                                                                 threshold recon iguration (Section 4.3) and thresh‑
+to initialize and the computational effort required                                                            old scaling (Section 4.4).
+to determine their values have notably decreased.
+This streamlines the scheduler’s deployment pro‑                                                               Fig. 5 presents the full cascade’s accuracy in com‑
+cess, while delivering substantially improved and                                                              parison to the baselines as the number of devices in‑
+consistent results. Furthermore, the new contin‑                                                               creases. MultiTASC++ effectively strikes a better ba‑
+uous threshold update scheme allows for the SLO                                                                lance between accuracy and the maintenance of
+targets to be chosen independently for each de‑                                                                the desired 95% SLO satisfaction rate. In
+vice, contrasting MultiTASC where all devices had to                                                           comparison to Static, MultiTASC++ achieves a
+agree on the same latency target during the initia‑                                                            higher accuracy for a smaller number of devices
+lization of the scheduler.                                                                                     where the server is being underutilized, while for
+                                                                                                               larger amounts of devices, it chooses to trade off
+                                                                                                               accuracy in order to sustain the satisfaction rate.
+A. Homogeneous scenario
+                                                                                                               Importantly, even though the accuracy is lower
+Fig. 4 shows the SLO satisfaction rate as the num‑                                                             compared to the static approach, it is still
+ber of devices increases with InceptionV3 hosted on                                                            substantially higher than the device‑hosted model’s
+the server. The igure includes the MultiTASC++,                                                                accuracy, justifying the use of a cascade ar‑
+Static and MultiTASC approaches. Notably, Multi‑                                                               chitecture. Compared to MultiTASC, our scheduler
+                                                                                                               achieves higher accuracy across all cases, with the
+TASC++ manages to consistently maintain the sat‑
+                                                                                                               exception of the instances where MultiTASC’s satis‑
+isfaction rate close to or above 95%. In contrast,
+                                                                                                               faction rate performance (Fig. 4) dips below the de‑
+Static experiences rapid degradation, with the ma‑
+                                                                                                               sired 95%.
+jority of the results of the forwarded samples not re‑
+turning within the latency target for 25‑40 devices                                                            Fig. 6 shows the system throughput difference be‑
+and above. On the other hand, MultiTASC exhibits                                                               tween MultiTASC++ and Static as the number of de‑
+a dip in the range of approximately 5 to 40 devices,                                                           vices increases. This igure shows the need for dy‑
+followed by an overcorrection that achieves a 100%                                                             namic runtime adaptation, since, while Static stag‑
+satisfaction rate resulting in a needless degradation                                                          nates at 1000 samples per second, MultiTASC++
+
+
+
+                                                                        ©International Telecommunication Union, 2024                                                     37
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+                                               SLO 100ms                                          SLO 150ms                                       SLO 200ms
+                            100                                             100                                                 100
+ Inferences below SLO (%)
+
+
+
+
+                            95                                               95                                                 95                                            Static low
+                                                                                                                                                                              Static mid
+                            90                                               90                                                 90
+                                                                                                                                                                              Static high
+                                                                                                                                                                              MultiTASC low
+                            85                                               85                                                 85
+                                                                                                                                                                              MultiTASC mid
+                                                                                                                                                                              MultiTASC high
+                            80                                               80                                                 80
+                                                                                                                                                                              MultiTASC++ low
+                            75                                               75                                                 75                                            MultiTASC++ mid
+                                                                                                                                                                              MultiTASC++ high
+                            70                                               70                                                 70
+
+
+                                  0   20       40     60        80    100         0      20       40     60        80     100         0   20       40    60        80   100
+                                            Number of Devices                                  Number of Devices                               Number of Devices
+
+
+                                                                     Fig. 11 – SLO satisfaction rate for InceptionV3 ‑ different devices
+
+                                       Low-End SLO 100ms                                      Mid-Tier SLO 100ms                           High-End SLO 100ms
+                            80                                               80                                                 80
+ Accuracy (%)
+
+
+
+
+                            78                                               78                                                 78
+
+
+                            76                                               76                                                 76
+
+
+                            74                                               74                                                 74
+
+
+                            72                                               72                                                 72
+
+                                  0   20       40     60        80   100          0      20       40     60        80     100         0   20       40    60        80   100
+                                           Number of Devices                                  Number of Devices                                Number of Devices
+
+                                       Low-End SLO 150ms                                      Mid-Tier SLO 150ms                           High-End SLO 150ms
+                            80                                               80                                                 80
+ Accuracy (%)
+
+
+
+
+                            78                                               78                                                 78
+                                                                                                                                                                               Light Model
+                                                                                                                                                                               Static
+                            76                                               76                                                 76
+                                                                                                                                                                               MultiTASC
+                            74                                               74                                                 74
+                                                                                                                                                                               MultiTASC++
+
+
+                            72                                               72                                                 72
+
+                                  0   20       40     60        80   100          0      20       40     60        80     100         0   20       40    60        80   100
+                                           Number of Devices                                  Number of Devices                                Number of Devices
+
+                                       Low-End SLO 200ms                                      Mid-Tier SLO 200ms                           High-End SLO 200ms
+                            80                                               80                                                 80
+ Accuracy (%)
+
+
+
+
+                            78                                               78                                                 78
+
+
+                            76                                               76                                                 76
+
+
+                            74                                               74                                                 74
+
+
+                            72                                               72                                                 72
+
+                                  0   20       40     60        80   100          0      20       40     60        80     100         0   20       40    60        80   100
+                                           Number of Devices                                  Number of Devices                                Number of Devices
+
+
+                                                                            Fig. 12 – Accuracy for InceptionV3 ‑ different devices
+
+
+manages to keep the linear increase of system                                                                           ence in accuracy, especially when targeting a 100 ms
+throughput as the number of devices rises for all                                                                       SLO, due to the lower attainable throughput of the
+SLO targets.                                                                                                            heavier Ef icientNetB3. Notably, even with a sub‑
+                                                                                                                        stantial number of devices, the collaborative cas‑
+Fig. 7 and Fig. 8 depict the achieved SLO satisfaction                                                                  cade architecture, when paired with MultiTASC++,
+rate and accuracy, when Ef icientNetB3 is deployed                                                                      signi icantly improves upon the accuracy of the on‑
+on the server. A similar dip to the one in Fig. 4                                                                       device model while preserving consistent respon‑
+can be observed for MultiTASC, between approxi‑                                                                         siveness. In contrast to MultiTASC, besides optimiz‑
+mately 5 and 20 devices. The dips in both igures                                                                        ing the trade‑off between satisfaction rate and accu‑
+reach values as low as 80%, which represents unac‑                                                                      racy, our approach also minimizes the variance be‑
+ceptable delays in 15pp more samples than the tar‑                                                                      tween different seed runs, a crucial element in en‑
+get. We can also observe a more signi icant differ‑                                                                     suring a robust high‑quality service. Fig. 9 shows
+
+
+
+38                                                                                    ©International Telecommunication Union, 2024
+                                                                               Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+                                                   SLO 100ms                                                SLO 150ms                                     SLO 200ms
+                           100                                                     100                                               100
+Inferences below SLO (%)
+
+
+
+
+                           95                                                       95
+                                                                                                                                                                                       Static low
+                           90                                                       90                                               90                                                Static mid
+                           85                                                                                                                                                          Static high
+                                                                                    85
+                                                                                                                                                                                       MultiTASC low
+                           80                                                       80                                               80                                                MultiTASC mid
+                           75
+                                                                                                                                                                                       MultiTASC high
+                                                                                    75
+                                                                                                                                                                                       MultiTASC++ low
+                           70                                                       70                                               70                                                MultiTASC++ mid
+                                                                                                                                                                                       MultiTASC++ high
+                           65                                                       65
+
+                           60                                                       60                                               60
+
+                                     5        10        15    20   25     30                  5        10     15   20      25   30             5    10      15    20    25       30
+                                               Number of Devices                                       Number of Devices                            Number of Devices
+
+
+                                                                        Fig. 13 – SLO satisfaction rate for Ef icientNetB3 ‑ different devices
+
+                                          Low-End SLO 100ms                                        Mid-Tier SLO 100ms                              High-End SLO 100ms
+                           82                                                       82                                               82
+
+                           80                                                       80                                               80
+Accuracy (%)
+
+
+
+
+                           78                                                       78                                               78
+
+                           76                                                       76                                               76
+
+                           74                                                       74                                               74
+
+                           72                                                       72                                               72
+
+                                     5        10        15    20   25     30                 5         10    15    20      25   30             5    10      15    20    25       30
+                                              Number of Devices                                    Number of Devices                                Number of Devices
+
+                                          Low-End SLO 150ms                                        Mid-Tier SLO 150ms                              High-End SLO 150ms
+                           82                                                       82                                               82
+
+                           80                                                       80                                               80
+Accuracy (%)
+
+
+
+
+                                                                                                                                                                                        Light Model
+                           78                                                       78                                               78                                                 Static
+                           76                                                       76                                               76                                                 MultiTASC
+                                                                                                                                                                                        MultiTASC++
+                           74                                                       74                                               74
+
+                           72                                                       72                                               72
+
+                                     5        10        15    20   25     30                 5         10    15    20      25   30             5    10      15    20    25       30
+                                              Number of Devices                                    Number of Devices                                Number of Devices
+
+                                          Low-End SLO 200ms                                        Mid-Tier SLO 200ms                              High-End SLO 200ms
+                           82                                                       82                                               82
+
+                           80                                                       80                                               80
+Accuracy (%)
+
+
+
+
+                           78                                                       78                                               78
+
+                           76                                                       76                                               76
+
+                           74                                                       74                                               74
+
+                           72                                                       72                                               72
+
+                                     5        10        15    20   25     30                 5         10    15    20      25   30             5    10      15    20    25       30
+                                              Number of Devices                                    Number of Devices                                Number of Devices
+
+
+                                                                                 Fig. 14 – Accuracy for Ef icientNetB3 ‑ different devices
+
+                                                   SLO 100ms                                                SLO 150ms                                      SLO 200ms
+                           95                                                      100                                               100
+Inferences below SLO (%)
+
+
+
+
+                                                                                    95                                                95
+                           90
+
+                                                                                    90                                                90
+                           85
+                                                                                                                                                                                        Static
+                                                                                    85
+                                                                                                                                      85                                                MultiTASC++
+                           80
+                                                                                    80
+                                                                                                                                      80
+
+                           75                                                       75
+                                                                                                                                      75
+
+                                                                                    70
+                                                                                                                                      70
+                                 0       10        20        30    40     50             0        10        20     30      40   50         0       10      20     30        40    50
+                                              Number of Devices                                        Number of Devices                                Number of Devices
+
+
+                                                                   Fig. 15 – SLO satisfaction rate for DeiT‑Base‑Distilled ‑ MobileViT‑x‑small
+
+
+
+
+                                                                                             ©International Telecommunication Union, 2024                                                             39
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+                               Accuracy 100ms                                  Accuracy 150ms                                 Accuracy 200ms
+                84                                          84                                                 84
+
+
+
+                82                                          82                                                 82
+ Accuracy (%)
+
+
+
+
+                80                                          80                                                 80                                          Light
+                                                                                                                                                           Static
+                                                                                                                                                           MultiTASC++
+                78                                          78                                                 78
+
+
+
+                76                                          76                                                 76
+
+
+
+                74                                          74                                                 74
+                     0   10      20     30        40   50        0       10      20     30        40     50         0   10      20     30        40   50
+                              Number of Devices                               Number of Devices                              Number of Devices
+
+
+                                                       Fig. 16 – Accuracy for DeiT‑Base‑Distilled ‑ MobileViT‑x‑small
+
+
+similar results to Fig. 6, where Static converges to a                                                 that can undermine the quality of service.
+system throughput of around 300 samples per se‑                                                        Additionally, it does not effectively utilize the
+cond while MultiTASC++ manages to maintain                                                             given satisfaction rate allowance, resulting in
+a linear increase of system throughput as the                                                          lower accuracy levels than potentially achievable.
+number of devices increases.
+                                                                                                       Furthermore, MultiTASC++ mitigates the dip ex‑
+Fig. 10 shows the SLO satisfaction rate and accu‑                                                      perienced by MultiTASC within the range of ap‑
+racy trends with an increasing number of devices,                                                      proximately 5 to 40 devices. In particular, when
+utilizing a reduced dataset of 1000 samples, as op‑                                                    it comes to mid and high‑end tier devices, Mul‑
+posed to the previous 5000 and with a lenient
+                                                                                                       tiTASC++ achieves signi icant accuracy gains over
+150 ms SLO. A noticeable distinction becomes
+                                                                                                       MultiTASC, while accuracy remains relatively con‑
+apparent when        comparing     the   evaluated
+                                                                                                       sistent for low‑end devices between both sched‑
+approaches. MultiTASC converges slowly to a
+threshold that satis ies the SLO, evident by the                                                       ulers.
+results between 10 to 20 devices, where the                                                            Fig. 13 and Fig. 14 present the same compari‑
+satisfaction rate reaches a low point of 75%. In
+                                                                                                       son with Ef icientNetB3 as the server‑side model.
+contrast, MultiTASC++ consistently delivers nearly
+                                                                                                       The results and conclusions obtained are similar to
+identical results to those observed in the prior
+                                                                                                       those from the previous experiment, where Incep‑
+experiment.
+                                                                                                       tionV3 was the server model.
+B. Heterogeneous scenario                                                                              However, it is worth emphasizing that the variance
+Fig. 11 and Fig. 12 present a comprehensive                                                            and luctuations observed in MultiTASC’s satisfac‑
+comparison of SLO satisfaction rate and accuracy                                                       tion rate are even more pronounced in this sce‑
+across MultiTASC++, MultiTASC, and Static in a                                                         nario. In terms of accuracy, MultiTASC achieves a
+heterogeneous device environment.       In this
+                                                                                                       higher accuracy with low‑end devices, particularly
+setting, InceptionV3 serves as the server‑side
+model. We report the performance metrics                                                               in the range of 0 to 15 devices, but subsequently
+separately for each device tier.                                                                       lags behind, mirroring the patterns observed in mid
+                                                                                                       and high‑end devices. This phenomenon can be
+Similar to the homogeneous scenario, our obser‑                                                        attributed to the low‑end devices’ lower latency,
+vations underscore the limitations of the static ap‑                                                   which signi icantly contributes to congestion, ne‑
+proach, which experiences a critical failure beyond a
+                                                                                                       cessitating faster threshold adjustments. It is also
+certain number of devices. Conversely, both Mul‑
+tiTASC++ and MultiTASC effectively maintain high                                                       worthy to note that MultiTASC++ achieves a higher
+satisfaction rates. Notably, our proposed sche‑                                                        accuracy for light devices when it comes to larger
+duler exhibits superior consistency and ef iciency in                                                  numbers of devices.
+trading accuracy for satisfaction rate, as it
+robustly maintains satisfaction rates precisely at the                                                 C. Evaluation on transformers
+targeted level.      MultiTASC, while providing
+operational viability compared to Static for                                                           Fig. 15 and Fig. 16 offer an examination of SLO sat‑
+more devices, it also introduces significant variance                                                  isfaction rates and accuracy in response to an in‑
+
+
+
+40                                                                   ©International Telecommunication Union, 2024
+                                                                                   Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+                                                                         SLO 150ms                                                                                      Accuracy
+                                      100
+
+
+
+                                       99                                                                                             81
+          SLO satisfaction rate (%)
+
+
+
+
+                                                                                                                       Accuracy (%)
+                                       98
+                                                                                                                                      80                                                                              Target
+                                                                                                                                                                                                                      without Model Switching
+                                       97                                                                                                                                                                             with Model Switching
+                                                                                                                                      79
+
+                                       96
+
+                                                                                                                                      78
+                                       95
+
+
+                                                  2        4         6        8         10    12    14    16                                    2        4         6        8        10     12    14   16
+                                                                Number of Devices                                                                              Number of Devices
+
+
+                                                                                       Fig. 17 – Model switching with InceptionV3 initialization
+
+                                                                         SLO 150ms                                                                                      Accuracy
+                                      97.0                                                                                      79.0
+
+
+                                                                                                                                78.5
+                                      96.5
+          SLO satisfaction rate (%)
+
+
+
+
+                                                                                                                                78.0
+                                                                                                                 Accuracy (%)
+
+
+
+
+                                      96.0                                                                                      77.5
+                                                                                                                                                                                                                       Target
+                                                                                                                                77.0                                                                                   without Model Switching
+                                      95.5                                                                                                                                                                             with Model Switching
+                                                                                                                                76.5
+
+
+                                                                                                                                76.0
+                                      95.0
+
+                                                                                                                                75.5
+
+                                      94.5
+                                                                                                                                75.0
+                                             14       16       18        20       22     24    26    28   30                               14       16       18        20       22    24     26   28   30
+                                                                    Number of Devices                                                                             Number of Devices
+
+
+                                                                                   Fig. 18 – Model switching with Ef icientNetB3 initialization
+
+                                                                                                                                                                                                            0.79
+1.0
+
+
+
+
+0.8                                                                                                                                                                                                         0.78
+
+
+
+
+0.6
+                                                                                                                                                                                                                   Accuracy (%)
+
+
+
+
+                                                                                                                                                                                                            0.77                  Number of active devices
+                                                                                                                                                                                                                                  Current average threshold
+                                                                                                                                                                                                                                  Running average satisfaction rate
+                                                                                                                                                                                                                                  Running average accuracy
+
+0.4
+
+                                                                                                                                                                                                            0.76
+
+
+
+
+0.2
+
+
+
+                                                                                                                                                                                                            0.75
+
+
+
+
+0.0
+      0                                       50                                  100                      150                                           200                               250
+                                                                                                    Time (s)
+
+
+                                        Fig. 19 – MultiTASC++’s behavior under intermittent device participation with dynamic threshold
+
+
+creasing number of devices using MultiTASC++ and                                                                                                               The outcomes closely resemble those observed in
+Static. In this scenario, the device model is the                                                                                                              previous scenarios, showcasing the ability of our
+mobile‑grade MobileViT‑x‑small transformer, while                                                                                                              scheduler to generalize to transformer architec‑
+the server model is DeiT‑Base‑Distilled.                                                                                                                       tures, even though its design was not tailored to
+
+
+
+
+                                                                                                    ©International Telecommunication Union, 2024                                                                                                                  41
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+them. Any apparent disparities in the results com‑                               tisfaction rate, and the average running accuracy
+pared to the CNN‑based experiments can be at‑                                    for the currently active devices. We note that the
+tributed to differences in inference latencies and                               percentage of active devices, the average threshold,
+model accuracies.                                                                and the running satisfaction rate are represented
+                                                                                 on the left y‑axis scale, while the running accuracy is
+D. Evaluation of model switching                                                 on the right y‑axis scale. Several key observations
+                                                                                 emerge from this visualization.
+Fig. 17 presents a comparative analysis of the SLO
+satisfaction rate and accuracy with the server model                             First, we notice an inverse correlation between the
+switching feature enabled and disabled. The sche‑                                threshold and the number of active devices. Ini‑
+duler is initialized with the InceptionV3 model,                                 tially, the threshold rapidly decreases to accommo‑
+targeting a 150 ms latency. Up to 12 devices,                                    date the need for maintaining the satisfaction rate.
+during runtime MultiTASC++ decides to switch to                                  Subsequently, as the number of active devices di‑
+a heavier model, namely Ef icientNetB3. This                                     minishes, the threshold is increased.
+achieves a substantially higher accuracy while
+keeping the satisfaction rate above the 95%                                      Furthermore, a direct correlation is observed be‑
+target. For 14 devices and above, the switch is                                  tween the increase in threshold and the gain in run‑
+no longer ef icient and InceptionV3 is used                                      ning accuracy. This emphasizes the trade‑off me‑
+across all samples. We should note here that the                                 chanism facilitated by the scheduler to optimize
+model switching feature was not used in previous                                 system performance.
+experiments so that our update rule could be
+                                                                                 Notably, the running SLO satisfaction rate consis‑
+fairly evaluated against Multi‑TASC without other
+                                                                                 tently maintains a level exceeding approximately
+techniques affecting the performance.
+                                                                                 95% throughout the duration of the experiment, un‑
+Fig. 18 shows a similar evaluation for the sche‑                                 derlining MultiTASC++’s effectiveness in ensuring
+duler, with the server‑side model initialized to                                 the ful illment of the speci ied service‑level objec‑
+Ef icientNetB3 and targeting a 150 ms latency.                                   tives.
+Once again, the satisfaction rate consistently
+exceeds the 95% target, accompanied by an                                        Fig. 20 shows the results of another experiment
+observable accuracy enhancement when the                                         with different initializations when it comes to de‑
+model switches to InceptionV3. In scenarios                                      vices, leading to a different plot line representing
+featuring 14 and 16 devices, model switching does                                the number of active devices compared to the pre‑
+not occur, leading to outcomes similar to                                        vious experiment. In this scenario, however, a static
+instances without model switching.                                               threshold is employed. The results from this expe‑
+                                                                                 riment unveil several insights.
+E. Intermittent device participation                                             The utilization of a static threshold, set at 0.35,
+In this experiment, we emulate a realistic setting                               engenders relatively stable running accuracy, as a
+where 20 devices run simultaneously, each bear‑                                  completely static running accuracy is not realistic.
+ing a 50% probability of going of line. We target                                However, it is accompanied by a notable variability
+low‑tier devices with Ef icientNetB3 as the server‑                              in the running satisfaction rate, consistently falling
+hosted model. The point at which a device goes                                   well below the 95% target. This observation under‑
+of line follows a normal distribution with a mean 𝜇                              lines the critical role played by a dynamically adap‑
+= 𝑁 /2 and a standard deviation 𝜎 = 𝑁 /5 where 𝑁                                 tive threshold in ensuring that SLOs are met.
+is the total number of samples. The duration for
+                                                                                 Both the running accuracy and the running satis‑
+which a device remains of line adheres to an alpha
+                                                                                 faction rate eventually converge at approximately
+distribution with a shape parameter 𝛼 = 60 se‑
+                                                                                 250 seconds when the devices complete their infer‑
+conds.
+                                                                                 ence tasks. Meanwhile, the threshold and the num‑
+Fig. 19 shows an overview of the dynamics in this                                ber of active devices continue to vary. This diver‑
+experiment. It illustrates the luctuation in the num‑                            gence arises due to extensive congestion within the
+ber of active devices over time, the average thresh‑                             request queue, resulting in a delay of approximately
+old maintained across devices, the running SLO sa‑                               30 seconds between the devices completing their in‑
+
+
+
+
+42                                                 ©International Telecommunication Union, 2024
+                                  Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+1.0
+
+
+                                                                                                       0.80
+
+
+
+
+0.8
+
+                                                                                                       0.79
+
+
+
+
+                                                                                                              Accuracy (%)
+0.6
+                                                                                                       0.78                  Number of active devices
+                                                                                                                             Current average threshold
+                                                                                                                             Running average satisfaction rate
+                                                                                                                             Running average accuracy
+
+0.4                                                                                                    0.77
+
+
+
+
+                                                                                                       0.76
+0.2
+
+
+
+
+                                                                                                       0.75
+
+
+      0         50          100           150              200          250           300
+                                                Time (s)
+
+
+                Fig. 20 – MultiTASC++’s behavior under intermittent device participation with static threshold
+
+
+ference and the server’s return of all requested re‑                    tiTASC++ to our old implementation, led us to the
+sults. Since approximately 50% of the devices do                        conclusion that the SLO satisfaction rate updates are
+not go of line, we expect the number of active de‑                      critical for precisely adhering to the targets set by
+vices to drop in half at around 155 seconds where                       each device. Equally essential is the adoption of con‑
+their inference inishes. While this can be observed                     tinuous threshold values, paired with a method de‑
+in Fig. 19 where the system remains responsive due                      signed to counteract slow updates, for the scheduler
+to MultiTASC++, in the case of Fig. 20 this does not                    to achieve its full potential. The harmonic coopera‑
+happen. This is due to the congestion in the request                    tion between all of these components led to a sche‑
+queue and the devices staying connected, waiting                        duler characterized by its consistent ability to
+for the results to return from the server.                              maintain the satisfaction rate that is targeted, as
+                                                                        well as allowing for system throughput to scale,
+Overall, this examined scenario further highlights                      while simultaneously enhancing performance
+the bene it of dynamic threshold adaptation during                      across various device tiers and workloads,
+runtime, particularly in settings characterized by                      surpassing the abilities of its predecessor,
+evolving conditions and varying system demands.                         MultiTASC.
+                                                                        Moreover, the implementation of model switching
+6.    CONCLUSION                                                        has proven effective, allowing for the scheduler to
+In this paper, we presented MultiTASC++, a dynamic                      adapt to scenarios where a different server‑hosted
+scheduler designed to address the challenges of con‑                    model leads to greater ef iciency.
+gestion in collaborative DNN inference involving a                      Lastly, by emulating a realistic deployment scenario
+multitude of IoT devices in indoor intelligent spaces.                  with intermittent partial participation of devices,
+By introducing the concept of the multi‑tenant cas‑                     we demonstrated our dynamic scheduler’s versa‑
+cade, we have achieved continuous dynamic adap‑                         tility, which can adapt to dynamic device availabi‑
+tation of threshold values, optimizing the trade‑off                    lity and tune the execution con iguration in a
+between accuracy and service‑level objectives dur‑                      timely manner. This adaptability is vital for
+ing runtime.                                                            optimizing system performance and ensuring that
+                                                                        the service‑level objectives are met.
+Our experimental evaluation, spanning diverse de‑
+vice environments and server‑side models, has                           While image classi ication is a well‑explored and
+demonstrated the ef icacy of our dynamic sched‑                         commonplace task, it would be of interest for future
+uler. Moreover, these experiments comparing Mul‑                        research to shift attention towards other signi icant
+
+
+
+                                            ©International Telecommunication Union, 2024                                                                     43
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+tasks, such as speech recognition. Furthermore, the                               [9] Alexandros Kouris, Stylianos I Venieris, and
+proposed system could be extended by investigat‑                                      Christos‑Savvas Bouganis. “CascadeCNN:
+ing the new challenges of generative inference tasks,                                 Pushing the Performance Limits of Quantisa‑
+such as image and text generation, and designing                                      tion in Convolutional Neural Networks”. In:
+novel methods in order to enable their deployment                                     FPL. 2018.
+in multi‑device cascade setups.                                                  [10] Tetsuro Nakamura, Shogo Saito, Kei Fuji‑
+                                                                                      moto, Masashi Kaneko, and Akinori Shi‑
+REFERENCES                                                                            raga. “Spatial‑ and Time‑Division Multiplex‑
+     [1] Stylianos I. Venieris, Ioannis Panopoulos, and                               ing in CNN Accelerator”. In: Parallel Comput‑
+         Iakovos S. Venieris. “OODIn: An Optimised                                    ing (2022).
+         On‑Device Inference Framework for Hetero‑                               [11] Sokratis Nikolaidis, Stylianos I. Venieris, and
+         geneous Mobile Devices”. In: SMARTCOMP.                                      Iakovos S. Venieris. “MultiTASC: A Multi‑
+         2021.                                                                        Tenancy‑Aware Scheduler for Cascaded DNN
+     [2] Stefanos Laskaridis, Stylianos I Venieris,                                   Inference at the Consumer Edge”. In: 2023
+         Alexandros Kouris, Rui Li, and Nicholas D                                    IEEE Symposium on Computers and Communi‑
+         Lane. “The Future of Consumer Edge‑AI                                        cations (ISCC). 2023.
+         Computing”. In: arXiv (2022).                                           [12] Zhi Zhou, Xu Chen, En Li, Liekang Zeng, Ke
+     [3] Mario Almeida, Stefanos Laskaridis, Abhinav                                  Luo, and Junshan Zhang. “Edge Intelligence:
+         Mehrotra, Lukasz Dudziak, Ilias Leontiadis,                                  Paving the Last Mile of Arti icial Intelligence
+         and Nicholas D. Lane. “Smart at What Cost?                                   With Edge Computing”. In: Proceedings of the
+         Characterising Mobile Deep Neural Networks                                   IEEE (2019).
+         in the Wild”. In: IMC. 2021.                                            [13] Mark Sandler, Andrew Howard, Menglong
+     [4] Eunhyeok Park, Dongyoung Kim, Soobeom                                        Zhu, Andrey Zhmoginov, and Liang‑Chieh
+         Kim, Yong‑Deok Kim, Gunhee Kim, Sungroh                                      Chen. “MobileNetV2: Inverted Residuals and
+         Yoon, and Sungjoo Yoo. “Big/little deep neu‑                                 Linear Bottlenecks”. In: CVPR. 2018.
+         ral network for ultra low power inference”. In:                         [14] Mingxing Tan and Quoc V. Le. “Ef icientNet:
+         CODES+ISSS. 2015.                                                            Rethinking Model Scaling for Convolutional
+     [5] Min Li, Yu Li, Ye Tian, Li Jiang, and Qiang Xu.                              Neural Networks”. In: International Confer‑
+         “AppealNet: An Ef icient and Highly‑Accurate                                 ence on Machine Learning (ICML).
+         Edge/Cloud Collaborative Architecture for                               [15] Barret Zoph, Vijay Vasudevan, Jonathon
+         DNN Inference”. In: DAC. 2021.                                               Shlens, and Quoc V. Le. “Learning Trans‑
+     [6] Xin Wang, Yujia Luo, Daniel Crankshaw,                                       ferable Architectures for Scalable Image
+         Alexey Tumanov, Fisher Yu, and Joseph E                                      Recognition”. In: IEEE/CVF Conference on
+         Gonzalez. “IDK Cascades: Fast Deep Learning                                  Computer Vision and Pattern Recognition
+         by Learning not to Overthink”. In: UAI. 2018.                                (CVPR). 2018.
+     [7] Seyed Iman Mirzadeh and Hassan                                          [16] Song Han, Huizi Mao, and William J Dally.
+         Ghasemzadeh. “Optimal Policy for De‑                                         “Deep Compression: Compressing Deep Neu‑
+         ployment of Machine Learning Models on                                       ral Networks with Pruning, Trained Quanti‑
+         Energy‑Bounded Systems”. In: IJCAI. 2020.                                    zation and Huffman Coding”. In: ICLR. 2015.
+     [8] Dimitrios Stamoulis, Ting‑Wu Rudy Chin,                                 [17] Yihui He, Xiangyu Zhang, and Jian Sun. “Chan‑
+         Anand Krishnan Prakash, Haocheng Fang,                                       nel Pruning for Accelerating Very Deep Neu‑
+         Sribhuvan Sajja, Mitchell Bognar, and Diana                                  ral Networks”. In: ICCV. 2017.
+         Marculescu. “Designing Adaptive Neural Net‑                             [18] Geoffrey Hinton, Oriol Vinyals, and Jeff Dean.
+         works for Energy‑Constrained Image Classi‑                                   “Distilling the Knowledge in a Neural Net‑
+          ication”. In: ICCAD. 2018.                                                  work”. In: NeurIPS. 2014.
+
+
+
+
+44                                                 ©International Telecommunication Union, 2024
+                              Nikolaidis et al.: MultiTASC++: A continuously adaptive scheduler for edge-based multi-device cascade inference
+
+
+
+
+[19] Bart Cox, Robert Birke, and Lydia Y. Chen.                     [29] Christian Szegedy, Vincent Vanhoucke,
+     “Memory‑aware and Context‑aware Multi‑                              Sergey Ioffe, Jonathon Shlens, and Zbigniew
+     DNN Inference on the Edge”. In: Pervasive and                       Wojna. “Rethinking the Inception Architec‑
+     Mobile Computing (2022).                                            ture for Computer Vision”. In: 2016 IEEE
+[20] Yiping Kang, Johann Hauswald, Cao Gao,                              Conference on Computer Vision and Pattern
+     Austin Rovinski, Trevor Mudge, Jason Mars,                          Recognition (CVPR ). 2016.
+     and Lingjia Tang. “Neurosurgeon: Collabora‑                    [30] Hugo Touvron, Matthieu Cord, Matthijs
+     tive Intelligence Between the Cloud and Mo‑                         Douze, Francisco Massa, Alexandre Sablay‑
+     bile Edge”. In: ASPLOS. 2017.                                       rolles, and Hervé Jé gou. “Training data‑
+[21] Hongshan Li, Chenghao Hu, Jingyan Jiang,                            ef icient image transformers & distillation
+     Zhi Wang, Yonggang Wen, and Wenwu Zhu.                              through attention”. In: International Confer‑
+     “JALAD: Joint Accuracy‑And Latency‑Aware                            ence on Machine Learning (ICML). 2021.
+     Deep Structure Decoupling for Edge‑Cloud                       [31] Chuan Guo, Geoff Pleiss, Yu Sun, and Kilian Q
+     Execution”. In: ICPADS. 2018.                                       Weinberger. “On Calibration of Modern Neu‑
+[22] Mario Almeida, Stefanos Laskaridis, Stylianos                       ral Networks”. In: ICML. 2017.
+     I Venieris, Ilias Leontiadis, and Nicholas D                   [32] Ajay J. Joshi, Fatih Porikli, and Nikolaos Pa‑
+     Lane. “DynO: Dynamic Onloading of Deep                              panikolopoulos. “Multi‑Class Active Learning
+     Neural Networks from Cloud to Device”. In:                          for Image Classi ication”. In: CVPR. 2009.
+     TECS (2022).                                                   [33] Ioannis Panopoulos, Sokratis Nikolaidis,
+[23] Stefanos Laskaridis, Stylianos I. Venieris,                         Stylianos I. Venieris, and Iakovos S. Venieris.
+     Mario Almeida, Ilias Leontiadis, and Nicholas                       “Exploring the Performance and Ef iciency
+     D. Lane. “SPINN: Synergistic Progressive In‑                        of Transformer Models for NLP on Mobile
+     ference of Neural Networks over Device and                          Devices”. In: IEEE Symposium on Computers
+     Cloud”. In: MobiCom. 2020.                                          and Communications (ISCC). 2023.
+[24] Jin Huang, Colin Samplawski, Deepak Gane‑                      [34] Ahsan Ali, Riccardo Pinciroli, Feng Yan, and
+     san, Benjamin Marlin, and Heesung Kwon.                             Evgenia Smirni. “BATCH: Machine Learning
+     “CLIO: Enabling Automatic Compilation of                            Inference Serving on Serverless Platforms
+     Deep Learning Pipelines across IoT and                              with Adaptive Batching”. In: SC. 2020.
+     Cloud”. In: MobiCom. 2020.                                     [35] Li Fei‑Fei, Jia Deng, and Kai Li. “ImageNet:
+[25] Daniel Kang, John Emmons, Firas Abuzaid,                            Constructing a Large‑Scale Image Database”.
+     Peter Bailis, and Matei Zaharia. “NoScope:                          In: Journal of Vision 9.8 (2009), pp. 1037–
+     Optimizing Neural Network Queries over                              1037.
+     Video at Scale”. In: Proceedings of the VLDB                   [36] Junting Pan, Adrian Bulat, Fuwen Tan, Xi‑
+     Endowment (2017).                                                   atian Zhu, Lukasz Dudziak, Hongsheng Li,
+[26] Haichen Shen, Seungyeop Han, Matthai Phili‑                         Georgios Tzimiropoulos, and Brais Martinez.
+     pose, and Arvind Krishnamurthy. “Fast Video                         “EdgeViTs: Competing Light‑Weight CNNs on
+     Classi ication via Adaptive Cascading of Deep                       Mobile Devices with Vision Transformers”.
+     Models”. In: IEEE Conference on Computer Vi‑                        In: European Conference on Computer Vision
+     sion and Pattern Recognition (CVPR). 2017.                          (ECCV). 2022.
+[27] Yiding Wang, Kai Chen, Haisheng Tan, and
+     Kun Guo. “Tabi: An Ef icient Multi‑Level Infer‑
+     ence System for Large Language Models”. In:
+     EuroSys. 2023.
+[28] Sachin Mehta and Mohammad Rastegari.
+     “MobileViT: Light‑weight, General‑purpose,
+     and Mobile‑friendly Vision Transformer”. In:
+     The Tenth International Conference on Learn‑
+     ing Representations, ICLR. 2022.
+
+
+
+                                        ©International Telecommunication Union, 2024                                                      45
+ITU Journal on Future and Evolving Technologies, Volume 5, Issue 1, March 2024
+
+
+
+
+AUTHORS
+                      Sokratis Nikolaidis is cur‑                                                       Iakovos S. Venieris has been
+                      rently a Ph.D. candidate in                                                       a professor at the School of
+                      the School of Electrical and                                                      Electrical and Computer En‑
+                      Computer Engineering, Na‑                                                         gineering, National Technical
+                      tional Technical University of                                                    University of Athens (NTUA)
+                      Athens, since 2021, and an                                                        since 1994 and is the direc‑
+                      assistant researcher at Intel‑                                                    tor of Intelligent Communi‑
+                      ligent Communications and                                  cations and Broadband Networks (ICBNet) Labora‑
+                      Broadband Networks Labo‑                                   tory. His research interests are in the ields of dis‑
+ratory. He received an M.Eng. degree in applied                                  tributed systems, security and privacy, software and
+mathematical and physical sciences in 2021 from                                  service engineering, agent technology, multimedia,
+National Technical University of Athens. He has                                  mobile communications and machine learning, in‑
+published two research papers for the international                              ternetworking, signalling, resource scheduling and
+conference ISCC 2023, receiving the Best Student                                 allocation for network management, modeling, per‑
+Full Paper award. His current research interests in‑                             formance evaluation, queuing theory. He has over
+clude distributed ML/DL, computer vision, natural                                370 publications in the above areas and has received
+language processing and generative AI.                                           several national and international awards for aca‑
+                                                                                 demic achievement. He has participated in and has
+                      Stylianos I. Venieris is cur‑
+                                                                                 successfully led several national and international
+                      rently a senior research sci‑
+                                                                                 projects.
+                      entist at Samsung AI, Cam‑
+                      bridge, U.K., where he leads
+                      the Distributed AI group. He
+                      received a Ph.D. degree in re‑
+                      con igurable hardware and
+                      deep learning in 2018 and
+the M.Eng. degree (Hons.) in electrical and elec‑
+tronic engineering in 2014 from Imperial College
+London, London, U.K. He has published over 20 re‑
+search papers in peer‑reviewed journals and inter‑
+national conferences. His latest research interests
+include custom hardware accelerators for deep neu‑
+ral networks, highly lexible inference systems for
+mobile and embedded platforms, and continual fe‑
+derated learning.
+
+
+
+
+46                                                 ©International Telecommunication Union, 2024
+

@@ -1,0 +1,631 @@
+  Energy- and Temperature-aware Scheduling: From
+   Theory to an Implementation on Intel Processor
+                             Qaisar Bashir† , Mohammad Pivezhandi‡ , Abusayeed Saifullah‡
+                                                       †
+                                                       AMD, Inc., California
+                                               ‡
+                                                   Wayne State University, Michigan
+
+
+
+   Abstract—Temperature, energy, and performance are the key        frequency scaling and increasing system temperature may
+considerations of real-time multicore systems. Thermal hotspots     result in a significant increase in power consumption [28].
+and high temperatures not only degrade reliability and per-         Today, real-time embedded systems are exploiting the ubiq-
+formance but also increase cooling costs and leakage current.
+To address these issues, we propose an energy, performance,         uitous multicore platforms. For multicore platforms, power-
+and temperature-aware semi-partitioned scheduling technique         aware designs are important, but localized heating occurs at a
+for sporadic real-time tasks. The proposed approach incorporates    much faster rate as compared to chip-wide heating. It increases
+DVFS, Dynamic Power Management, and chip floor-plan in clas-        thermal cycles, thermal hotspots, and temperature gradients
+sical partitioned scheduling technique. To further reduce temper-   that cause physical damage [30]. Therefore, it is important to
+ature, energy, hotspots, and gradients, the proposed partitioned
+scheduling also considers individual task behaviors in the form     control both the energy and temperature of multicore systems.
+of hot and cold tasks and applies reactive thermal management          There are many reliability-aware techniques that maintain
+techniques such as task migration (hence called semi-partitioned    system reliability, including replication, frequency elevation,
+scheduling) for system safety. To our knowledge, this is the        and rollback recovery [16], [33], [34]. But these techniques
+first paper that considers energy, performance, reliability, and    incur high energy consumption and degrade performance. It
+temperature together in real-time multicore scheduling. Finally,
+we present the results through experiments on the Intel Xeon        is important to consider energy consumption, temperature,
+2680 v3 multicore platform. The results show that the proposed      and problems associated with peak temperatures, including
+approach on average saves 15% power, reduces 3 c average            hotspots, temporal and spatial gradients, and thermal cycles,
+temperature, improves task schedulability, and avoids 100%          when considering overall system performance. By considering
+thermal emergencies compared to the state-of-the-art technique.     the temporal and spatial gradients of the operating temper-
+                                                                    atures, power-aware techniques can provide a better perfor-
+                                                                    mance, energy efficiency, and reliability. In a recent study,
+                      I. I NTRODUCTION
+                                                                    researchers identified that a 6 C of temperature reduction
+   In multicore technology, thermal management plays a cru-         could boost chip reliability by two times [19].
+cial role. Power density is doubling nearly every three years.         Thermal and energy management for multicore systems
+During processing, heat is produced, and energy is consumed.        can be introduced at both software and hardware levels.
+To remove heat from the processor die, hardware-based solu-         Scheduling is one of the ways to overcome these problems. So,
+tions are typically used, such as fans. However, it increases       it is important to introduce a temperature, performance, and
+cooling costs by almost $3 per watt of heat dissipation [27].       energy-aware mechanism for real-time systems. Energy and
+An overheated chip not only increases the cooling costs but         temperature-aware scheduling techniques have been widely
+also reduces reliability [30]. Moreover, the power consumption      introduced previously but most of the techniques in literature
+of a chip includes the power necessary for normal operation         either considered temperature or energy individually [18], [20].
+(dynamic power) and the power of invalid electric leakage              This work addresses real-time scheduling of constrained
+(static power). The invalid electric leakages account for half      deadline sporadic tasks on multicore that takes temperature,
+of the total power consumption when the cheap temperature           energy, reliability, and performance into account. A com-
+exceeds 86°C. A chip’s temperature management is crucial for        plex interdependence between temperature, performance, and
+reducing electric leakage and increasing reliability.               energy makes temperature, performance, and energy-aware
+   An uncontrolled temperature can adversely deteriorate the        scheduling techniques challenging. Each core’s temperature
+performance and reliability of the system. Furthermore, spatial     profile depends on its power profile, floor plan, neighboring
+gradients (a situation where a core is operating at high            cores’ power profiles, and execution pattern of tasks.
+temperature as compared to the others), temporal gradients (a          In this paper, we focus on energy, temperature, and per-
+situation where a core is overly used as compared to the oth-       formance trade-off by exploiting the Dynamic Voltage and
+ers), and thermal cycles (a large temperature variation) bring      Frequency Scaling (DVFS) and Dynamic Power Manage-
+challenges to leakage power, cooling cost, and performance.         ment (DPM) capabilities of multicore platforms in real-time
+Moreover, the temperature of the multicore system on the chip       scheduling. Our approach regulates the voltage and frequency
+heavily depends on energy or power density [12]. Aggressive         of each core by taking into account individual task behavior,
+thereby enabling the control of energy consumption as well                                              TABLE I
+as the temperature of each core. Specifically, we make the                                     D EFINITION OF NOTATIONS
+following new contributions.                                             Symbol       Defintion
+                                                                         ⇣i           Power deviation factor of task ⌧i
+  • We observe that a fixed partitioned scheduling may not               ⇢i           The time period of task ⌧i
+    ensure system reliability under adverse heat effects on               i           Dropping priority level of task ⌧i
+                                                                                      Worst-case execution time of ⌧i
+    a multicore. Therefore, we propose a temperature- and                Ci
+                                                                         ui           Utilization of task ⌧i
+    energy-aware semi-partitioned scheduling for real-time                            Static power
+    tasks on a multicore platform which allows occasional                IL           Leakage current
+                                                                         Vop          Operating voltage
+    task migration with negligible overhead. It takes into               Tambient     Ambient temperature
+    account the temperature profile of each core, floor-plan,            I0           Current in ambient temperature
+                                                                         J            Junction temperature
+    neighboring cores’ power profiles, the execution pattern             RC           Time Constant for damping voltage
+    of the tasks based on their characteristics, and the indi-           Vtt          Transistor threshold temperature
+    vidual behaviors in the form of hot and cold tasks.                  Tj           Temperature of the j th core
+                                                                         P [t2 t1 ]   Power consumption in time period [t2 t1 ]
+  • We implement the proposed scheduling on the Intel Xeon               Rthermal     Thermal Coefficient
+    2680 v3 multicore platform [1] and evaluate through                  pij          Impact of power consumption of j th core on ith core
+                                                                         U (f i )     Total power consumption of the respective ith core
+    experiments on Intel Xeon 2680 multicore considering
+                                                                         Ckl          Worst case execution time of ⌧k at frequency level l
+    actual workload. To our knowledge, this is the first                 Di           Deadline of ⌧i
+    implementation and systematic experimentation of such
+    real-time scheduling using actual processor workload
+    on a commercial multicore platform. The results show                [6]. While the DPM-based techniques perform well in thermal
+    that the proposed approach, on average, reduces power               emergencies, they drastically reduce system performance.
+    consumption by 15%, reduces 3 C average temperature,                   A number of studies considered optimizing temperature
+    improves task schedulability, and avoids 100% thermal               and energy under real-time constraints [7], [9], [25]. The
+    emergencies compared to the state-of-the-art technique.             work in [25] is based on genetic algorithms that has high
+  In the the rest of the paper, Section II reviews related work,        computational and runtime overhead, making it unsuitable for
+Section III describes the system model and problem definition,          real-time systems in practice. The other approaches are based
+Section IV discusses the proposed scheduling, and Section V             on core configurations [9] that only provide control on a
+describes our implementation and experimentation.                       group of cores. In contrast, our approach regulates frequencies
+                                                                        and low energy states of individual cores, which is more
+                     II. R ELATED W ORK                                 effective in controlling temperature and energy consumption.
+                                                                        In addition, our approach considers task behavior to ensure
+   While there are many works on semi-partitioned scheduling            system reliability and adopts occasional task migration to
+(see [10]), they do not consider temperature or energy-aware            control peak temperature and improve performance. To our
+scheduling. Existing temperature-aware techniques are based             knowledge, ours is the first work that considers temperature,
+on prediction [18], model-based stochastic [32], or floor-              energy, performance, reliability, and individual task behavior
+planning [35]. Their actions are performed only when the op-            (hot and cold tasks) at once. Furthermore, we have imple-
+erating temperature goes beyond a certain threshold limit, and          mented the proposed scheduling on the Intel Xeon platform
+requests are issued by the scheduler to control frequencies. The        considering actual workload.
+work in [22] formulated a constructive speed-based scheduling
+algorithm and derived thermal feasibility checks for periodic                                  III. S YSTEM M ODEL
+tasks. A response time analysis was studied in [11] considering
+energy harvesting. It does not consider energy or performance           A. Task Model
+while optimizing temperature.                                               We consider a task set ⌧ consisting of n sporadic tasks
+   The issues related to reactive thermal management tech-              with constrained deadlines: ⌧ = {⌧1 , ⌧2 , ......., ⌧n }. Each task
+niques such as hotspots, thermal cycles, and thermal gradients          ⌧i , 1  i  n, is a sequence of instructions, and is charac-
+also adversely affect the reliability of the system. They lower         terized using five-tuple (Ci , Di , ⇢i , ⇣i , i ) representation. We
+the lifespan of the system [29]. A few reliability-aware tech-          consider a multicore system consisting of m cores where each
+niques were introduced in the past. These techniques are based          core is DVFS-enabled. Apart from that, we have also assigned
+on frequency elevation [34], rollback [33], and replication [16].       a power deviation factor ⇣i to each task ⌧i to designate it as
+But none of these techniques considered energy as a constraint.         a hot or cold task. ⇣ is the fraction of core power consumed
+   The energy benefits of multicore scheduling were studied             by a task instance execution. This value varies between 0.01
+in [4], [5], [38]–[40]. These techniques improve energy con-            and 1.0 to indicate 1 to 100 percent deviation of power. A
+sumption under performance constraints but do not consider              task with ⇣ > 0.5 is considered as hot task and a task with
+temperature. Some of these techniques are based on DPM and              ⇣  0.5 is considered as cold task. The time period of a task
+switch cores to low-energy modes to optimize energy con-                ⌧i is denoted by ⇢i . The time period is the minimum duration
+sumption. A detailed review of these techniques is presented in         before a task repeats itself. The deadline of task ⌧i is denoted
+
+
+
+                                                                    2
+by Di , and Di  ⇢i . The dropping priority level of each                               proposed in [29] and derived the constants based on hot and
+task is denoted by i , the lower this value, the higher the                             cold tasks upon incorporating ⇣ based on utilization as follows.
+priority to be dropped. The worst-case execution time of task                                              2      3 2
+                                                                                                                        T1(initial)
+                                                                                                                                    3 2 3
+                                                                                                             T1                          p1
+⌧i is represented via Ci . For an individual task P  ⌧i , utilization                                      6 T2 7 6 T2(initial) 7 6 p2 7
+                                                         n                                                 6      7 6               7 6 7 ⇥ ⇤
+ui = C⇢ii ; for task set ⌧ , total utilization usum = i=1 ui .                                             6 T3 7 6 T3(initial) 7 6 p3 7
+                                                                                                           6 .... 7 = 6             7 + 6 7. A                             (2)
+                                                                                                           6      7 6 .... 7 6 .... 7
+                                                                                                           4 .... 5 4 .... 5 4 .... 5
+                                                                                                             Tm         Tm(initial)      pm
+B. Power and Thermal Model
+                                                                                        Here, pi and Ti are the individual power consumption and
+   A widely used power model for processors [3] models
+                                                                                        individual temperature of the ith core, A is a m ⇥ m matrix
+power P as P = +↵s , where ↵ > 0 is the switching capac-
+                                                                                        given by
+itance, and is a fixed-parameter dependent on the hardware,                                                     2                                            3
+and > 0 is the static power [31]. So the energy consumption                                                 p11            p12    p13     ....     ...   p1m
+                                                                                                          6 p21            p22    p23     ....     ...   p2m 7
+of a core at speed s over a time duration Cs at given workload                                            6
+                                                                                                          6p               p32    p33     ....     ...
+                                                                                                                                                             7
+                                                                                                                                                         p3m 7
+C is modeled as E(C, s) = ( + ↵s ) Cs + ↵Cs 1 .                                                       A = 6 21
+                                                                                                          6 ....            ...    ....   ....     ...   p3m 7
+                                                                                                                                                             7
+                                                                                                          4 ....            ...    ....   ....     ...   p3m 5
+   The leakage power is a major cause of overall energy
+                                                                                                            pm1            pm2    pm3     ....     ...   pmm
+consumption below the critical frequency [21]. In practice,
+this power model cannot be used exactly as it is, due to the                            where pij , 1  i, j  m, indicates the impact of power
+temperature dependence of static power. Specifically, static                            consumption of the j th core on the ith core. To calculate these
+power     is given by     = IL .Vop , where IL is the leakage                           parameters, we have used a similar formula from [17] based
+current and Vop is the operating voltage. IL can be expressed                           on utilization and ⇣ as follows.
+as shown below [7].                                                                                                                            n
+                                                                                                                                               X
+                                                                                                         fi         fj                                       i
+                                  2                                                          pij =                           ;    U (f i ) =         bki · Ckf · ⇣k · ↵s
+                              J                   J T
+                                           ↵·Vop · J·T ambient                                       U (f i )       U (f j )
+               IL = I0 ·    2         ·e              ambient                 (1)                                                              k=1
+                           Tambient
+                                                                                        Here i and j are the indices of individual cores and f i and
+In Equation (1), Tambient is the ambient temperature, I0 is the                         f j are their respective frequencies; U (f i ) indicates the total
+leakage current at the corresponding ambient temperature, J                             power consumption of core i; Ckl is the worst-case execution of
+is the junction temperature (highest operating temperature),                            ⌧k task at frequency level l; bki is a boolean variable which is
+and Vop is the operating voltage. Equation (1) shows that an                            1 if task ⌧k runs on core i, and 0 otherwise. The above relation
+increase in junction temperature increases IL . The value of                            can be used by passing an array of cores as a parameter to
+   increases due to an increase in IL , thereby increasing the                          see the impact of multiple cores on a single core at once. This
+system’s overall power consumption [13].                                                power model has considered the impact of neighboring cores
+                                                                                        to (almost) accurately measure the temperature of each core.
+   For the temperature profile of each core, we first need
+                                                                                        Table I summarizes the notations used in this paper.
+to derive a relation between the operating voltage and the
+                                                                                            We consider a multi-core with m identical cores {M1 , M2 ,
+frequency of the core. The relation between Vop and processor
+                                    (V   V )2                                           ....., Mm }, with discrete frequency levels. The chip floor-
+frequency f is given by f = RC. opVop tt , where Vtt is the                             plan is also an important factor for system reliability and the
+transistor threshold voltage or mobility parameter, and RC is                           chip temperature model. Chip floor-plan considers the distance
+the constant that relates the core frequency to the operating                           between cores, thickness, width, and many other parameters.
+voltage level [26]. Based on the model described in [8], we                             Our system model also considers the low energy modes
+can derive the temperature Tj of the j th core against power                            {sleep, deepsleep, standby} of each core, and switching time
+consumption in the presence of fixed ambient temperature                                between low energy modes and active or idle mode.
+as Tj = p[t2 t1 ] · Rthermal + S2 + Tambient , where p[t2 t1 ]
+is the power consumption during the time interval [t2 t1 ],                                  IV. P ROPOSED S EMI -PARTITIONED S CHEDULING
+Tambient is the fixed ambient temperature, Tj (0) is the reference
+temperature at time 0, Rthermal is the thermal coefficient, and                           In a partitioned scheduling technique, each task is statically
+S2 is given by                                                                          assigned to some core and not allowed to migrate. In our
+                                                                                        semi-partitioned scheduling, the currently active job of a task
+                                                                 t2   t1                must complete its execution on the assigned core. After its
+    S2 = Tj (0) · p[(t2 ) (t1 )] .Rthermal       Tambient · e Rthermal ·C .             completion, the next job of the same task may occasionally
+                                                                                        be assigned to another core.
+   The above model is used to calculate the temperature of                                To characterize workload, we need to define request bound
+each core for any duration of time without considering the                              functions (rbf). The value of rbf(⌧i , L) is the total execution
+effect of neighboring cores. But this model is not the exact                            requirement of all jobs of ⌧i during interval L (only the jobs
+representation of each core temperature due to the significant                          of ⌧i whose release times are in the interval are considered).
+impact of neighboring temperatures. Now, to take into account                           An approximation of rbf is given in [14] as follows. The
+the effect of neighboring cores, we have adopted the model                              constant ⇠ is the value that relates frequency and worst-case
+
+
+
+                                                                                    3
+execution time of a task. Task utilization ui based on frequency                                           TABLE II
+adjustment is: ui = ⇠.C                                                           I NTEL PXA270 P OWER C ONSUMPTION AT D IFFERENT
+                       ⇢i .
+                         i
+                                                                                                F REQUENCY L EVELS
+                                             ⇠.Ci
+                 rbf(⌧i , L) = (⇠ · Ci ) +        ·L              (3)             Levels    Frequency (M Hz)   Active Power(W )   Idle Power(W )
+                                              ⇢i                                  Level 1          624               0.925             0.260
+                                                                                  Level 2          520               0.747             0.222
+A. Initial Partitioning                                                           Level 3          416               0.570             0.186
+                                                                                  Level 4          312               0.390             0.154
+   In our approach, the task assignment on an individual core                     Level 5          208               0.279             0.129
+                                                                                  Level 6          104               0.116             0.064
+depends on the core frequency and scheduling algorithm.
+Deadline monotonic (DM) is an optimal algorithm for an
+individual core for sporadic tasks with constrained dead-
+lines.Therefore, we have used DM for tasks assignment on                     assigning workload as long as it is feasible up to the maximum
+an individual core.                                                          frequency fmax . As shown in Table II the power values of Intel
+   Assume all tasks (⌧1 , ⌧2 , · · · , ⌧n ) are in decreasing priority       PXA270 processor at different frequency levels [2], placing a
+based on DM and (⌧1 , ⌧2 , ⌧3 , ...,⌧i 1 ) are already assigned to           core in low energy mode consumes much less power compared
+the cores and a new task ⌧i requests core time. Task ⌧i can be               to running/active or idle mode. When the task is not feasible
+feasibly assigned to any core Mk , 1  k  m, that satisfies                 on available running cores, we move a core from low energy
+the following condition (see [23] for proof), where bjk is a                 mode to running mode and assign the task to it.
+boolean variable which is 1 if task ⌧j is already assigned to                C. Handling Temperature Threshold and Reliability
+core k (i.e., Mk ), and 0 otherwise.
+                                                                                In Section III, we have shown how temperature increases
+                     n
+                     X                                                       due to the change in frequency and impact of power consump-
+              (Di          bjk · rbf(⌧j , Di ))   ⇠ · Ci ·        (4)        tion on temperature. In Section III, Equation (2) shows the
+                     j=1
+                                                                             neighboring cores’ effect on a core’s individual temperature.
+   We assign the task to the first available core that satisfies             As we know, every processor has a maximum temperature
+Condition (4). The algorithm continues to assign tasks to                    threshold value. A thermal hotspot appears when the tem-
+the available core as long as this condition is satisfied. We                perature of any core (T1 , T2 , ......., Tm ) is greater than the
+switch to the next frequency level and adjust the execution                  maximum temperature threshold that may cause permanent
+requirements according to the next frequency level if the                    failure or stall the system. We propose a task migration
+above condition is not satisfied. We continue to increase                    policy to handle temperature and associated problems. We
+frequency levels (up to maximum available frequency) and                     have defined multiple threshold levels to safely operate be-
+stop whenever the tasks are feasible. If no frequency level is               low the maximum temperature threshold. Tthreshold represents
+found where the tasks are feasible (schedulable), Algorithm 3                the maximum threshold temperature allowed. We have de-
+returns partitioning as failed.                                              fined the Tthreshold(2) and Tthreshold(1) just below the maximum
+                                                                             threshold temperature to avoid thermal violations (Tthreshold >
+B. Energy Minimization                                                       Tthreshold(1) > Tthreshold(2) ). Multiple threshold levels are also
+   Our proposed approach computes rbf and evaluates Con-                     beneficial for task migration policy. Task migration policy is
+dition (4) at each core. Since increasing the frequency of                   proposed to control peak temperature.
+the whole platform leads to an abrupt increase in power                         We allow migration of tasks between cores, if a core’s
+consumption, it selects the core with maximum remaining                      operating temperature Ti , 1  i  m1 (where m1 is the
+utilization and increases the frequency of only the individual               number of active cores, and 1, 2, · · · , m1 are the indices of
+core when Condition (4) is not satisfied.                                    active cores) is close to Tthreshold or the core’s workload is
+   Note that a frequency much lower or higher than critical                  so small that it can be shifted to other cores, while ensuring
+frequency leads to leakage power that becomes the major                      that all tasks meet their deadlines and the cores operate in
+source of total energy consumption. Hence, for energy effi-                  frequency range [fmin , fmax ] on targeted cores. The benefit
+ciency, first we choose the range of frequencies that are closer             of task migration is that either we can control the peak
+to (but not lower than) critical frequency due to lower energy               temperature by migrating tasks or we can move some cores
+consumption in that range. This frequency range is different                 in low energy mode by shifting their workload to the cores
+for each processing platform. We denote the lower and upper                  whose Ti , 1  i  m (m is total number of cores) is less than
+bounds of this frequency range by fmin and fmax , respectively.              Tthreshold(2) to save overall power consumption. The proposed
+So our proposed algorithm will not choose a frequency lower                  approach also considers the case when no such core exists that
+than fmin in any case and will limit the frequency at fmax .                 can accommodate the complete workload of the core (whose
+   Most of the current techniques distribute workload across                 workload is selected for migration). Then our approach shifts a
+the multicore platform and continue to operate all cores. In                 limited number of tasks by meeting feasibility while operating
+our approach, the objective is to minimize the number of cores               at a range of frequency [fmin , fmax ]. The task that is selected
+for task assignment and keep the unused cores in low energy                  for migration must complete its currently active job on the
+modes. Hence, when we assign tasks to a core, we continue                    current core. The next job will migrate to a different core.
+
+
+
+                                                                         4
+  Let ⌧d is the set of tasks of core Mi that needs to migrate              Let ⌧d be the set of tasks of core Mi that needs to migrate
+  m1 is the number of active cores that are operating in                   m1 is the number of active cores that are operating in
+   frequency range [fmin , fmax ] and operating temperature is              frequency range [fmin , fmax ] and operating temperature is
+   < Tthreshold(2)                                                          < Tthreshold(2)
+  Step 1: Sort active cores based on operating temperature                 Step1:if (Ti and Tthreshold(2) and Ti and Tthreshold(1) and m1
+  Step 2: for each task in ⌧d check Condition (4) on m1 cores               6= 0) then select a task from ⌧d with maximum ⇣i ;
+  Step 3: if conditions satisfied; then Assign task to                     Step 2: for each task in ⌧d check Condition (4) on m1 cores
+   corresponding core and update corresponding rbf;                        Step 3: if conditions satisfied; then
+  Step 4: if conditions not satisfied and frequency is < fmax of               Assign task to corresponding core and repeat step 1 to 3
+   any core among m1 ; then update m1 and increase                              unless temperature is below Tthreshold(2)
+   frequency level by 1 step of m1 cores and move to Step 2;               Step 4: else if conditions not satisfied and frequency is
+  Step 5: if ⌧d empty; then move core in low energy mode;                    < fmax of any core among m1 ; then
+  Step 6: if ⌧d not empty; then continue to execute remaining                  update m1 and increase frequency level by 1 step of m1
+   tasks;                                                                       cores and move to Step 1
+  Step 7: Exit;                                                            Step 5:else if m1 =0 and Ti > Tthreshold(2) then
+                                                                               Select the task from ⌧d with maximum i and drop the
+                                                                                current job of the task
+ Algorithm 1: Migration of task (When a core has small workload)               Continue to repeat Step 5 unless temperature is below
+                                                                                Tthreshold(2) ;
+                                                                           Step 6: else
+   Algorithm 1 shows the first scenario of task migration (when                go to step 7;
+a core has a small workload). It first finds the list of active            Step 7: Exit;
+cores (m1 cores) that are operating in the frequency range
+                                                                          Algorithm 2: Migration of task (When Operating temperature is
+[fmin , fmax ] and whose operating temperatures Ti are below
+                                                                          close to Tthreshold )
+Tthreshold(2) except the core whose workload is selected for
+migration. Step 1 sorts the available cores in decreasing order
+of Ti . Step 2 selects each task one after another from the core                                              r4cm
+and considers it as a new task and assigns the task to the first                                     Running
+available core that satisfies Condition (4). Steps 3–6 shift the
+core (whose workload is selected for migration) in low energy                        12𝑚𝑠 0𝑚𝑠                   0𝑚𝑠        261𝑚𝑠
+mode on a feasible assignment of all tasks. Otherwise, the core                                                                     Deep
+                                                                             Standby        Idle                            4𝑚𝑠
+continues to execute the remaining tasks.                                                                                           Sleep
+                                                                                          0.3𝑚𝑠
+   Now we consider the second scenario of task migration
+when a core operating temperature approaches Tthreshold ). To
+control Tthreshold , Algorithm 2 checks the temperature of each                                      3𝑚𝑠        137𝑚𝑠
+core (Ti , 1  i  m) as shown in Equation 2, and if Ti is
+below Tthreshold(2) , the core continues to operate at the same
+operating frequency. If the operating temperature of any core                                         Sleep
+is between Tthreshold(2) and Tthreshold(1) , Algorithm 2 finds the
+list of active cores that are operating in the frequency range                                    Fig. 1. PXA270 State Switching.
+[fmin , fmax ] with operating temperatures below Tthreshold(2) .
+Migration overhead. The proposed task migration does not                 Intel Xeon 2680 datasheets. Since the ratio of the PXA270
+impose special latency overhead since with task migration                state transitions, e.g., the time to transfer from deep sleep to
+instructions will be redistributed through the change of the             idle v.s. the time to transfer from standby to idle state, is
+program counter (PC) in different threads. This reconfiguration          similar to the Intel Xeon 2680 v3 platform, the simulation and
+of PC value takes a few clocks for flush and stall of the                behavior analysis is based on the constraints extracted from
+ongoing instructions. Since the clock is in term of gigahertz,           this platform. The same result can be extracted when scaling
+the latency overhead is negligible.                                      the timing according to the results extracted from experiments.
+                                                                            The processor must move from low energy mode to idle or
+D. Switching Mechanism and Incorporating Break Even Time                 active/running mode to accommodate that task. In Figure 1,
+   As we have seen, the proposed approach moves a core from              we observe that time required to move a processor from low
+low energy mode to running mode and assigns the task to the              energy to idle or active mode is much larger than the time
+core. However, if a core is in low energy mode, it cannot start          required to move a processor to low energy mode from the
+executing the workload right away. It needs a considerable               active mode. To accommodate the switching times between
+amount of time before starting the execution of an assigned              states, we have used the concept of break-even time (BET)
+task based on low energy mode (sleep, deepsleep, standby).               defined as BET = tlow + twake , where tlow is the total time
+   Figure 1 shows the Intel Marvell’s XScale PXA270 pro-                 required to move to low energy mode, twake is the wake-time
+cessor switching time between different states. Its mechanical           (time needed to move from low energy to idle/active mode).
+and thermal specification is publicly available in [2], but                 The value of tlow varies depending on the low energy
+we cannot extract the same information from the available                state. For example, the values of tlow for standby, sleep
+
+
+
+                                                                     5
+and deepsleep for Intel processor PXA270 are 0.3 ms, 3 ms                                each core. This information is used for task assignments and
+and 4 ms respectively. The values of twake are much higher                               migrations. For example, if the core operating temperature is
+compared to tlow . The corresponding values of twake against                             near the threshold level and one of the tasks needs to migrate
+standby, sleep and deepsleep are 12 ms, 137ms and 261 ms                                 from the core to reduce the temperature, the task with a
+respectively as shown in Figure 1. Figure 1 shows 0 ms is                                maximum value of ⇣ is selected to migrate based on target
+required to move a processor from idle mode to running/active                            core feasibility. Migrating a hot task from a core leads to a
+mode. So we can conclude that a processor starts execution                               sharp decrease in corresponding core operating temperature.
+of a task right away if it is in running mode or idle mode.                              To avoid spatial gradients and temporal gradients, the proposed
+One greedy approach is that we move a core to low energy                                 approach uses two counters for each core to keep track of how
+mode as soon as it is idle. This approach only works well                                many times a core is selected and how long it remains active.
+when the system has very small break-even time. In contrast,                             We use these counters to ensure that all cores are equally used.
+the proposed algorithm moves a core (if available) from low
+energy mode to idle mode as soon as one of the running cores
+approaches the upper limit of frequency range or operating                                  The proposed approach also considers extreme thermal
+temperature of the core is close to threshold. So a newly                                emergencies. We used a task migration mechanism to control
+arrived or migrated task can start execution on the available                            peak temperature, but a situation can arise in which no
+core instantly. The proposed technique moves the core in                                 core is available to migrate tasks feasibly and all cores are
+opposite direction only if the core workload can be feasibly                             operating near Tthreshold . To handle this scenario, we assigned
+assigned to other active cores with Ti < Tthreshold(2) within the                        a task dropping priority i to each task. The dropping priority
+defined frequency range.                                                                 varies between 1 to 6. The lower i value shows the higher
+                                                                                         priority of the task. The proposed approach drops tasks, when
+  The sporadic task model is denoted by ⌧ = {⌧1 , ⌧2 , ......., ⌧n } m is the            (Ti , 1  i  m1 ) of any core is greater than Tthreshold(1) . The
+    number of cores and n is the total number of tasks
+  PARTITION(⌧ , m)
+                                                                                         proposed approach dropped the task with the lowest dropping
+  for each task in ⌧                                                                     priority from the selected core. The purpose of dropping tasks
+  Step 1: m1 := get list of active cores
+  Step 2: while m1 <m and frequency of all active cores <fmax and
+                                                                                         with low priority is to avoid thermal violations that may lead
+    Ti < Tthreshold(2) do                                                                to permanent failure of the device. The proposed approach
+        Step 3: sort m1 in increasing order based on Ti2m1
+        Step 4: if ⌧i satisfies Condition (4) then
+                                                                                         continues to drop tasks unless the operating temperature of
+              assign task ⌧i to the core; update assigned task utilization on            the core is below Tthreshold(1) .
+                selected core;
+              proceed to next task;
+        Step 5: if ⌧ is empty then
+              go to step 13;
+        Step 6: if Condition (4) is not satisfied and frequency of any active core          We choose dropping instead of halting to avoid complication
+          is < b then                                                                    that arises when skipping the jobs. For dropping the tasks,
+              update m1 and choose core with minimum Ti ;
+              update frequency of selected core and go to step 2;                        we get the Linux process ID of each process and assign the
+        Step 7: else
+              Move a core from low energy to active mode; Move to step 2;                priorities on each ID manually according to the process func-
+  Step 8: while no of active cores=m and Ti < Tthreshold(1) do                           tionality. However, in halting process, skipping/dropping only
+        Run task migration algorithm;
+        Step 9: if ⌧i satisfies Condition (4) then                                       the affected jobs requires significant effort as we have to save
+              assign task ⌧i to the core;
+              update assigned task utilization on selected core; proceed to next
+                                                                                         the current state of the process and the associated variables.
+                task;                                                                    Besides, the Intel memory architecture does not provide the
+  Step 10: while Ti2m1 > Tthreshold(1) do
+        select the core with maximum Ti ; drop task with maximum i value                 memory unlocking mechanism which makes halting without
+          from selected core; Continue to drop tasks unless temperature is below         knowing the current state of the execution infeasible. This
+          Tthreshold(1) if Ti < Tthreshold(1) then
+              Move to Step 8;                                                            means the execution of the process should start from the
+  Step 11: if ⌧ is empty then                                                            beginnings for the user cores when dropping the jobs.
+        go to step 13;
+  Step 12: else
+        return Partition Failed;
+  Step 13: return Partition Successful;
+                                                                                            Task assignment under temperature and energy constraints
+     Algorithm 3: Semi-Partitioned Scheduling Technique                                  according to the proposed semi-partitioned scheduling tech-
+                                                                                         nique is shown in Algorithm 3. Step 1 FINDS the list of
+                                                                                         the active number of cores. Steps (2-4) show the process
+E. Handling Power Deviation and Extreme Thermal Condition                                of task assignment when the active cores are less than the
+   Our proposed approach also considers power deviation                                  total available cores and operating in the frequency range.
+factor ⇣ to control peak temperature and temperature balance                             Frequency scaling on the individual core is shown in step 6.
+among the cores. ⇣ is used to differentiate between hot and                              Step 7 moves a core from low energy mode to active mode if
+cold tasks. This categorization represents the static power                              all active cores are operating at the upper limit of the frequency
+behavior of cores. For example, hot tasks indicate that the                              range if we still have some cores in low energy mode. Steps 8
+temperature is above some threshold in steady state. We                                  and 9 show the task migration mechanism. Steps 10–13 show
+keep tracking the power deviation factor of tasks assigned to                            the task dropping process.
+
+
+
+                                                                                     6
+                             TABLE III                                               Another unique feature of Intel Xeon E5 2680 v3 is
+        I NTEL X EON E5 2680 AVAILABLE FREQUENCIES (GHz)                          uncore frequency scaling (UFS). UFS is independent of the
+ Core Frequency        AP uncore frequency          PP uncore frequency           core frequencies. UFS enables the processor to control the
+       2.5                    2.2                           2.1                   frequency of uncore components (e.g., RAM, caches) without
+       2.4                    2.1                           2.0                   the interference of core frequencies. UFS can be specified by
+       2.3                    2.0                           1.9                   using the Model Specific Register (MSR) [36], [37]. The work
+       2.2                    1.9                           1.8                   in [15] derived lower bounds of active processor (AP) uncore
+       2.1                    1.8                           1.7
+       2.0                    1.75                         1.65
+                                                                                  frequencies and passive processor (PP) uncore frequencies,
+       1.9                    1.65                         1.55                   and showed that uncore frequencies can be used to limit power
+       1.8                    1.6                           1.5                   consumption. We have used uncore frequencies to differentiate
+       1.7                    1.5                           1.4                   between hot and cold tasks. A hot task will use a higher
+       1.6                    1.4                           1.2                   UFS value than a cold task. The available frequency levels
+       1.5                    1.3                           1.2
+       1.4                    1.2                           1.2
+                                                                                  are shown in Table III.
+       1.3                    1.2                           1.2                      Intel Xeon E5 2680 v3 also supports per core C-states.
+       1.2                    1.2                           1.2                   C-states represent the power-saving states. They are used to
+                                                                                  power down a subsystem that is not executing any workload.
+                                                                                  C-states are further divided into package C-states (PC-states)
+                              TABLE IV                                            and core C-states (CC-states) [37]. We cannot control PC-
+                I NTEL X EON E5 2680 BASIC CC- STATES                             states as we cannot interfere the packages. We only control
+     ID          Name                   Functional Description                    CC-states due to interaction with cores. Many other C-states
+    C0      Active/Running           Core is executing instructions               involve hyper-threading, but we focus on basic CC-states [36].
+    C1         Halt/Idle     No execution, but return to C0 instantaneously
+    C1E       Auto Halt       Halt+DVFS(with lowest available frequency)          The basic CC-states are shown in Table IV.
+    C2        Stop Clock      Same as C1, but requires longer time to C0
+    C3           Sleep       Require considerable long time to move to C0
+    C6       Power Gating        BCLK is off and remove core voltage              A. Workload Generation
+                                                                                     System workload is an average core usage over a certain
+   V. E XPERIMENT ON I NTEL X EON 2680 M ULTICORE                                 time duration. At any given time, a core either executes a task
+   This section provides details of the implementation and sys-                   or remains idle. Generating an exact workload is difficult as
+tematic experimentation of real-time scheduling using actual                      the system threads never guarantee time at millisecond-level
+processor workload on an Intel Xeon 2680 v3 platform [1].                         granularity. Most of the tools for workload generation use one
+By evaluating our technique on a 12-core Intel Xeon 2680                          process per-core to stabilize utilization. Algorithm 4 shows our
+v3 processor, we were able to overcome the shortcomings                           dynamic program to generate a system workload with multiple
+of single-core simulations. Intel Xeon E5 2680 v3 supports                        processes per-core. We used the getchar() function to block
+per-core P-states. P-states allow changing the frequency and                      the program at any time. This function does not consume any
+voltage level of the core [15]. Intel Xeon E5 2680 v3 supports                    time and allows to end the program by pressing any key. The
+multiple sets of P-states that correspond to different oper-                      program allows changing the number of processes and elapsed
+ating points (frequency-voltage combinations). P-states can                       time (milliseconds) to adjust system utilization. The program
+be either hardware-controlled (Intel speed shift technology)                      generates stable utilization with +/- 2%.
+or OS-controlled (Intel speed step technology). P-states work
+based on frequency, where the corresponding voltage level is                      B. Analysis of Power Consumption
+automatically selected [24].                                                         We compared our proposed technique with TBP in terms
+                                                                                  of time spent in lower energy states. The technique that keeps
+  void task1 ( void *)                                                            cores in higher energy states consumes more power. Table
+  { while (1)                                                                     V shows time spent by each core in CC-states at different
+        { c l o c k t wakeup = c l o c k ( ) + 5 0 ;                              utilization factors. At 25% utilization factor, the proposed
+  / / elapsed time (50)                                                           technique on average spent 19% more time in lower CC-
+                w h i l e ( c l o c k ( ) < wakeup )                              state as compared to TBP. Our technique spent more time in
+                Sleep ( 5 0 ) ; } }
+  i n t main ( i n t , c h a r * * )                                              lower CC-states because it controls cores individually and only
+  { i n t ThreadNr ;              i n t p r o c e s s =30;                        moves a core in C0 or C1 when the already running cores are
+        f o r ( i n t i = 0 ; i < p r o c e s s ; i ++)                           out of good frequency range or due to high core temperature
+                    b e g i n t h r e a d ( task1 ,0 ,& ThreadNr ) ;              as defined in IV-D. At 50% and 75% utilization factors, the
+        ( void ) getchar ( ) ;                                                    proposed technique on average spent 17% and 1.8% more time
+        return 0; }
+                                                                                  in lower energy states, respectively, as compared to TBP.
+                                                                                     Figure 2 shows the power consumption results of Intel Xeon
+          Algorithm 4: Workload Generation Program                                2680 v3 platform. The technique that spent more time in lower
+                                                                                  CC-states saves more power. Our technique on average saves
+
+
+
+                                                                              7
+                                                                          TABLE V
+                                                  T IME S PENT IN CC- STATES P ROPOSED T ECHNIQUE VS TBP
+
+ Utilization                          25%                                          50%                                             75%
+ Algorithm         Proposed Technique            TBP            Proposed Technique            TBP               Proposed Technique            TBP
+   States        C0% C1% C2-C3% C0%             C1% C2-C3%    C0% C1% C2-C3% C0%             C1% C2-C3%       C0% C1% C2-C3% C0%             C1% C2-C3%
+  Core 01        25.6   10.3     64.1    28.4   34.6 37.0     52.4   13.2     34.4    54.4   27.3 18.3        76.4   21.6      2.0    81.2   18.7  0.1
+  Core 02        25.4   11.4     63.2    22.4   33.8 43.8     53.2   10.9     35.9    51.6   26.6 21.8        77.7   21.4      0.9    77.8   21.6  0.6
+  Core 03        30.4   13.6     56.0    21.6   30.6 47.8     51.6   13.4     35.0    53.5   30.7 15.8        81.3   18.2      0.5    76.5   23.4  0.1
+  Core 04        29.3   11.9     58.8    27.3   31.4 32.2     47.8   11.6     40.6    52.4   31.9 15.7        80.9   17.6      1.5    80.4   19.4  0.2
+  Core 05        26.6   13.7     59.7    27.2   32.4 40.4     56.4   12.9     30.7    51.7   34.0 14.3        82.3   15.4      2.3    79.8   19.8  0.4
+  Core 06        34.6   14.3     51.1    29.7   29.6 40.7     53.9   13.7     32.4    47.9   32.7 19.4        81.7   16.3      2.0    83.6   16.1  0.3
+  Core 07        28.7   13.3     58.0    26.6   33.4 40.0     51.6   14.4     34.0    51.4   30.3 18.3        83.2   14.2      2.6    82.2   17.4  0.4
+  Core 08        29.6   11.3     59.1    27.4   37.4 35.2     53.7   12.3     34.0    53.4   33.4 13.2        84.1   13.7      2.2    85.4   14.5  0.1
+  Core 09        32.8   13.2     54.0    28.2   26.6 45.2     52.8   10.6     36.6    57.4   31.6 11.0        83.1   13.4      3.5    79.3   20.1  0.6
+  Core 10        28.4   12.4     59.2    26.4   32.7 40.9     58.4   11.7     29.9    55.2   30.5 14.3        83.2   13.9      2.9    82.7   16.6  0.7
+  Core 11        23.6   13.1     63.3    25.4   40.4 34.2     59.2    9.6     31.2    53.3   29.6 17.1        81.2   16.4      2.4    81.7   18.1  0.2
+  Core 12        31.4   10.4     58.2    25.3   33.4 41.3     51.3   13.4     35.3    51.4   29.3 19.3        80.3   17.2      2.5    83.3   16.3  0.4
+  Average        28.9   12.4     58.7    26.3   33.0 39.9     53.5   12.3     34.1    52.8   30.6 16.5        81.3   16.6      2.1    81.1   18.5  0.3
+
+                                      r5cm
+
+
+
+
+                                                                                 Fig. 3. Average operating temperature of the system at 60% utilization under
+                                                                                 different utilization policies on Intel Xeon 2680.
+               Fig. 2. Power Consumption under Varying Utilization.
+
+15% and 20% more power as compared to TBP and DM (with                           thermal cycles (temperature variation) and also affects the
+threshold), respectively.                                                        performance of the system. The large thermal cycles directly
+                                                                                 reduce the reliability of the system and may cause permanent
+C. Analysis of Temperature                                                       damage. Our approach shows smooth behavior by operating at
+                                                                                 a good range of frequency. TBP executes workload at a higher
+   Our approach not only reduces the overall power consump-
+                                                                                 frequency that creates large variations in operating tempera-
+tion of the system but also reduces the average temperature
+                                                                                 ture. Figure 3 also shows that the operating temperature of
+of the system. Figure 3 shows the average operating temper-
+                                                                                 DM (without threshold) continues to increase and may cause
+ature of the system at 60% utilization. We utilized multiple
+                                                                                 permanent damage to the system.
+temperature threshold levels as defined in IV-C. The proposed
+approach maintains a lower average temperature by operating                         Operating temperature of individual cores under our pro-
+all the cores at a good range of frequency. DM continues to                      posed technique is shown in Figure 4. Our approach not only
+execute workload without using low energy modes. Although                        keeps average temperature of the system under maximum
+TBP also supports low energy modes, it mostly operates                           threshold but also keeps the operating temperature of indi-
+at a maximum frequency that leads to a sharp increase in                         vidual cores below the maximum threshold (Tthreshold ).
+temperature. Table V shows that our technique spent more
+time in low energy modes as compared to TBP that further
+reduces the overall temperature of the system.                                                             VI. C ONCLUSION
+   Figure 3 also shows that the average temperature of the
+system under proposed technique remains below the maximum                           We have proposed a semi-partitioned scheduling technique
+threshold temperature. While some existing techniques drasti-                    for real-time tasks under temperature, energy, and performance
+cally reduce the temperature when it is close to the maximum                     constraints on multicore. We have also implemented and
+threshold, a sudden decrease in temperature produces large                       evaluated the approach on the Intel Xeon platform.
+
+
+
+                                                                             8
+                                                                                    [10] Casini et al. Task splitting and load balancing of dynamic real-time
+                                                                                         workloads for semi-partitioned edf. IEEE Trans on Comp, 2020.
+                                                                                    [11] Chandarli et al. Response time analysis for thermal-aware real-time
+                                                                                         systems under fixed-priority scheduling. In ISORC ’21.
+                                                                                    [12] Chantem et al. Temperature-aware scheduling and assignment for hard
+                                                                                         real-time applications on mpsocs. IEEE Trans on VLSI Sys, 2010.
+                                                                                    [13] Fallah et al. Standby and active leakage current control and minimization
+                                                                                         in cmos vlsi circuits. IEICE trans elect, 2005.
+                                                                                    [14] Fisher et al. A fully polynomial-time approximation scheme for feasi-
+                                                                                         bility analysis in static-priority systems with arbitrary relative deadlines.
+                                                                                         In ECRTS ’05, 2005.
+                                                                                    [15] Hackenberg et al. An energy efficiency feature survey of the intel haswell
+                                                                                         processor. In IPDPS ’15.
+                                                                                    [16] Haque et al. On reliability management of energy-aware real-time
+                                                                                         systems through task replication. IEEE TPDS, 2016.
+                                                                                    [17] Huang et al. Qt-adaptation engine: Adaptive qos-aware scheduling and
+                                                                                         governing in thermally constrained mobile devices. IEEE Trans on
+                                                                                         Comp-Aided Des of Integ Circt and Sys, 2019.
+                                                                                    [18] Hwang et al. A predictive system shutdown method for energy saving
+                                                                                         of event-driven computation. TODAES ’00.
+                                                                                    [19] Lee et al. Thermal-aware scheduling for integrated cpus–gpu platforms.
+                                                                                         TECS ’19.
+                                                                                    [20] Liu et al. Overhead-aware system-level joint energy and performance
+                                                                                         optimization for streaming applications on multiprocessor systems-on-
+                                                                                         chip. In Euromicro Conf Real-Time Sys, 2008.
+                                                                                    [21] Pagani et al. Energy efficient task partitioning based on the single
+                                                                                         frequency approximation scheme. RTSS ’13.
+                                                                                    [22] Quan et al. Leakage aware feasibility analysis for temperature-
+                                                                                         constrained hard real-time periodic tasks. In ECRTS’09.
+                                                                                    [23] Sanjoy et al. Preemptively scheduling hard-real-time sporadic tasks on
+                                                                                         one processor. In RTSS ’90.
+                                                                                    [24] Schöne et al. Energy efficiency features of the intel skylake-sp processor
+                                                                                         and their impact on performance. arXiv, 2019.
+                                                                                    [25] Sheikh et al. Simultaneous optimization of performance, energy and
+                                                                                         temperature for dag scheduling in multi-core processors. In IGCC ’12.
+                                                                                    [26] Sheikh et al. Fast algorithms for thermal constrained performance
+                                                                                         optimization in dag scheduling on multi-core processors. In Int Green
+                                                                                         Comp Conf and Workshp, 2011.
+                                                                                    [27] Skadron et al. Temperature-aware microarchitecture. ACM SIGARCH,
+                                                                                         2003.
+                                                                                    [28] Srinivasan et al. Exploiting structural duplication for lifetime reliability
+                                                                                         enhancement. In ISCA ’05.
+                                                                                    [29] Wang et al. A simple thermal model for multi-core processors and its
+Fig. 4. Temperature Behavior of Each Core under Proposed Technique at                    application to slack allocation. In IPDPS ’10.
+60% Utilization                                                                     [30] Wang et al. Adaptive routing algorithms for lifetime reliability opti-
+                      ACKNOWLEDGMENT                                                     mization in network-on-chip. IEEE Trans Comp, 2015.
+                                                                                    [31] Xu et al. Energy-efficient policies for embedded clusters. ACM
+  This work was supported by NSF through grants CNS-                                     SIGPLAN Not., 2005.
+2301757, CAREER- 2211523, CCF-2118202, and CNS-                                     [32] Zanini et al. A control theory approach for thermal balancing of mpsoc.
+2211642.                                                                                 In Proc Asia and South Pacific Desgn Automtn, 2009.
+                                                                                    [33] Zhang et al. A unified approach for fault tolerance and dynamic power
+                                                                                         management in fixed-priority real-time embedded systems. IEEE Trans
+                             R EFERENCES                                                 on Comp-Aid Des Int Circt and Sys, 2005.
+ [1] http://ark.intel.com/products/81908/Intel-Xeon-Processor-E5-2680               [34] Zhou et al. Balancing lifetime and soft-error reliability to improve
+     v3-30M-Cache-2-50-GHz.                                                              system availability. In ASP-DAC ’16.
+ [2] https://docs.toradex.com/100210-colibri-arm-som-pxa270.pdf.                    [35] Zhou et al. Thermal-aware task scheduling for 3d multicore processors.
+ [3] Hakan Aydin and Qi Yang. Energy-aware partitioning for multiprocessor               IEEE Trans on Para and Dist Sys, 2009.
+     real-time systems. In ISPDP ’03, 2003.                                         [36] Agner Fog. The microarchitecture of intel, amd and via cpus. opt guide
+ [4] Ashikahmed Bhuiyan, Zhishan Guo, Abusayeed Saifullah, Nan Guan,                     for ass programmrs, 2011.
+     and Haoyi Xiong. Energy-efficient real-time scheduling of dag tasks.           [37] Part Guide. Intel® 64 and ia-32 architectures software developer’s
+     ACM Transactions on Embedded Computing Systems (TECS), 17(5):1–                     manual. Vol 3B: Sys prog Guid, 2011.
+     25, 2018.                                                                      [38] Zhishan Guo, Ashikahmed Bhuiyan, Di Liu, Aamir Khan, Abusayeed
+ [5] Ashikahmed Bhuiyan, Di Liu, Aamir Khan, Abusayeed Saifullah, Nan                    Saifullah, and Nan Guan. Energy-efficient real-time scheduling of
+     Guan, and Zhishan Guo. Energy-efficient parallel real-time scheduling               dags on clustered multi-core platforms. In 2019 IEEE Real-Time and
+     on clustered multi-core. IEEE Transactions on Parallel and Distributed              Embedded Technology and Applications Symposium (RTAS), pages 156–
+     Systems, 31(9):2097–2111, 2020.                                                     168. IEEE, 2019.
+ [6] Attia et al. Dynamic power management techniques in multi-core                 [39] Zhishan Guo, Ashikahmed Bhuiyan, Abusayeed Saifullah, Nan Guan,
+     architectures: A survey study. J. Ain Shams Eng, 2017.                              and Haoyi Xiong. Energy-efficient multi-core scheduling for real-time
+ [7] Baati et al. Temperature-aware dvfs-dpm for real-time applications under            dag tasks. In 29th Euromicro conference on real-time systems (ECRTS
+     variable ambient temperature. In Symp SIES ’13.                                     2017). Schloss Dagstuhl-Leibniz-Zentrum fuer Informatik, 2017.
+ [8] Bampis et al. On multiprocessor temperature-aware scheduling prob-             [40] Abusayeed Saifullah, Sezana Fahmida, Venkata P Modekurthy, Nathan
+     lems. J. of Scheduling, 2013.                                                       Fisher, and Zhishan Guo. Cpu energy-aware parallel real-time schedul-
+ [9] Bashir et al. An online temperature-aware scheduling technique to avoid             ing. Leibniz international proceedings in informatics, 165, 2020.
+     thermal emergencies in multiprocessor systems. J Comp Elec Eng, 2018.
+
+
+
+
+                                                                                9
+

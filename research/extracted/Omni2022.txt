@@ -1,0 +1,1019 @@
+                                Multi-mode on Multi-core:
+                         Making the best of both worlds with Omni
+                                        Robert Gifford          Linh Thi Xuan Phan
+                                                University of Pennsylvania
+
+   Abstract—When scheduling multi-mode real-time systems on               better schedulability. However, these two technologies are
+multi-core platforms, a key question is how to dynamically adjust         generally disconnected from one another: the former either
+shared resources, such as cache and memory bandwidth, when                focuses on single core or completely ignores shared resources
+resource demands change, without jeopardizing schedulability
+during mode changes. This paper presents Omni, a first end-to-            such as cache and memory bandwidth, while the latter typi-
+end solution to this problem. Omni consists of a novel multi-mode         cally assumes a static system with a fixed taskset that does
+resource allocation algorithm and a resource-aware schedulabil-           not change at runtime. To the best of our knowledge, none
+ity test that supports general mode-change semantics as well              of the existing solutions considers both multi-mode systems
+as dynamic cache and bandwidth resource allocation. Omni’s                scheduling and shared multi-core multi-resource allocation.
+resource allocation leverages the platform’s concurrency and the
+diversity of the tasks’ demands to minimize overload during                  Unfortunately, there is no easy way to extend one of the
+mode transitions; it does so by intelligently co-distributing tasks       two technologies to cover the entire scenario. One possible
+and resources across cores. Omni’s schedulability test ensures            approach would be to integrate a multi-mode scheduling
+predictable mode transitions, and it takes into account mode-             technique, such as [12], with an even partitioning of shared
+change effects on the resource demands on different cores, so as          resources. This approach can ensure timing guarantees for
+to best match their dynamic needs using the available resources.
+   We have implemented a prototype of Omni, and we have                   multi-mode systems, but—as our evaluation shows—it suffers
+evaluated it using randomly generated multi-mode systems with             from poor schedulability and resource utilization because it
+several real-world benchmarks as the workload. Our results show           cannot adapt to the dynamic changes in resource demands,
+that Omni has low overhead, and that it is substantially more             which happen naturally whenever the system transitions be-
+effective in improving schedulability than the state of the art.          tween modes. Another approach would be to apply existing
+                                                                          multi-core resource allocation methods, such as the holistic
+                       I. I NTRODUCTION                                   allocation from [39], to each individual mode. This approach
+The trend towards full autonomy has transformed the design of             produces a unique resource configuration for each mode that
+cyber-physical systems (CPS) in two fundamental ways. On                  closely matches each mode’s resource demand, but, without
+the software side, CPS are becoming increasingly adaptive:                considering mode transitions, it yields low schedulability and
+for example, a self-driving vehicle may need to dynamically               cannot provide any guarantees.
+execute different subsets of software features at runtime de-                In this paper, we present Omni, a first integrated end-to-
+pending on the road conditions or detected obstacles, and/or              end solution to the multi-resource co-allocation problem of
+it may switch between different controllers, such as an ad-               multi-mode systems on multi-core platforms. Omni consists
+vanced MPC controller and a standard PID controller, to                   of (1) a multi-mode resource allocation algorithm that holisti-
+optimize performance and safety. On the hardware side, CPS                cally maps tasks and allocates cache and memory bandwidth
+increasingly use modern multi-core platforms in many critical             resources to cores, and (2) a resource-aware schedulability
+areas, such as automotive [20] and avionics [22, 32], where               test for the system. Our key insight is to concurrently (i)
+they not only provide enhanced capabilities and performance,              adapt resource and task allocation dynamically as the system
+but also lower costs. These developments have introduced a                transitions between modes, to closely match the changes in
+new real-time challenge: How to ensure predictable run-time               resource demands at mode changes, and to (ii) take into
+adaptation on multi-core platforms while maximizing resource              account the effect of mode changes on execution demands,
+use efficiency?                                                           which in turn guide our allocation decisions. Omni’s resource
+   Recent research in real-time systems has already developed             allocation algorithm leverages the platform concurrency and
+two important technologies that can help to address this                  the diversity of tasks’ demands to minimize overload during
+challenge. First, multi-mode theories [10, 31, 34] can be used            mode transitions. This is achieved by strategically redistribut-
+to model and formally reason about adaptive systems. In this              ing tasks and resources in tandem across cores. In doing
+formalism, the system is represented as a multi-mode system,              so, Omni aims to maximize schedulability in each mode
+whose modes correspond to different configurations and whose              while minimizing the mode-change overhead by bringing the
+transitions correspond to configuration changes in response to            modes’ allocations as close to each other as possible. Omni
+events. Each mode is associated with a set of tasks that are              further separates new tasks that appear only in the new mode
+active when the system is in that mode. Multi-mode analysis               from existing tasks as much as possible; this is to avoid
+can then be used to analyze the timing behavior of the system,            potential overload during the transition, when new jobs of
+both within a mode and during a mode transition. The second               new tasks (which are often released immediately at the mode-
+technology is multi-core resource allocation [39], which offers           change instant) co-exist on the same core with unfinished
+a way to reduce interference among concurrent executions, en-             jobs from the old mode. In summary, we make the following
+able better isolation among tasks, and consequentially achieve            contributions:
+
+                                                                      1
+  •  a multi-mode resource allocation algorithm that dynami-            have a theoretical analysis. As DNA uses average rates of
+     cally adapts task mapping and shared resource allocation           execution for its allocations, a worst-case schedulability test
+     to changes in resource demands at mode transitions                 would require fundamental changes to the algorithm itself.
+     (Section IV);                                                      Extending fine-grained adaptive solutions like DNA to multi-
+   • a resource-aware multi-mode schedulability analysis                mode hard real-time systems is an interesting future direction.
+     (Section V); and                                                      Several platforms have been developed to support multi-
+   • a prototype implementation of Omni that supports general           mode behaviors. For instance, Neukirchner et al. [27] de-
+     mode-change semantics and dynamic resource allocation              velops an implementation of multi-mode monitors. Azim et.
+     (Section VI)                                                       al. [3] proposes an implementation in LITMUSRT that utilizes
+We have evaluated Omni using multi-mode systems generated               checkpoints and rollback-based mode-change mechanisms for
+from PARSEC [5], SPLASH2x [37], DIS [24], and Isol-                     efficient mode changes. Chen et. al. [10] provides a Xen-
+bench [38] benchmarks. Our results show that Omni can be                based system called SafeMC for experimental exploration and
+implemented with low overhead, and that it substantially out-           evaluation of MCPs. There also exist multi-mode virtualization
+performs state-of-the-art techniques in terms of schedulability         platforms that support multi-mode systems, such as M2-
+and resource-use efficiency.                                            Xen [21]. Unlike our Omni prototype, none of these platforms
+                                                                        supports dynamic shared resource allocations.
+                     II. R ELATED W ORK
+Multi-mode systems have been studied extensively in real-time                           III. S YSTEM MODEL AND GOAL
+literature. Existing solutions focus on two key areas: 1) new
+models and timing analysis techniques for supporting multi-             Platform. We consider a multi-core platform consisting of
+mode behaviors (see e.g., [2, 7, 8, 16, 23, 28, 29, 30, 36]), and       K identical cores, and a shared cache and memory bus that
+2) mode change protocols for ensuring schedulability during             are accessible by all cores. The cache is divided into Cmax
+mode transitions (e.g., see [6, 35] and references therein).            equal-size cache partitions, using an existing cache partition-
+Tools for systematic design exploration and evaluation of               ing technique such as Intel’s CAT. Similarly, the memory
+MCPs have also been developed [31]. Most existing solutions             bandwidth (referred to as ‘bandwidth’ hereafter) is divided
+target uniprocessors, however.                                          into Bmax equal-size bandwidth partitions, using an existing
+   Multi-mode scheduling and analysis have recently been                technique such as MemGuard. Cache and bandwidth are
+extended towards multiprocessors [1, 4, 12, 17, 26, 33]. While          allocated dynamically at the core level: at run time, each core
+the majority still considers CPU only, some recent work has             is allocated a set of cache and memory bandwidth partitions,
+begun to consider shared resources. For instance, Negrean [25]          which are available to any task currently running on the core.
+develops an analysis for multi-mode applications on AU-                 To minimize run-time overhead, we restrict cache and memory
+TOSAR conform multi-core platforms; it considers resource               reallocations to only during a mode change, i.e., when resource
+sharing protocols such as Priority Ceiling Protocol (PCP) and           demands change the most.
+spinlock-based mechanisms. Methods for mapping multi-mode                  Within each mode, tasks are assigned to fixed cores. Tasks
+applications on NoC platforms have also been studied [13].              on a core are scheduled using the partitioned Earliest Deadline
+Closely related to our work, Kwon [19] recently proposes                First (EDF) policy1 . However, during a mode change, a task
+a cache allocation technique that adapts cache allocation as            may be assigned to a different core in the new mode to improve
+the system mode changes; however, it focuses exclusively on             schedulability. Our choice of limiting migrations and resource
+cache allocation, and it considers neither memory bandwidth             reallocations to only during mode changes seeks to balance
+nor task mapping. To the best of our knowledge, none of the             the tradeoff between run-time efficiency and schedulability.
+existing solutions for multi-mode systems are able to perform           Multi-mode system model. We consider a multi-mode system
+adaptive co-allocation of tasks and multiple shared resources           that is defined by a set of operating modes M, an initial mode
+(cache and memory bandwidth) on multi-core platforms in                 m0 ∈ M, a set of mode transitions R ⊆ M × M, and a set
+response to mode changes, as Omni does.                                 of deadline-constrained periodic tasks T that need to execute
+   Several multi-resource co-allocation techniques have been            in the modes. Each mode m has a set of tasks T m ⊆ T that
+developed. For example, CaM [40] and its virtualization exten-          are active when the system is in this mode. Each transition is
+sion [39] propose holistic resource allocation techniques that          triggered by a mode-change request event (MCR), which for
+find the assignments of tasks, cache and memory bandwidth to            simplicity is assumed to be unique for each transition. Initially,
+cores in an integrated fashion. Unlike Omni, these techniques           the system begins in the initial mode m0 . At runtime, whenever
+are static and do not consider multi-mode behaviors. It is              an MCR associated with an outgoing transition arrives, the
+highly non-trivial to extend such a solution to the multi-mode          system will perform the mode change, according to a given
+setting–as our evaluation results show, a simple extension of           mode change protocol, to move to the destination mode. As in
+CaM suffers from very poor performance.                                 most existing work, we assume mode changes do not overlap –
+   Dynamic co-allocation of multiple resources has also been            the system processes MCRs in a first-come-first-served basis,
+explored. For example, DNA/DADNA [15] adapts the resource               rejecting MCRs while performing the mode change until all
+allocation at run time based on program phases. Like exist-             mode change actions complete.
+ing work in this space, DNA/DADNA assumes single-mode                     1 We use EDF due to its high resource utilization bound; it should be
+systems. It is also designed for soft real-time and does not            possible to extend to other scheduling policies.
+
+
+                                                                    2
+Resource-aware task model. We follow a resource-aware                  migration and reallocation semantics, as follows:2
+real-time task model based on [40], where each task is                   • If a task is assigned to a different core in the new mode,
+characterized by three per-mode timing attributes: a period,               its existing job will be migrated to the new core.
+a deadline, and a resource-aware worst-case execution time               • All new jobs of active tasks will be released on the cores
+(WCET) that specifies the task’s WCET depending on the                     they are mapped to in the new mode.
+resources it is given. For each mode m and each task τ ∈ T m ,           • Cache and bandwidth reallocation will take effect at
+we denote by pm            m
+                  τ and dτ the period and deadline of τ in                 the MCR instant; consequently, existing jobs will be
+mode m, respectively, and by em τ (c, b) the WCET of τ in mode             (re)allocated the resources assigned to their cores in the
+m when it is allocated c cache partitions and b bandwidth                  new mode.
+partitions (1 ≤ c ≤ Cmax and 1 ≤ b ≤ Bmax ). As in existing
+work, the task’s resource-aware WCET can be obtained by                Goal. Given the above setting, our goal is perform task and
+formal analysis or measurement; we followed the latter for             resource co-allocation for the multi-mode system to maximize
+our experiments.                                                       its schedulability. Specifically, for each mode m of the system,
+Mode-change protocol (MCP). An MCP describes the execu-                we seek to holistically compute the task-to-core mapping
+tion behavior of a multi-mode system during a mode transition          Πm and the cache and bandwidth configurations (Cm , Bm ) for
+– that is, from the instant the associated MCR arrives until           each core when the system is in mode m. Here, Πm        τ ∈ [1, K]
+the instant where all new attributes associated with the new           represents the core on which τ is mapped to in mode m,
+(destination) mode are in effect. Before specifying the MCP,           and Ckm and Bm    k represent the number of cache partitions
+we first distinguish the different types of tasks during a mode        and bandwidth partitions allocated to core k in mode m,
+transition from mode m′ to mode m:                                     respectively, for all 1 ≤ k ≤ K. We require that the total number
+                                                                       of cache (bandwidth) partitions allocated to all cores is no
+  • Old tasks: Active in m′ but not in m.                              more than Cmax (Bmax ).
+  • New tasks: Active in m but not in m′ .
+                                                                       Challenges. One common challenge in scheduling multi-mode
+  • Existing tasks: Active in both modes. These tasks consist
+                                                                       systems is to ensure timing guarantees during mode transitions,
+    of unchanged tasks, which maintain the same timing                 because of the potential overload caused by the co-existence of
+    attributes (period, deadline, WCET) in the new mode,               existing jobs and new jobs. In our setting, schedulability of a
+    and changed tasks, which have at least one of their timing         transition has two additional challenges: (1) Existing jobs on a
+    parameters modified in the new mode.                               core during a mode transition may come from a different core
+  We further categorize jobs during a transition into two types:       in the old mode, so their (remaining) execution times depend
+existing jobs are unfinished jobs that are released before the         on not only the resource configurations and executions of their
+MCR instant but have deadlines after the MCR instant, and              old cores but also those of their new cores. This leads to extra
+new jobs are jobs that are released at or after the MCR instant.       overhead and complicates resource allocation. (2) The task-
+  For analysis purposes, we assume the following mode                  to-core mapping and resource allocation are interdependent: a
+change semantics, as it can maintain periodicity while min-            poor mapping in a mode can make it difficult to efficiently
+imizing mode change latencies and system loads. However,               allocate resources, and vice versa.
+our analysis should extend to other MCPs as well.                      Baseline solutions. Since there exists no existing work that
+                                                                       considers shared resource allocation for multi-mode systems,
+  • Old tasks are dropped immediately (including existing
+                                                                       we extend the two most closely-related hard real-time solutions
+    jobs) and there are no new releases in the new mode.
+                                                                       (c.f. Section II) to our setting as baseline solutions. The first
+    Since old tasks are no longer needed, dropping them
+                                                                       extends the multi-modal task partitioning technique in [12],
+    immediately helps avoid unnecessary overload.
+                                                                       which computes a static mapping of tasks to cores that
+  • Unchanged tasks release their jobs as before without
+                                                                       takes into account mode change effects but it ignores shared
+    being affected by the mode change, to maintain their
+                                                                       resources. Our extension, referred to as MM-Static, applies
+    periodicity.
+                                                                       the same partitioning strategy, except that it statically divides
+  • Changed tasks release their first new jobs based on the
+                                                                       the cache and bandwidth as evenly as possible among the
+    old period (i.e., as if there were no mode transition),
+                                                                       cores, and then uses the resulting WCETs obtained under
+    and release all subsequent jobs based on the new period.
+                                                                       that resource configuration for the analysis. (For consistency,
+    Again, this strategy aims to maintain the tasks’ periodicity
+                                                                       we also replace the zero-slack rate-monotonic (ZSRM) [11]
+    as much as possible.
+                                                                       schedulability test used in [12] with our EDF-based schedu-
+  • New tasks release their first jobs on their assigned cores
+                                                                       lability test in Section V.) The second baseline uses the static
+    immediately, to enable a prompt transition to the new
+                                                                       holistic resource allocation algorithm from [40] to compute
+    mode.
+                                                                       the task mapping and resource allocation for each individual
+  • All new job releases follow their tasks’ periods and
+                                                                       mode in the system. We refer to this baseline as CaM.
+    deadlines associated with the new mode. Existing jobs,
+    however, maintain their existing deadlines.                           One can observe that neither baseline solution is ideal: the
+                                                                       first cannot handle cases where the set of active tasks or their
+During a mode transition, tasks may migrate among cores                   2 Systematic design exploration of novel resource-aware multi-core mode
+and the resources allocated to each core may also change.              change protocols, e.g., a resource-aware extension of SafeMC [10] is an
+Therefore, we need to extend the above protocol to consider            interesting future direction.
+
+
+                                                                   3
+timing attributes change drastically during a mode transition,          It then selects a mode, mstart , to be the starting mode for the
+since it relies on a single static mapping for all modes.               multi-mode exploration; this could be the initial mode m0 .
+In contrast, the second completely ignores mode transitions,               Phase 1: Multi-mode exploration and allocation. Starting
+which can lead to substantial mode change overhead (as the              with mstart , Omni performs a round of iterative exploration
+mappings may differ substantially) and poor schedulability              of the multi-mode system structure (e.g., in a breadth-first-
+during mode transitions. We next discuss the Omni algorithm             search manner). At each reachable mode m, it computes
+and how it overcomes these challenges.                                  a new resource and task allocation for m based on m’s
+                                                                        current allocation and the allocations of its (direct) predecessor
+      IV. O MNI RESOURCE ALLOCATION ALGORITHM                           modes (i.e., modes with an incoming transition to m). This
+Basic ideas. Omni aims to co-allocate tasks and resources to            computation is done by a ‘folding’ procedure that aims to
+cores in each mode such that the resources given to each core           (i) keep existing tasks on the same cores across as many of
+best match the demands generated by the tasks mapped to the             these modes as possible (to reduce migrations), (ii) limit core
+core. Towards this, it uses a combination of four key insights:         sharing as much as possible between new tasks and existing
+                                                                        tasks (to reduce overload during mode transitions), and (iii)
+   Insight #1. Omni performs reallocation at mode transitions,
+                                                                        balance loads among cores (to maximize schedulability). This
+since these are time points when resource demands may
+                                                                        is shown in the F OLD() function in Algorithm 1.
+change significantly.
+   Insight #2. For each mode, the task mapping and the (cache              Phase 2: System-wide schedulability analysis. After all
+and bandwidth) allocation are computed in a tightly integrated          modes have been explored, Omni analyzes the schedulability
+fashion to account for their interdependence and their com-             of the system under the new task and resource allocation,
+bined effects on tasks’ WCETs and cores’ utilizations.                  using the schedulability analysis in Section V. If the system is
+                                                                        schedulable, Omni terminates and outputs the new allocation
+   Insight #3. Omni reduces the worst-case overload and mode
+                                                                        as a solution. Otherwise, it computes a new load score
+change overhead during any mode transition by considering all
+                                                                        – defined as the sum of tasks’ utilizations under the new
+incoming transitions when computing an allocation for a mode.
+                                                                        allocation across all modes in the system. There are two cases:
+The idea is to make the target mode’s allocation as similar to
+the source mode’s allocation as possible across all possible             a) If the new load score reduces the old load score (com-
+incoming transitions, thus reducing task migrations and mode                puted in the previous round) by more than some config-
+change latency. The implication is that existing tasks should               urable threshold: Omni saves the new allocation and load
+be kept on the same cores across as many mode transitions as                score for the current round, and then continues to the next
+possible, without risking overall schedulability.                           round of multi-mode exploration (Phase 1), starting with
+   Insight #4. New tasks should share cores with existing tasks             mstart as before.
+as little as possible to reduce the chance of them overloading           b) Otherwise: Omni reverts to the old allocation (from the
+the system during a mode transition, since they may co-exist                previous round). It will then attempt to perform “task
+with existing jobs.                                                         redistribution” (Phase 3) for unschedulable modes and
+   Omni works by exploring the multi-mode system structure                  transitions.
+to compute new task and resource allocations for modes,                 If the system is unschedulable and Omni has reached the
+followed by a redistribution of tasks (and resources) for               maximum number of task redistribution attempts R, it simply
+unschedulable modes (if needed). It repeats this process over           reports unschedulable and outputs the old allocation.
+multiple rounds, until either the system is schedulable and                Phase 3: Task redistribution. The task redistribution proce-
+a solution is found, or a given maximum number of task                  dure (c.f. TASK R EDISTRIBUTE () function, Algorithm 2) aims
+redistributions R is reached.                                           to bring the system out of an unschedulable state by moving or
+   Our algorithm relies on two pre-configured parameters: R,            swapping tasks between cores.3 Specifically, beginning with a
+the maximum number of task redistribution attempts after each           mode m∗ that is unschedulable or that has an unschedulable
+round; and r, the maximum number of task redistributions                incoming mode transition, our task redistribution tries to move
+performed when computing each mode’s allocation during a                a task in m∗ from an unschedulable core to a schedulable core.
+round. These parameters can be configured based on, e.g.,               If this is not possible, it will consider swapping tasks between
+the maximum number of tasks per mode divided by the                     cores. (Task swapping is useful, e.g., when the algorithm falls
+average task utilization. Intuitively, the smaller the average          into a local optima and cannot further reduce the system
+task utilization, the more tasks need to be redistributed to have       load sufficiently.) To determine whether a task move/swap
+an impact on core schedulability, and vice versa.                       is feasible, Omni checks whether the schedulable target core
+   We next describe an overview of our allocation algorithm.            will remain schedulable after the move/swap and a resource
+                                                                        redistribution. If a move/swap is feasible, Omni performs the
+A. Algorithm overview                                                   move/swap, followed by a resource redistribution for m∗ . It
+Omni begins by initializing each mode with a base allocation,           then saves the allocation given by the task redistribution, along
+which consists of a task-to-core mapping and a per-core cache           with its resulting load score, for the current round. It will then
+and bandwidth configuration. (For our experiments, we used              repeat the multi-mode exploration (Phase 1), but starting with
+the static allocation given by MM-Static; however, Omni can               3 This procedure is also used internally by the F OLD () function in computing
+work with any base allocation, though the result may vary.)             the new allocation for a mode during Phase 1.
+
+
+                                                                    4
+mode m∗ (i.e., mstart = m∗ ). If neither a move nor a swap is                           Algorithm 1 Computation of a new allocation for a mode
+feasible for m∗ , Omni tries with the next unschedulable mode                            1: function F OLD(Mcur , M prevs , cores, r)                                    ▷
+or transition. This is important because, even if an earlier                                     Mcur : current mode,
+                                                                                                 M prevs : previous modes that can transistion into Mcur ,
+explored mode or mode transition remains unschedulable, a                                        r: number of attempts for task redistribution
+task redistribution in a later mode can lead to a change in the                          2:    for M prev ∈ M prevs do
+allocations of the whole multi-mode system, thus potentially                             3:         FilterAllocation(Mcur , M prev .cores)
+                                                                                         4:    tierList =
+enabling schedulability of the earlier mode as well.                                             CreateCoreTier(Mcur .T , Mcur ∪ M prevs , |Mcur | + |M prevs |)
+Termination condition. The algorithm terminates when (i) the                             5:    carryoverCores = 0/
+system is schedulable at the end of the current round of multi-                          6:    for i = |tierList| . . . 1 do            ▷ Map tasks to cores until tier 1
+                                                                                         7:         for τ ∈ tierList[i] do                 ▷ Assign to most popular core
+mode exploration, or (ii) task redistribution is not feasible for                        8:              assignTask(Mcur , τ, τ.bestCore)
+any of the unschedulable modes or mode transitions, or (iii)                             9:              ResRedistribute(Mcur .cores)
+the maximum number of task redistribution attempts R has                                10:              carryoverCores ∪ τ.bestCore          ▷ Note carry-over task here
+been reached, whichever is earlier. Termination is guaranteed                           11:
+                                                                                        12:    delaySet = 0/
+because (1) either the system is schedulable, or (2) the algo-                          13:    for τ ∈ tierList[0] do                        ▷ Iterate through tier 1 tasks
+rithm terminates because it has performed R task redistribution                         14:         if τ ∈ M prevs == false then
+attempts or because task redistribution is not feasible for any                         15:              delaySet ∪ τ
+                                                                                        16:              continue
+of the unschedulable modes and mode transitions.                                        17:         didAlloc = false
+                                                                                        18:         lcore = GetLowestUtil(carryoverCores)
+                                                                                        19:         while lcore! = NULL && didAlloc == false do
+B. Details of key procedures                                                            20:              if U[lcore] + U[τ] > 1 then
+                                                                                        21:                  lcore = GetLowestUtil(carryoverCores)
+Next, we describe the folding and task redistribution proce-                            22:                  continue
+dures in detail. Due to space constraints, we omit other simpler                        23:              assignTask(Mcur , τ, lcore)
+or less critical functions.                                                             24:              didAlloc = true
+                                                                                        25:
+Folding procedure. Algorithm 1 shows the folding procedure                              26:         if didAlloc == false then
+for computing a new allocation for a current mode Mcur . The                            27:              lcore = GetNextLowestUtil(M prevs .cores)
+procedure works by “folding” the current allocations of the                             28:              assignTask(Mcur , τ, lcore)
+                                                                                        29:
+predecessor modes M prevs and the current mode Mcur ; the goal                          30:         ResRedistribute(Mcur .cores)
+is to keep existing tasks on the same cores across as many                              31:
+mode transitions as possible. For this, Omni first filters out all                      32:    for τ ∈ delaySet do                     ▷ Iterate through Mcur only tasks
+tasks of the predecessors that are not active in Mcur from their                        33:         didAlloc = false
+                                                                                        34:         lcore = GetLowestUtil(cores ∩ carryoverCores)
+allocations (Lines 2–3). It then assigns tasks in mode Mcur                             35:         while lcore! = NULL && didAlloc == false do
+into tiers (Line 4). Specifically, a task τ is in tier i if, under                      36:              if U[lcore] + U[τ] > 1 then
+the current allocation, i is mapped onto the same core for a                            37:                  lcore = GetLowestUtil(carryoverCores)
+                                                                                        38:                  continue
+maximum of i modes in M prevs ∪ {Mcur }. We refer to such a                             39:              assignTask(Mcur , τ, lcore)
+core as a best core for τ.                                                              40:              didAlloc = true
+                                                                                        41:
+   Intuitively, a task in a higher tier shares the same core across                     42:         if didAlloc == false then
+more modes than a task in a lower tier; hence, we should keep                           43:              lcore = GetNextLowestUtil(M prevs .cores)
+it on its best core if possible. In contrast, a task that belongs                       44:              assignTask(Mcur , τ, lcore)
+to the lowest tier either shares no common core across the                              45:         ResRedistribute(Mcur .cores)
+                                                                                        46:
+modes or is a new task for any incoming mode transition                                 47:    for i = 0 . . . r do
+(i.e., not active in Mcur ’s predecessors). In the former case, the                     48:         if ModeSchedulable(Mcur ) == true then
+task will inevitably experience migration for all but at most                           49:              return
+                                                                                        50:         if !TaskRedistribute(M prevs , Mcur .cores, true) then
+one incoming mode transition, regardless of which core it is                            51:              TaskRedistribute(M prevs , Mcur .cores, false)
+mapped to in Mcur . Therefore, Omni prioritizes minimizing                              52:         ResRedistribute(Mcur .cores)
+worst-case utilization in selecting a core for such tasks to
+improve schedulability.4 In the latter case, Omni aims to keep                             Resource redistribution is done incrementally one partition
+this new task on a different core from those of existing tasks                          at a time, by first selecting the least-loaded (lowest-utilization)
+to avoid overloading unfinished jobs.                                                   core and most-loaded (highest-utilization) core, and then mov-
+   Based on the above insight, the algorithm works by iterating                         ing one resource partition from the former to the latter to
+through the tiers, in decreasing tier number until tier 1 (Line 6).                     reduce their utilization difference. If it is not possible to move
+For each task τ in a chosen tier, it assigns τ to its best                              a partition from the least loaded core to the most loaded core
+core (Lines 7–8), keeping track of each core that contains                              without creating a swap in their utilization (i.e., the former
+an existing task (carryoverCores in Line 10). Between task                              becomes more loaded than the latter), we move to the second
+assignments, Omni performs resource redistribution for Mcur                             least-loaded core, and so on. Resource redistribution completes
+to balance the loads across cores (Line 9).                                             when it is no longer beneficial to move partitions between
+                                                                                        cores. When that happens, Omni proceeds with the next task
+   4 The current worst-case utilization of a core is the total utilization of the
+                                                                                        in the tier and repeats the same core assignment and resource
+tasks that have been assigned to the core so far, assuming that each such task
+has the largest WCET among its WCETs in M prevs ∪ {Mcur }.                              redistribution procedure, until there is no task left.
+
+                                                                                    5
+   Omni then proceeds to the lowest tier (tierList[0]), which            Algorithm 2 Omni Task Redistribution
+contains tasks that do not share cores across modes. It finds             1: function TASK R EDISTRIBUTE(Mprevs , cores, nmTask)                       ▷
+an allocation for all existing tasks in this tier first (Lines 12–                     Mprevs : Previous modes that transistion into Mcur ,
+                                                                                       nmTask: true for new mode, false for carry over
+30), delaying new tasks to the final stage (Lines 32–51).                 2:    hcore = GetHighestUtilCore(cores)
+For each existing task τ, Omni attempts to assign τ to the                3:    while hcore do
+lowest-utilization core lcore among the carryoverCores set                4:        lastCore = false
+                                                                          5:        lcore = NULL
+(containing only existing tasks so far) that can fit the task             6:        τ = SelectTask(hcore, Mprevs , nmTask)
+(Lines 18–24). If no core in carryoverCores can accommodate               7:        while Util[hcore] −Util[τ] > 1 do
+the task, Omni assigns τ to a core that has the smallest worst-           8:             τ = SelectTask(hcore, Mprevs , nmTask)
+                                                                          9:        if τ == NULL then return ERR
+case utilization. The worst-case utilization considers only tasks        10:
+that have been assigned so far in the current round, and                 11:        if nmTask then
+assuming that those tasks inherit their largest WCETs from               12:                       ▷ Find next lowest util core with no carry over task
+                                                                         13:             lcore =NextLowestUtilNoCOCore(cores, lcore)
+any of the modes in M prevs that they belong to (Lines 26–28).           14:        else
+   Finally, Omni proceeds to the new tasks of Mcur . The                 15:                          ▷ Find next lowest util core with carry over task
+allocation for a new task works similar to that of an existing           16:             lcore =NextLowestUtilCOCore(cores, lcore)
+task, except that Omni tries to assign the new task to cores             17:        if lcore == NULL then
+                                                                         18:             lcore = GetLowestUtilCore(cores)
+that are not in the carryoverCores set (Lines 33–40). This is            19:             lastCore = true
+to separate new tasks from old tasks as much as possible to              20:
+avoid overloads during mode changes. If no such core exists,             21:        if Util[TestResRedistribute(lcore, τ)] ≤ 1 then
+                                                                         22:             MoveTask(hcore, lcore, τ)
+it assigns the task to the core with the smallest worst-case uti-        23:             ResRedistribute(cores)
+lization. By assigning tasks in this order, Omni simultaneously          24:             return OK                           ▷ Successfully moved a task
+minimizes migrating carryover tasks, while still keeping new             25:
+mode tasks separate to avoid mode change overloads.                      26:                                                         ▷ Try to swap tasks
+                                                                         27:        τ ′ = GetTaskWithUtilLessThan(lcore, 1 −Util[lcore])
+   If the mode is unschedulable after folding all tasks together,        28:        if τ ′ == NULL && lastCore == false then
+the algorithm attempts to redistribute tasks and resources               29:             go to 11                             ▷ Try with next lowest core
+for a configurable number of times, r (Lines 47–52). Task                30:        else if τ ′ == NULL && lastCore == true then
+                                                                         31:             return ERR
+redistribution can be invoked to move either a new-mode                  32:
+task or a carry-over task from an unschedulable core to                  33:        if Util[TestResRedistribute(lcore, τ ′ )] ≤ 1 then
+a schedulable core. We prioritize moving new mode tasks                  34:             SwapTasks(hcore, lcore, τ, τ ′ )
+                                                                         35:             ResRedistribute(cores)
+(Line 50) first, as these tasks do not experience mode change            36:             return OK
+overheads that carry-over tasks potentially experience due to            37:        hcore = NextHighestUtilCore(cores, hcore)
+core migration or resource reallocation. If no new-mode task             38:    return ERR
+can be moved, we try again with a carry-over task (Line 51).
+Since task redistribution only moves a single task at a time,            task swap between the two cores, hcore and lcore, followed
+during heavy load situations, the mode may continue to be                by a resource redistribution, would be feasible (Lines 27–36).
+unschedulable after several redistributions.                             If a move (swap) is feasible, Omni performs the move (swap),
+Task redistribution. Algorithm 2 shows the task redistribution           followed by the resource redistribution. (When there are
+algorithm for a mode m∗ that is unschedulable or that has                multiple candidate tasks for moving (swapping) that meet our
+an unschedulable incoming transition. As discussed above,                criteria, we prioritize the task(s) that would lead to the greatest
+task redistribution is performed for new-mode tasks first and            decrease in the utilization difference between the two cores
+then for carry-over tasks in m∗ . The algorithm takes as                 after task moving/swapping and resources redistribution.)
+input a flag, nmTask, which is true if new-mode tasks are                Complexity. As Algorithm 1 is the primary execution loop
+considered, and false otherwise. To redistribute tasks, Omni             for Omni, it is useful to understand its runtime complexity.
+checks whether moving a task from an unschedulable core (in              It takes O(n · K · E) and O(K · log K) to compute the tier list
+decreasing core utilization) to a schedulable core (in increasing        and to sort cores, respectively, where n = maximum number
+core utilization) and redistributing resources afterwards will           of tasks per mode, K = number of cores, and E = maximum
+make the former core schedulable without making the latter               number of incoming transitions per mode. A resource redistri-
+unschedulable (Lines 2–24). If a move is not possible, Omni              bution takes O(K ·Cmax · Bmax ), and a task redistribution takes
+will attempt to swap tasks (Lines 27–36).                                O(n2 · K ·Cmax · Bmax ), where Cmax and Bmax are the maximum
+   Starting with the highest-utilization core hcore, Omni se-            number of cache and bandwidth partitions, respectively. Thus,
+lects a candidate task τ (i.e., a new task if nmTask = 1, and            Algorithm 1 takes O(n ·E ·K +K ·log K +r ·n2 ·K ·Cmax ·Bmax ).
+a carry-over task otherwise) on the core for moving (Line 6              Since E, K, Bmax and Cmax are (typically small) constants, we
+and 8). It then searches for a destination core for τ among              arrive at O(r · n2 ).
+schedulable (low-utilization) cores, in increasing order of core
+utilization (Lines 11–19). For each candidate core lcore, Omni                             V. S CHEDULABILITY ANALYSIS
+first checks whether the core would remain schedulable with              We now present a schedulability analysis for our multi-mode
+the extra task τ after a resource redistribution (Lines 21–24).          system model under a given task and resource allocation,
+If such a move is not possible, Omni will check whether a                which is used by Omni during its allocation.
+
+                                                                     6
+                                                                                                                 p -d
+
+
+
+
+   Consider a multi-mode system and mode change protocol                         carry-in         pm’ – d!m’
+                                                                                                  !
+                                                                                deadline                       first new job release
+defined by our model from Section III where tasks are                                       tdl
+scheduled on their cores using EDF. The system is
+schedulable under an allocation (Πm ,Cm , Bm ) iff it is                                    t’                    pm                   pm        m
+                                                                                       t0                          !                   !
+                                                                                                                                                d!   t0+t
+schedulable in each mode m ∈ M and during each mode
+transition r ∈ R under this allocation. Before establishing the                Fig. 1: Worst-case demand scenario of an existing task.
+conditions for each case, let us define some notation. We                                                                                   ′
+                                                                               Case       dm)Ifmod
+                                                                                t’ = (t –1)                                / T m ), then its demand
+                                                                                                    pm a new task (i.e., τ ∈
+                                                                                                 τ is
+denote by T m  k the set of  tasks that are mapped onto core               can be computed using the standard DBF function, which is
+k in mode m, i.e., T m   k = τ ∈ T
+                                      m
+                                        | Πm
+                                           τ = k . In addition,             given by dbf m
+  m                                                                                             τ (t) in Eq. (1).
+Dk denotes the maximum deadline of all tasks on core k in                                                                                ′
+                                                                               Case 2) If τ is an existing task (i.e., τ ∈ T m ), then its
+mode m, i.e., Dm                m            m        m
+                   k = maxm {dτ }. Finally, Eτ and Uτ denote                demand consists of (i) the demand generated by its new jobs,
+                        τ∈T k
+the WCET and utilization of τ in mode m, respectively. That                 which are released and have (new mode) deadlines in [t0 ,t0 +t],
+is, Eτm = em    m m                  m       m     m   m
+           τ (Ck , Bk ) where k = Πτ , and Uτ = Eτ /pτ .
+                                                                            and (ii) the carry-in demand from at most one (unfinished)
+                                                                            existing job, which was released prior to t0 and has deadline
+Mode schedulability. The schedulability of a mode m can be                  in the interval (t0 ,t0 + t], if it exists. We call such a job the
+determined using an existing EDF schedulability test, except                carry-in job of the task τ.5
+that each task’s WCET corresponds to the resources assigned                    To bound the demand of existing tasks, we first consider
+to its core in this mode. The demand bound function (DBF)                   each existing task individually and compute the total demand
+of a task τ on core k in mode m is given by                                 generated by both its carry-in job and its new jobs based on a
+                                                                            worst-case execution scenario. We further tighten the analysis
+                                     t − dτm + pm
+             ∀t > 0 : dbf m
+                                                    m
+                          τ (t) =
+                                                 τ
+                                                    Eτ .         (1)        by considering the total carry-in demand of carry-in jobs that
+                                           pτm
+                                                                            came from the same core in the old mode altogether.
+  The DBF of core k in mode m is thus given by and                             A worst-case scenario that generates the maximum demand
+                             X                                              by an existing task τ is given by Lemma 2. An example that
+                dbf m
+                    k (t) =       dbf m
+                                      τ (t).                     (2)        illustrates this scenario is shown in Figure 1.
+                                m
+                            τ∈T k
+                                                                            Lemma 2. The worst-case demand of an existing task τ in
+The next theorem states the schedulability condition for mode               the interval [t0 ,t0 + t] happens when (i) there exists a job of
+m. Its proof follows directly from the analysis in [14].                    τ with a deadline at t0 + t, (ii) all new jobs of τ are released
+                                                                            as soon as possible, and (iii) the carry-in job of τ, if exists,
+Theorem 1. The system
+                  P m is schedulable m    in mode m if for all
+                                                                            is executed as late as possible in the old mode.
+1 ≤ k ≤ K: Ukm =        Uτ ≤ 1 and ∀t < Lk , dbf m
+                                                 k (t) ≤ t, where
+                     m
+                 τ∈T k                                                        The proof follows similar arguments as in existing EDF
+                 n          1      X                    o                   demand analysis; due to space constraints, we omit it here.
+       Lkm = max Dm k  ,        ×       (pm
+                                            − d m
+                                                  )U  m
+                                                     τ .                      Under the worst-case scenario illustrated in Figure 1, the
+                         1 −Ukm       m
+                                          τ     τ
+                                  τ∈T k                                     maximum demand of new jobs of τ in It is bounded by
+Mode transition schedulability. To determine the system                                                                     t − dτm + pm
+                                                                                                       dbf m
+                                                                                                           τ (t) = ⌊
+                                                                                                                                       τ
+                                                                                                                                         ⌋Eτm               (3)
+schedulability during a mode transition, we first assume that                                                                    pmτ
+the system is schedulable in each individual mode (i.e.,                    where pm       m       m
+                                                                                      τ , dτ and Eτ are the period, deadline, and WCET of
+Theorem 1 holds for all modes). Consider a mode transition                  τ in the new mode m.
+m′ → m, and suppose t0 is the instant when the transition is                    To compute the carry-in demand for τ, we first recall that
+triggered (i.e., when its MCR arrives). Since the system is                 the new resource allocation of the new mode takes effect
+assumed to be schedulable in the old mode m′ , it is schedulable            immediately after the MCR instant; thus, the maximum time
+during the mode transition from m′ to m if every core k is                  that τ’s carry-in job needs to execute in the new mode m
+schedulable from time t0 onwards. Consider any interval [t1 ,t2 ]           is no more than its WCET in the new mode, which is Eτm .
+of length t that begins at or after the MCR instant t0 . If t1 > t0 ,       This worst-case scenario can happen if τ’s carry-in job is
+then all jobs whose release times and deadlines are both within             not executed at all prior to the MCR instant. In addition,
+[t1 ,t2 ] could only be new jobs of the tasks in m. Hence, the              under the assumption that the system is schedulable in each
+total demand on core k during this interval is bounded by                   mode in isolation, τ’s carry-in job is guaranteed to meet its
+dbf mk (t), which is at most t since the system is assumed to be            deadline if the mode transition does not occur. Therefore,
+schedulable in mode m. Thus, we only need to consider the                   as Figure 1 illustrates, the maximum remaining execution
+case where t1 = t0 , i.e., the demand generated by jobs during              time of τ’s carry-in job if it is continued to be given the
+the interval It = [t0 ,t0 + t] for t > 0.                                   same resource allocation as in the old mode is bounded by
+                                                                                                 ′   m′          m′       m′
+    Because all old tasks of the mode transition are dropped at             tdl − t0 ≤ t ′ − (pm
+                                                                                               τ − dτ ), where pτ and dτ are the period
+the MCR instant, only tasks that are active in the new mode
+                                                                              5 There can be at most one carry-in job per existing task, since the system is
+m contribute to the mode transition demand. Let τ be a task
+                                                                            schedulable in the old mode and a task’s deadline is no more than its period.
+on core k in mode m (i.e., τ ∈ T m   k ). The demand generated by           Note also that the deadline of the carry-in job remains unchanged across a
+τ during the interval It depends on its type:                               mode transition; only new jobs’ deadlines follow the new mode’s.
+
+
+                                                                        7
+and deadline of τ in the old mode. Here, t ′ is the time from the old mode’s resource allocation, must be bounded above
+the MCR instant to τ’s first new job release, if there exists at both by the maximum of their old mode’s deadlines and by
+least one such job within the interval It under the worst-case t. If either condition is violated, then at least one of the
+scenario described above (i.e., if t ≥ dτm ); otherwise, t ′ is the carry-in jobs would miss its deadline on core i in the old
+same as t. In other words, t ′ = (t − dτm ) mod pm               m
+                                                       τ if t ≥ dτ , mode in the absence of a mode change, which contradicts our
+       ′
+and t = t otherwise.                                                 assumption that each mode is always schedulable in isolation.
+   However, since the resources allocated to τ’s carry-in job The maximum extra execution time that the carry-in job might
+may change in the new mode, its WCET can become larger need to execute due to a change in the resource allocation in
+                                                                                                                           ′
+than its old mode’s WCET. This typically happens if τ is the new mode is at most max{0, Eτm − Eτm }. Hence, the total
+                                                                                                                  ′
+assigned fewer cache/bandwidth partitions in m than in m′ . demand of all carry-in jobs in Si,k              (m ,m)
+                                                                                                                      in It is bounded by
+In that case, τ’s carry-in job might need to execute an extra
+                                 ′                                                               ′       X                          ′
+amount of at most Eτm − Eτm execution time units, i.e., the                   min{t, max dτm } +                    max{0, Eτm − Eτm }).
+                                                                                       (m′ ,m)
+difference between τ’s new WCET and its old WCET. Thus,                             τ∈Si,k                 (m′ ,m)
+                                                                                                      τ∈Si,k
+depending on whether there exists a new job release for τ in
+the interval It , the maximum remaining execution time of τ’s By combining the above with the DBF of new jobs of a task
+                                                                             ′
+carry-in job under the new mode’s allocation can be computed in S(m ,m) , given by Eq. (3), we imply that the total demand
+                                                                         i,k
+as follows:                                                                            (m′ ,m)
+                                                                     of all tasks in Si,k      in the interval It is bounded by
+   Case 1) If t ≥ dτm , then t ′ = (t − dτm ) mod pm
+                                                   τ ,  and
+                                                                            (m′ ,m)                             ′                              ′
+                                                                                                                        X
+  (m′ ,m)                             ′     m′                   m′    dbf k,i (t) = min{t, max dτm } +                        max{0, Eτm − Eτm }
+          = min Eτm , max{0,t ′ −(pm                        m
+               
+Eτ                                   τ −dτ )}+max{0, Eτ −Eτ } .                                       ′
+                                                                                                    (m ,m)
+                                                                                                                   τ∈Si,k                       (m′ ,m)
+                                                                                                                                          τ∈Si,k
+  Case 2) If t < dτm , then
+                                                                                                      X                t − dτm + pm
+          (m′ ,m)                                 ′                                             +                  ⌊              τ
+                                                                                                                                    ⌋Eτm .
+                  = min Eτm , t + max{0, Eτm − Eτm } .
+                         
+        Eτ                                                                                                                  pmτ
+                                                                                                         (m′ ,m)
+                                                                                                    τ∈Si,k
+   Since the mode transition demand of an existing task τ is
+the sum of its new jobs’ demand and its carry-in demand, its                Thus, the total demand of all existing tasks in mode m on
+demand during the mode transition is bounded by                             core k is bounded by the sum of the demand from all the
+                                                                                                       (m′ ,m)
+                                                                            groups i, that is Ki=1 dbf k,i (t). As a result, we can bound
+                                                                                             P
+               (m′ ,m)             t − dτm + pm         (m′ ,m)
+           dbf τ         (t) = ⌊          m
+                                              τ
+                                                ⌋Eτm + Eτ         (4)       the demand of a core using the next lemma.
+                                        pτ
+  By combining the demands of existing tasks and new tasks,                 Lemma 4. The maximum demand of a core k during a mode
+we derive Lemma 3.                                                          transition from m′ to m is bounded by
+                                                                                                                                                 K
+Lemma 3. The maximum demand of a core k during a mode                                 (m′ ,m)                      X                             X            (m′ ,m)
+                                                                                  dbf k       (t) =                                dbf m
+                                                                                                                                       τ (t) +            dbf k,i       (t)
+transition m′ → m is bounded by
+                                                                                                                   m          m′                 i=1
+       (m′ ,m)
+                     X                X      (m′ ,m)                                                     τ∈T       k ∧τ ∈
+                                                                                                                        / T
+   dbf k       (t) =      dbf m
+                              τ (t) +    dbf τ       (t)
+                           m   m′                   m     m′
+                                                                            for all t > 0.
+                   τ∈T k \T                    τ∈T k ∩T
+                                                                                (m′ ,m)                                            ′                                          ′
+                                                                                                                                         X
+                                       (m′ ,m)                              dbf k,i       (t) = min{t, max dτm } +                                   max{0, Eτm − Eτm }
+for all t > 0, where dbf m
+                         τ (t) and dbf τ       (t) are defined in                                               (m′ ,m)
+                                                                                                             τ∈Si,k                        (m′ ,m)
+                                                                                                                                       τ∈Si,k
+Eqs. (1) and (4), respectively.
+                                                                                                    X              t − dτm + pm
+  The above lemma gives a means to check for schedulability                                 +                  ⌊              τ
+                                                                                                                                ⌋Eτm .
+                                                                                                                        pm
+during a mode transition. However, the DBF function                                                  (m′ ,m)
+                                                                                                τ∈Si,k
+                                                                                                                          τ
+    (m′ ,m)
+dbf k       (t) so far only considers each task individually,
+which can be conservative. Since each mode is schedulable                      The following theorem states the schedulability condition
+individually, it is possible to bound the carry-in demand of                for a mode transition from m′ to m. Its proof comes directly
+multiple tasks altogether to tighten the analysis.                          from Lemmas 3 and 4.
+                                                                            Theorem 5. The system is schedulable during a mode tran-
+Tightening the total carry-in demand. First, we observe that
+                                                                            sition from m′ to m if
+existing tasks on a core k in the new mode may be migrated
+from different cores in the old mode. We first divide the set                (1) the system is schedulable in modes m′ and m according
+of existing tasks on core k in the new mode m into different                     to Theorem 1, and
+                                                                                                             (m′ ,m)          (m′ ,m)
+groups that correspond to the cores they were executing on                   (2) for all 1 ≤ k ≤ K: min{dbf k        (t), dbf k       (t)} ≤ t for
+                                           (m′ ,m)                               all t > 0.
+in the old mode m′ . Specifically, let Si,k        denote the set of
+existing tasks τ ∈ T m  k such that τ was assigned to core i in                Thus, the multi-mode system is schedulable under a given
+                     ′
+mode m′ (i.e., Πm  τ = i), for all 1 ≤ i ≤ K.                               allocation if all of its mode transitions are schedulable under
+   Then, the total execution demand of all the carry-in jobs                that allocation.
+     (m′ ,m)
+in Si,k      in an interval It , assuming that they continue with
+
+                                                                        8
+Overheads. The above analysis assumes that run-time over-               information passed in previously, along with the current mode
+heads, such as task migration and resource allocation over-             transition number, our mode change handler determines if a
+heads, have been accounted for by inflating WCETs and                   task should be aborted, be added back to a core as a new
+DBFs. Briefly, we can account for overheads by modifying                mode task, have its runtime parameters updated and possibly
+the mode schedulability test as follows: 1) adding the overhead         migrated, or have its current state left unchanged. Although
+for performing mode change actions (stop old tasks, release             LITMUSRT already offers existing interfaces for adding a task
+new tasks, modify task-to-core mapping, modify resource                 to and removing a task from its appropriate scheduling queues,
+allocations, etc.) on each core into the core’s DBF, and 2) for         these actions can only happen during specific times of a task’s
+each task that may carry-over to an outgoing mode, inflating its        lifetime. For example, existing scheduler implementations only
+WCET with the cost for reloading its working set to account             permit removing tasks from the ready queue (i.e., a queue used
+for the impact of migration or resource allocation. Due to              for tasks that have had a job already released and is ready for
+space limitations, we omit the detailed discussion.                     execution). In contrast, since an MCR can arrive at any time,
+                                                                        we need to perform mode change actions whenever the MCR
+                       VI. P ROTOTYPE                                   arrives. This asynchronous nature of MCRs created many
+To evaluate Omni and to show its utility in practice, we built          new race conditions that we needed to handle carefully. One
+a prototype of Omni on top of LITMUSRT [9]. In this section,            example is when a task finished its previous job and committed
+we describe the key aspects of the prototype and some of the            the next job to be released in the future, there is no existing
+challenges we faced in our implementation.                              mechanism in LITMUSRT to cancel this pending release until
+Scheduler extension. We implemented our prototype as a                  after the task is put into the ready queue. Our mode change
+scheduler plugin within the LITMUSRT extension for the                  handler is able to avoid the race conditions involved with
+Linux 4.9.30 Kernel. LITMUSRT modifies the Linux kernel to              modifying a task’s state regardless of which state the task is
+support various real-time task models and modular scheduler             currently in (e.g., even if the task might have just been setup
+plugins. To execute a task as a real-time task on top of                for a new release and will only be moved to the ready queue
+LITMUSRT , the user can add special system calls to the                 much later). To accomplish this with minimal overheads and
+target application’s source code. These system calls enable             with minimal modifications to the existing LITMUSRT system,
+the task to transition from Linux’s default scheduler to the            we employed a lazy removal technique in which tasks that are
+user’s scheduler of choice within LITMUSRT , such as EDF.               unable to be modified or removed from our scheduler plugin
+The user can then loop the desired application code, where              at mode change instant are flagged as pending for removal.
+each iteration of the loop is considered as a single job instance       When the task is eventually moved into the ready queue upon
+by LITMUSRT . During runtime, the plugin is responsible for             release, we check its pending removal flag and remove the
+keeping track of each task’s real-time meta data, such as task          task at that point if the removal flag is set.
+ordering within its own run queues, execution time tracking,            Job reset. Another limitation of LITMUSRT is that it has
+and relative deadline.                                                  no way to control the progress of the user-level task that is
+   LITMUSRT also provides other common mechanisms that                  executing for each job loop. Ideally, when a task is scheduled,
+our prototype utilizes, including, e.g., non-mode-change task           it will finish its workload and return to the top of the loop
+preemptions, task migrations between Linux’s run queues, and            where it will sleep until LITMUSRT schedules its next job
+concurrency control. However, it does not natively support              release. If a task misses its deadline, however, LITMUSRT
+multi-mode execution. Hence, we extended LITMUSRT to in-                has no mechanism to reset the task back to the top of the
+corporate multi-mode system structures, mode-dependent task             loop such that its next job release will begin at the start of
+structures, and functions for executing mode change actions             the application. We remedied this by adding a system call at
+(such as forcefully aborting, adding, or modifying tasks).              the beginning of each application, immediately before the job
+Mode change handler. We extended LITMUSRT ’s system call                loop. This system call takes a snapshot of each task’s registers,
+interface to enable mode change information to be passed                which is reloaded at the beginning of each job loop iteration.
+to our scheduler plugin and to trigger mode transitions at              This enables us to perform a reset of the task’s state, even
+runtime from user space. For this, we dedicate one core to              when its previous job never finished (e.g., because the job
+Linux for executing Linux system-related tasks and our mode             missed its deadline, or because it was aborted in a previous
+change handler; we refer to this core as the management core.           mode change). In total, our scheduler plugin contains about
+The remaining cores can be used to execute Litmus real-                 2000 lines of code, including our mode change handler and
+time tasks. This approach is not only essential for Linux to            all LITMUSRT modifications.
+function but also needed to isolate the real-time tasks from            Resource control. After performing mode change actions on
+Linux’s potential interference. Further, to avoid task excessive        each real-time task, the mode change handler releases each
+creation overhead during mode transitions, we map each real-            Litmus core’s scheduling plugin lock. Each core immediately
+time Litmus task its own single Linux task, irrelevant of how           applies its resource allocation for the new mode, before
+many modes the real-time task is in.                                    picking the next task to execute. For cache and memory
+   When a mode transition occurs during a multi-mode exe-               bandwidth partitioning, we integrated Intel’s Cache Allocation
+cution, the management core preempts all Litmus cores, grab-            Technology (CAT) [18] and Memguard [41] into our extension
+bing each of their scheduling locks to process mode change              of LITMUSRT , respectively. CAT divides the last-level cache
+actions on each Litmus real-time task. Using the mode change            into partitions, which can be allocated to cores using special
+
+                                                                    9
+model-specific registers (MSRs) on certain Intel CPUs. The               mapping and resource allocation for each mode individually.
+number and size of these partitions are CPU specific and                 These two baseline solutions are representative of the state
+are based on the number of set-associative ways. Using bit               of the art in multi-core multi-mode system scheduling and
+masks, a user can set a class of service register (COS) to               holistic multi-core resource allocation, respectively.
+have a specific mapping of contiguous partitions. Cores are              Experimental platform. Our prototype ran on a CAT-capable
+associated with a specific COS through the use of another                Intel Xeon E5-2683 v4 processor with 16 cores and a 40MB
+per-core register (PQR) that specifies which COS should be               20-way set-associate L3 cache that is divided into 20 partitions
+used for that core. CAT enforces the property that all new               (Cmax = 20). The machine also has three single-channel 16GB
+last-level cache allocations from a logical core are made only           PC-2400 DDR4 DRAM sticks. Using the method from [41]
+to a way specified in the bitmask of that core’s COS.                    we measured a maximum guaranteed bandwidth of 1.4 GB/s,
+   Memguard is a software-based technique to control the                 which we divided into 20 partitions of 70MB/s each (Bmax =
+amount of memory requests a core can make within a con-                  20). While this is lower than the peak bandwidth that the
+figurable time window. Through a kernel module, a core is                platform supports, it results in much better isolation between
+allocated a total bandwidth in terms of MB/s. If too many                the cores. To avoid nondeterministic timing, we disabled
+requests are made before the core’s budget is refreshed, which           Intel SpeedStep, hyperthreading and hardware prefetching.
+is tracked through a CPU performance counter, then the core              We performed both the WCET profiling and experimental
+is preempted and a spinning thread is scheduled to throttle the          evaluation on this platform. For our experiments, we con-
+core until the next replenishment period. Memguard does not              figured the platform to use 4 cores, 12 cache partitions,
+work with LITMUSRT out of the box because the throttling                 and 12 bandwidth partitions, as this is a common core and
+thread runs on Linux’s normal scheduler, which has lower                 cache configuration for CAT-enabled CPUs. Our numerical
+priority than any of Litmus’s plugins. This means that if a real-        evaluation additionally considered a larger platform, with 8
+time task is executing and Memguard wakes up, the throttle               cores and 20 cache/bandwidth partitions, to evaluate the effect
+thread will never be chosen to execute. We fixed this by                 of platform configurations on schedulability performance.
+making the throttle thread a “real-time task” that is controlled         Workload. Since real traces for multi-mode multi-core sys-
+by our scheduler. When too many memory requests are made,                tems are usually proprietary and we are not aware of any
+Memguard preempts our scheduler, which sees a per-core bit               public ones, we combined real applications (from benchmarks)
+signaling that the core should be throttled. We then manually            with synthetic utilizations/periods for our evaluation workload.
+schedule the throttle thread until another interrupt disables the           We created a generation tool that can produce synthetic
+bit at the next Memguard replenishment time.                             multi-mode systems with many different configurable param-
+   Note that CAT and Memguard provide the mechanisms for                 eters. For example, we can specify: the number of modes,
+controlling shared cache and memory bandwidth throughput                 the probability of mode transitions, the distribution of task
+only; they do not solve the question of how to achieve                   utilizations, the probability of a task being an existing, new,
+an effective shared resource allocation, which our resource              or changed task across a mode transition, etc.
+allocation algorithm focuses on.                                            Following the approach outlined in [39], we randomly
+                                                                         picked tasks (programs) from several different benchmarks,
+                      VII. E VALUATION
+                                                                         including PARSEC, SPLASH2x, DIS and IsolBench). We
+To evaluate the effectiveness and applicability of Omni, we              obtained a total of 11 different benchmark tasks, thus forming
+conducted an extensive set of experiments, both numerically              a diverse set of tasks with varied resource requirements.
+and experimentally on real multi-core hardware. Our key                  All these benchmarks support tasks with a single threaded
+questions were: (1) What is the run-time overhead of Omni?               execution mode, which we used in our evaluation.
+(2) Can Omni indeed improve schedulability and resource use                 We profiled each task program in the Omni prototype
+efficiency compared to state-of-the-art solutions? And (3) How           running on our experimental platform, where we ran the
+well does Omni scale to the system size?                                 task under all possible cache and bandwidth configurations
+                                                                         (20 × 20 = 400 configurations in total). The collected WCET
+A. Experimental setup                                                    values were then used for our analysis. We used the WCET
+Algorithms for comparison: Since we were not aware of                    when the task is allocated the entire cache and the entire
+any existing solution for the shared cache, bandwidth, and               memory bus as its reference WCET for our taskset generation.
+task allocation for multi-mode systems, we compared Omni                    We generated tasksets with taskset (reference) utilizations
+against two baseline solutions, MM-Static and CaM, described             ranging between 1.0 and 4.0, at steps of 0.1. (Note that, since
+in Section III. MM-Static extends the task-to-core partitioning          a taskset’s reference utilization assumes that each task is given
+method for multi-mode systems from [12] with a static,                   the entire cache and memory bus, it corresponds to a much
+even distribution of cache and bandwidth to cores. (As we                larger actual utilization when cache and bandwidth resources
+wanted to evaluate overloaded scenarios as well, we made a               are partitioned among tasks.) For each taskset utilization, we
+slight modification to the original algorithm in [12] in our             generated 400 independent tasksets per mode, for a total of
+implementation: if a taskset is unschedulable, instead of re-            24,800 tasksets per experiment in a system with 2 modes.
+porting failure, MM-Static schedules the task on the core with           Tasks’ utilizations fall within the range of either [0.01, 0.4] or
+the lowest utilization.) CaM applies the holistic multi-core             [0.4, 0.9]. The probability of selecting one over the other is
+resource allocation technique from [40] to compute the task              determined by one of three different distributions: [ 89 , 19 ], [ 69 ,
+
+                                                                    10
+  Sched   Cache   Membw    Remove    Insert   Update   MCR     Reset
+   179    2362     7736      364      665      775     46615    772
+                                                                             distributions help separately; 3) MM-Static; and 4) CaM. For
+                                                                             both Omni and Omni-no-migration, we set R = 10, r = 30,
+ TABLE I: Scheduling and mode-change overheads (in ns).                      and the load score threshold to be 0.01.6
+3         4 5                                                                   Results. Figure 2 shows the fraction of schedulable tasksets
+9 ] and [ 9 , 9 ]. We refer to first, second, and third distributions
+as light, medium, and heavy distributions, respectively. Each                with respect to different taskset reference utilizations for each
+task’s period (deadline) was set to be the ratio of its reference            of the three task utilization distributions. We can make the
+WCET to its utilization.                                                     following observations:
+                                                                                • CaM performs extremely poorly across all three utiliza-
+B. Run-time overhead
+                                                                                   tion distributions. At reference utilization 1.0, it fails
+To evaluate the overheads introduced by our prototype, we                          to schedule the majority of the tasksets. For example,
+collected micro-benchmarks for the tasksets that we generated                      only 26% of the tasksets are schedulable under light
+above. We ran each taskset in our prototype on our exper-                          distribution and 44% of the tasksets are schedulable
+imental platform. We used the timestamp counter to track                           under heavy utilization distribution. This further confirms
+the time for a variety of functions and saved the timestamps                       the importance of considering mode transitions when
+into memory to be reported after an experiment had finished.                       computing resource allocation.
+In total, we collected micro-benchmarks of over 500 mode                        • MM-Static performs consistently better, but it is still
+changes for the following functions:                                               much worse compared to Omni and its simplified version
+   • sched(), the main scheduling function;                                        Omni-no-migration.
+   • cache(), setting CAT model-specific registers to con-                      • Both Omni and its simplified version without migration
+     figure cache allocation;                                                      outperform the two baseline solutions by a significant
+   • membw(), setting Memguard bandwidth;                                          factor. In particular, Omni can schedule up to 2× more
+   • remove(), mode change action to remove a single old                           tasksets compared to MM-Static, which is the better
+     mode task;                                                                    performed state-of-the-art solution.
+   • insert(), mode change action to insert a single new                        • Omni also consistently performs better than Omni-no-
+     mode task;                                                                    migration, which shows that task migration does help
+   • update(), mode change action to update a single                               substantially in improving schedulability. In addition, the
+     changed mode task;                                                            difference between Omni-no-migration and the baseline
+   • MCR(), full mode change handler for all tasks; and                            solutions also show that task Omni’s redistribution ap-
+   • Reset(), resets task registers for a new job release after                    proach alone can already improve performance compared
+     old mode removal or missed deadline.                                          to the state of the art.
+We took measurements over the course of 4 hours (the time                    Impact of platform configurations. To evaluate how well
+it took to run our experimental platform through 500 mode                    Omni scales to the platform size, our next experiment con-
+changes) and report the average.                                             sidered a larger platform configuration with 8 cores and 20
+   The overhead results are summarized in Table I, where all                 cache/bandwidth partitions. We generated multi-mode systems
+times are averaged across the measured values and rounded                    as before, except that the taskset utilization ranges from 1.0
+to the nearest nanosecond. The results show that Omni incurs                 to 8.0 (with steps of 0.1). We performed resource allocation
+negligible scheduling overhead, and that it introduces only a                and schedulability analysis for all algorithms.
+small overhead for the mode change actions and cache/band-                      Figure 3 shows the schedulability results of the three algo-
+width allocations. The full mode change handler for all task                 rithms Omni, Omni-no-migration, and MM-Static. We can ob-
+(MCR) overhead has the largest overhead, which is expected                   serve that, as we double the number of cores and increase the
+since it covers the complete handling of a mode change.                      number of partitions, Omni maintains a similar performance
+                                                                             improvement factor over Omni-no-migration and MM-Static.
+C. Numerical evaluation
+                                                                             The results also demonstrate the same relative performance
+Schedulability performance. In this first experiment, we used                among the three algorithms, as well as the positive impacts of
+a platform with 4 cores and 12 cache/bandwidth partitions,                   both task redistribution and task migrations on schedulability.
+which resembles our configured experimental platform. We                     Impact of multi-mode system size. Our last experiment
+generated multi-mode systems with 2 modes, with a 20%                        evaluated the algorithms as we increased the number of modes.
+probability of tasks migrating from one mode to the next, and                We considered the same platform configuration as in the first
+a 50% probability of a migrated task having its parameters                   experiment (4 cores, 12 partitions), but generated multi-mode
+updated to a new value within the same utilization distribu-                 systems with twice as many modes (4 modes). Each mode
+tion. Each mode is associated with a taskset taken from the                  always has a mode transition to the next immediate mode
+generated tasksets, as described earlier.                                    (Mode 0 → Mode 1 → Mode 2 → Mode 3 → Mode 0), as well
+   For each multi-mode system, we performed resource alloca-                 as an additional 50% probability of having a mode transition to
+tions and schedulability analysis under 4 different algorithms:              any other mode. We chose to exclude CaM from this analysis
+1) Omni, our proposed resource allocation algorithm (Sec-
+                                                                               6 This threshold value is small enough to capture the minimum amount
+tion IV); 2) Omni-no-migration, a variant of Omni resource
+                                                                             of improvement that Omni could yield by redistributing a single resource
+allocation algorithm but with only resource redistribution                   partition or by a single task move/swap. A smaller value would lead to little
+implemented, to evaluate how much migrations and resource                    improvement, whereas a larger one would make the algorithm stop too soon.
+
+
+                                                                        11
+  Fraction of schedulable tasksets
+
+
+
+
+                                                                                                                                                                       Fraction of schedulable tasksets
+
+
+
+
+                                                                                                                                                                                                                                                                                            Fraction of schedulable tasksets
+                                                                                                                                              Omni                                                                                                                           Omni                                                                                                             Omni
+                                      1                                                                                           Omni-no-migration                                                           1                                                  Omni-no-migration                                              1                                                 Omni-no-migration
+                                                                                                                                         Static-mm                                                                                                                      Static-mm                                                                                                        Static-mm
+                                     0.9                                                                                                                                                                  0.9                                                                                                                  0.9
+                                                                                                                                               CaM                                                                                                                            CaM                                                                                                              CaM
+                                     0.8                                                                                                                                                                  0.8                                                                                                                  0.8
+                                     0.7                                                                                                                                                                  0.7                                                                                                                  0.7
+                                     0.6                                                                                                                                                                  0.6                                                                                                                  0.6
+
+                                     0.5                                                                                                                                                                  0.5                                                                                                                  0.5
+
+                                     0.4                                                                                                                                                                  0.4                                                                                                                  0.4
+
+                                     0.3                                                                                                                                                                  0.3                                                                                                                  0.3
+                                     0.2                                                                                                                                                                  0.2                                                                                                                  0.2
+
+                                     0.1                                                                                                                                                                  0.1                                                                                                                  0.1
+                                      0                                                                                                                                                                       0                                                                                                                 0
+                                           1   1.2 1.4 1.6 1.8                                             2    2.2 2.4 2.6 2.8    3   3.2 3.4 3.6 3.8       4                                                    1     1.2 1.4 1.6 1.8   2    2.2 2.4 2.6 2.8    3   3.2 3.4 3.6 3.8   4                                            1   1.2 1.4 1.6 1.8   2    2.2 2.4 2.6 2.8    3   3.2 3.4 3.6 3.8   4
+                                                                                                               Taskset Utilization                                                                                                            Taskset Utilization                                                                                              Taskset Utilization
+
+                                                                                                    (a) Bimodal Light                                                                                                          (b) Bimodal Medium                                                                                                 (c) Bimodal Heavy
+                                                                                                                   Fig. 2: System schedulability under different taskset distributions (2 modes, 4 cores).
+                                                                                                                                                                                                                                                       the Linux kernel to the best of our ability, and every core not
+                                               Fraction of schedulable tasksets
+
+
+
+
+                                                                                                                                                                  Omni
+                                                                                           1                                                          Omni-no-migration
+                                                                                          0.9
+                                                                                                                                                             Static-mm                                                                                 involved in running an experiment received a small amount of
+                                                                                                                                                                   CaM
+                                                                                          0.8                                                                                                                                                          memory bandwidth and its own isolated cache partition.
+                                                                                          0.7
+                                                                                          0.6
+                                                                                                                                                                                                                                                          To begin an experiment, we passed the multi-mode sys-
+                                                                                          0.5                                                                                                                                                          tem to LITMUSRT through a custom system call, so that
+                                                                                          0.4
+                                                                                                                                                                                                                                                       LITMUSRT knows a task’s parameters for all modes. We then
+                                                                                          0.3
+                                                                                          0.2
+                                                                                                                                                                                                                                                       launched our experiment from a management program that
+                                                                                          0.1                                                                                                                                                          was pinned to the management core (unused by LITMUSRT
+                                                                                           0
+                                                                                                1    1.5       2   2.5   3   3.5       4   4.5   5    5.5        6   6.5                                  7       7.5     8                            for running real-time tasks). This management program forks a
+                                                                                                                             Taskset Utilization
+                                                                                                                                                                                                                                                       unique instance of each task in the multi-mode system, which
+                                       Fig. 3: Schedulabilty of 8-core systems (2 modes).                                                                                                                                                              is then transformed into a real-time LITMUSRT task before
+                                                                                                                                                                                                                                                       executing its workload. After all tasks have transitioned to
+                                                       Fraction of schedulable tasksets
+
+
+
+
+                                                                                                                                                                  Omni
+                                                                                            1                                                         Omni-no-migration
+                                                                                          0.9
+                                                                                                                                                             Static-mm                                                                                 our LITMUSRT scheduler, we launched a special setup mode
+                                                                                          0.8                                                                                                                                                          transition which will abort any tasks that do not belong to
+                                                                                          0.7
+
+                                                                                          0.6
+                                                                                                                                                                                                                                                       our initial mode, while applying the proper task parameters
+                                                                                          0.5                                                                                                                                                          to tasks that do. Once this initial mode transition completes
+                                                                                          0.4
+
+                                                                                          0.3
+                                                                                                                                                                                                                                                       from our management program, the experiment is considered
+                                                                                          0.2                                                                                                                                                          to have started and the management task will sleep itself until
+                                                                                          0.1
+                                                                                                                                                                                                                                                       the next mode transition.
+                                                                                            0
+                                                                                                1    1.2 1.4 1.6 1.8         2     2.2 2.4 2.6 2.8       3       3.2 3.4 3.6 3.8                                          4                               For each multi-mode system, we repeated the same exper-
+                                                                                                                                 Taskset Utilization
+                                                                                                                                                                                                                                                       iment using two different resource allocation configurations:
+                                       Fig. 4: Schedulabilty of 4-mode systems (2 cores).                                                                                                                                                              the resource allocation solution produced by Omni, and the
+since it significantly under-performed in our schedulability                                                                                                                                                                                           one produced by MM-Static. We omit the experiment for CaM,
+evaluation with just 2 modes.                                                                                                                                                                                                                          as it performs poorly compared to all other algorithms.
+   The results are shown in Figure 4. We observe a drop in                                                                                                                                                                                                Results. Our measurement results further confirm the rela-
+schedulability across all three algorithms compared to that of                                                                                                                                                                                         tive performance between Omni and MM-Static. Specifically,
+the two-mode systems (c.f. Figure 2); this is expected, because                                                                                                                                                                                        the results show that for the same taskset utilization, Omni
+when the number of modes and mode transitions increase, the                                                                                                                                                                                            is able to improve both (observed) schedulability and reduce
+system will also become harder to schedule. However, both                                                                                                                                                                                              job deadline miss ratio substantially. For instance, at taskset
+Omni and Omni-no-migration continue to perform substan-                                                                                                                                                                                                utilization of 2.0, out of 36 tasksets we ran, MM-Static expe-
+tially better than the state-of-the-art algorithm MM-Static, and                                                                                                                                                                                       rienced 3.79× more jobs missing their deadlines, and 1.53×
+their improvement factors also increase with more modes.                                                                                                                                                                                               more multi-mode systems missing their deadlines compared to
+Summary. Our evaluation demonstrates that the insights and                                                                                                                                                                                             Omni. The results demonstrate that Omni can arrive at a much
+strategies Omni employs are highly effective in improving                                                                                                                                                                                              better resource and task allocation than existing solutions.
+schedulability and resource use compared to the state of the
+art. This schedulability improvement factor also maintains as                                                                                                                                                                                                              VIII. C ONCLUSION
+we scale the platform and multi-mode system size.                                                                                                                                                                                                      In this paper, we have introduced Omni, the first end-to-end
+                                                                                                                                                                                                                                                       multi-mode real-time resource allocation algorithm that is able
+D. Experimental evaluation                                                                                                                                                                                                                             to dynamically adjust shared resources and task allocation to
+For our experimental evaluation, we ran a subset of the gen-                                                                                                                                                                                           more optimally ensure schedulability during mode transitions.
+erated multi-mode systems from the first numerical evaluation                                                                                                                                                                                          Omni contributes a novel multi-mode resource allocation al-
+on our prototype. We configured our experimental platform                                                                                                                                                                                              gorithm and a resource-aware schedulability test that supports
+to have 4 cores and 12 cache/bandwidth partitions. For each                                                                                                                                                                                            general mode-change semantics as well as dynamic cache
+multi-mode system, the amount of time we waited between                                                                                                                                                                                                and bandwidth resource allocation. Through our prototype and
+each mode transition is a random value that falls in the range                                                                                                                                                                                         analysis implementations, we have demonstrated that Omni
+of the maximum deadline in the whole taskset plus 20%-80%.                                                                                                                                                                                             is able to outperform existing state-of-the-art solutions both
+Each core used for our experiment was fully isolated from                                                                                                                                                                                              numerically and on a real platform by a significant factor.
+
+                                                                                                                                                                                                                                                  12
+                   ACKNOWLEDGMENTS                                     [19] O. Kwon, G. Schwäricke, T. Kloda, D. Hoornaert,
+This work was supported in part by NSF grants CNS-1703936,                  G. Gracioli, and M. Caccamo. Flexible cache partitioning
+CNS-1750158, CNS-1955670, CNS-2111688, and by ONR                           for multi-mode real-time systems. In DATE, pages 1156–
+N00014-20-1-2744.                                                           1161, 2021.
+                                                                       [20] P. Leteinturier, S. Brewerton, and K. Scheibert. Multicore
+                                                                            benefits and challenges for automotive applications. In
+                        R EFERENCES                                         SAE World Congress and Exhibition. SAE International,
+ [1] M. Ahmed and N. Fisher. Tractable schedulability                       apr 2008.
+     analysis and resource allocation for real-time multimodal         [21] H. Li, M. Xu, C. Li, C. Lu, C. Gill, L. Phan, I. Lee, and
+     systems. ACM Trans. Embed. Comput. Syst., 13(2s), jan                  O. Sokolsky. Multi-mode virtualization for soft real-time
+     2014.                                                                  systems. In RTAS, pages 117–128, 2018.
+ [2] T. Amnell, E. Fersman, L. Mokrushin, P. Pettersson, and           [22] T. M. Lovelly and A. D. George. Comparative Analysis
+     W. Yi. TIMES: a tool for schedulability analysis and code              of Present and Future Space-Grade Processors with De-
+     generation of real-time systems. In FORMATS, 2003.                     vice Metrics. J. Aerosp. Inf. Syst., 14(3):184–197, 2017.
+ [3] A. Azim and S. Fischmeister. Efficient mode changes in            [23] F. Maraninchi and Y. Rémond. Mode-automata: a new
+     multi-mode systems. In ICCD, 2016.                                     domain-specific construct for the development of safe
+ [4] H. Baek, K. G. Shin, and J. Lee. Response-time analysis                critical systems. Science of Computer Programming,
+     for multi-mode tasks in real-time multiprocessor systems.              46(3):219–254, 2003.
+     IEEE Access, 8:86111–86129, 2020.                                 [24] J. Musmanno. Data intensive systems (dis) benchmark
+ [5] C. Bienia, S. Kumar, J. P. Singh, and K. Li. The PAR-                  performance summary. page 144, 08 2003.
+     SEC benchmark suite: Characterization and architectural           [25] M. Negrean, S. Klawitter, and R. Ernst. Timing analysis
+     implications. In PACT, 2008.                                           of multi-mode applications on autosar conform multi-
+ [6] A. Burns. System mode changes-general and criticality-                 core systems. In DATE, 2013.
+     based. In WMC, 2014.                                              [26] V. Nelis, J. Goossens, and B. Andersson. Two proto-
+ [7] G. C. Buttazzo, G. Lipari, and L. Abeni. Elastic task                  cols for scheduling multi-mode real-time systems upon
+     model for adaptive rate control. In RTSS, 1999.                        identical multiprocessor platforms. In ECRTS, 2009.
+ [8] G. C. Buttazzo, G. Lipari, M. Caccamo, and L. Abeni.              [27] M. Neukirchner, K. Lampka, S. Quinton, and R. Ernst.
+     Elastic scheduling for flexible workload management.                   Multi-mode monitoring for mixed-criticality real-time
+     IEEE Transactions on Computers, 51(3):289–302, 2002.                   systems. In CODES+ISSS, 2013.
+ [9] J. M. Calandrino, H. Leontyev, A. Block, U. C. Devi, and          [28] L. Phan, S. Chakraborty, and P. Thiagarajan. A multi-
+     J. H. Anderson. LITMUSRT : A Testbed for Empirically                   mode real-time calculus. In RTSS, 2008.
+     Comparing Real-Time Multiprocessor Schedulers. In                 [29] L. T. X. Phan, S. Chakraborty, and I. Lee. Timing anal-
+     RTSS, 2006.                                                            ysis of mixed time/event-triggered multi-mode systems.
+[10] T. Chen and L. T. X. Phan. SafeMC: A system for                        In RTSS, 2009.
+     the design and evaluation of mode-change protocols. In            [30] L. T. X. Phan, I. Lee, and O. Sokolsky. Compositional
+     RTAS, 2018.                                                            analysis of multi-mode systems. In ECRTS, 2010.
+[11] D. de Niz, K. Lakshmanan, and R. Rajkumar. On the                 [31] L. T. X. Phan, I. Lee, and O. Sokolsky.              A se-
+     Scheduling of Mixed-Criticality Real-Time Task Sets. In                mantic framework for multi-mode systems. In RTAS,
+     RTSS, 2009.                                                            2011. Available from http://repository.upenn.edu/cgi/
+[12] D. de Niz and L. T. X. Phan. Partitioned Scheduling                    viewcontent.cgi?article=1495&context=cis_papers.
+     of Multi-Modal Mixed-Criticality Real-Time Systems on             [32] W. Powell. High-Performance Spaceflight Computing
+     Multiprocessor Platforms. In RTAS, 2014.                               (HPSC) Project Overview, Nov. 2018.
+[13] P. Dziurzanski, A. Singh, and L. Indrusiak. Multi-criteria        [33] P. Rattanatamrong and J. A. Fortes. Mode transition
+     resource allocation in modal hard real-time systems. In                for online scheduling of adaptive real-time systems on
+     J Embedded Systems, 2017.                                              multiprocessors. In RTCSA, volume 1, pages 25–32,
+[14] A. Easwaran. Demand-based scheduling of mixed-                         2011.
+     criticality sporadic tasks on one processor. In 2013 IEEE         [34] J. Real and A. Crespo. Mode change protocols for real-
+     34th Real-Time Systems Symposium, pages 78–87, 2013.                   time systems: A survey and a new proposal. Real-Time
+[15] R. Gifford, N. Gandhi, L. T. X. Phan, and A. Haeberlen.                Systems, 26:161–197, 2004.
+     Dna: Dynamic resource allocation for soft real-time               [35] J. Real and A. Crespo. Mode change protocols for real-
+     multicore systems. In RTAS, 2021.                                      time systems: A survey and a new proposal. Real-Time
+[16] S. Goddard and X. Liu. A variable rate execution model.                Systems, 26(2):161–197, 2004.
+     In ECRTS, pages 135–143, 2004.                                    [36] Y. Shin, D. Kim, and K. Choi. Schedulability-driven
+[17] J. Goossens and P. Richard. Partitioned scheduling of                  performance analysis of multiple mode embedded real-
+     multimode multiprocessor real-time systems with tem-                   time systems. In DAC, 2000.
+     poral isolation. 2013.                                            [37] Splash2x benchmark.         http://parsec.cs.princeton.edu/
+[18] Intel. Improving real-time performance by utilizing cache              parsec3-doc.htm#splash2x.
+     allocation technology, Apr. 2015. White Paper.                    [38] P. K. Valsan, H. Yun, and F. Farshchi. Taming non-
+
+                                                                  13
+     blocking caches to improve isolation in multicore real-
+     time systems. In RTAS, pages 1–12, 2016.
+[39] M. Xu, R. Gifford, and L. T. X. Phan. Holistic multi-
+     resource allocation for multicore real-time virtualization.
+     In DAC, page 168, 2019.
+[40] M. Xu, L. T. X. Phan, H. Choi, Y. Lin, H. Li, C. Lu,
+     and I. Lee. Holistic resource allocation for multicore
+     real-time systems. In RTAS, 2019.
+[41] H. Yun, G. Yao, R. Pellizzoni, M. Caccamo, and L. Sha.
+     Memory bandwidth management for efficient perfor-
+     mance isolation in multi-core platforms. IEEE Trans-
+     actions on Computers, 65(2):562–576, Feb 2016.
+
+
+
+
+                                                                   14
+

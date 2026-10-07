@@ -1,0 +1,997 @@
+    Shared Memory-contention-aware Concurrent DNN
+       Execution for Diversely Heterogeneous SoCs
+                                 Ismet Dagli                                                        Mehmet E. Belviranli
+                     Computer Science Department                                                Computer Science Department
+                       Colorado School of Mines                                                   Colorado School of Mines
+                           Golden, CO, USA                                                            Golden, CO, USA
+                        ismetdagli@mines.edu                                                       belviranli@mines.edu
+
+Abstract
+                                                                                    Case 1: Naïve Execution (Fastest processor: GPU)
+Two distinguishing features of state-of-the-art mobile and                                                                                         Device
+                                                                                           VGG-19                     ResNet101                    GPU
+autonomous systems are: 1) There are often multiple work-
+                                                                                                                                                   DLA
+loads, mainly deep neural network (DNN) inference, running                                                   [IDLE]
+
+concurrently and continuously. 2) They operate on shared                            Case 2: Naïve Concurrent Execution (GPU & DLA)
+memory System-on-Chips (SoC) that embed heterogeneous                                            VGG-19                    [IDLE]
+accelerators tailored for specific operations. State-of-the-art                                         ResNet101
+systems lack efficient performance and resource manage-
+                                                                                    Case 3: Contention-aware layer-level mapping
+ment techniques necessary to either maximize total system
+                                                                                     VGG-19(L#1-#28)      VGG-19(L#29-#43)
+throughput or minimize end-to-end workload latency. In this
+                                                                                    ResNet101(L#1-#95) ResNet101(L#96-#448)
+work, we propose HaX-CoNN, a novel scheme that character-
+izes and maps layers in concurrently executing DNN infer-                           Time(ms)                                 8.7       10.6 11.3
+ence workloads to a diverse set of accelerators within an SoC.                    Figure 1. Different ways of executing VGG-19 and ResNet-101
+Our scheme uniquely takes per-layer execution characteris-                        DNNs in parallel on Xavier AGX.
+tics, shared memory (SM) contention, and inter-accelerator
+transitions into account to find optimal schedules. We evalu-                     35, 64]. Notably, a diverse range of applications embed multi-
+ate HaX-CoNN on NVIDIA Orin, NVIDIA Xavier, and Qual-                             ple DNNs as subtasks such as object detection and semantic
+comm Snapdragon 865 SoCs. Our experimental results indi-                          segmentation for autonomous systems [15, 62] or pose esti-
+cate that HaX-CoNN can minimize memory contention by                              mation and eye-tracking for VR applications [12, 65]. Work-
+up to 45% and improve total latency and throughput by up to                       loads running concurrently and continuously in such systems
+32% and 29%, respectively, compared to the state-of-the-art.                      necessitate powerful SoCs that can meet high computational
+CCS Concepts: • Computer systems organization →                                   demand and ensure safety [16] and QoS [23] requirements.
+Heterogeneous (hybrid) systems; • General and ref-                                Thus, such SoCs are often equipped with a CPU, a GPU, and
+erence → Performance; • Computing methodologies →                                 one or more domain-specific accelerators (DSAs), optimized
+Shared memory algorithms; Neural networks.                                        to perform specific types of operations. For example, NVIDIA
+                                                                                  Xavier AGX and Orin architecture comprise deep learning
+Keywords: Concurrent DNN inference, Shared memory con-                            accelerators (DLA), and a programmable vision accelerator
+tention, Heterogeneous SoCs                                                       (PVA) in addition to CPU and GPU. Utilizing different types
+                                                                                  of DSAs for concurrently running workloads enables the
+1     Introduction                                                                flexibility to explore execution strategies [41]. Leveraging
+Modern mobile and autonomous systems —such as cars,                               this opportunity, in this work, we focus on mapping layers of
+drones, and robots— hinge on edge intelligence, which in-                         parallel DNNs to different types of DSAs so that we can improve
+volves running computationally demanding workloads [34,                           computational latency and system throughput.
+                                                                                     A common feature of such heterogeneous SoCs is the
+Permission to make digital or hard copies of part or all of this work for         shared physical main memory where data is stored for access
+personal or classroom use is granted without fee provided that copies are         by all processing units (PUs) in the system. Even though
+not made or distributed for profit or commercial advantage and that copies        this cost-driven design decision curbs costly data movement,
+bear this notice and the full citation on the first page. Copyrights for third-   memory subsystems in such architectures are often designed
+party components of this work must be honored. For all other uses, contact        to accommodate the memory demands of a single PU at a
+the owner/author(s).
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom
+                                                                                  time. Consequently, shared memory contention emerges as
+© 2024 Copyright held by the owner/author(s).                                     one of the primary performance bottlenecks in mobile and au-
+ACM ISBN 979-8-4007-0435-2/24/03.                                                 tonomous SoCs, when parallel tasks are concurrently mapped
+https://doi.org/10.1145/3627535.3638502                                           to different accelerators [20, 39, 67].
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom                                                                 Ismet Dagli and Mehmet E. Belviranli
+
+
+    We investigate concurrent execution on shared memory              minimizes the overall latency of concurrently running DNNs
+SoCs through a case study. In a typical loop running on au-           on shared memory SoCs.
+tonomous systems, VGG-19 [58] and ResNet101 [18] can be             • We propose a generalized and formal layer-to-accelerator
+used in tandem for vision (i.e., perception) tasks. Since the re-     mapping approach for concurrently running DNNs. We
+maining tasks in the autonomous loop depend on the comple-            demonstrate that SAT solvers can be utilized to produce
+tion of these two DNNs, utilizing all computational resources         optimal schedules for multi-accelerator execution.
+in the SoC for these DNNs is expected to reduce the total           • We build a new contention modeling approach which sig-
+latency of the system. Fig. 1 illustrates three different ways of     nificantly reduces profiling search space by decoupling
+executing two DNNs on NVIDIA Xavier AGX SoC. In Case                  performance measurement and the slowdown.
+1, DNNs are serially executed on the fastest DSA, which is          • We present D-HaX-CoNN, a dynamic runtime adaptation
+the GPU, resulting in 11.3ms of cumulative latency. However,          of SAT solver-based optimal schedule generation for dy-
+this method leaves DLA idle, thereby under-utilizing the sys-         namically changing workloads.
+tem resources. The first approach can be improved by a naïve        • We evaluate HaX-CoNN and D-HaX-CoNN on NVIDIA
+concurrent execution, as shown in Case 2. In this scheme,             AGX Orin, Xavier AGX, and Qualcomm Snapdragon 865
+VGG-19 is run on GPU, and ResNet101 is mapped to DLA,                 SoCs. Our results show that HaX-CoNN can provide la-
+resulting in 10.6ms cumulative latency with a slight improve-         tency and throughput improvements up to 32% and 29%,
+ment. However, the speed-up obtained remains limited due              respectively, over greedy-scheduling based approaches.
+to two reasons: (1) DLA takes longer to execute, leaving GPU
+idle towards the end, and (2) when GPU and DLA operate
+                                                                    2    Related Work
+together, they contend for shared memory and slow down.             Concurrent DNN execution: Several studies [10, 32, 33,
+For more efficient execution of concurrent DNNs, we need a          37, 43, 69] propose scheduling techniques for the concurrent
+finer-grained, i.e., layer-level, mapping of the DNNs to DSAs.      execution of multiple DNNs. Two of them focus on multi-
+    Case 3 depicts an ideal case where layers in both DNNs          DNN inference on SoCs: Herald [37] introduces a mapper to
+are divided into two groups after layers #28 and #95, respec-       optimize hardware resource utilization across accelerators
+tively. For each DNN, the execution is switched between             such as NVDLA [1] and Shi-diannao [14] whereas H2H [69]
+two DSAs at the boundary of corresponding layer groups              improves Herald by considering inter-accelerator transition
+(i.e., transition point). While seemingly non-intuitive, this       costs.
+approach considerably improves the cumulative latency and              Multi-accelerator scheduling: Scheduling for systems
+increases the overall system utilization. This is due to a care-    with more than one type of accelerator has recently been
+ful partitioning and mapping of layers to GPU and DLA in a          targeted by many studies [4, 6, 24, 28, 29, 63, 66]. Among the
+way that: (1) the shared memory contention across concur-           most relevant, Gamma [29] and Kang et al. [28] build genetic
+rently running layers is minimized, (2) neither of the DSAs is      algorithms to utilize multiple accelerators for a single DNN
+left idle, and (3) the overhead of switching between accelera-      execution while Wu et al. [66] and Mensa [6] target unique
+tors between two layers is minimized. However, finding such         hardware for edge devices. None of these studies address
+partitioning is not trivial, and the state-of-the-art approaches    contention and balancing issues with multi-DNN execution.
+(detailed in Section 2) fail to provide a holistic approach to      DNN training for large-scale systems [27, 40, 42, 50], on the
+perform this partitioning optimally.                                other hand, is outside the scope of this work.
+    In this study, we propose HaX-CoNN, a multi-accelerator            Optimal schedule generation: Only a couple of stud-
+and contention-aware execution scheme for collaboratively           ies create optimal schedules for multi-DSA execution. Ax-
+and concurrently running DNNs on shared memory SoCs.                oNN [11] maps layers of a single DNN onto heterogeneous
+HaX-CoNN is centered around characterizing common lay-              accelerators under an energy budget, resulting in a serial
+ers in DNNs according to their DSA-specific performance
+and identifying how they are affected by shared memory con-         Table 1. Feature comparison between the most related work
+tention. Leveraging decoupled performance and contention            and HaX-CoNN.
+                                                                                                                                        OmniBoost [32]
+
+
+
+
+characterization at a layer-level, HaX-CoNN exploits distinct
+                                                                                                                        Pipeline [24]
+                                                                                                         AxoNN [11]
+
+
+
+
+                                                                                                                                                                                              HaX-CoNN
+                                                                                                                                                                     Herald [37]
+                                                                                                                                                         MoCA [33]
+                                                                                             Mensa [6]
+
+
+
+
+                                                                                                                                                                                   H2H [69]
+
+
+
+
+capabilities of each DSA in the system by deciding whether
+                                                                        Related Work
+the execution of the next layer in the DNN should transition
+to another DSA or not. HaX-CoNN uniquely finds an opti-
+mal mapping between the layers and DSAs in the system by                Concurrent DNNs       ✗           ✗               ✗               ✓               ✓           ✓             ✓          ✓
+formulating the problem as a set of constraint-based linear             Multi-accelerator     ✓           ✓               ✓               ✗               ✗           ✓             ✓          ✓
+equations and utilizing SAT solvers to find a solution.                 Transition cost       ✓           ✓               ✓               ✓               ✓           ✗             ✓          ✓
+    Our work makes the following contributions:                         Memory contention     ✗           ✗               ✗               ✗               ✓           ✗             ✗          ✓
+• We present HaX-CoNN, a contention-aware, multi-accelerator            Dynamic scheduling    ✓           ✗               ✓               ✗               ✓           ✗             ✗          ✓
+   execution scheme that maximizes compute utilization and              Optimal schedules     ✗           ✓               ✗               ✓               ✗           ✗             ✗          ✓
+Contention-aware Concurrent DNN Execution on Shared Memory SoCs                              PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom
+
+
+ Overview
+                              Sec 3.2
+                                                                              Therefore, we ensure that fusible layers are grouped together
+                                    Layer                                     and mapped to the same accelerator.
+    Concurrent                 Characterization Sec 3.4
+      DNNs        Sec 3.1                                       Sec 3.5       2) Input/output reformatting: DSAs typically operate in an
+                                                    Problem       Schedule
+                    Layer
+                              Sec 3.3             Formulation    Generation
+                                                                              internal hardware (HW) pipeline. If a transition from a layer
+      Target       Grouping
+      DSAs
+                                   Memory                                     mapped to such a DSA disrupts its pipeline, then an ad-
+                                  Contention
+                                  Slowdown                                    ditional output reformatting operation is inserted by the
+                                                                              execution framework. Similarly, input reformatting might
+                 Figure 2. Overview of HaX-CoNN.                              be required after transitioning to that DSA. Layer groupings
+                                                                              can be structured to avoid such formatting overheads.
+execution. OmniBoost [32] uses Monte Carlo tree search                        3) Accelerator and software limitations: DSAs are often limited
+by exhaustively profiling layers on CPU and GPU. Both ap-                     by the layer types, parameters, and batch sizes they support.
+proaches only create static schedules.                                        DNN execution frameworks, such as NVIDIA TensorRT [48]
+   Shared memory contention: None of the studies men-                         and Qualcomm SNPE [52], ensure such constraints are fol-
+tioned so far addresses shared memory contention. MoCA [33]                   lowed. We identify such limitations via vendor specific API
+designs a multitenant DSA architecture with dynamic mem-                      calls and our framework considers these limitations when
+ory resource management. FAST [68] uses an integer linear                     locating valid transitions between accelerators.
+programming based operator fusion technique to remedy the                        In this step, we group layers as follows: If transitioning to
+memory bottlenecks whereas ParDNN [51] partitions DNNs                        another DSA after a layer is prohibited or leads to increased
+under a memory limit. However, these approaches are not                       overhead, the layer is grouped with subsequent layers. Oth-
+adaptable to off-the-shelf multi-DSA shared memory SoCs.                      erwise, the layer is marked as a potential transition point.
+   Table 1 provides a snapshot of what the most relevant
+                                                                              3.2   Per-layer performance and transition
+works offer and how they compare against HaX-CoNN. Achiev-
+ing the ideal execution scenario depicted in Case 3 of Fig. 1                       characterization
+requires holistic consideration of several factors given in the               After we identify all feasible layer groupings, hence the tran-
+table: (i, ii) interaction and mapping opportunities created                  sition points, the next step is to characterize each layer’s (or
+by running concurrent DNNs on different types of DSAs, (iii)                  layer group’s) performance and the overhead if an inter-DSA
+the transition overhead when the execution within a DNN                       transition occurs after that particular layer (or layer group).
+switches across accelerators, (iv) the slowdown caused by                        Layer characterization: Strategically assigning layers to
+the shared memory contention as layers run concurrently –                     the DSAs where they will run most efficiently has the poten-
+our analysis shows that shared memory contention-unaware                      tial to increase performance. Previous studies [6, 19, 30, 31,
+decisions can reduce system performance by up to 70%, as de-                  37] have detailed various parameters that affect the efficiency
+tailed in Section 5.2–, (v) support for dynamic schedules, and                of deep learning accelerators, such as layer type, input size,
+(vi) optimal schedule creation. The efficient and safe opera-                 kernel size, etc. Different layers within a DNN yield varying
+tion of performance critical mobile and autonomous work-                      performance speed-ups when run on a specific DSA. To il-
+loads on shared memory SoCs depends on the holistic con-                      lustrate and analyze this further, we conduct an experiment
+sideration of all these factors. Our experiments demonstrate                  where we profile layer groups in GoogleNet on GPU and DLA.
+that the lack of such consideration results in mispredicted                   The results given in Table 2 show that while the DLA per-
+performance, which in turn results in inefficient execution.                  forms slower than GPU for all layers, the speed reduction is
+3     HaX-CoNN: Heterogeneity-aware                                           less severe for some layers. The fourth column lists the ratio
+                                                                              of execution time on DLA over GPU, which varies from 1.40x
+      Execution of Concurrent Deep Neural                                     to 2.02x among different layer groups. Larger performance
+      Networks                                                                discrepancies primarily arise because compared to DLAs,
+An overview of our proposed methodology is given in Fig. 2.                   GPUs are heavily optimized for large-size matrix operations
+HaX-CoNN takes the DNNs to be scheduled and the target                        and they are capable of more effectively exploiting perfor-
+DSAs as input and produces the optimal schedule as output.                    mance on convolution operations with larger inputs. Con-
+                                                                              versely, smaller kernels, such as those in groups 95-109 and
+3.1     Layer grouping                                                        124-140, are better fits for the DLA’s internal on-chip buffer.
+The first step involves identifying minimal layer groups to                      Prior studies [3, 6, 11, 25, 32] show that it is feasible to char-
+serve as atomic assignment units for DSAs. This grouping                      acterize DNNs via a layer-centric profiling approach where
+considers several factors:                                                    commonly used layer types are profiled beforehand for dif-
+1) Preserving layer optimizations: Layer/operator fusion [2,                  ferent input and filter sizes. Following a similar methodology,
+7, 44] merges multiple layers into a single layer. Transition                 we profile each layer or layer group on the DSAs in the sys-
+points during DNN execution, where we switch execution                        tem. We utilize IProfiler interface of TensorRT on NVIDIA
+from one DSA to another, should not impede operator fusion.                   devices [49], which reports per layer time. Profiled execution
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom                                                    Ismet Dagli and Mehmet E. Belviranli
+
+
+
+
+                                                                     EMC Utilization (%)
+Table 2. Execution (E) and transition (T) time of layer groups                             80
+                                                                                                                             GPU DLA
+in GoogleNet                                                                               60
+                            D/G      T. Time   T. Time                                     40
+   Layer    GPU    DLA                                   Memory
+                           E. Time   G to D    D to G
+   Group    (ms)   (ms)                                  Thr. (%)                          20
+                            Ratio      (ms)      (ms)
+    0-9     0.45    0.75     1.65     0.056      0.15     41.97                             0
+
+
+
+
+                                                                                                i1_f1
+                                                                                                i1_f2
+                                                                                                i1_f3
+                                                                                                i1_f4
+                                                                                                i1_f5
+                                                                                                i2_f1
+                                                                                                i2_f2
+                                                                                                i2_f3
+                                                                                                i2_f4
+                                                                                                i2_f5
+                                                                                                i3_f1
+                                                                                                i3_f2
+                                                                                                i3_f3
+                                                                                                i3_f4
+                                                                                                i3_f5
+                                                                                                i4_f1
+                                                                                                i4_f2
+                                                                                                i4_f3
+                                                                                                i4_f4
+                                                                                                i4_f5
+                                                                                                i5_f1
+                                                                                                i5_f2
+                                                                                                i5_f3
+                                                                                                i5_f4
+                                                                                                i5_f5
+   10-24    0.19    0.34     1.80     0.075      0.13     62.21
+   25-38    0.31    0.45     1.44     0.062      0.08     78.49
+   39-52    0.18    0.37     2.02     0.011      0.03     53.41                                  Input and Filter Size
+   53-66    0.16    0.31     1.98     0.055      0.03     55.70     Figure 3. EMC utilization by conv layers on GPU and DLA
+   67-80    0.17    0.33     1.96     0.024      0.04     59.24     with varying input (i) and filter (f) sizes
+   81-94    0.21    0.31     1.50     0.058      0.05     62.60
+  95-109    0.25    0.35     1.40     0.030      0.06     76.12
+  110-123   0.16    0.27     1.66     0.024      0.07     66.95
+                                                                    between multiple concurrent workloads as a function of
+  124-140   0.24    0.36     1.49     0.007      0.05     47.96     requested memory throughput and external memory traf-
+                                                                    fic, and builds a piece-wise model to predict the slowdown
+times are then embedded into variable 𝑡, which is used in           experienced by the accelerator requesting the throughput.
+equations 2, 4, 5, and 7 in Section 3.4.                            Built upon PCCS, our decoupled approach is performed at
+   Inter-DSA layer transitions: Despite the potential per-          layer-level and separates the collection of layer-specific stan-
+formance boost offered by multi-DSA execution, transition-          dalone performance profiles, as collected in Section 3.2, and
+ing between DSAs comes with a cost. This cost, crucial for          the slowdown caused by concurrent execution. The last col-
+accurate performance predictions and optimal scheduling, is         umn in Table 2 lists memory throughput measurements per
+contingent on the size of the transient data in private caches      layer group in GoogleNet. The general pattern we observe in
+of DSAs. The output of the layer preceding the transition is        many DNNs is that higher input size results in higher mem-
+flushed back to the shared memory so that the DSA where             ory throughput. We also observe that, as the filter size in
+the next layer will execute on can access it. The fifth and         convolution and pooling layers gets larger, there is a decrease
+sixth columns in Table 2 represent the time spent when the          in throughput due to the increasing arithmetic intensity of
+execution, after each layer group, switches from GPU to             the underlying operation.
+DLA and vice versa. As output data sizes decrease toward               Conventional hardware counters to monitor requested
+the end of layer groups, so does transition time. Notably,          memory throughput may not be applicable for some black-
+our experiments also reveal that some layer groups, such            box DSAs which cannot be profiled with conventional tools.
+as 39-53 and 95-109, ending with pooling layers result in           For example, NVIDIA Nsight Compute tool [8] can profile
+significantly less transition overhead when switching from          requested memory throughput on GPUs but not on DLAs. As
+GPU to DLA. We empirically derive the transition costs of           an alternative way to methodologically solve this issue, we
+the layers on our target set of accelerators, following the         develop a four-step approach: 1) We first profile target layers
+methodology outlined in [11]. To implement them, we insert          on GPU and analyze the memory throughput for several
+𝑀𝑎𝑟𝑘𝑂𝑢𝑡𝑝𝑢𝑡 and 𝑎𝑑𝑑𝐼𝑛𝑝𝑢𝑡 API calls in TensorRT [49]. We              layer types (i.e., convolution, pooling, and fully connected)
+then incorporate them into equations 2 and 3 in Section 3.4.        and their parameters (i.e., input size filter size). Through-
+                                                                    out their execution lifetimes, we observe that many layers
+3.3   Characterizing shared memory contention                       individually exhibit homogeneous memory access charac-
+One of the core novelties of our work is its ability to account     teristics as they internally embed homogeneous and dense
+for the slowdown caused by shared memory contention.                computations. 2) We then profile external memory controller
+Since existing multi-DSA schedulers do not consider this            (EMC) utilization for all layers on both DLA and GPU. In
+when making scheduling decisions, the resulting mappings            Fig. 3, the input sizes of i1-i5 for the convolution layers cor-
+often leave the system under-utilized. However, estimating          respond to (224,224,64), (224,112,64), (112,112,64), (112,56,64),
+this slowdown, especially for multi-DSA systems, is not triv-       (56,56,64) and filter sizes of f1-f5 correspond to (1x1), (2x2),
+ial. Exhaustive and peer-wise runs of all combinations of           (3x3), (4x4), (5x5), respectively. Our analysis reveals that the
+layers by colocating them are required. This will result in         EMC utilization for DLA and GPU are correlated and pro-
+a factorial explosion of profiling search space and require         portional. 3) Using this observation, we estimate its memory
+significant profiling time [71].                                    throughput on black-box DSAs (e.g., DLA in this case) by
+   To prevent this, we follow a decoupled two-step approach:        dividing its GPU-based memory throughput by the ratio of
+we first characterize each layer’s requested memory through-        EMC utilization of GPU and DSA for that specific layer. 4)
+put when they are run standalone. Using these throughput            Finally, by utilizing PCCS, we estimate the slowdown of a
+values, we then utilize a processor-centric slowdown model,         layer on an accelerator via its requested memory throughput
+PCCS [67], to estimate the slowdown without relying on              and the external memory throughput requested by the other
+layer-specific information. PCCS represents the slowdown            concurrently running layer on the other DSA.
+Contention-aware Concurrent DNN Execution on Shared Memory SoCs                            PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom
+
+
+                  t0        t1         t2         t3   t4                       Table 3. The notation used by our formulation.
+           DSA1    L11           L21                                     Notation            Explanation
+           DSA2    L21                      L22                          𝐷𝑁 𝑁𝑛               𝑛th DNN in the given 𝐷𝑁 𝑁 set which contains net-
+                                                                                             works to be executed concurrently
+           DSA3    L31
+                                                                         𝐿𝑖,𝑛                𝑖th layer of the 𝑛th DNN in the 𝐷𝑁 𝑁 set
+                                                                         𝑙𝑒𝑛 (𝐷𝑁 𝑁𝑛 )        Total number (length) of layer groups in 𝐷𝑁 𝑁𝑛
+Figure 4. Illustration for a hypothetical execution of five lay-
+                                                                         𝐴𝑎                  𝑎th accelerator in the given accelerator set 𝐴
+ers from three DNNs running on three different accelerators.             S(𝐿𝑖,𝑛 )            The schedule, i.e., accelerator mapping, of 𝐿𝑖,𝑛
+Colored regions indicate additional slowdowns each layer                 𝑡 (𝐿𝑖,𝑛 , 𝐴𝑎 )      Total execution time of 𝐿𝑖,𝑛 on 𝐴𝑎
+experiences for varying external memory pressure.                        𝑠𝑡 (𝑖, 𝑛)           Execution start time of 𝐿𝑖,𝑛
+                                                                         𝑒𝑡 (𝑖, 𝑛)           Execution end time of 𝐿𝑖,𝑛
+   When multiple layers are run simultaneously on differ-                𝜏 (𝐿𝑖,𝑛 , 𝐴𝑎 ,      The time required to transition the DNN execution
+ent accelerators, the degree of slowdown throughout their                𝑂𝑈𝑇 |𝐼 𝑁 )          after|before layer 𝑙𝑖 executed on accelerator 𝐴𝑎
+execution is non-uniform and depends on the other layers                 𝑇 𝑅𝑖,𝑛              Boolean var if a transition is set after layer 𝐿𝑖,𝑛
+running concurrently. Fig. 4 illustrates this behavior by de-            𝑇 (𝐿, 𝑆 (𝐿) )𝑛      Total execution time elapsed by the execution of given
+picting the execution timelines of five hypothetical layers                                  sets of layer 𝐿 of the 𝑛th DNN
+                                                                         𝑐 𝐿𝑖,𝑛 ,𝑆 (𝐿),𝐿     The slowdown of 𝐿𝑖,𝑛 due to the contention caused
+belonging to three different DNNs. Each timeline represents
+                                                                                             layers running on other accelerators, i.e., 𝑆 (𝐿)
+the execution of 𝑖th layer on 𝑗th DNN, labeled as 𝐿𝑖 𝑗 on                𝐼𝑖,𝑗                The length of interval where layers 𝑖 and 𝑗 overlap
+𝐷𝑆𝐴𝑘 . The black regions in the timeline represent the time              𝐼𝑛𝑡                 Interval array holding start and end time of layers
+that the executions would take if all layers were run sepa-                                              𝑙𝑒𝑛 (𝐷𝑁
+rately. Each colored extension to the black regions indicates                                                 ∑︁𝑁𝑛 )
+                                                                             𝑇 (𝐿, 𝑆 (𝐿 → 𝐴))𝑛 =                       𝑡 (𝐿𝑖,𝑛 , 𝑆 (𝐿𝑖,𝑛 )) ∗ 𝐶𝐿𝑖,𝑛 ,𝑆 (𝐿),𝐿
+slowdowns for different sets of layers running together. To                                                  𝑖=0
+address the complexity of handling varying amounts of slow-            + 𝑇 𝑅𝑖,𝑛 × 𝜏 (𝐿𝑖 , 𝑠 (𝐿𝑖 ), 𝑂𝑈𝑇 ) + 𝑇 𝑅𝑖,𝑛 × 𝜏 (𝐿𝑖+1, 𝑠 (𝐿𝑖+1 ), 𝐼 𝑁 )
+down during the execution of collocated layers, we introduce
+                                                                                                                                          (2)
+a scheduling concept called contention interval. Each con-
+                                                                          We encode the decision to make transitions into our formu-
+tention interval (𝑡𝑖 , 𝑡𝑖+1 ) represents a period separated by the
+                                                                       lation via the boolean function given in Eq. 3. This function
+start or end of a layer execution, and it is represented by
+                                                                       compares the accelerator assignments of adjacent layers 𝐿𝑖,𝑛
+the Eq. 8 explained in Section 3.4. During each contention
+                                                                       and 𝐿𝑖+1,𝑛 . If the assignments differ, the transition cost, 𝜏, is
+interval, different rates of slowdowns are observed by each
+                                                                       subsequently incorporated      into Eq. 2.
+layer, and the slowdown depends on the cumulative external                                  (
+memory pressure demands during that interval.                                                       1    , if 𝑆 (𝐿𝑖,𝑛 ) ≠ 𝑆 (𝐿𝑖+1,𝑛 )
+                                                                                     𝑇 𝑅𝑖,𝑛 =                                                          (3)
+                                                                                                    0    , if 𝑆 (𝐿𝑖,𝑛 ) = 𝑆 (𝐿𝑖+1,𝑛 )
+3.4   Formulating the problem
+We integrate layer execution time, inter-accelerator tran-               Eq. 4 and 5 compute the execution start and end times, 𝑠𝑡 ()
+sition time, and memory contention slowdown into a cost                and 𝑒𝑡 () respectively, for layer 𝐿𝑖,𝑛 . 𝐼𝑛𝑡 array in Eq. 6 stores
+function and formulate the scheduling problem as a series              the start and end time for layers, facilitating the iterative
+of linear equations. Table 3 summarizes the variables and              comparison of the contention intervals across layers.
+notations we use in the formulation. The primary input to                                   𝑠𝑡 (𝑖, 𝑛) = 𝑇 (𝐿0 𝑡𝑜 𝑖 −1 , 𝑛 , 𝑆 (𝐿))𝑛                    (4)
+our model is the 𝐷𝑁 𝑁 set for which we explore its mapping
+                                                                                       𝑒𝑡 (𝑖, 𝑛) = 𝑠𝑡 (𝑖, 𝑛) + 𝑡 (𝐿𝑖,𝑛 , 𝑆 (𝐿𝑖,𝑛 )) ∗ 𝐶𝑖,𝑛             (5)
+to the accelerator set 𝐴. 𝐿𝑖,𝑛 denotes the smallest layer en-
+tity that belongs to the layer set of 𝐷𝑁 𝑁𝑛 . A layer entity                             ∀𝐿𝑖,𝑛 , [𝑠𝑡 (𝑖, 𝑛), 𝑒𝑡 (𝑖, 𝑛)] ∈ 𝐼𝑛𝑡
+is either a single layer or a group of layers, as explained in                                                                            (6)
+                                                                          𝑤ℎ𝑒𝑟𝑒 1 ≤ 𝑖 ≤ 𝑙𝑒𝑛(𝐷𝑁 𝑁𝑛 ), 1 ≤ 𝑛 ≤ 𝑙𝑒𝑛(𝐷𝑁 𝑁 )
+Section 3.1. Functions 𝑡 (𝐿𝑖,𝑛 , 𝑎) and 𝜏 (𝐿𝑖,𝑛 , 𝑎, 𝑂𝑈𝑇 |𝐼 𝑁 ) rep-
+                                                                          The contention function 𝐶, outlined in Eq. 7, calculates the
+resent the execution time and transition overheads of layer
+                                                                       total slowdown for layer 𝐿𝑖,𝑛 by taking each time overlapping
+𝐿𝑖,𝑛 on accelerator 𝐴𝑎 , respectively.
+                                                                       with that layer and the slowdown ratio corresponding to
+   The goal of our formulation is to find the schedule 𝑆 for
+                                                                       the interval. The contention model returns an estimated
+all layers across all DNNs. The schedule function, defined in
+                                                                       slowdown amount depending on the bandwidth demanded
+Eq. 1, returns 𝐴𝑎 that 𝐿𝑖,𝑛 should be mapped to. 𝑆 is assumed
+                                                                       by layer 𝑙𝑖 and cumulative external bandwidth demanded by
+to be initially unknown and will be determined by the solver
+                                                                       other layers running inside the same interval.
+later.
+                                                                                              ∑︁ 𝐼 (𝐿𝑖,𝑛 , 𝐿 𝑗,𝑛 ) ∗ 𝑐𝑜𝑛𝑡_𝑚𝑜𝑑𝑒𝑙 (𝐿𝑖,𝑛 , 𝐿𝑠 )
+         𝑆 (𝐿𝑖,𝑛 ) = 𝐴𝑎 𝑤ℎ𝑒𝑟𝑒 1 ≤ 𝑖 ≤ 𝑙𝑒𝑛(𝐷𝑁 𝑁𝑛 ),                         𝐶𝐿𝑖,𝑛 ,𝑆 (𝐿),𝐿 =
+                                                           (1)                              𝐼 ∈𝐼𝑛𝑡
+                                                                                                          𝑡 (𝐿𝑖,𝑛 , 𝑆 (𝐿𝑖,𝑛 )) ∗ 𝑙𝑒𝑛(𝐿𝑠 )
+             1 ≤ 𝑛 ≤ 𝑙𝑒𝑛(𝐷𝑁 𝑁 ) , 1 ≤ 𝑎 ≤ 𝑙𝑒𝑛(𝐴)                                                𝑘
+
+   Total execution time of a DNN is formulated in Eq. 2. Total         𝑤ℎ𝑒𝑟𝑒 1 ≤ 𝑗 ≤ 𝑙𝑒𝑛(𝐷𝑁 𝑁𝑛 ), 1 ≤ 𝑛 ≤ 𝑙𝑒𝑛(𝐷𝑁 𝑁 ), 𝐿 𝑗,𝑛 ∈ 𝐿𝑠
+time comprises standalone execution time 𝑡 of each layer, the                          𝐼𝑛𝑡𝑘 ∩ [𝑠𝑡𝑖,𝑛 , 𝑒𝑡𝑖,𝑛 ] ≠ ∅ , 𝐼𝑛𝑡𝑘 ∩ [𝑠𝑡 𝑗,𝑛 , 𝑒𝑡 𝑗,𝑛 ] ≠ ∅
+slowdown 𝐶, and and 𝐼 𝑁 and 𝑂𝑈𝑇 transition costs, 𝜏.                                                                                            (7)
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom                                                       Ismet Dagli and Mehmet E. Belviranli
+
+
+   Eq. 8 details how we determine the duration of contention               and lidars) and many DNNs designed for a fixed image or a
+intervals. If a layer faces no contention, the equation simply             video frame size. Some scenarios, such as a drone switching
+returns the layer’s execution time, leading to a value of 1 to             between discovery or tracking modes, might require unique
+be returned in Eq. 7, thereby indicating no slowdown effect                control flow graphs (CFGs). Such CFGs (or the path followed
+for a layer running independently in Eq. 2.                                in a CFG) and their corresponding schedules can be pre-
+            
+            
+             𝑒 𝑗 − 𝑠𝑖   𝑖 𝑓 (𝑠 𝑗 ≤ 𝑠𝑖 ≤ 𝑒 𝑗 & 𝑠𝑖 ≤ 𝑠 𝑗 ≤ 𝑒𝑖 )             determined statically and toggled during the execution. Thus,
+                                                                           users of HaX-CoNN can rely on offline profiling to determine
+            
+            
+             𝑒 − 𝑠𝑗     𝑖 𝑓 (𝑠𝑖 ≤ 𝑠 𝑗 ≤ 𝑒𝑖 & 𝑠𝑖 ≤ 𝑠 𝑗 ≤ 𝑒𝑖 )
+             𝑗
+            
+                                                                           the execution costs needed for static scheduling [72].
+            
+            
+  𝐼 (𝑖, 𝑗) = 𝑒𝑖 − 𝑠 𝑗    𝑖 𝑓 (𝑠𝑖 ≤ 𝑠 𝑗 ≤ 𝑒𝑖 & 𝑠 𝑗 ≤ 𝑒𝑖 ≤ 𝑒 𝑗 ) (8)
+                                                                             There are other cases where the static generation of op-
+              𝑒𝑖 − 𝑠𝑖    𝑖 𝑓 (𝑠𝑖 ≤ 𝑠 𝑗 & 𝑒𝑖 ≤ 𝑒 𝑗 )
+            
+                                                                           timal schedules may not be possible. For example, different
+            
+            
+            
+            
+            𝑒𝑖 − 𝑠𝑖
+                        𝑜𝑡ℎ𝑒𝑟𝑤𝑖𝑠𝑒                                         DNN models may be required for various phases of the au-
+            
+   We establish a constraint in Eq. 9 that limits two distinct             tonomous system execution [5, 21, 70], resulting in an unpre-
+layers from sharing the same accelerator for longer than an 𝜀              dictable change in the CFG. For such scenarios, we propose
+interval. Ideally, in a flawless model, the estimated execution            D-HaX-CoNN, a runtime-based adaptation of our solution to
+and slowdown values could yield perfect transitions where                  (1) run SAT solvers on-the-fly, (2) gradually achieve and apply
+accelerator usage periods can be precisely predicted. Variable             better schedules, and (3) eventually reach an optimal solu-
+𝜀 allows us to mitigate the prediction errors, and facilitates             tion as the autonomous system continues to operate. This ap-
+more transition points by allowing for a tiny overlap of                   proach is feasible because autonomous systems often embed
+concurrently assigned layers on the same accelerator at the                long-running loops and once an optimal schedule is found
+start or end of their executions.                                          for a recently changed CFG, it will be reused for a while.
+     𝐿𝑖,𝑛𝑛 , 𝐿 𝑗,𝑛 (𝐿𝑖,𝑛𝑛 ∈ 𝐷𝑁 𝑁𝑛𝑛 𝑎𝑛𝑑 𝐿 𝑗,𝑛 ∈ 𝐷𝑁 𝑁𝑛 |                    4     Experimental Setup
+ 𝑠𝑡𝐿 𝑗,𝑛 <𝑠𝑡𝐿𝑖,𝑛𝑛 ∓ 𝜀 < 𝑒𝑡𝐿𝑖,𝑛𝑛 𝑜𝑟 𝑠𝑡𝐿 𝑗,𝑛 < 𝑒𝑡𝐿𝑖,𝑛𝑛 ∓ 𝜀 < 𝑒𝑡𝐿 𝑗,𝑛 ) (9)     Computing platforms: We use three popular heteroge-
+            𝑤ℎ𝑒𝑟𝑒 𝑆 (𝐿𝑖,𝑛𝑛 ) = 𝑆 (𝐿 𝑗,𝑛 ) , 𝑛𝑛 ≠ 𝑛                         neous SoCs to evaluate HaX-CoNN : NVIDIA AGX Orin [47],
+   Objective functions: Depending on the different scenar-                 Xavier AGX [46], and Qualcomm SnapDragon 865 develop-
+ios that a user may target, we propose two separate objective              ment kit [53]. All three platforms have a shared memory with
+functions: Equation 10 maximizes the utilization of the sys-               multiple accelerators. The technical specifications of these
+tem to increase the total throughput and Equation 11 min-                  systems are summarized in Table 4. It is essential to note
+imizes the maximum latency among DNNs. The use cases                       that the maximum number of accelerators we consider in
+for objective functions are further elaborated in Section 5.               our experiments is limited to two because, to the best of our
+                                                                           knowledge, there are no off-the-shelf SoCs that offer more
+          ∑︁ 𝑁 )
+      𝑙𝑒𝑛 (𝐷𝑁
+                     1                                                     than two types of programmable DSAs for DNN acceleration.
+   max                       (10) min max 𝑇 (𝐿, 𝑆 (𝐿))𝑛            (11)
+         𝑛=1
+               𝑇 (𝐿, 𝑆 (𝐿))𝑛                                                  Applications: We use the DNNs that are commonly used
+                                                                           in benchmarking DNN inference: Alexnet [36], GoogleNet
+3.5   Optimal and dynamic schedule generation                              [61], Inception-V4 [59], ResNet18/52/101/152 [18], VGG-19
+In our work, we target optimal schedules that satisfy given
+objectives and constraints because we don’t resort to heuris-              Table 4. The HW specifications for targeted architectures.
+tics to find such schedules. We achieve this by representing
+                                                                                                    NVIDIA AGX Orin
+the entire scheduling problem formulated in Section 3.4 as
+                                                                               GPU          Ampere arch. 1792 CUDA & 64 Tensor cores
+a constraint-based optimization problem and solving with                       DSA          NVDLA v2.0
+industry-strength SAT solvers such as Z3 [13], Gurobi [17],                    CPU          12-core Arm Cortex v8.2 64-bit
+and OptiMathSAT [57]. These solvers employ branch &                            Memory       32GB LPDDR5 | Bandwidth: 204.8 GB/s with 256-bit
+bound techniques to converge towards optimal solutions for                     Software     JetPack 5.0.1
+many NP-complete problems (i.e., job-shop scheduling) [55].                                        NVIDIA Xavier AGX
+Considering the relatively small parameter search space of                     GPU          Volta arch. 512 CUDA and 64 Tensor cores
+our targeted problem set (i.e., total number of accelerators                   DSA          NVDLA v1.0
+                                                                               CPU          8-core Carmel Arm v8.2 64-bit
+and tasks in the system), the use of SMT solvers provides                      Memory       16GB LPDDR4 | Bandwidth: 136.5 GB/s, 256-bit
+optimal schedules in seconds. Depending on the operational                     Software     JetPack 4.5
+requirements of the autonomous system, optimal schedules                                  Qualcomm 865 Mobile Development Kit
+can be found either statically or dynamically.                                 GPU          Qualcomm Adreno™ 650 GPU
+   Generating optimal schedules beforehand (i.e., statically)                  DSA          Hexagon 698 DSP
+is feasible for a variety of scenarios, such as in autonomous                  CPU          Qualcomm Kryo 585, 8-core, up to 2.84GHz
+systems with fixed resolution input devices (like cameras                      Memory       6GB LPDDR5 | Bandwidth: 34.1 GB/s with 64 bits
+Contention-aware Concurrent DNN Execution on Shared Memory SoCs                PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom
+
+
+Table 5. Standalone runtimes (ms) and relative performance.       a pipeline fashion, respectively. Scenario 4 is a hybrid of
+       Device    NVIDIA AGX Orin       NVIDIA Xavier AGX
+                                                                  scenarios 2 and 3. We benchmark HaX-CoNN against five
+    DNN                                                           different baselines: (1) GPU only, (2) non-collaborative GPU
+                 GPU        DLA       GPU            DLA          & DLA, (3) Mensa [6] (which only supports single-DNN
+                 (ms)       (ms)      (ms)           (ms)         execution), (4) Herald [37], and (5) H2H [69] (which both
+    CaffeNet     0.74       1.79      2.26           5.51         support multi-DNN execution).
+    DenseNet     2.19       3.10      7.84           -
+                                                                  5.1   Running multiple instances of the same DNN
+    GoogleNet    0.99       1.52      1.98           3.68
+    Inc-res-v2   3.06       5.15      15.12          17.95            Scenario 1 - Concurrent image processing with same
+    Inception    2.49       5.66      8.31           15.94        DNNs: In systems aiming for high throughput, multiple in-
+    ResNet18     0.41       0.74      1.37           2.81         stances of the same DNN could concurrently process con-
+    ResNet50     0.91       1.67      2.88           6.01         secutive images. Fig. 5 reports the results of five different
+    ResNet101    1.56       2.47      5.34           10.6         experiments designed for this scenario. The experiments are
+    ResNet152    2.19       3.26      7.7            12.71        run on NVIDIA Orin and we compare HaX-CoNN against
+    VGG19        1.07       2.93      5.95           19.05        two naïve baselines and Mensa [6]. Overall, our experiments
+[58], FCN-ResNet18, CaffeNet [26], DenseNet [22], and Inc-        for this scenario show that HaX-CoNN can boost throughput
+Res-v2 [60] with datasets from COCO [38], ImageNet ILSVRC         (i.e., FPS) up to 29%. There are several key observations we
+[56], and Cityshape [9]. These DNNs could be used for vari-       make in this experiment: (1) In GoogleNet experiment, HaX-
+ous tasks in autonomous systems, such as object detection,        CoNN maps the middle groups of layers (1-95 and 38-149)
+image recognition, semantic segmentation, pose estimation,        to GPU for both DNN instances since GPU executes those
+and depth estimation [15].                                        layers ∼2x faster than the DLA. (2) Due to shared memory
+                                                                  contention, non-collaborative GPU & DLA execution does
+   Profiling: Profiling duration varies by platforms: Compu-      not always generate a better throughput compared to GPU-
+tation, transition, and contention characterizations can take     only execution. (3) We observe either limited improvements
+up to 3, 10, and 15 minutes per DNN model, respectively,          or no improvement by Mensa as it doesn’t consider shared
+on NVIDIA Orin, Xavier, and Qualcomm platforms whereas            memory contention, leading to mismatched layer transitions.
+building engines require more time on NVIDIA boards. Since        Even though Mensa considers transition costs, its greedy
+our approach is layer-centric, we performed profiling only        strategy fails to account for the transition costs occurring in
+once and it is offline.                                           the future, leading to inaccurate transition decisions.
+   Neural network synchronization: TensorRT natively              5.2   Concurrently running different type of DNNs
+does not provide support synchronization between the layers
+of DNNs concurrently running at different DSAs. To make           Table 6 lists the results of the experiments we performed by
+sure that the inter-accelerator transitions across DNNs are       comparing HaX-CoNN to naïve and state-of-the-art multi-
+properly performed, we implement a TensorRT plugin that           DNN concurrent execution schemes. Experiments 1-5 are on
+employs inter-DNN synchronization via inter-process shared        Xavier AGX, 6-8 are on AGX Orin, and 9-10 are on Qualcomm
+memory primitives.                                                865. The second to fourth columns describe the experiment
+                                                                  designs and the corresponding scenarios. There are four
+   Schedule generation: We solve our formulation given            baselines we compare our work against: (1) GPU-only, (2)
+in Section 3.4 by using Z3 SMT solver. Z3 has shown su-           GPU & DSA, (3) Herald [37], (4) H2H [69]. The last three
+perior performance for scheduling problems over popular           columns list the optimal schedules found by HaX-CoNN, the
+solvers [55]. It works by determining the satisfiability of       latency and throughput (i.e., FPS) for HaX-CoNN, and the
+the constraints and finding an optimal solution for a given       improvement over the best-performing baseline.
+objective and constraints. In most of our experiments, Z3
+takes under three seconds to run on a single CPU core of
+NVIDIA Orin AGX. In some cases, such as for the Inception-
+ResNet-v2 network which consists of 985 layers, the solver
+takes around ten seconds to find the optimal schedule.
+5     Evaluation
+We demonstrate the utility of HaX-CoNN via four execution
+scenarios with different objectives and also via an experiment
+that exhaustively collocates all the DNNs in our evaluation
+set. Scenario 1 aims to maximize throughput in concurrent         Figure 5. Throughput (FPS) comparison for Scenario 1: Mul-
+data processing on the same DNN whereas scenarios 2 and           tiple instances of the same DNN is run concurrently on
+3 target two different DNNs operating in parallel and in          NVIDIA AGX Orin.
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom                                                         Ismet Dagli and Mehmet E. Belviranli
+
+
+Table 6. Experiments run for Scenarios 2, 3, and 4. We compare these scenarios against baselines when run on NVIDIA Xavier
+AGX (in experiments 1-5), NVIDIA AGX Orin (in experiments 6-8), and Qualcomm 865 (in experiments 9-10). DSA refers to
+DLA for NVIDIA platforms and to the Hexagon DSP for the Qualcomm platform.
+
+                                                                                                      Optimal      Runtime of    Improvement
+                                              (1) GPU      (2) GPU &
+   Exp                                                                   (3) Herald     (4) H2H     schedule by    HaX-CoNN      over the best
+         Goal       DNN-1       DNN-2           only          DSA
+    #                                                                                               HaX-CoNN        schedule      baseline (%)
+                                             Lat.   FPS    Lat.   FPS    Lat.   FPS    Lat.   FPS   TR     Dir.   Lat.   FPS     Lat.      FPS
+   1     Min                                                                                        29    DtoG
+                    VGG-19      ResNet152    17.05 58      16.05 62      19.73 50      16.55 60                   13.01   77     23      22
+         Latency                                                                                    89    GtoD
+
+   2     Min        ResNet152   Inception    16.23 61      15.96 62      15.81 63      15.75 64     188   DtoG    13.11   76     20      18
+         Latency                                                                                    72    GtoD
+
+   3     Max        Alexnet     ResNet101    11.04 90      10.97 93      12.10 82      11.49 87     11    GtoD    8.7     115    26      23
+         FPS                                                                                        161   DtoG
+
+   4     Max        ResNet101   GoogleNet    7.02   143    7.37   140    8.95   111    9.10   109   0     DtoG    7.02    143    0       0
+         FPS                                                                                        0     DtoG
+
+   5     Min        GoogleNet   FC_ResN18    15.41 77      18.88 61      23.68 47      20.90 54     38    DtoG    12.09   85     22      21
+         Latency    ResNet152                                                                       235   GtoD
+
+   6     Min        VGG-19      ResNet152    3.95   267    4.58   218    5.76   174    4.90   204   27    DtoG    3.21    311    23      22
+         Latency                                                                                    95    GtoD
+
+   7     Max        GoogleNet   ResNet101    4.12   378    4.24   364    4.44   340    4.13   380   38    DtoG    3.4     426    19      18
+         FPS                                                                                        128   GtoD
+
+   8     Min        ResNet101   Inception    5.06   197    4.97   201    5.56   180    4.91   203   31    DtoG    4.41    226    13      12
+         Latency    GoogleNet                                                                       88    GtoD
+
+   9     Max        GoogleNet   ResNet101    98.3   10.1   79.1   12.6   95.9   10.4   113.8 8.8    52    DtoG    71.08   14.1   11      10
+         FPS                                                                                        148   GtoD
+
+   10    Min        Inception   ResNet152    219.6 4.5     178.2 5.6     223.1 4.5     202.3 5.2    17    DtoG    155.3   6.4    15      15
+         Latency                                                                                    135   GtoD
+
+
+
+   Scenario 2 - Two different DNNs operating on the same                    pipelined manner. This scenario is covered by experiments
+data: This scenario illustrates a case where different DNNs,                3, 4, 7, and 9. To establish the dependency among DNNs, we
+such as object detection and image segmentation, process                    connect the last layer of the 𝐷𝑁 𝑁 1 to the first layer of 𝐷𝑁 𝑁 2
+the same input in parallel, and they synchronize afterwards.                as an input. Interestingly, HaX-CoNN opts not to use DLA
+The results are assumed to be passed on to subsequent tasks,                for none of the layers in experiment 4 since running two
+such as motion planning [45], and then the loop is started                  images sequentially on the GPU yields a higher throughput.
+over. Experiments 1, 2, 6, and 10 in Table 6 are run to demon-              Particularly, the performance of DLA on ResNet18 is less
+strate this scenario on three different target architectures.               than the slowdown imposed on the GPU. Overall, if there are
+Our results show that HaX-CoNN improves both latency and                    cases where layer-level mapping does not foster any benefits,
+throughput up to 23% in all four experiments of this scenario.              HaX-CoNN is capable of identifying these cases and utilizing
+We also observe that both H2H and Herald make inaccurate                    the baseline solution instead. Our scheme guarantees that
+latency estimations that are wrong by up to 75% since neither               no worse results are obtained than the naïve baselines.
+of them considers shared memory contention. Experiments
+                                                                               Scenario 4 - Multiple DNNs with concurrent and stream-
+1 and 6 show that HaX-CoNN results in different schedules
+                                                                            ing data: In this scenario, two DNNs (𝐷𝑁 𝑁 1 and 𝐷𝑁 𝑁 2 )
+for the same scenario running on different SoCs. For exper-
+                                                                            have a serial dependency in between and another DNN
+iment 10, GPU & DSP is the best performing baseline for
+                                                                            (𝐷𝑁 𝑁 3 ) runs in parallel with the former two [54]. Exper-
+Qualcomm platform since GPU & DSP are more balanced
+                                                                            iments 5 and 8 belong to this scenario and the objective
+on this platform in terms of their computation capability.
+                                                                            function is set to minimize the combined latency. HaX-CoNN
+Even though the schedule found by HaX-CoNN in exper-
+                                                                            is able to provide latency and throughput improvements
+iment 10 on Qualcomm has a relatively higher transition
+                                                                            up to 22%. Best performing baselines run 𝐷𝑁 𝑁 3 mostly on
+cost among other transition candidates, the improvement
+                                                                            GPU since unbalanced workloads among accelerators and
+primarily comes from minimizing the memory contention
+                                                                            shared memory contention alleviate the advantages of con-
+and effectively distributing the layers to DSAs.
+                                                                            current utilization. In experiment 5, the schedules that use
+  Scenario 3 - Two different DNNs operating on stream-                      both DSAs concurrently perform worse than serialized GPU
+ing data: This scenario examines a common autonomous                        executions, since DLA is generally less effective in running
+system setup where the input (e.g., camera stream) is avail-                fully-connected layers. In experiment 8, H2H provides the
+able as a data stream and multiple tasks, such as object de-                fastest baseline performance since they are capable of exploit-
+tection followed by object tracking [54], are executed in a                 ing heterogeneity of DSAs for appropriate layers (e.g., such
+Contention-aware Concurrent DNN Execution on Shared Memory SoCs                               PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom
+
+
+                                                                                                      D-HaX-CoNN Baseline Optimal
+                                                                                 17
+
+
+
+
+                                                                  Latency (ms)
+                                                                                 15
+                                                                                 13
+                                                                                 11
+                                                                                      0   2   4   6   8   10   12   14   16   18    20   22   24   26   28   30
+                                                                                                               Timeline (seconds)
+
+                                                                  Figure 7. A dynamic execution scenario where the target CFG
+                                                                  (i.e., DNN pairs) changes every 10 seconds. D-HaX-CoNN is
+                                                                  shown to gradually improve the execution time as Z3 is asked
+                                                                  to update schedules at 25ms, 100ms, 250ms, 500ms, and 1.5s.
+Figure 6. Slowdown of concurrently executing GoogleNet on
+                                                                  Blue stars show the update intervals.
+GPU with different DNNs on DLA.
+as running DLA-efficient small layers on DLA and assign-          are no other concurrently running DNNs. HaX-CoNN signif-
+ing others to the GPU). However, the schedules proposed by        icantly reduces the shared memory contention slowdown in
+H2H lead to an over-subscribed DLA execution. On the other        all experiments.
+hand, HaX-CoNN finds the right transition points where no         5.3                 Adapting optimal scheduling to dynamically
+accelerators are overloaded and the transition cost is lower.                         changing workloads
+In some schedules generated by H2H, such as experiment 3,
+while the transition points that are identified by H2H pre-       As discussed in Section 3.5, we propose D-HaX-CoNN to han-
+vent accelerator over-subscription, the assignments for the       dle dynamic changes to the autonomous CFGs. Its operation
+remaining layers on both DNNs lead to workload imbalance.         is as follows: (1) It starts with an initial best naïve schedule.1
+   Throughout the experiments, we generally observe that          (2) As the autonomous loop starts executing with the initial
+the benefits of architectural heterogeneity exploited by the      schedule, we periodically replace the initial schedule with a
+state-of-the-art remain limited. The primary reason for the       better schedule as Z3 progresses. (3) We continue running
+subpar performance of H2H and Herald compared to naive            Z3 until no further improvement is possible.
+baselines is that their cost functions ignore shared memory          To demonstrate the effectiveness of D-HaX-CoNN, we per-
+contention. This, in turn, causes the timings to be mispre-       form an experiment where dynamic changes in the CFG are
+dicted and eventually results in being unable to generate         simulated by changing three DNN pairs being executed every
+optimal schedules. Certain layers end up being assigned           10 seconds. DNN pairs are the same within experiments 2, 5,
+to the same accelerator (either GPU or DSA) at the same           and 1 in Table 6, respectively. Fig. 7 depicts the concurrent
+time, and this is due to poor (i.e., non-optimal) handling of     execution time of the DNN pairs (i.e., latency per image) as
+constraints triggered by mispredicted execution times. For        they change. In this experiment, D-HaX-CoNN is run on a
+example, on the DLA, two layer groups that are supposed to        single CPU core with an initial schedule given by baseline.
+execute at different times are scheduled together, but they       We update the schedules at 25ms, 100ms, 250ms, 500ms, and
+end up waiting for each other. During this time, the other        1.5s after starting Z3. The blue lines correspond to the exe-
+accelerator (e.g., the GPU) is left idle.                         cution time of the updated schedule. The optimal schedule
+   In experiments 4 and 9 of Table 6, the latency of schedules    for each pair (represented by a yellow line) is calculated to
+generated by Herald is better than H2H because H2H makes          denote the oracle solution that D-HaX-CoNN is expected to
+optimizations to reduce the transition costs, yet leading to      reach.
+worse inter-DSA contention. We also observe that some of             Our results show that D-HaX-CoNN quickly converges to
+the optimizations performed by H2H are already performed          the optimal solution. In particular, D-HaX-CoNN reaches an
+by TensorRT. Therefore, such optimizations are already cov-       optimal solution faster for the second and third DNN pairs
+ered by our baselines, and this may hinder the benefits of        (1.9s and 1.3s), compared to the first pair (5.8s), since the latter
+H2H over our baselines. On the other hand, this situation         pair has three DNNs and more layer groups. As explained
+does not affect the benefits demonstrated by HaX-CoNN over        before, a larger number of layer groups results in potentially
+H2H and Herald. Also, it is worth noting it takes more time       more transition points to explore, which then increases the
+to generate schedules with H2H or Herald (i.e., more than         time required to explore all transition candidates for the
+10 seconds in most cases) than with HaX-CoNN.                     optimized objective function.
+   Based on what we observe in Table 6, we further analyze           To evaluate the overhead of running Z3 solver along with
+the slowdown caused by memory contention. Fig. 6 depicts          the concurrent DNN execution, we conduct another exper-
+the amount of slowdown experienced by GoogleNet running           iment where we run AlexNet on DLA along with various
+on the GPU when other DNNs are concurrently run on the            DNNs on GPU while Z3 solver runs on a single CPU core of
+DLA of Xavier AGX. The slowdown is calculated based on            1We do not start with a Herald or H2H schedule since they also take seconds
+
+the standalone GPU execution of GoogleNet where there             to return a schedule.
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom                                                             Ismet Dagli and Mehmet E. Belviranli
+
+
+NVIDIA AGX Orin. The results, presented in Table 7, show                 Table 8. Comparison among HaX-CoNN and the best
+that running the solver on the fly slows down the DNN exe-               baseline for DNN pairs running on AGX Orin.
+cution time by no more than 2%. This is attributed to Z3’s                DNNs           1      2      3      4      5      6      7      8   9   10
+low memory footprint and Z3 successfully reduces the size                 1-CaffeNet     GPU
+                                                                                         1.13
+of the parameter search space for our targeted problem into
+                                                                          2-DenseNet     GPU    H2H
+a smaller set.                                                                           1.14   1.18
+5.4 Exhaustive evaluation with all DNN pairs                              3-GoogleNet    GPU    D/G    GPU
+                                                                                         1.06   1.18   1.22
+The DNNs that are run concurrently in the experiments
+                                                                          4-Inc-res-v2   GPU    GPU    D/G    D/G
+presented in Section 5.2 were handpicked to reflect the im-                              1.08     x    1.25   1.18
+portance of the use cases in each scenario. In this subsection,           5-Inception    GPU    GPU    GPU    D/G    H2H
+we conduct a comprehensive evaluation of HaX-CoNN, by                                    1.10   1.15   1.15   1.06   1.05
+running every possible DNN pair in our entire DNN set.                    6-ResNet18     GPU    D/G    G/D    D/G    GPU    GPU
+                                                                                          x     1.14   1.13   1.32   1.19   1.23
+Since we test every possible pair, the execution times for two
+                                                                          7-ResNet50     GPU    D/G    H2H    GPU    GPU    GPU    GPU
+concurrent DNNs can significantly differ. We first check the                              x     1.21   1.06   1.16   1.11   1.06   1.17
+execution time on DLA and GPU for DNN-1 and compare it                                   GPU    G/D    G/D    D/G    GPU    D/G    GPU    GPU
+                                                                          8-ResNet101
+to DNN-2. Then, to balance out the discrepancy, we increase                              1.11   1.05   1.08   1.19   1.08   1.24   1.11   1.09
+the number of iterations for the faster DNN. Such scenarios               9-ResNet152    GPU    G/D    G/D    GPU    Her.   D/G    H2H    GPU GPU
+are quite common in multi-sensor systems where two inde-                                 1.09   1.08   1.17   1.14   1.07   1.18   1.09   1.08 1.18
+                                                                                         GPU    GPU    GPU    GPU    GPU    GPU    GPU    GPU GPU GPU
+pendent sensor data (i.e., camera and radar) are processed                10-VGG19
+                                                                                          x     1.11   1.04     x      x    1.08    x      x    x   x
+concurrently at different frequencies, or where multiple it-
+erations over consecutive data are required to maintain the
+system’s overall accuracy above a threshold. Results of this
+experiment are given in Table 8 as a lower triangular matrix
+–The upper triangular matrix is symmetric because we are                    another DNN on the DLA slows down the entire execu-
+running DNN pairs. The first row of each cell shows the                     tion due to high memory contention. When DenseNet or
+accelerator(s) where the baseline is the fastest for the cor-               GoogleNet are paired with VGG-19, HaX-CoNN shows a
+responding objectives. The second row of each cell shows                    slight speed-up since DLA is proportionally faster than
+the percentage of improvements that HaX-CoNN was able                       the average on the last layer groups in DenseNet and
+to achieve over the baseline. In this experiment, due to the                GoogleNet, and in the initial groups of VGG-19.
+complexity of the scheduling and because of similar reasons              3. Despite the execution of CaffeNet on DLA being slower
+explained in Section 5.2, both H2H and Herald mostly result                 compared to GPU; favoring a GPU-only baseline, HaX-
+in worse runtimes than the naïve baselines. Key observations                CoNN is still able to improve performance since CaffeNet
+from this experiment include:                                               is a compute-intensive DNN and does not cause too much
+1. Any pair involving GoogleNet shows improvement since                     contention when paired with other DNNs.
+   GPU’s performance is close to DLA’s performance on
+   GoogleNet and HaX-CoNN can exploit different transition               6    Conclusion
+   points where both accelerators are efficient.                         We propose HaX-CoNN, a scheme that maps layers in con-
+2. Overall, HaX-CoNN improves the throughput on 35 pairs                 currently executing DNN inference workloads to the accel-
+   out of 45 and identifies that GPU-only execution should               erators of a heterogeneous SoC. HaX-CoNN holistically con-
+   be applied to the remaining 10 pairs (which are marked                siders per-layer execution characteristics, shared memory
+   as x in Table 8), ensuring that HaX-CoNN does not under-              contention, and inter-accelerator transitions while finding
+   perform. However, experiments involving VGG19 show                    optimal schedules. Our experimental results show that HaX-
+   improvement only in three pairs. The fastest baselines for            CoNN can improve latency up to 32%.
+   this DNN are all GPU-only and the execution of VGG19
+   on DLA is substantially slower than on GPU. Running                   Acknowledgements
+                                                                         We would like to thank the anonymous reviewers for their
+Table 7. The scheduling overhead (%) of dynamically running              valuable feedback. This material is based upon work sup-
+the Z3 solver on a CPU core while AlexNet on the DLA is                  ported by National Science Foundation (NSF) under Grants
+concurrently executed along with other DNNs on the GPU
+                                                                         No. CCF-2124010 and CHE-2235143, and National Institute
+of Xavier Orin.
+                                                                         for Occupational Safety and Health (NIOSH) Contract num-
+  CaffeNet   DenseNet   GoogleNet   Inc-res-v2   Inception   MobileNet
+   0.45%      0.89%       1.64%       0.69%        1.64%       1.31%
+                                                                         ber 75D30119C05413. Any opinions, findings, or recommen-
+  ResNet18   ResNet52   ResNet101   ResNet152     VGG16       VGG19      dations expressed in this material are those of the authors
+   0.16%      %0.23%      0.38%       0.71%        1.12%       1.59%     and do not necessarily reflect the views of NSF or NIOSH.
+Contention-aware Concurrent DNN Execution on Shared Memory SoCs                                PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom
+
+
+References                                                                     [15] Sorin Grigorescu, Bogdan Trasnea, Tiberiu Cocias, and Gigel Macesanu.
+                                                                                    2020. A survey of deep learning techniques for autonomous driving.
+ [1] NVIDIA Deep Learning Accelerator. 2023. http://nvdla.org/ (accessed            Journal of Field Robotics 37, 3 (2020), 362–386.
+     on 08/04/2023).                                                           [16] Jérémie Guiochet, Mathilde Machin, and Hélène Waeselynck. 2017.
+ [2] Manoj Alwani, Han Chen, Michael Ferdman, and Peter Milder. 2016.               Safety-critical advanced robots: A survey. Robotics and Autonomous
+     Fused-layer CNN accelerators. In 2016 49th Annual IEEE/ACM In-                 Systems 94 (2017), 43–52.
+     ternational Symposium on Microarchitecture (MICRO). 1–12. https:          [17] Gurobi Optimization, LLC. 2023. Gurobi Optimizer Reference Manual.
+     //doi.org/10.1109/MICRO.2016.7783725                                           https://www.gurobi.com
+ [3] Laith Alzubaidi, Jinglan Zhang, Amjad J Humaidi, Ayad Al-Dujaili,         [18] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep
+     Ye Duan, Omran Al-Shamma, José Santamaría, Mohammed A Fadhel,                  residual learning for image recognition. In Proceedings of the IEEE
+     Muthana Al-Amidie, and Laith Farhan. 2021. Review of deep learning:            conference on computer vision and pattern recognition(CVPR). 770–778.
+     Concepts, CNN architectures, challenges, applications, future direc-      [19] Kartik Hegde, Po-An Tsai, Sitao Huang, Vikas Chandra, Angshuman
+     tions. Journal of big Data 8 (2021), 1–74.                                     Parashar, and Christopher W Fletcher. 2021. Mind mappings: enabling
+ [4] Mehmet E Belviranli, Farzad Khorasani, Laxmi N Bhuyan, and Rajiv               efficient algorithm-accelerator mapping space search. In Proceedings
+     Gupta. 2016. Cumas: Data transfer aware multi-application scheduling           of the 26th ACM International Conference on Architectural Support for
+     for shared gpus. In Proceedings of the 2016 International Conference on        Programming Languages and Operating Systems (ASPLOS). 943–958.
+     Supercomputing. 1–12.                                                     [20] Mark Hill and Vijay Janapa Reddi. 2019. Gables: A roofline model for
+ [5] Behzad Boroujerdian, Radhika Ghosal, Jonathan Cruz, Brian Plancher,
+                                                                                    mobile socs. In 2019 IEEE International Symposium on High Performance
+     and Vijay Janapa Reddi. 2021. Roborun: A robot runtime to exploit              Computer Architecture (HPCA). IEEE, 317–330.
+     spatial heterogeneity. In 2021 58th ACM/IEEE Design Automation Con-       [21] Yu-Shun Hsiao, Siva Kumar Sastry Hari, Michał Filipiuk, Timothy Tsai,
+     ference (DAC). IEEE, 829–834.                                                  Michael B Sullivan, Vijay Janapa Reddi, Vasu Singh, and Stephen W
+ [6] Amirali Boroumand, Saugata Ghose, Berkin Akin, Ravi                            Keckler. 2022. Zhuyi: perception processing rate estimation for safety
+     Narayanaswami, Geraldo F Oliveira, Xiaoyu Ma, Eric Shiu, and                   in autonomous vehicles. In Proceedings of the 59th ACM/IEEE Design
+     Onur Mutlu. 2021. Google neural network models for edge devices:               Automation Conference. 289–294.
+     Analyzing and mitigating machine learning inference bottlenecks.          [22] Gao Huang, Zhuang Liu, Laurens van der Maaten, and Kilian Q Wein-
+     In 2021 30th International Conference on Parallel Architectures and            berger. 2017. Densely Connected Convolutional Networks. In Proceed-
+     Compilation Techniques (PACT). IEEE, 159–172.                                  ings of the IEEE Conference on Computer Vision and Pattern Recogni-
+ [7] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie                tion(CVPR).
+     Yan, Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis              [23] Nathaniel Hudson, Hana Khamfroush, and Daniel E Lucani. 2021. QoS-
+     Ceze, et al. 2018. {TVM}: An automated {End-to-End} optimizing                 aware placement of deep learning services on the edge with multiple
+     compiler for deep learning. In 13th USENIX Symposium on Operating              service implementations. In 2021 International Conference on Computer
+     Systems Design and Implementation (OSDI 18). 578–594.                          Communications and Networks (ICCCN). IEEE, 1–8.
+ [8] NVIDIA Nsight Compute. 2022. https://docs.nvidia.com/nsight-              [24] EunJin Jeong, Jangryul Kim, Samnieng Tan, Jaeseong Lee, and Soonhoi
+     compute/NsightCompute/index.html (accessed on 08/04/2023).                     Ha. 2021. Deep learning inference parallelization on heterogeneous
+ [9] Marius Cordts, Mohamed Omran, Sebastian Ramos, Timo Rehfeld,                   processors with tensorrt. IEEE Embedded Systems Letters 14, 1 (2021),
+     Markus Enzweiler, Rodrigo Benenson, Uwe Franke, Stefan Roth, and               15–18.
+     Bernt Schiele. 2016. The cityscapes dataset for semantic urban scene      [25] Fucheng Jia, Deyu Zhang, Ting Cao, Shiqi Jiang, Yunxin Liu, Ju Ren,
+     understanding. In Proceedings of the IEEE conference on computer vision        and Yaoxue Zhang. 2022. CoDL: efficient CPU-GPU co-execution for
+     and pattern recognition. 3213–3223.                                            deep learning inference on mobile devices. In Proceedings of the 20th
+[10] Ismet Dagli and Mehmet E Belviranli. 2021. Multi-accelerator Neural            Annual International Conference on Mobile Systems, Applications and
+     Network Inference in Diversely Heterogeneous Embedded Systems.                 Services. Association for Computing Machinery New York, NY, USA,
+     In 2021 IEEE/ACM Redefining Scalability for Diversely Heterogeneous            209–221.
+     Architectures Workshop (RSDHA). IEEE, 1–7.
+                                                                               [26] Yangqing Jia, Evan Shelhamer, Jeff Donahue, Sergey Karayev, Jonathan
+[11] Ismet Dagli, Alexander Cieslewicz, Jedidiah McClurg, and Mehmet E.             Long, Ross Girshick, Sergio Guadarrama, and Trevor Darrell. 2014.
+     Belviranli. 2022. AxoNN: Energy-Aware Execution of Neural Network              Caffe: Convolutional Architecture for Fast Feature Embedding. arXiv
+     Inference on Multi-Accelerator Heterogeneous SoCs. In Proceedings of           preprint arXiv:1408.5093 (2014).
+     the 59th ACM/IEEE Design Automation Conference (DAC).                     [27] Yimin Jiang, Yibo Zhu, Chang Lan, Bairen Yi, Yong Cui, and Chuanx-
+[12] Ismet Dagli, Andrew Depke, Andrew Mueller, Md Sahil Hassan, Ali                iong Guo. 2020. A unified architecture for accelerating distributed
+     Akoglu, and Mehmet Esat Belviranli. 2023. Contention-Aware Per-                {DNN} training in heterogeneous {GPU/CPU} clusters. In 14th
+     formance Modeling for Heterogeneous Edge and Cloud Systems. In                 USENIX Symposium on Operating Systems Design and Implementation
+     Proceedings of the 3rd Workshop on Flexible Resource and Applica-              (OSDI 20). 463–479.
+     tion Management on the Edge (Orlando, FL, USA) (FRAME ’23). As-           [28] Duseok Kang, Jinwoo Oh, Jongwoo Choi, Youngmin Yi, and Soonhoi
+     sociation for Computing Machinery, New York, NY, USA, 27–31.                   Ha. 2020. Scheduling of deep learning applications onto heterogeneous
+     https://doi.org/10.1145/3589010.3594889                                        processors in an embedded device. IEEE Access 8 (2020), 43980–43991.
+[13] Leonardo De Moura and Nikolaj Bjørner. 2008. Z3: An efficient SMT         [29] Sheng-Chun Kao and Tushar Krishna. 2020. Gamma: Automating the
+     solver. In Tools and Algorithms for the Construction and Analysis of           hw mapping of dnn models on accelerators via genetic algorithm. In
+     Systems: 14th International Conference, TACAS 2008, Held as Part of            2020 IEEE/ACM International Conference On Computer Aided Design
+     the Joint European Conferences on Theory and Practice of Software,             (ICCAD). IEEE, 1–9.
+     ETAPS 2008, Budapest, Hungary, March 29-April 6, 2008. Proceedings 14.    [30] Sheng-Chun Kao and Tushar Krishna. 2022. MAGMA: An Optimization
+     Springer, 337–340.                                                             Framework for Mapping Multiple DNNs on Multiple Accelerator Cores.
+[14] Zidong Du, Robert Fasthuber, Tianshi Chen, Paolo Ienne, Ling Li, Tao           In 2022 IEEE International Symposium on High-Performance Computer
+     Luo, Xiaobing Feng, Yunji Chen, and Olivier Temam. 2015. ShiDianNao:           Architecture (HPCA). IEEE, 814–830.
+     Shifting vision processing closer to the sensor. In Proceedings of the    [31] Sheng-Chun Kao, Suvinay Subramanian, Gaurav Agrawal, and Tushar
+     42nd Annual International Symposium on Computer Architecture(ISCA).            Krishna. 2023. FLAT: An Optimized Dataflow for Mitigating Attention
+     92–104.
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom                                                               Ismet Dagli and Mehmet E. Belviranli
+
+
+     Performance Bottlenecks. published in arxiv, will appear in Proceedings   [45] Rihards Novickis, Aleksandrs Levinskis, Roberts Kadikis, Vitalijs Fes-
+     of the International Conference on Architectural Support for Program-          cenko, and Kaspars Ozols. 2020. Functional architecture for au-
+     ming Languages and Operating Systems (ASPLOS) (2023).                          tonomous driving and its implementation. In 2020 17th Biennial Baltic
+[32] Andreas Karatzas and Iraklis Anagnostopoulos. 2023. OmniBoost:                 Electronics Conference (BEC). IEEE, 1–6.
+     Boosting Throughput of Heterogeneous Embedded Devices under               [46] NVIDIA. 2023. AI-Powered Autonomous Machines at Scale | NVIDIA
+     Multi-DNN Workload. arXiv preprint arXiv:2307.03290 (2023).                    Jetson AGX Xavier. https://www.nvidia.com/en-us/autonomous-
+[33] Seah Kim, Hasan Genc, Vadim Vadimovich Nikiforov, Krste Asanović,              machines/embedded-systems/jetson-agx-xavier/.              (accessed on
+     Borivoje Nikolić, and Yakun Sophia Shao. 2023. MoCA: Memory-                   08/04/2023).
+     Centric, Adaptive Execution for Multi-Tenant Deep Neural Networks.        [47] NVIDIA. 2023. Next-level AI performance for next-gen robot-
+     In 2023 IEEE International Symposium on High-Performance Computer              ics | NVIDIA Jetson Orin AGX. https://www.nvidia.com/en-us/
+     Architecture (HPCA). IEEE, 828–841.                                            autonomous-machines/embedded-systems/jetson-orin/. (accessed
+[34] Srivatsan Krishnan, Zishen Wan, Kshitij Bhardwaj, Ninad Jadhav, Alek-          on 08/04/2023).
+     sandra Faust, and Vijay Janapa Reddi. 2022. Roofline model for uavs:      [48] NVIDIA. 2023. TensorRT. https://developer.nvidia.com/tensorrt (ac-
+     A bottleneck analysis tool for onboard compute characterization of             cessed on 08/04/2023).
+     autonomous unmanned aerial vehicles. In 2022 IEEE International Sym-      [49] NVIDIA. 2023. TensorRT IProfiler.              https://docs.nvidia.com/
+     posium on Performance Analysis of Systems and Software (ISPASS). IEEE,         deeplearning/tensorrt/api/c_api/classnvinfer1_1_1_i_profiler.html (ac-
+     162–174.                                                                       cessed on 08/04/2023).
+[35] Srivatsan Krishnan, Zishen Wan, Kshitij Bhardwaj, Paul Whatmough,         [50] Jay H Park, Gyeongchan Yun, Chang M Yi, Nguyen T Nguyen, Se-
+     Aleksandra Faust, Sabrina Neuman, Gu-Yeon Wei, David Brooks, and               ungmin Lee, Jaesik Choi, Sam H Noh, and Young-ri Choi. 2020. Het-
+     Vijay Janapa Reddi. 2022. Automatic Domain-Specific SoC Design                 pipe: Enabling large DNN training on (whimpy) heterogeneous GPU
+     for Autonomous Unmanned Aerial Vehicles. In 2022 55th IEEE/ACM                 clusters through integration of pipelined model parallelism and data
+     International Symposium on Microarchitecture (MICRO). IEEE, 300–317.           parallelism. In Proceedings of the 2020 USENIX Conference on Usenix
+[36] Alex Krizhevsky, Ilya Sutskever, and Geoffrey E Hinton. 2012. Imagenet         Annual Technical Conference. 307–321.
+     classification with deep convolutional neural networks. Advances in       [51] Fareed Qararyah, Mohamed Wahib, Doğa Dikbayır, Mehmet Esat Belvi-
+     neural information processing systems(NeurIPS) 25 (2012).                      ranli, and Didem Unat. 2021. A computational-graph partitioning
+[37] Hyoukjun Kwon, Liangzhen Lai, Michael Pellauer, Tushar Krishna, Yu-            method for training memory-constrained DNNs. Parallel computing
+     Hsin Chen, and Vikas Chandra. 2021. Heterogeneous dataflow acceler-            104 (2021), 102792.
+     ators for multi-DNN workloads. In 2021 IEEE International Symposium       [52] Qualcomm. 2023. Neural Processing SDK for AI. https://developer.
+     on High-Performance Computer Architecture (HPCA). IEEE, 71–83.                 qualcomm.com/software/qualcomm-neural-processing-sdk (accessed
+[38] Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays, Pietro Per-           on 08/04/2023).
+     ona, Deva Ramanan, Piotr Dollár, and C Lawrence Zitnick. 2014. Mi-        [53] Qualcomm. 2023. Snapdragon 865 Mobile Hardware Development
+     crosoft coco: Common objects in context. In Computer Vision–ECCV               Kit. https://stage.developer.qualcomm.com/hardware/snapdragon-
+     2014: 13th European Conference, Zurich, Switzerland, September 6-12,           865-hdk. (accessed on 08/04/2023).
+     2014, Proceedings, Part V 13. Springer, 740–755.                          [54] Ratheesh Ravindran, Michael J Santora, and Mohsin M Jamali. 2020.
+[39] Hao Luan, Yu Yao, and Chang Huang. 2022. A Many-Ported and Shared              Multi-object detection and tracking, based on DNN, for autonomous
+     Memory Architecture for High-Performance ADAS SoCs. IEEE Design                vehicles: A review. IEEE Sensors Journal 21, 5 (2020), 5668–5677.
+     & Test 39, 6 (2022), 5–15.                                                [55] Sabino Francesco Roselli, Kristofer Bengtsson, and Knut Åkesson. 2018.
+[40] Pak Markthub, Mehmet E Belviranli, Seyong Lee, Jeffrey S Vetter, and           SMT solvers for job-shop scheduling problems: Models comparison
+     Satoshi Matsuoka. 2018. DRAGON: breaking GPU memory capacity                   and performance evaluation. In 2018 IEEE 14th International Conference
+     limits with direct NVM access. In SC18: International Conference for           on Automation Science and Engineering (CASE). IEEE, 547–552.
+     High Performance Computing, Networking, Storage and Analysis. IEEE,       [56] Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, Sanjeev
+     414–426.                                                                       Satheesh, Sean Ma, Zhiheng Huang, Andrej Karpathy, Aditya Khosla,
+[41] Mohammad Alaul Haque Monil, Mehmet E Belviranli, Seyong Lee,                   Michael Bernstein, et al. 2015. Imagenet large scale visual recognition
+     Jeffrey S Vetter, and Allen D Malony. 2020. Mephesto: Modeling energy-         challenge. International journal of computer vision 115 (2015), 211–252.
+     performance in heterogeneous socs and their trade-offs. In Proceedings    [57] Roberto Sebastiani and Patrick Trentin. 2015. OptiMathSAT: A tool for
+     of the ACM International Conference on Parallel Architectures and Com-         optimization modulo theories. In International conference on computer
+     pilation Techniques. 413–425.                                                  aided verification. Springer, 447–454.
+[42] Deepak Narayanan, Aaron Harlap, Amar Phanishayee, Vivek Seshadri,         [58] Karen Simonyan and Andrew Zisserman. 2014. Very deep convolu-
+     Nikhil R Devanur, Gregory R Ganger, Phillip B Gibbons, and Matei               tional networks for large-scale image recognition. In International
+     Zaharia. 2019. PipeDream: generalized pipeline parallelism for DNN             Conference on Learning Representations(ICLR).
+     training. In Proceedings of the 27th ACM Symposium on Operating           [59] Christian Szegedy, Sergey Ioffe, Vincent Vanhoucke, and Alexander A
+     Systems Principles(SOSP). 1–15.                                                Alemi. 2017. Inception-v4, inception-resnet and the impact of residual
+[43] Deepak Narayanan, Keshav Santhanam, Fiodar Kazhamiaka, Amar                    connections on learning. In Thirty-first AAAI conference on artificial
+     Phanishayee, and Matei Zaharia. 2020. {Heterogeneity-Aware} Cluster            intelligence.
+     Scheduling Policies for Deep Learning Workloads. In 14th USENIX           [60] Christian Szegedy, Sergey Ioffe, Vincent Vanhoucke, and Alexander A.
+     Symposium on Operating Systems Design and Implementation (OSDI                 Alemi. 2017. Inception-v4, Inception-ResNet and the Impact of Residual
+     20). 481–498.                                                                  Connections on Learning. In AAAI.
+[44] Wei Niu, Jiexiong Guan, Yanzhi Wang, Gagan Agrawal, and Bin Ren.          [61] Christian Szegedy, Wei Liu, Yangqing Jia, Pierre Sermanet, Scott Reed,
+     2021. DNNFusion: accelerating deep neural networks execution with              Dragomir Anguelov, Dumitru Erhan, Vincent Vanhoucke, and Andrew
+     advanced operator fusion. In Proceedings of the 42nd ACM SIGPLAN               Rabinovich. 2015. Going deeper with convolutions. In Proceedings of
+     International Conference on Programming Language Design and Imple-             the IEEE conference on computer vision and pattern recognition. 1–9.
+     mentation(PLDI). 883–898.                                                 [62] Tesla. 2023. Tesla Autopilot AI. https://www.tesla.com/AI
+Contention-aware Concurrent DNN Execution on Shared Memory SoCs                 PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom
+
+
+[63] Stavros Tzilis, Pedro Trancoso, and Ioannis Sourdis. 2019. Energy-
+     efficient runtime management of heterogeneous multicores using on-
+     line projection. ACM Transactions on Architecture and Code Optimiza-
+     tion (TACO) 15, 4 (2019), 1–26.
+[64] Zishen Wan, Karthik Swaminathan, Pin-Yu Chen, Nandhini Chan-
+     dramoorthy, and Arijit Raychowdhury. 2022. Analyzing and Improving
+     Resilience and Robustness of Autonomous Systems. In Proceedings of
+     the 41st IEEE/ACM International Conference on Computer-Aided Design.
+     1–9.
+[65] Miao Wang, Xu-Quan Lyu, Yi-Jun Li, and Fang-Lue Zhang. 2020. VR
+     content creation and exploration with deep learning: A survey. Com-
+     putational Visual Media 6 (2020), 3–28.
+[66] Hsin-I Wu, Da-Yi Guo, Hsu-Hsun Chin, and Ren-Song Tsay. 2020. A
+     pipeline-based scheduler for optimizing latency of convolution neural
+     network inference over heterogeneous multicore systems. In IEEE
+     International Conference on Artificial Intelligence Circuits and Systems
+     (AICAS). IEEE, 46–49.
+[67] Yuanchao Xu, Mehmet Esat Belviranli, Xipeng Shen, and Jeffrey Vet-
+     ter. 2021. PCCS: Processor-Centric Contention-Aware Slowdown
+     Model for Heterogeneous System-on-Chips. In MICRO-54: 54th An-
+     nual IEEE/ACM International Symposium on Microarchitecture (Vir-
+     tual Event, Greece) (MICRO ’21). Association for Computing Machin-
+     ery, New York, NY, USA, 1282–1295. https://doi.org/10.1145/3466752.
+     3480101
+[68] Dan Zhang, Safeen Huda, Ebrahim Songhori, Kartik Prabhu, Quoc Le,
+     Anna Goldie, and Azalia Mirhoseini. 2022. A full-stack search tech-
+     nique for domain optimized deep learning accelerators. In Proceedings
+     of the 27th ACM International Conference on Architectural Support for
+     Programming Languages and Operating Systems (ASPLOS). 27–42.
+[69] Xinyi Zhang, Cong Hao, Peipei Zhou, Alex Jones, and Jingtong Hu.
+     2022. H2H: Heterogeneous Model to Heterogeneous System Mapping
+     with Computation and Communication Awareness. In Proceedings of
+     the 59th ACM/IEEE Design Automation Conference (DAC).
+[70] Hengyu Zhao, Yubo Zhang, Pingfan Meng, Hui Shi, Li Erran Li,
+     Tiancheng Lou, and Jishen Zhao. 2020. Safety score: A quantitative
+     approach to guiding safety-aware autonomous vehicle computing sys-
+     tem design. In 2020 IEEE Intelligent Vehicles Symposium (IV). IEEE,
+     1479–1485.
+[71] Qi Zhu, Bo Wu, Xipeng Shen, Li Shen, and Zhiying Wang. 2017. Co-
+     run scheduling with power cap on integrated cpu-gpu systems. In
+     2017 IEEE International Parallel and Distributed Processing Symposium
+     (IPDPS). IEEE, 967–977.
+[72] Jie Zou, Xiaotian Dai, and John A McDermid. 2022. Resilience-Aware
+     Mixed-Criticality DAG Scheduling on Multi-cores for Autonomous
+     Systems. ACM SIGAda Ada Letters 42, 1 (2022), 81–85.
+PPoPP ’24, March 2–6, 2024, Edinburgh, United Kingdom                                           Ismet Dagli and Mehmet E. Belviranli
+
+
+A     Artifact Appendix                                          A.6   Installation
+A.1    Abstract                                                  We assume installation through JetPack is followed. Upon it,
+                                                                 run the script below to install python3 dependencies.
+The artifact described here includes the source code for HaX-
+                                                                 $ apt install -y python3-pip
+CoNN, DNN profiling logs, runtimes, and the sources for the
+                                                                 $ pip3 install -r requirements.txt
+applications used in our evaluation.
+                                                                   If you are using a different Python 3 version than the de-
+A.2    Description                                               fault one that comes with JetPack, please modify the default
+Check-list (artifact meta information):                          version as 3.6.9 on Xavier AGX and 3.8.10 on Orin AGX by
+• Hardware: NVIDIA Jetson Xavier AGX 32 GB and NVIDIA            using update-alternatives
+  Jetson Orin AGX 32 GB                                          A.7   Starter guide
+• Software: Default installation of Jetpacks by NVIDIA Jet-
+                                                                 This is a starter guide for a DNN pair (Resnet101 and GoogleNet).
+  pack 4.5.1 on Xavier AGX and JetPack 5.1.1 on Orin AGX
+                                                                 The system can either run both DNNs on GPU, or select the
+• Architecture: aarch64
+                                                                 map among GPU and DLA. We propose to distribute the
+• Software details needed: Xavier AGX uses Python 3.6.9,
+                                                                 layers among GPU and DLA.
+  TensorRT 7.1.3, CUDA 10.2.89 and Orin AGX uses Python
+  3.8.10, TensorRT 8.4.0, CUDA 11.2                              $ ./starter_guide.sh
+• Binary: Binary files are large, so generating them by using    A.8   Experiment Flow
+  scripts in this artifact is necessary.                         All of the applications’s input files we discussed in Sec. 3/4/5.
+• Output: Profiling data (execution time, transition time,       Their input file can be found under < 𝑚𝑎𝑖𝑛 − 𝑑𝑖𝑟𝑒𝑐𝑡𝑜𝑟𝑦 >
+  memory use) for both layers and neural networks. The end       /𝑝𝑟𝑜𝑡𝑜𝑡𝑥𝑡_𝑖𝑛𝑝𝑢𝑡_𝑓 𝑖𝑙𝑒𝑠. Under src, we provide buildEngine.py.
+  result is the improved total execution time/throughput.        By using input files, TensorRT generates the engines to run
+• Experiment workflow: Makefile, Python and bash scripts         on GPU or DLA by following the given arguments. Run-
+• Disk space required (approximately): 8GB                       ning 𝑚𝑎𝑘𝑒 generates all the necessary engines to analyze
+A.3    Public Availability                                       GoogleNet, which is given as an example in Table 2. We pro-
+                                                                 vide three major profiling scripts/ under script folder, which
+We maintain the most updated version of the code in the
+                                                                 are layer_analysis, transition_analysis, and emc_analysis.
+GitHub repository given below. Please refer to this repository
+                                                                 First, the layer analysis step explains how layers are pro-
+for the most updated version.
+                                                                 filed. A summary of comprehensive profiling results can be
+https://github.com/ismetdagli/HaX-CoNN                           running the script under it as explained in the first subsec-
+   As stated in the requirements of green badge definition,      tion of Section 3.2. The second step explains how transition
+this code is publicly available under Zenodo as well.            times are collected as explained in the second subsection
+                                                                 of Section 3.2. The last step explains how EMC utilizations
+https://zenodo.org/records/10225025                              are collected as explained in Section 3.3. Also, the Nsight
+A.4    Hardware dependencies                                     Compute profiling script is run for this step. We modified Ten-
+                                                                 sorRT’s sampleInference.cpp source file. If another version is
+We performed our experiments on an NVIDIA Jetson Xavier          targeted, the same logic needs to be applied to synchronize
+AGX 32 GB and NVIDIA Jetson AGX Orin 32 GB. While HaX-           DNNs. If different devices are targeted, DL frameworks need
+CoNN is compatible with any architectures using TensorRT         to be modified in a way that DNNs can simultaneously start.
+with NVIDIA GPUs, we also use DLA which only exists              $make
+in NVIDIA Jetson Families. So, reproducibility of the code       $python3 scripts/layer_analysis/layer_all_util.py
+requires Xavier AGX or AGX Orin whereas the methodology          $python3 scripts/transition_time_analysis/
+can be applied to other heterogeneous shared memory SoCs         transition_util.py
+(i.e., Qualcomm 865 Development Kit).
+                                                                    Using profiling results, we generate a schedule and run
+A.5    Software dependencies                                     the experiments. Under src, we run z3 solver. Following the
+The easiest way to follow our dependencies is to use Jet-        schedules found, the corresponding engines are generated.
+pack 4.5.1 on Xavier AGX and Jetpack 5.1.1 on Orin AGX.          Multi-DNN experiment script is given below and targets to
+We mainly use TensorRT as ML framework in our imple-             generate some experiments given in Table 6. The overhead
+mentation, as DLA can only be programmed via TensorRT.           experiment given in Table 7 can be regenerated by using the
+Xavier AGX has TensorRT 7.1.3 and Orin AGX uses TensorRT         overhead script given below.
+8.4.0. It is important to note that manually installing Ten-     $ python3 src/z3_solver_multi_dnn.py
+sorRT/CUDA on Jetson boards etc. is not suggested and all        $ ./collect_data_multidnn_experiment.sh
+software-related installations are available through JetPack.    $ ./scripts/run_all_plan.sh build/overhead_gpu
+

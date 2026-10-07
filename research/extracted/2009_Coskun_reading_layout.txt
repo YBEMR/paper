@@ -1,0 +1,848 @@
+        Evaluating the Impact of Job Scheduling and Power Management
+                on Processor Lifetime for Chip Multiprocessors
+
+                Ayse K. Coskun    Richard Strong      Dean M. Tullsen     Tajana Simunic Rosing
+                    Computer Science and Engineering — University of California, San Diego
+                                {acoskun, rstrong, tullsen, tajana}@cs.ucsd.edu
+
+
+
+ABSTRACT                                                                             cause permanent damage to the underlying circuit), and the phys-
+Temperature-induced reliability issues are among the major chal-                     ical and electrical phenomena that induce them. Silicon devices
+lenges for multicore architectures. Thermal hot spots and ther-                      have a number of failure modes that are impacted by temperature,
+mal cycles combine to degrade reliability. This research presents                    and in some cases these modes are at odds: thermal management
+new reliability-aware job scheduling and power management ap-                        techniques that reduce the rate of one failure mode may exacerbate
+proaches for chip multiprocessors. Accurate evaluation of these                      another. In fact, we show that techniques that are nearly identical
+policies requires a novel simulation framework that can capture                      in performance, power, and even peak temperature can differ by a
+architecture-level effects over tens of seconds or longer, while also                factor of two in expected processor lifetime. Therefore, it is crit-
+capturing thermal interactions among cores resulting from dynamic                    ical that we have a model of power, temperature, and particularly
+scheduling policies. Using this framework and a set of new thermal                   reliability that incorporates all critical failure modes. This paper in-
+management policies, this work shows that techniques that offer                      troduces such an integrated modeling framework, shows that some
+similar performance, energy, and even peak temperature can differ                    policies have unintended consequences when all sources of failure
+significantly in their effects on the expected processor lifetime.                   are considered, and proposes new policies that provide significant
+                                                                                     gains in processor lifetime with little loss in performance.
+Categories and Subject Descriptors                                                       Most power and thermal management techniques have focused
+                                                                                     primarily on controlling peak temperature. Although several types
+C.4 [Performance of Systems]: Modeling Techniques                                    of failures clearly scale with the peak temperature, that factor alone
+General Terms                                                                        does not accurately model all types of failures. Other failures, such
+                                                                                     as cracks and fatigue failures, are created not by sustained high
+Reliability
+                                                                                     temperatures, but rather by the repeated heating and cooling of sec-
+                                                                                     tions of the processor. This phenomenon is referred to as thermal
+1.     INTRODUCTION                                                                  cycling. The particular failures that our infrastructure models in-
+   The microprocessor industry has moved to chip multiprocessing                     clude electromigration, time dependent dielectric breakdown, and
+to enable the scaling of performance beyond the limits of unipro-                    the thermal cycling-induced errors mentioned above. Failing to in-
+cessor execution. As the chip area shrinks, the power density grows                  clude thermal cycling in the failure model can lead to misleading
+for new process technologies, causing higher temperatures. There-                    results and highly suboptimal temperature mitigation strategies.
+fore, our success at finding ways to profitably use the available tran-                  Modeling thermal cycles is difficult. The primary challenge is
+sistors has a cost, as we are now faced with significant challenges                  the need to accurately model these systems over the timescales
+in managing the power and thermal effects on these chips. High                       which thermal cycles occur. This far exceeds the ability of cur-
+temperatures increase the cost of cooling, degrade reliability, and                  rent processor modeling techniques, which typically simulate sys-
+reduce performance.                                                                  tem behavior at instruction or cycle level. Therefore, we intro-
+   A number of mechanisms for thermal control are currently avail-                   duce new performance modeling mechanisms, integrated with our
+able for multicore processors—including job scheduling, job mi-                      power, thermal, and reliability models, that allows accurate model-
+gration, dynamic voltage and frequency scaling, etc. This paper                      ing of execution behavior over tens or hundreds of seconds. Being
+presents a framework for evaluating the effectiveness of these tech-                 able to capture all the thermal failure effects is critical to an accu-
+niques in various combinations, and presents effective new policies                  rate understanding of processor lifetime. We show, for example,
+for managing thermal effects.                                                        that some proposed mechanisms that appear to improve reliability
+   The primary goal of managing temperature is to prevent pro-                       if thermal cycling effects are ignored actually have the opposite ef-
+cessor failure. This research is focused on hard failures (which                     fect when thermal cycling is taken into account.
+                                                                                         In this work, we define several new scheduling and power man-
+                                                                                     agement policies. This research shows that the most critical factors
+                                                                                     for increasing processor lifetime with acceptable performance are:
+Permission to make digital or hard copies of all or part of this work for            (1) The asymmetric thermal characteristics of the cores (cores in
+personal or classroom use is granted without fee provided that copies are            the center having very different properties than those on the edges,
+not made or distributed for profit or commercial advantage and that copies           etc.); (2) The frequency of migration, which can both inhibit sleep
+bear this notice and the full citation on the first page. To copy otherwise, to      states and cause thermal cycling. Our most effective policy that em-
+republish, to post on servers or to redistribute to lists, requires prior specific
+permission and/or a fee.
+                                                                                     ploys voltage/frequency scaling, as well as our best one that does
+SIGMETRICS/Performance’09, June 15–19, 2009, Seattle, WA, USA.                       not, both account for the location asymmetry and reduce the num-
+Copyright 2009 ACM 978-1-60558-511-6/09/06 ...$5.00.
+ber of thread movements. We present new scheduling policies that             Prior work has also investigated low overhead temperature-aware
+can decrease the failure rate by a factor of two (over naive manage-     task scheduling at the operating system level for multiprocessor
+ment), with a performance cost of less than 4%.                          system-on-chips (MPSoC) [8], and the authors proposed an adap-
+   This paper is organized as follows. Section 2 discusses recent        tive probabilistic policy addressing both temperature variations and
+work in thermal and reliability management. Section 3 describes          hot spots. The adaptive scheduling technique is combined with
+the integrated performance, power, thermal, and reliability sim-         thread migration or DVFS to further improve thermal behavior.
+ulation framework. We provide the details of the experimental            Murali, et al. [22] propose a technique that assigns frequencies to
+methodology in Section 4, and explain the thermal management             different cores in an MPSoC to guarantee meeting the thermal con-
+techniques in Section 5. A thorough evaluation of the techniques is      straints. In the offline phase, the set of feasible frequencies for
+presented in Section 6, and we conclude in Section 7.                    different temperature and workload constraints are calculated by
+                                                                         solving convex optimization models. At run time, the management
+2.    BACKGROUND AND RELATED WORK                                        policy selects the appropriate frequency values that meet the cur-
+                                                                         rent workloads and operating conditions.
+   In this section we provide an overview of previously proposed
+                                                                             In Heat-and-Run [12], the authors propose a DTM solution for
+dynamic thermal management (DTM) techniques, and also sim-
+                                                                         chip multiprocessors with SMT cores. SMT thread assignment is
+ulation methodologies for modeling performance, power and re-
+                                                                         used to maximize processor resource utilization by co-scheduling
+liability. Many of the DTM techniques are reactive in nature—
+                                                                         threads that use complementary resources before cooling is neces-
+depending on sensors to indicate temperatures beyond assigned
+                                                                         sary. In this way the cost of thread migration is reduced.
+thresholds, and adapting the processor to either reduce or migrate
+                                                                             Few papers in the thermal management literature have taken re-
+activity to bring the temperature down.
+                                                                         liability explicitly into account. Reliability management has been
+   Brooks and Martonosi [4] introduced the concept of dynamic
+                                                                         mostly addressed previously as a way of optimizing the policies or
+thermal management in reaction to thermal measurements. Some
+                                                                         architecture at design-time. The Reliability-Aware Microprocessor
+thermal management techniques stall execution or migrate compu-
+                                                                         (RAMP) provides a reliability model at the architecture level for
+tation to other units to control temperature. A well-known example
+                                                                         temperature related intrinsic hard failures [30]. It analyzes the ef-
+of such techniques is clock gating, which freezes all dynamic op-
+                                                                         fects of application behavior on reliability and optimizes the archi-
+erations until the thermal emergency is over, causing typically sig-
+                                                                         tectural configuration and the voltage/frequency setting statically
+nificant performance cost. Clock gating is implemented in Intel’s
+                                                                         (at design time) to meet the reliability target. Previous work also
+Pentium 4 [13].
+                                                                         shows that aggressive power management can adversely affect re-
+   Donald et al. [10] propose a dynamic thermal management tech-
+                                                                         liability due to fast thermal cycles, and optimization methods that
+nique for simultaneous multithreading (SMT) architectures. Their
+                                                                         consider reliability constraints can provide energy savings while
+technique selectively manages the execution of integer or floating
+                                                                         improving the MPSoC lifetime [25].
+point intensive threads to prevent hot spots in the register files. To
+                                                                             To the best of our knowledge, a simulation framework to evalu-
+identify integer or floating point intensive threads, hardware event
+                                                                         ate the reliability impact of dynamic management policies in a fast
+counters are sampled during execution. In activity migration, the
+                                                                         and accurate way has not been introduced previously. The Sim-
+heat is spread by moving computation to a different location on
+                                                                         Point tool [26] also addresses the problem of long simulation times,
+the die. Migration can happen at multiple levels: from one core to
+                                                                         but it provides clustering analysis to identify a few representative
+another [14], or within a core [28].
+                                                                         points that can be simulated to predict the performance of the en-
+   Existing redundancy in a superscalar pipeline can be utilized for
+                                                                         tire application. Instead, we want to capture the entire behavior
+controlling temperature [24]. In this technique, the power density
+                                                                         rather than summarize. However, we use SimPoint’s phase iden-
+is controlled by balancing the utilization of issue queues, regis-
+                                                                         tification mechanism to capture a complete phase trace as part of
+ter files and ALUs. Fetch gating alternates between fetching and
+                                                                         our simulation process. Biesbrouck, et al. [1] use individual pro-
+stalling fetch in order to reduce the activity and power density in
+                                                                         gram phase information (a complete phase trace not unlike ours) to
+the pipeline. Skadron et al. introduce a feedback control loop to
+                                                                         guide multithreaded simulation. This is accomplished by creating
+control the duty cycle for fetch-gating [28].
+                                                                         a Co-Phase Matrix, which represents the per-thread performance
+   Another class of thermal management techniques use dynamic
+                                                                         for each potential combination of the single-threaded phase behav-
+voltage and frequency scaling (DVFS, where the system is able to
+                                                                         iors that occur when multiple programs are run together. Although
+alter the processor’s frequency and supply voltage dynamically) to
+                                                                         RAMP [30] also integrates an architecture-level performance sim-
+respond to thermal emergencies [28]. DVFS can use different num-
+                                                                         ulator with a power model and a thermal simulator, it does not in-
+ber of steps for the global voltage and frequency settings, ranging
+                                                                         clude the phase-based approach we introduced. Using our frame-
+from two in Intel’s SpeedStep technology to 40 for the Intel XScale.
+                                                                         work, we are able to simulate much longer periods of real-life exe-
+   In hybrid thermal management [27], for mild levels of thermal
+                                                                         cution in reasonable simulation time.
+stress fetch gating (where we stall fetch, but allow other stages of
+the pipeline to proceed with previously fetched instructions) is used
+as the response mechanism. When the overhead of the fetch gat-
+                                                                         3. A NOVEL FRAMEWORK FOR MULTI-
+ing increases and instruction level parallelism (ILP) cannot suffi-         CORE RELIABILITY MODELING
+ciently hide the ill performance effect, DTM switches to DVFS.              This area of research presents new methodological challenges
+Another hybrid DTM technique minimizes the performance im-               that require tools and solutions radically different than traditional
+pact by proactive use of software techniques like thermal-aware          architectural investigation. This section describes the entire simu-
+process scheduling combined with reactive use of hardware tech-          lation infrastructure, but with a focus on the two most novel aspects
+niques such as clock gating [19]. Donald, et al. evaluate various        of the framework, which are the long time-frame performance mod-
+combinations of DVFS, clock gating (i.e., stop-go) and migration         eling and the integrated reliability model.
+for managing the temperature of multicore processors [11]. They
+show that distributed DVFS combined with thread migration pro-           3.1 Overview
+vides the best performance among different alternatives.                   For a study such as this one, it is critical that we have a fully
+                                                                                                 This framework relies on two simplifying assumptions that are
+             Phase-Based                Performance                 Thermal
+                                                                                              critical to making this problem tractable. The first is that the time
+                                                                                              constants over which temperature varies do not require us to fully
+  Phase      Performance     Database                 Scheduling                Reliability
+                                          / Power                  Modeling
+  Profile      & Power                                 Manager                 Computation
+                                                                   (HotSpot)
+                                                                                              capture cycle-by-cycle variances in the temperature portion of the
+                                         Query Tool
+(SimPoint)     Modeling
+             (M5 / Wattch)
+                                                                                              model. The instruction-level variations are captured in the perfor-
+                                                                                              mance model, but only summarized in the latter stages. This allows
+                                                                                              us to replace the cycle-by-cycle data with a stair-step graph, pre-
+                                                                                              senting performance and power behavior as constant at the average
+                             Figure 1: Design Flow
+                                                                                              values over individual intervals. This way, we capture the program
+                                                                                              behavior with little loss of accuracy.
+                                                                                                 The second assumption is that the behavior of individual threads
+integrated performance, power, and thermal model of the entire
+                                                                                              is separable. This is accurate because we model systems with pri-
+chip multiprocessor. This is because we are modeling interactive
+                                                                                              vate L2 caches, which is a likely architectural scenario in future
+scheduling techniques that observe the temperature and possibly
+power characteristics of the processor and make scheduling deci-                              systems [21]. At 16 cores and above, the interconnect cost of a
+sions accordingly. For example, it is impossible to completely de-                            shared cache would be extremely high. This assumption has been
+                                                                                              used and demonstrated to be accurate even on research that does
+couple the performance and the thermal models. However, full in-
+                                                                                              not require this type of long simulation [20]. Even with the small
+teractive architecture-level simulation is also not possible, as just
+                                                                                              core counts in current multicores, the AMD dual-core and quad-
+a single simulation at these time frames corresponding to several
+                                                                                              core Opteron, the IBM Power6, and the coming Intel Nehalem pro-
+minutes of real execution time could require months to complete.
+   Our simulation framework is shown in Figure 1. The perfor-                                 cessor all have private L1 and L2 caches. For shared L2 caches,
+mance modeling front-end combines a full-program phase profile                                interactions between threads will be higher and system-level ac-
+                                                                                              curacy will be reduced. However, recent research on multicore
+combined with detailed architecture-level simulation of every dis-
+                                                                                              caching has focused on reducing those interactions [16], and in the
+tinct program phase at all possible frequency settings, including
+                                                                                              extreme, the proposed techniques could be configured to make the
+both performance and power characteristics. This characteriza-
+                                                                                              shared caches essentially act as private caches. Thus, even in that
+tion all goes into a database that can be queried as the full CMP
+simulation progresses. In this way, we can model the effects of                               scenario we can represent a reasonable system accurately. This as-
+changing frequency, stopping or migrating jobs, etc., without fur-                            sumption makes it difficult to model parallel applications with any
+                                                                                              significant communication between threads, if that communication
+ther architecture-level simulation. After scheduling decisions are
+                                                                                              impacts the runtime characteristics of the application.
+made and the resulting performance and power data produced, we
+can model time-varying temperature effects across the entire chip.
+The temperature curves are then fed into the reliability models, pro-                         3.2.1 Phase Modeling
+ducing the expected failure rates.                                                               We used SimPoint [26] to identify the various phases within the
+                                                                                              applications and to characterize complete program execution. A
+3.2 Long-Term Performance Modeling                                                            program’s execution is divided into intervals of 100 million instruc-
+   To accurately model the reliability of the system including ther-                          tions. Once we assign each interval to a representative phase, we
+mal cycling effects, we need to capture temporal thermal behavior                             represent a program’s execution by a Phase-ID trace [1]. Thus, at
+over time periods orders of magnitude longer than typically mod-                              any instruction during a program’s execution, we use this file to
+eled in architectural simulation. At the same time, we would like                             determine the current phase and to identify points of transition be-
+to capture various types of effects that the architectural simula-                            tween phases.
+tion provides; e.g., workload-dependent utilization of specific ar-                              By running simulations at each phase point in M5 and compos-
+chitectural structures and their impact on power and temperature,                             ing performance/power statistics with the Phase-ID trace, we cre-
+the time-varying behavior of individual applications, etc. This re-                           ate both a power and a performance trace. The scheduling manager
+quires the development of new simulation tools and methodologies                              then accesses these traces via the query tool.
+not currently available.
+   We initially use SimPoint [26] to capture the phases of each                               3.2.2 Power Modeling and Management
+application. But instead of capturing one or a few representative                                Power modeling requires coupling the execution traces obtained
+phases, we use it to capture a complete phase profile of each ap-                             from M5 with a tool that computes the power consumption for each
+plication, beginning to end. Then, using the M5 performance sim-                              functional unit. This coupling converts the performance parame-
+ulator [2] integrated with the Wattch power modeling tool [5] and                             ters (e.g., cache accesses, branch predictions, etc.) into estimates
+utilizing a finite number of simulation samples for each phase, we                            for transistor switching, and then the power model utilizes these
+can reconstruct the power and execution properties of the complete                            estimates for calculating the instantaneous power values.
+program. In fact, we do this for all voltage and frequency settings                              Transistors consume power when they switch output values, but
+available, so that we can reconstruct the complete program even in                            they also leak power even when they do not switch. The former is
+the face of an arbitrary number of voltage/frequency changes.                                 referred to as dynamic power, and historically has been the dom-
+   We capture these program traces in a database which can be                                 inant factor; however, as technology shrinks, leakage power be-
+queried by the Schedule Manager at distinct intervals. Given a                                comes increasingly important. We utilized Wattch [5] for the dy-
+program start point, an interval length in cycles, and a frequency                            namic power modeling of cores in our framework. We integrated
+setting, the query tool returns the average instructions per second                           Wattch with M5 to provide dynamic and cycle accurate power mea-
+(IPC) and power levels across the interval, and the point in execu-                           surements for each application. To model power dissipation of L2
+tion the program reaches at the end of the interval. Thus, at runtime,                        caches, we used CACTI [34] (an integrated memory performance,
+the scheduling manager can make decisions about thread migra-                                 area, leakage, and dynamic power model) and obtained the typi-
+tion, thread stoppage, or voltage/frequency changes, and query the                            cal power consumption of a memory block with the given size and
+database to model the precise effects.                                                        properties, and then used these values throughout the simulation.
+   We developed a power model for 65nm by scaling the parameters               Parameter                    Model Value
+                                                                               Sampling Interval            50ms
+within Wattch to match published power values for 65nm technol-
+                                                                               Thread Migration Delay       syscall delay + cold start effects
+ogy. The variation in dynamic power range we observed matches                  DVFS Delay                   syscall delay + 20E-6s
+the power distribution on a similar core [15], on which the major-             Wakeup Delay                 25ms
+ity of applications had less than 16% power dissipation difference             Application Startup Delay    syscall delay + cold start effects
+from the other applications. Among the applications sampled in                 Transition Power             10W
+that distribution were the SPEC suite, which we use in this study.             (to and from sleep states)
+   We compute the leakage power of CPU cores based on struc-
+                                                                                  Table 1: Delay and Power Model Assumptions
+ture areas, temperature, and supply voltage. For the 65nm process
+technology, we assume a leakage power density of 0.5W/mm2 at
+383K [3]. To account for the temperature and voltage, we used the                        Parameter                    Value
+second-order polynomial model proposed by Su, et al. [33]. This                          Die Thickness                0.1mm
+model computes the change in leakage power for the given differ-                         Core Area                    14.44mm2
+ential temperature and voltage values. We determined the coeffi-                         L2 area (total of 2 banks)   10.56mm2
+cients in the polynomial model empirically to match the normalized                       Convection Capacitance       140 J/K
+leakage values in the paper. This model is found to match closely                        Convection Resistance        0.1 K/W
+with measurements [33], and we found the leakage values produced
+                                                                                            Table 2: HotSpot Parameters
+were in line with expected values (i.e., 30–40% of the total power
+consumption) based on the technology.
+   One of the techniques we investigate to manage power is Dy-
+                                                                         less than 3.0 µs. We also attributed architecture overhead to cold
+namic Power Management (DPM). DPM puts cores in sleep state
+                                                                         start effects in the branch predictor, caches, TLBs, etc. We mea-
+to save energy. We implemented a fixed timeout policy [18], which
+                                                                         sured cold start effects by inducing many random migrations for
+is one of the commonly used DPM policies. For each core, the pol-
+                                                                         each benchmark and computing the average loss in performance.
+icy waits for a timeout period when the core is idle, and then turns
+                                                                         The average loss was 204 µs, but varied wildly by benchmark—
+off the core. This is to ensure that we do not turn off cores for very
+                                                                         i.e., from 2 to 740 µs. Note that cold start effects dominate the
+short idle times, where turning off the core would not amortize the
+                                                                         migration penalty. To address the highly variable overhead, we
+cost of transitioning to and from the sleep state. The time period
+                                                                         modeled a distinct migration penalty for each benchmark.
+to amortize the cost of going to sleep is called the breakeven time
+                                                                            Automated thermal modeling requires power traces for each unit
+(tbe ). We assume a sleep state power value of 0.05W, and based on
+                                                                         as input, in addition to the chip and package characteristics such
+the active and idle power dissipation values we computed the tbe
+                                                                         as die thickness, heat sink convection properties, etc. Therefore,
+to be around 200ms. A simple and effective way to set the timeout
+                                                                         we feed the detailed power trace derived by the combination of the
+period is ttimeout = tbe [18].
+                                                                         scheduling manager and the performance/power database into the
+                                                                         thermal model. We modified HotSpot Version 4.0’s [28] (block
+3.3 Thread Management and Thermal Mod-                                   model) settings to model the thermal characteristics of the 16-core
+    eling                                                                die. We used the steady state temperature of each unit as the ini-
+   We implemented a scheduling manager which enables the simu-           tial temperature values. We summarize the HotSpot parameters in
+lation of a large array of thread management policies. The mech-         Table 2. We calculated the die characteristics based on the trends
+anisms available for managing temperature include adjusting the          reported for 65nm process technology [14].
+frequency/voltage of a core (DVFS), putting an idle core into a low-        The described methodology allows us to do full-program simu-
+power sleep mode (DPM), migrating computation off of a hot core,         lation with simple lookups of sampled simulation data. This sac-
+and policies that stop activity on a hot core (i.e., clock- or fetch-    rifices some accuracy. However, the rate at which temperature
+gating). We present the specific policies we model in Section 5. In      changes typically dwarfs the time of even complete phases, so we
+each policy, the scheduling manager makes a set of decisions after       would expect this technique to actually sacrifice little accuracy.
+each scheduling interval, and it may incorporate performance and         We validated our methodology by comparing the results with di-
+thermal information from the prior interval. After making those          rect M5/ Wattch power output. For each phase simulation point of
+decisions for each thread and core, the scheduling manager then          each SPEC benchmark, we ran M5 and Wattch for 500ms of sim-
+queries the performance database to obtain the power and perfor-         ulated execution and gathered power statistics every 500µs. We
+mance behavior of each core over the next interval. Our simulation       compared the power statistics of M5/Wattch and our framework,
+sampling intervals (50 ms) are shorter than a scheduling interval, so    and we found that our phase-based approach has 1.8% error over-
+there would be multiple exchanges with the performance database          all. Table 3 shows the detailed results for the benchmarks. bzip2
+before another scheduling decision is made.                              with input set program had the largest average error of 3.0%.
+   Since the scheduling manager keeps track of performance and              The low error margin in our power computation methodology
+power information, it also has the responsibility of modeling com-       translates to even lower error in temperature computation because
+plex phenomena such as the delay from thread migrations. The             of the thermal time constants. To verify the accuracy of our method-
+model simulates the effects on power and performance for the fol-        ology in terms of the temperature response, we experimented with
+lowing phenomena: thread migration, DVFS, starting a new appli-          bzip2, as it has the highest power error margin. Figure 2 shows one
+cation on a core, core sleep, and core wakeup. The assumptions we        particular (worst case) data point—the temperature trace for a core
+made for several of the delays modeled are presented in Table 1, but     running bzip2 and then going to sleep state, on a system running
+one of the more complex phenomena deserves special attention.            12 bzip2 threads. The “M5/Wattch” thermal trace corresponds to
+   We modeled two aspects of the cost of thread migration among          the detailed power trace sampled at 500µs, and the “phase” trace
+cores. We measured the software overhead in M5’s full system             is the thermal output of running the same workload and using our
+mode as the time for Linux to migrate a thread from one core to an-      power computation methodology. We observe that the trace gener-
+other idle core and to start execution. This thread migration takes      ated with our methodology closely matches the trace sampled at a
+  Benchmark      Average Error   Benchmark           Average Error         Similar to the EM failure rate equation, we use λ0T DDB to repre-
+  parser         0.023           facerec             0.022
+                                                                           sent the first half of the equation. Both EM and TDDB failure rates
+  applu          0.021           gcc_166             0.020
+  art110         0.016           fma3d               0.024
+                                                                           are exponentially dependent on temperature.
+  swim           0.018           mcf                 0.011
+  galgel         0.015           gap                 0.020                     λT DDB = A0 eγEox e(−Ea /kT ) = λ0T DDB e(−Ea /kT )            (2)
+  twolf          0.009           vpr_route           0.017
+  mesa           0.027           ammp                0.015
+  lucas          0.009           bzip2_program       0.030                    Thermal cycling (TC) is caused by the large difference in ther-
+  vortex1        0.018           equake              0.029                 mal expansion coefficients of metallic and dielectric materials, and
+  sixtrack       0.011           eon_rushmeier       0.018                 leads to cracks and other permanent failures. The thermal cycling
+  apsi           0.014           crafty              0.018                 effect is modeled by the Coffin-Mason equation [17]. Slow ther-
+                          Overall: 0.018                                   mal cycles happen because of low frequency power changes such
+                                                                           as power on/off cycles. Fast cycles occur due to events such as
+Table 3: Power Estimation Error of Our Front-End Tool Com-                 power management decisions. Although lower frequency cycles
+pared with respect to M5/Wattch                                            have generally received more attention, recent work shows that
+                                                                           thermal cycles due to power or workload variations can also de-
+                                                                           grade reliability [23, 25]. The failure rate due to thermal cycling is
+                                                                           formulated as in Equation 3.
+
+                                                                                            λT C = C0 (∆T − ∆To )−q f                         (3)
+
+
+                                                                              In this equation, ∆T is the temperature cycling range. The elas-
+                                                                           tic portion of the thermal cycle is shown as ∆To . Elastic thermal
+Figure 2: Comparison of Temperature Responses for bzip2, Us-               stress refers to reversible deformation occurring during a cycle, and
+ing Two Simulation Methodologies.                                          ∆To should be subtracted from the total strain range. Typically,
+                                                                           ∆To << ∆T [17], so the ∆To component can be dropped from
+                                                                           the equation. C0 is a material dependent constant, q is the Coffin-
+higher granularity. As bzip2 is one of the most power-variant ap-          Manson exponent, and f is the frequency of thermal cycles. Note
+plications, the rest of the benchmarks demonstrate even less differ-       that the Coffin-Manson equation [17] computes the number of cy-
+ence. Because thermal cycling effects are insignificant unless the         cles to failure. Therefore, the MTTF (in years) is the number of
+temperature variations are more than a few degrees, these results          cycles multiplied by the period of the cycles.
+are more than accurate enough to capture both temperature-induced             Computing the frequency of cycles is not straightforward in a
+and cycle-induced effects.                                                 simulation of an irregular, dynamic system. To resolve this prob-
+   Once we generate a full thermal trace, we use this trace as input       lem, we observed the recent temperature history on each core to
+to our reliability model described in the next section.                    compute ∆T and f . We set the initial length of the history win-
+                                                                           dow to 5 seconds, and adjusted the length dynamically depending
+3.4 Reliability Modeling                                                   on how many cycles were observed. For example, if no tempera-
+   Our work targets temperature-induced reliability problems. Our          ture cycles were observed in the last interval, we incremented the
+simulation and modeling framework allows us to evaluate schedul-           history window length to capture slower cycles. ∆T is the temper-
+ing policies based on their success in reducing the failure rate due to    ature differential we observed in the last interval. We set a higher
+thermal hot spots and thermal cycles. Achieving a lower failure rate       band of 80% and a lower band of 20% of the temperature range
+increases the mean-time-to-failure, which is the expected lifetime         recorded in the last interval, and counted the number of times the
+of the circuit. The most commonly studied temperature-induced              temperature exceeded the higher band or went below the lower
+intrinsic hard failure mechanisms are electromigration, time depen-        band, and used that to calculate the number of cycles in this pe-
+dent dielectric breakdown, and thermal cycling [17, 30].                   riod. In this way, we could account for the contribution of cycles
+   Electromigration (EM) occurs in interconnects as a result of the        with varying temperature differentials and varying periods.
+momentum transfer from electrons to ions that construct the inter-            To combine the failure rates, we used the sum-of-failure-rates
+connect lattice and leads to hard failures such as opens and shorts in     model as in RAMP [30]. This model assumes that all the individ-
+metal lines. The EM failure rate (λEM ), based on Black’s model,           ual failure rates are independent. Mean-time-to-failure (MTTF) is
+is given in Equation 1. In the equation, Ea is the activation energy,      1/λ for constant failure rates; therefore, we averaged the failure
+k is the Boltzmann’s constant, T is the temperature, J and Jcrit are       rate observed throughout the simulation and computed the corre-
+the current density and the threshold current density, respectively,       sponding average MTTF. The average MTTF value reported for
+and A0 is a material dependent constant. We represent the first half       65nm technology is 7 years [32].
+of the equation with the term λ0EM , which can be considered as a             For moderate temperatures at 65nm technology, Srinivasan, et
+constant (an average technology/circuit dependent value).                  al. [31] demonstrate that the contribution of electromigration, di-
+                                                                           electric breakdown, and cycling to the overall failure rate are sim-
+   λEM = A0 (J − Jcrit )−n e(−Ea /kT ) = λ0EM e(−Ea /kT )            (1)
+                                                                           ilar to each other. This allows us to calibrate the constants in each
+                                                                           failure equation (λ0EM , λ0T DDB , and C0 ) to give a system MTTF
+                                                                           of 7 years at nominal temperature. We used the same constants
+   Time dependent dielectric breakdown (TDDB) is a wear-out                all throughout the experiments, which means that the relative im-
+mechanism of the gate dielectric, and failure occurs when a conduc-        pact of different failure mechanisms might change depending on
+tive path is formed in the dielectric. TDDB is caused by the electric      the conditions. For example, if the temperature is high, then the
+field and temperature, and the failure rate is defined in Equation 2.      effect of EM or TDDB is higher than TC.
+                                                                        bound applications is particularly important in this study because
+                                                                        it impacts how performance scales as the frequency changes. We
+                                                                        model both homogeneous and heterogeneous workloads in terms
+                                                                        of the applications’ CPU or memory boundedness. As our exe-
+                                                                        cution model does not extend to parallel programs, the homoge-
+                                                                        neous workloads stand in for both homogeneous server-type work-
+                                                                        loads and parallel applications with few stalls for communication.
+                                                                        However, our homogeneous and heterogeneous multiprogrammed
+                                                                        workloads best represent a server environment, where the average
+                                                                        lifetime of the processor can significantly affect overall costs.
+                                                                           We use the ratio of memory-bus transactions to instructions as a
+                                                                        metric to classify applications as memory or CPU-bound, as sug-
+                                                                        gested by Wu et al. [35]. We classify applications along several
+                                                                        other dimensions. By constructing our workloads from applica-
+                                                                        tions with different phase variability, power savings potential and
+             Figure 3: Floorplan of the 16-core CPU                     CPU/memory boundedness, we seek to represent a wide range of
+                                                                        real world workloads.
+     CPU Clock          2.0Ghz                                             Table 5 describes each workload. We model workloads with
+     ICache             64KB 2-way @1ns (2 cyc)                         12–16 threads—our CMP architecture is constructed to not have
+     DCache             64KB 2-way @1ns (2 cyc)
+                                                                        thermal issues when lightly loaded, which is the expected behavior
+     L2Cache            2MB 8-way @10ns (20 cyc) (2 banks)
+     Memory Latency     100ns (200 cyc)                                 for the next few processor generations. We construct both homo-
+     Branch Predictor   21264-style tournament predictor                geneous and heterogeneous workloads, and CPU-bound, memory-
+     Issue              out-of-order                                    bound, and mixed workloads. The mixed workloads contain appli-
+     ROB                128 entry                                       cations from both extremes, as well as some in the middle of our
+     Issue Width        4                                               categorization. In the time frames we model, several of the appli-
+     Functional Units   4 IntAlu, 2 IntMult, 2 FPALU, 2 FPMultDiv       cations complete execution. In those cases, we continually restart
+     Physical Regs      128 Int, 128 FP                                 the application at the beginning to get consistent behavior across
+     IQ entries         64                                              the experiment.
+     Vdd                1.2V                                               A common performance metric on multicore platforms is a raw
+     DVFS Settings      100%, 95%, 85%
+                                                                        count of IPC. However, this metric gives undeserved bias towards
+               Table 4: Architectural Parameters                        high-IPC threads as performance may be increased by running more
+                                                                        CPU bound threads. To circumvent this difficulty, we used the Fair
+                                                                        Speedup Metric (FS) [7, 29]. FS is computed by finding the har-
+   We also examined thermal gradients, which refer to the temper-       monic mean of each thread’s speed-up over a baseline policy of
+ature differences among different locations on the die. However,        running the thread at the highest frequency and voltage.
+we do not explicitly include the effects of gradients in our over-         Although some applications complete multiple times during our
+all reliability model. This is because although thermal gradients       simulations, we compute FS in such a way that the overall contri-
+can induce hard errors, their primary effect is on device latencies,    bution of each application is the same.
+which are then manifested as an increase in timing errors, rather
+than hard failures.                                                     5. RELIABILITY-AWARE SCHEDULING
+                                                                           The simulation and modeling infrastructure described allows us
+4.    METHODOLOGY                                                       to design and evaluate several job allocation and thermal manage-
+   This section describes other details of our simulation infrastruc-   ment strategies. We divide these techniques into three categories,
+ture that impact the results shown in the following sections. These,    those that change what is running on a core (via gating or migra-
+in general, are details that are relatively independent of our frame-   tion), those that continue to execute the same thread but change
+work described in Section 3 and easily changed, such as the pro-        speed (via DVFS), and hybrids that combine the two types.
+cessor core model, the workload, etc.                                      Each of these methods can be integrated with Dynamic Power
+   The M5 Simulator’s [2] out-of-order execution model is based         Management (DPM) as well. DPM turns off cores after they have
+on SimpleScalar 3.0 [6], and provides a detailed model of an Alpha      been idle for a given timeout period. The scheduling and thermal
+21264 processor. Anticipating continued scaling of core counts,         management policies evaluate the system characteristics at every
+the CPU we model is a 16-core multiprocessor manufactured at            scheduling period, and make a decision accordingly. In all cases,
+65nm. The floorplan for this CPU is provided in Figure 3. Each          the scheduling tick is set to every 200ms. The threshold tempera-
+core has out-of-order issue, a private data cache, instruction cache,   ture for all the temperature-triggered policies is 85o C. The default
+L2 cache, and memory channels. Each core possesses three volt-          policy keeps the initial assignment of jobs to cores fixed, and no
+age and frequency settings for dynamic voltage/frequency scaling:       workload migration or voltage/frequency scaling occurs on the fly.
+1.200V at 2.0GHz, 1.187V at 1.900GHz, and 1.06V at 1.7GHz
+which represent DVFS settings of 100% (original), 95% (step-1),         5.1 Migration and Gating Scheduling Policies
+and 85% (step-2), respectively. The architectural parameters of            These techniques attempt to move computation off of hot cores,
+each core are depicted in Table 4.                                      either via migration or stalled execution as a response to a thermal
+   Creating representative workloads is a challenge in a 16-core en-    event (high temperature) or as a matter of policy.
+vironment. To assist this process, we classify all SPEC2K bench-           Stop_Go [11] runs each core at the default (highest) frequency
+marks in terms of their variability and memory boundedness (dis-        and voltage setting until a core reaches the thermal threshold. At
+cussed below). The distinction between CPU bound and memory             this point, the core is stalled and the clock is gated to reduce power
+    Wkload name      Description                  Cores Utilized   Benchmarks
+    hom_16_cpu       Homogeneous CPU Bound             16          sixtrack*16
+    hom_16_mem       Homogeneous MEM Bound             16          mcf*16
+    het_16_cpu       Heterogeneous CPU Bound           16          mesa*3, bzip2_program*3, crafty*2, eon_rushmeier*3, vortex1*2, sixtrack*3
+    het_16_mem       Heterogeneous MEM Bound           16          mcf*4, art110*4, equake*3, gcc_166*3, swim*2
+    het_16_mix       Heterogeneous MIX                 16          mcf*2, mesa, art110, sixtrack*2, equake, bzip2_program, eon_rushmeier*2
+                                                                   swim, applu, twolf, crafty, apsi, lucas
+    het_12_cpu       Heterogeneous CPU Bound            12         mesa*2, bzip2_program*3, crafty*2, eon_rushmeier*2, vortex1*1, sixtrack*2
+    het_14_cpu       Heterogeneous CPU Bound            14         mesa*2, bzip2_program*3, crafty*2, eon_rushmeier*2, vortex1*2, sixtrack*3
+    het_12_mix       Heterogeneous MIX                  12         mcf*2, mesa, art110, sixtrack*2, eon_rushmeier*2, swim, crafty, apsi, lucas
+    het_14_mix       Heterogeneous MIX                  14         mcf*2, mesa, art110, sixtrack*2, equake, eon_rushmeier*2, swim, twolf,
+                                                                   crafty, apsi, lucas
+                                                    Table 5: Workload Characteristics
+
+
+
+                                                                          execution characteristics of the threads in determining core tem-
+                                                                          perature. Thus, those techniques ended up constantly moving jobs
+                                                                          between hot and cold cores.
+
+
+                                                                          5.2 Methods with Voltage/Frequency Scaling
+                                                                             This set of techniques rely exclusively on dynamic voltage and
+                                                                          frequency scaling to control thermal dynamics. They differ in how
+                                                                          and when DVFS is applied.
+ Figure 4: Thread Assignment Strategy for Balance Location                   DVFS-Threshold (dvfs_t) reduces voltage and frequency (V/f)
+                                                                          one step at a time when a core’s temperature exceeds a thresh-
+                                                                          old. After reducing the V/f to the step-1 (95%) setting, if the core
+consumption. If the core’s temperature goes below the temperature         is still above the threshold in the next scheduling interval, dvfs_t
+threshold in the next sampling interval, execution continues. We          uses the step-2 (85%) setting. When a core’s temperature is below
+assume that each core can be clock-gated individually.                    the threshold, the V/f setting is increased, again one step at each
+   Migration sends jobs that have exceeded a thermal threshold to         scheduling interval.
+the coolest core that has not been assigned a new thread during the          DVFS-location (location_dvfs) uses a fixed V/f setting for each
+current scheduling period. If the coolest core selected is already        core, and there is no dynamic scaling at runtime. As the center
+running a job, we swap the jobs among the hot and cool cores.             cores tend to heat up more quickly, the four cores in the center of
+This technique can be thought of as an extension of core-hopping          the floorplan have the 85% setting. The corner cores are typically
+or activity migration techniques [12, 14] to the case of many cores       the coolest cores, hence they use the 100% (original) V/f setting.
+and many threads.                                                         The rest of the cores (i.e., the eight remaining cores on the sides)
+   Balance assigns jobs with the highest committed IPC during the         have the 95% setting.
+last interval (i.e., between the last two scheduling ticks) to cores         DVFS-Performance (dvfs_perf) reduces the voltage and fre-
+that have the lowest temperature. This scheduling idea represents a       quency dynamically on a core depending on the memory bound-
+more proactive form of migration in which threads are dynamically         edness of the current application phase. Previously, it was shown
+assigned to locations before thermal thresholds necessitate action.       that CPU-intensive tasks do not gain much in terms of energy sav-
+   Balance_Location is similar to balance, but instead of assigning       ings from running at low frequencies; and conversely, it is benefi-
+the threads with the highest committed IPC to the coolest cores,          cial to run memory-bound tasks at a lower frequency [9], as their
+it assigns them to cores that are expected to be coolest based on         performance is much more tolerant of frequency scaling. DVFS-
+location. The cores on the corner locations of the floorplan are          Performance seeks to reduce the overall chip temperature with min-
+expected to be the coolest; the remaining cores on the sides are ex-      imal performance cost by proactively scaling back those applica-
+pected to be the second coolest; and the cores in the center of the       tions that are least impacted.
+floorplan are hottest. This is because the temperature of a core is          To determine the memory-bound phases, we use a cycles-per-
+a result not only of activity on that core, but also on the activity      instruction (CPI) based metric, µ, as defined by Dhiman et al. [9].
+of its neighbors: higher number of active neighbors results in hot-       It compares the observed CPI with a potential CPI we might have
+ter cores. Figure 4 shows the strategy we used to assign 16 jobs          gotten without memory events. If the µ is near one, the applica-
+(j1 to j16 ) to cores, where the jobs have decreasing committed IPC       tion is CPU-bound. If it is low, the application is memory-bound.
+(IP C1 > IP C2 > ... > IP C16 ). Whereas the optimal alloca-              Note that µ can also take negative values. Analysis on our own
+tion of threads to cores might diverge from the allocation shown          application set confirms that this metric tracks extremely well with
+in the figure depending on the IPC difference among threads, this         performance degradation in the presence of DVFS.
+allocation generally results in temperature characteristics close to         If the µ observed in the last interval is less than -0.8, then we use
+the best allocation. With this scheme and 14 threads, for example,        the 85% setting, and we find less than 6% performance loss during
+cores labeled j15 and j16 in this figure would always be idle.            those phases. If −0.8 < µ < 0.5, we apply the 95% setting, which
+   We also experimented with heuristics that choose a thread’s next       induces less than 5% loss in performance. For µ > 0.5, we do
+core allocation based on the temperature of the thread’s current          not perform any V/f scaling. When µ > 0.5, if we used the 85%
+core (e.g., move the thread on the hottest to the coolest core), but      scaling for CPU-bound applications, the performance loss would
+these heuristics performed poorly. In multicore architectures like        be in the range of 12–15%.
+the one we model, location is a more significant factor than the             DVFS-Performance_Threshold (dvfs_perf_t) behaves exactly
+like dvfs_perf unless a core reaches a thermal threshold. If the tem-        To deliver a fair comparison, we present the energy and per-
+perature exceeds the threshold on a core, then the policy activates       formance of the policies in addition to reliability (mean-time-to-
+dvfs_t to reduce the temperature on that core. After the core’s tem-      failure). This is in lieu of trying to create a single artificial metric
+perature returns within threshold, we switch back to dvfs_perf.           that captures all three: such user-defined metrics are susceptible to
+   This technique wins if by proactively slowing a thread that is         providing results that are specific to the assumptions made while
+tolerant of frequency changes, it can enable a nearby thread that is      creating the metric or while weighing the individual parameters.
+not so tolerant of frequency change to forego a DVFS slowdown.               We normalized all results in the following sections with respect
+                                                                          to the default case of no thermal management (i.e., all threads run-
+5.3 Techniques Combining Workload Alloca-                                 ning full speed on the initially assigned cores). Hence, the y-axes
+    tion and DVFS                                                         in our MTTF, performance, temperature and energy plots demon-
+   In investigating the interaction of scheduling and DVFS policies,      strate the normalized values for these parameters. This allows us to
+we employ Balance_Location to represent the scheduling policies.          evaluate each policy on the same scale.
+It has useful properties in terms of both reliability and performance.       Srinivasan et al. [32] reported the average MTTF of the SPEC
+It does only enough migration to find the best location for each          suite simulated for 65nm at 1.0V of supply voltage as 7 years, and
+thread, then only migrates when application characteristics change.       our model is calibrated to the same value. However, if the reliabil-
+   Balance_Location & DVFS-Threshold works by initially us-               ity model was re-calibrated to assume a shorter or longer MTTF,
+ing Balance_Location to assign potentially hotter threads to cooler       the policies would still display the same trends; only the absolute
+locations on the die. If this technique fails to keep a given core un-    numbers would change depending on process technology, baseline
+der the specified threshold, the core employs dvfs_t until it is under    MTTF, and the system being modeled. Therefore, we show results
+the thermal threshold.                                                    based on the % change in MTTF values, rather than absolute num-
+   Balance_Location & DVFS_Performance uses the Balance_-                 bers, so that the dependence on the absolute calibration is minimal.
+Location policy to allocate jobs to cores, and runs dvfs_perf_t at the
+same time to decide on the V/f settings of the cores.                     6.1 Full Core Utilization
+   Balance_Location & DVFS-Location assigns the location V/f                 Sections 6.1.1 to 6.1.3 examine the case where all cores are ac-
+settings as in the location_dvfs policy to cores, and performs Balan-     tively running threads.
+ce_Location for allocating the threads. This tends to have the effect
+of assigning the most memory-bound threads in the center zone,            6.1.1 Techniques Utilizing Workload Allocation
+which runs at the 85% setting.                                               This section analyzes the workload allocation policies’ ability
+   Balance_Location uses IPC in assigning threads to locations.           to improve thermal characteristics. The policies that we analyzed
+When combined with DVFS, we must account for the V/f and its              in this section include Stop_Go, Migration, Balance, and Balan-
+effect on the measured IPC. Thus, if a core is running at a lower         ce_Location. The results in Figure 5, which are the average val-
+V/f setting, we scale the measured IPC based on the average per-          ues for all the 16-thread workloads, indicate that Migration, Bal-
+formance hit observed at that V/f level.                                  ance, and Balance_Location have little impact on reliability in this
+                                                                          scenario—this is because cores are fully utilized and most of our
+6.    EXPERIMENTAL RESULTS                                                workloads are highly homogeneous.
+   In this section we demonstrate that the framework we proposed             In the one heterogeneous workload, the effect is still small. In
+allows us to evaluate a large set of previously proposed and new          that case, the Balance and Balance_Location policies each improve
+scheduling algorithms, in terms of performance, power, tempera-           reliability by 4.4% with minimal impact (less than 1%) on perfor-
+ture, and processor lifetime (reliability). We show that having a         mance, energy, and average temperature. Thus, in the absence of
+fully integrated model, including a reliability model that accounts       idle cores, these policies are less effective than the ones with volt-
+for all the major causes of temperature-induced hard failures, sheds      age and frequency scaling, which we discuss in Section 6.1.2.
+some new light on CMP scheduling.                                            The Stop_Go policy was notably different than the policies dis-
+   Section 5 identified a wide assortment of thread management            cussed above, as it has the ability to cool a core even in the absence
+policies. In evaluating those policies in various execution scenar-       of idle cores. Stop_Go improved the MTTF by 65%, but with a
+ios, this section attempts to sort out the key issues facing the de-      hefty 52% decrease in performance and a 69% increase in energy
+signer of a multicore thread management policy, such as: (1) how          consumption. Average temperature of the processor was reduced
+to properly combine scheduling/migration policies, DVFS policies,         by 8%. The Stop_Go policy is prone to creating large temperature
+and DPM policies; (2) how to address peak temperature effects             variations due to switching among active and idle states. However,
+without exacerbating thermal cycling; (3) whether to use reactive         the frequency of stalling/resuming execution was high enough that
+or proactive DVFS policies; and (4) how to address thermal asym-          the temperature variations were of a relatively low magnitude, and
+metries in the chip multiprocessor.                                       the reliability of the core was dominated by the thermal hot spots
+   We group the experiments in four major categories. Section 6.1         only (i.e., no significant increase in cycling-based failures).
+looks at full core utilization scenarios with a varying number of
+memory-bound and CPU-bound threads, using the five 16-thread              6.1.2 Techniques with Voltage/Frequency Scaling
+workloads from Table 5. For these experiments, threads are initially         Figure 6 shows the effect of the DVFS policies on reliability
+placed on the cores randomly (i.e., with neither a clearly good or        when the cores are fully utilized. DVFS has a much more signifi-
+bad initial allocation). Section 6.2 examines systems that are less       cant impact than the workload allocation policies, due to its ability
+than fully utilized, with 12 or 14 jobs (i.e., 2 or 4 idle cores). Sec-   to reduce temperature even in the face of full utilization.
+tion 6.3 takes a deeper look at the consequences of the initial alloca-      In particular, we find several key insights in these results. First, it
+tion of idle cores. Finally, Section 6.4 investigates how reliability,    is important to always keep an eye on peak temperature. dvfs_perf,
+performance, and energy vary when the system has DPM capabil-             by selectively choosing which threads to scale, sacrifices very little
+ities, and which schedulers best complement DPM to achieve the            in performance, but does lag a bit behind in MTTF in comparison to
+desired trade-offs for reliability, energy, and performance.              other DVFS policies. This is because it ignores thermal warnings.
+                                                                                   Figure 6: Comparison of DVFS-Based Techniques
+
+
+
+
+  Figure 5: Comparison of Workload Allocation Techniques
+
+
+dvfs_perf_t reacts upon reaching a threshold as well, and as a result
+loses some performance, but it has one of the lowest failure rates.
+   Second, we see significant benefits of proactive techniques over                   Figure 7: Comparison of Hybrid Techniques
+traditional reactive techniques. It is interesting to note that the other
+DVFS policies beat dvfs_t along all axes, which is particularly sur-
+prising on the performance front. This is surprising because (1)            by choosing the allocation with the lowest peak temperature. Once
+dvfs_t only scales when it has to, and (2) the other DVFS poli-             we determined the active cores, we performed the initial placement
+cies default to dvfs_t upon reaching the threshold temperature. The         of threads on these cores randomly.
+reason that other DVFS policies perform better is that proactively             We first focus on the case with 14 active threads in Figure 8.
+scaling a thread (whose performance is tolerant to scaling) reduces         Although this utilization is close to the full utilization examples
+the temperature in that area, and often prevents other neighboring          explored in Section 6.1, the impact on the reliability of the various
+threads from reaching the threshold.                                        policies changes significantly.
+   Third, we see that it is critical that our thread management policy         Policies with frequent workload re-allocation (i.e., Balance, Mi-
+understands the inherent thermal asymmetry of the multicore sys-            gration) result in poorer reliability with respect to the other poli-
+tem (an asymmetry that will exist, in all likelihood, for any mul-          cies. The Balance policy assigns jobs to cores based on tempera-
+ticore greater than four cores). The policy that provides the best          ture rather than location and often mistakes a core that is cool now
+balance among all three metrics is location_dvfs, with a failure rate       for a core that will stay cool in the future. Migration policies that
+that is half of the baseline and a minimal performance loss (3.8%           focus heavily on current temperatures are prone to this type of error.
+of default). To further investigate this point, we compared loca-           The Migration result has the same issue. Policies that migrate more
+tion_dvfs with homogeneous proactive scaling: all cores at 85%              than necessary have two distinct reliability disadvantages over the
+DVFS and all cores at 95% DVFS. Among these DVFS techniques,                other techniques. First, migrating too often will tend to thwart the
+location_dvfs still demonstrate the best trade-off point. The 95%-          DPM manager, which does not put a core to sleep until it has been
+DVFS result improved performance over location_dvfs by less than            idle for awhile. This increases the time cores spend running at hot-
+1%, but gave up 25% in processor lifetime. The 85%-DVFS in-                 ter temperatures. Second, migration causes thermal cycling. This
+creased reliability significantly, but more than doubled the perfor-        was the dominant cause of the low MTTF results, as the power
+mance cost compared to location_dvfs.                                       variations between idle and active states create cycles of a signifi-
+   Our techniques are easily adapted to other sources of asymmetry,         cant magnitude. We examine the effects of migrations in detail in
+such as process variations, as long as we can quantify the effects of       Section 6.4.
+such variations on the thermal and power properties of each core.              The Stop_Go policy achieves 1.25 times improvement in MTTF.
+                                                                            However, this comes at the cost of a drastic performance and energy
+6.1.3 Hybrid Techniques                                                     cost. Although Stop_Go could be utilized effectively as a back-up
+   We examine the hybrid techniques in this section, and show the           policy for thermal emergencies to guarantee that temperature does
+results in Figure 7. When we compare the hybrid policies against            not exceed a given peak value, it is inefficient if used frequently.
+the DVFS based policies, we see that DVFS-based policies are                   Among the DVFS policies, dvfs_perf achieves the best perfor-
+improved little by combining them with job allocation policies.             mance of less than 2% degradation, while location_dvfs results in
+Again, this is due to the limited gains from reorganizing running           the longest system life time with a 69% improvement. The hybrid
+threads on a fully utilized system.                                         policy Balance_Location&location_dvfs seems to provide the best
+                                                                            trade-off point among the policies as it achieves almost the same
+6.2 Impact of Partial Utilization                                           MTTF as location_dvfs with better performance and lower energy
+   It is expected that most multicore systems will be utilized less         consumption. The reason the hybrid scheduling policies still pro-
+than 100% most of the time. This is true especially for the CMPs            vide only small gains over DVFS policies alone is that we start the
+in the server domain. To evaluate the impact of scheduling mech-            experiments with an optimal placement of idle cores. We examine
+anisms on reliability when some cores are idle, we used the 12              this further in Section 6.3.
+and 14 thread workloads described in Table 5: a CPU-bound and                  We expect that as technology scaling continues, the bandwidth
+a mixed CPU-bound/memory-bound workload for each of the 12                  for performing voltage scaling will decrease due to the leakage
+and 14 thread cases. The results represent the average of the CPU-          power and transistor threshold voltage limitations. This situation
+bound and mixed cases for the 12 and 14 thread experiments. At the          will require other mechanisms for managing power and tempera-
+beginning of each simulation, we decided which cores to leave idle          ture. Balance_Location is our best candidate for workload alloca-
+                                                                            experiments. For example, the policy dvfs_perf_t experiences a
+                                                                            15% reduction in MTTF in comparison to the best allocation when
+                                                                            either the worst or in-order idle core locations are used. This de-
+                                                                            crease in reliability is comparable to the default policy’s 20% re-
+                                                                            duction in MTTF when using the in-order and worst case initial
+                                                                            assignments.
+                                                                               On the other hand, when dvfs_perf_t was combined with Bal-
+                                                                            ance_Location, we were able to achieve a level of reliability to
+                                                                            match that of the optimal initial placement. This indicates that
+                                                                            one of the major roles of the allocation policy is reassigning thread
+                                                                            topologies to assist other policies that optimally set core voltage
+      Figure 8: Effect of System Utilization (2 Idle Cores)                 and frequency. Thus, in a real CMP system, it is critical to com-
+                                                                            bine a conservative migration technique (i.e., one which avoids un-
+                                                                            necessary migrations and does not create cycling) with DVFS tech-
+                                                                            niques. In the absence of an intelligent migration and scheduling
+                                                                            policy, it is difficult to avoid detrimental configurations over time.
+
+                                                                            6.4 Interactions with Power Management
+                                                                               Dynamic power management (DPM) takes advantage of pro-
+                                                                            longed core idleness to put the core into a sleep mode. In sleep,
+                                                                            the power consumption of the core is greatly diminished. Each of
+                                                                            the policies presented is compatible with dynamic power manage-
+                                                                            ment, but some are able to use DPM opportunities better. Taking
+                                                                            a closer look at two extremes, we first examine two policies, Mi-
+      Figure 9: Effect of System Utilization (4 Idle Cores)                 gration and Balance_Location&location_dvfs for the het_12_mix
+                                                                            workload with 12 CPU and memory bound threads. Comparing the
+                                                                            thermal traces for Migration and Balance_Location&location_dvfs
+tion, as it significantly increases reliability with negligible perfor-     (Figure 10), the Migration policy suffers significant thermal cy-
+mance loss.                                                                 cle variations. For Migration, we demonstrate the thermal cycles
+   Figure 9 shows the 12-core utilization results. Because chip tem-        observed on two cores due to frequent re-allocation of workloads.
+peratures are lower overall, the magnitude of potential reliability         For the Balance_Location&location_dvfs policy, we show all the
+gains is reduced. In fact, policies that only react to thermal thresh-      cores’ thermal traces, and observe that each core’s temperature is
+olds see no activity in this scenario (e.g., Migration, dvfs_t, etc.)       stable and lower than the threshold.
+and they give the same results as the default policy, as the core              This stability along with a lower peak temperature results in
+temperatures do not exceed the threshold. Policies that proactively         significantly higher reliability. Balance_Location&location_dvfs
+look for opportunities can still improve processor lifetime signifi-        turns out to be the best policy when paired with DPM, and it pro-
+cantly, and even Balance_Location provides small gains. Policies            vides an increase in MTTF of 36% over Migration, while the per-
+that proactively migrate based on current temperature (Balance)             formance difference is only 1.5%. So we see that scheduling poli-
+make mistakes and create thermal cycling.                                   cies which effectively manage thread locations and DPM policies
+                                                                            can reduce processor temperatures and improve reliability. At the
+6.3 Effect of Initial Idle Core Locations                                   same time, DPM can also lead to greater thermal cycling which
+   In this section, we examine each policy’s ability to adapt to dif-       can counteract some of the MTTF gains that result from the lower
+ferent initial workload mappings on the processor topology. For ex-         power levels of sleeping cores. The adverse effect of DPM on re-
+ample, what happens when the initial mapping of threads to cores            liability due to thermal cycles is also emphasized in previous work
+is highly suboptimal? This could happen with a topology-ignorant            [25]. Thus, when we include the effects of thermal cycling fail-
+scheduler (a likely scenario early on), or just because of jobs enter-      ures, we observe that the traditional assumptions for finding op-
+ing or leaving the system. We examined several ways of performing           timal strategies are incomplete; it would be wise to re-design the
+the initial allocation: best possible, worst possible, and an in-order      DPM policies with a reliability perspective.
+placement of jobs on cores.                                                    Despite DPM’s possible impact on reliability, we do see (Fig-
+   The best case, i.e., the case with the lowest peak temperature, for      ure 11) that even in the face of this cycling phenomena, DPM was
+12 active threads is leaving the center cores (5, 6, 9, 10) idle, and for   an overall win for all policies with the exception of Balance. In this
+14 active threads when cores 6 and 9 are idle. The worst case oc-           figure, we show the average results over heterogeneous CPU-bound
+curs when the corner cores are idle. Specifically, the worst case for       workloads. The reason that Balance received no benefit from using
+a system with 12 active cores is leaving the cores 0, 3, 12, and 15         DPM is its proactive mechanism that keeps moving hot threads to
+idle. Similarly, when 14 cores are active, leaving two of the corner        colder cores. The result is that no core is idle long enough to trigger
+cores on the opposite sides idle, such as cores 0 and 15, represent         the sleep mode. On the other end of the spectrum, Migration and
+the worst assignment. The in-order initial assignment allocates all         Balance_Location show gains of 27% and 20% in MTTF for the
+available threads on the cores starting from core 0 ascending. This         average case respectively. The reliability improvement in DVFS-
+method initially leaves cores 12–15 idle when 12 threads are ac-            based techniques are less prominent and range between 4%–8%
+tive, and cores 14–15 idle with 14 threads are active. The in-order         MTTF increase.
+method attempts to model a naive scheduler that assigns jobs to                The policy Stop_Go receives a large benefit in energy from using
+cores using a first-available strategy.                                     DPM mechanisms, reducing power consumption by 27% in com-
+   We have observed notable differences in reliability between the          parison to the no-DPM case. If confronted with a design choice that
+       Figure 10: (a) Cycles Caused by the Migration Policy; (b) Stable Thermal Profile of Balance_Location & location_dvfs
+
+                                                                                                                    Migrations
+                                                                                                          ALL     corner center side
+                                                                              balance                     4.76    4.75     5.00    4.65
+                                                                              migration                   7.66    8.36     5.00    8.66
+                                                                              balance_loc                 2.73    1.25     1.60    4.03
+                                                                              balance_loc& dvfs_t         3.65    3.85     2.10    4.33
+                                                                              balance_loc& dvfs_perf_t    3.64   3.86      2.10    4.30
+                                                                              balance_loc& loc_dvfs       3.54    3.70     2.20    4.12
+                                                                                                               V/f Setting Changes
+                                                                              dvfs_perf_t                 2.98    2.60     0.80    4.20
+                                                                              dvfs_perf                   0.83    1.40     0.00    1.00
+                                                                              dvfs_t                      3.40    3.60     0.40    4.80
+                                                                              balance_loc& dvfs_t         3.64    4.40     1.10    4.53
+                                                                              balance_loc& dvfs_perf_t    3.58   4.00      2.00    4.20
+                                                                        Table 6: Number of Migrations and V/f Changes (per Second)
+
+
+         Figure 11: MTTF and Energy Effects of DPM
+
+
+requires the simplicity of Stop_Go, DPM could help regain much of
+the energy lost from the constant start and stop of individual cores.
+   In Table 6 we show the number of migrations and number of V/f
+setting changes per second for the policies to provide a more com-
+plete understanding of the runtime behavior. The policies that are
+not listed do not utilize migrations or DVFS. The columns marked               Figure 12: Contributions of Failure Mechanisms
+as ALL, corner, center, and side refer to the average number across
+all cores, across only the corner cores, center cores and side cores,
+respectively. The results are with DPM, and for the CPU-bound           of thermal cycles, we would conclude that reliability had increased.
+heterogeneous workload with 14 threads (i.e., 2 idle cores). Mi-        However, because of the number of thread migrations, they create
+gration has a significantly higher number of thread movements           large thermal cycles (TC). The Location_dvfs and the hybrid Bal-
+in comparison to other policies: almost 3 times more than Bal-          ance_Location&Location_dvfs policies, on the other hand, reduce
+ance_Location. The low migration count of Balance_Location is           the failure rates caused by thermal hot spots without introducing
+a result of its ability to match the performance characteristics of     a significant amount of thermal cycling failures. Note that in the
+applications with the thermal behavior of cores. Compared to Bal-       default case, as there is no workload re-allocation, temperature is
+ance_Location only, combining Balance_Location with DVFS in-            stable and no cycles are observed.
+creases the frequency of migrations, as the temperature profile of
+the cores vary more when their V/f settings are dynamically ad-         7. CONCLUSIONS
+justed. Among the DVFS policies, dvfs_perf has the lowest number
+                                                                           This paper analyzes how job scheduling and power management
+of changes as it only alters the V/f setting of applications tolerant
+                                                                        policies affect system lifetime. It demonstrates a novel CMP simu-
+to operating at a slower speed. Also, dvfs_perf_t reduces the fre-
+                                                                        lation framework which is able to simulate thermal dynamics over
+quency of changes in comparison to dvfs_t as it proactively adjusts
+                                                                        far longer time periods than typical architectural simulators, at high
+the V/f setting and triggers the thermal threshold fewer times.
+                                                                        accuracy. It evaluates a number of techniques in terms of their ef-
+   To better understand the tension between the different failure
+                                                                        fect on reliability, temperature, energy, and performance.
+mechanisms, Figure 12 presents a breakdown of the contribution
+                                                                           The results in this paper provide several key insights that will
+of different failure types to reliability. This figure demonstrates
+                                                                        serve us well in the design of future thermal management policies:
+the normalized average failure rate for our two best and two worst
+policies (i.e., best/worst in terms of their average MTTF results).     • It is critical to consider thermal cycling effects in addition to
+The workload for this experiment is the heterogeneous CPU-bound           peak temperature effects. We saw two policies that erroneously
+workload with 12 threads. Recall that the failure rate is inversely       appear to increase lifetime when thermal cycling was ignored.
+proportional to MTTF. This figure shows that Balance and Mi-
+gration reduce the probability of failures due to electromigration      • Thermal cycling is not a significant effect in a fully utilized sys-
+(EM) and dielectric breakdown (TDDB). If we ignored the effect            tem, as the variance in power between running threads was not
+     shown to be sufficiently high to cause harmful effects. However,          [11] J. Donald and M. Martonosi. Techniques for multicore thermal
+     when cores are idle, it is important that we manage the idle cores             management: Classification and new exploration. In International
+     in a way that does not exacerbate thermal cycling.                             Symposium on Computer Architecture (ISCA), pages 78–88, 2006.
+                                                                               [12] M. Gomaa, M. D. Powell, and T. N. Vijaykumar. Heat-and-Run:
+• Conservative policies that minimize migration not only reduce                     leveraging SMT and CMP to manage power density through the
+  thermal cycling, but also maximize our ability to exploit sleep                   operating system. In Architectural Support for Programming
+                                                                                    Languages and Operating Systems (ASPLOS), pages 260–270, 2004.
+  states via DPM.
+                                                                               [13] S. Gunther, F. Binns, D. M. Carmean, and J. C. Hall. Managing the
+• Understanding thermal asymmetries, which are either due to the                    impact of increasing microprocessor power consumption. In Intel
+                                                                                    Technology Journal, 2001.
+  layout of the processor or due to process variation, is critical
+                                                                               [14] S. Heo, K. Barr, and K. Asanovic. Reducing power density through
+  to effective thermal management. Not understanding thermal                        activity migration. In ISLPED, pages 217–222, 2003.
+  variance causes much unnecessary movement because we can-                    [15] Intel pentium 4 processor in the 423-pin package thermal design
+  not discern between a hot thread and a hot core. Understanding                    guidelines. Technical Report 249203-001, Intel, November 2000.
+  the thermal variance allows us to employ an asymmetric thermal               [16] R. Iyer et al. QoS policies and architecture for cache/memory in
+  policy that accounts for and even exploits that asymmetry.                        CMP platforms. In ACM Sigmetrics, pages 25–36, 2007.
+                                                                               [17] Failure mechanisms and models for semiconductor devices, JEDEC
+• Proactive techniques that apply DVFS to frequency-tolerant ap-                    publication JEP122C. http://www.jedec.org.
+  plications can raise the performance of the entire system. This              [18] A. Karlin, M. Manesse, L. McGeoch, and S. Owicki. Competitive
+  is somewhat non-intuitive, as the frequency-tolerant applications                 randomized algorithms for nonuniform problems. In Algorithmica,
+  are also the coolest applications. However, by lowering overall                   pages 542–571, 1994.
+  temperatures chip-wide, this allows the hot applications to run              [19] A. Kumar, L. Shang, L.-S. Peh, and N. K. Jha. HybDTM: a
+                                                                                    coordinated hardware-software approach for dynamic thermal
+  longer without triggering thermal events.                                         management. In Design Automation Conference (DAC), pages
+                                                                                    548–553, 2006.
+   In future work, we will be addressing reliability management of             [20] R. Kumar, D. M. Tullsen, and N. P. Jouppi. Core architecture
+multithreaded multicore systems. We will seek to provide a com-                     optimization for heterogeneous chip multiprocessors. In Parallel
+prehensive understanding of how parallel workloads differ from                      Architectures and Compilation Techniques (PACT), pages 23–32,
+single-threaded benchmarks, and propose novel management tech-                      2006.
+niques to address the particular characteristics of such workloads.            [21] R. Kumar, V. Zyuban, and D. M. Tullsen. Interconnections in
+                                                                                    multi-core architectures: Understanding mechanisms, overheads and
+                                                                                    scaling. In ISCA, pages 408–419, 2005.
+Acknowledgment                                                                 [22] S. Murali et al. Temperature control of high-performance multicore
+The authors would like to thank Erez Zadok as well as all of the anonymous          platforms using convex optimization. In Design Autom. and Test in
+reviewers for their help in improving the paper. This research was supported        Europe (DATE), pages 110–115, 2008.
+in part by NSF grant CCF-0702349, GSRC, NSF GreenLight, Cisco, CNS,            [23] H. Nguyen. Multilevel interconnect reliability on the effects of
+Sun Microsystems, and UC Micro grant 06-198.                                        electro-thermomechanical stresses. Ph.D. dissertation, University of
+                                                                                    Twente, Netherlands, 2004.
+                                                                               [24] M. Powell, E. Schuchman, and T. Vijaykumar. Balancing resource
+8.      REFERENCES                                                                  utilization to mitigate power density in processor pipelines. In
+ [1] M. V. Biesbrouck, T. Sherwood, and B. Calder. A co-phase matrix to             International Symposium on Microarchitecture, pages 294–304,
+     guide simultaneous multithreading simulation. In International                 2005.
+     Symposium on Performance Analysis of Systems and Software, pages          [25] T. S. Rosing, K. Mihic, and G. D. Micheli. Power and reliability
+     45–56, 2004.                                                                   management of SoCs. In IEEE Transactions on VLSI, 15(4), pages
+ [2] N. L. Binkert, E. G. Hallnor, and S. K. Reinhardt. Network-oriented            391–403, April 2007.
+     full-system simulation using M5. In Computer Architecture                 [26] T. Sherwood, G. H. E. Perelman, and B. Calder. Automatically
+     Evaluation using Commercial Workloads (CAECW), 2003.                           characterizing large scale program behavior. In ASPLOS, 2002.
+ [3] P. Bose. Power-efficient microarchitectural choices at the early          [27] K. Skadron. Hybrid architectural dynamic thermal management. In
+     design stage. In Keynote Address, Workshop on Power-Aware                      Design Autom. and Test in Europe (DATE), pages 10–15, 2004.
+     Computer Systems, 2003.                                                   [28] K. Skadron, M. Stan, W. Huang, S. Velusamy, K. Sankaranarayanan,
+ [4] D. Brooks and M. Martonosi. Dynamic thermal management for                     and D. Tarjan. Temperature-aware microarchitecture. In ISCA, pages
+     high-performance microprocessors. In High-Performance Computer                 2–13, 2003.
+     Architecture (HPCA), pages 171–182, 2001.                                 [29] J. Smith. Characterizing computer performance with a single
+ [5] D. Brooks, V. Tiwari, and M. Martonosi. Wattch: a framework for                number. In Communication of ACM, 31(10), pages 1202–1206, 1988.
+     architectural-level power analysis and optimizations. In International    [30] J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers. The case for
+     Symposium on Computer architecture, pages 83–94, 2000.                         lifetime reliability-aware microprocessors. In ISCA, pages 276–287,
+ [6] D. C. Burger and T. M. Austin. The simplescalar tool set, version 2.0.         2004.
+     Technical Report CS-TR-97-1342, University of Wisconsin,                  [31] J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers. The impact of
+     Madison, June 1997.                                                            technology scaling on lifetime reliability. In International Conference
+ [7] J. Chang and G. S. Sohi. Cooperative cache partitioning for chip               on Dependable Systems and Networks (DSN), pages 177–186, 2004.
+     multiprocessors. In ACM International Conference on                       [32] J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers. Lifetime
+     Supercomputing, pages 242–252, 2007.                                           reliability: Toward an architectural solution. In IEEE Micro,
+ [8] A. K. Coskun, T. Rosing, and K. Whisnant. Temperature aware task               25(3):70–80, 2005.
+     scheduling in MPSoCs. In Design Autom. and Test in Europe                 [33] H. Su, F. Liu, A. Devgan, E. Acar, and S. Nassif. Full-chip leakage
+     (DATE), pages 1659–1664, 2007.                                                 estimation considering power supply and temperature variations. In
+ [9] G. Dhiman and T. Rosing. Dynamic voltage frequency scaling for                 ISLPED, pages 78–83, 2003.
+     multi-tasking systems using online learning. In International             [34] D. Tarjan, S. Thoziyoor, and N. P. Jouppi. CACTI 4.0. Technical
+     Symposium on Low Power Electronic Design (ISLPED), pages                       Report HPL-2006-86, HP Laboratories Palo Alto, 2006.
+     207–212, 2007.                                                            [35] Q. Wu, M. Martonosi, D. W. Clark, V. J. Reddi, D. Connors, Y. Wu,
+[10] J. Donald and M. Martonosi. Leveraging simultaneous                            J. Lee, and D. Brooks. A dynamic compilation framework for
+     multithreading for adaptive thermal control. In Second Workshop on             controlling microprocessor energy and performance. In International
+     Temperature-Aware Computer Systems, 2005.                                      Symposium on Microarchitecture, pages 271–282, 2005.
+

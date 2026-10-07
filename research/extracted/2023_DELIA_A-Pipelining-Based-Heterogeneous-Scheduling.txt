@@ -1,0 +1,929 @@
+Received 22 February 2023, accepted 31 March 2023, date of publication 5 April 2023, date of current version 12 April 2023.
+Digital Object Identifier 10.1109/ACCESS.2023.3264828
+
+
+
+
+A Pipelining-Based Heterogeneous Scheduling
+and Energy-Throughput Optimization Scheme
+for CNNs Leveraging Apache TVM
+DELIA VELASCO-MONTERO 1 , BART GOOSSENS 2 , (Member, IEEE),
+JORGE FERNÁNDEZ-BERNI 1 , ÁNGEL RODRÍGUEZ-VÁZQUEZ 1 , (Life Fellow, IEEE),
+AND WILFRIED PHILIPS2 , (Senior Member, IEEE)
+1 Instituto de Microelectrónica de Sevilla, Universidad de Sevilla-CSIC, 41092 Seville, Spain
+2 Image Processing and Interpretation Research Group, imec-Ghent University, 9000 Ghent, Belgium
+
+Corresponding author: Delia Velasco-Montero (delia@imse-cnm.csic.es)
+This work was supported in part by the Flemish Government (Belgium) through AI Research Program by Project SEMIoTICS under Grant
+PID2021-128009OB-C31; in part by MCIN/AEI/10.13039/501100011033 and EU ‘‘ERDF: A Way of Making Europe,’’ through Project
+ULTIMATE under Grant TED2021-131835B-I00; in part by MCIN/AEI/10.13039/501100011033 through the European Union
+NextGenerationEU/ PRTR, by the U.S. Office of Naval Research under Grant N00014-19-1-2156; and in part by the European
+Commission and Junta de Andalucía through Erasmus+ Traineeship Program.
+
+
+
+
+  ABSTRACT Extracting information of interest from continuous video streams is a strongly demanded
+  computer vision task. For the realization of this task at the edge using the current de-facto standard approach,
+  i.e., deep learning, it is critical to optimize key performance metrics such as throughput and energy con-
+  sumption according to prescribed application requirements. This allows achieving timely decision-making
+  while extending the battery lifetime as much as possible. In this context, we propose a method to boost
+  neural-network performance based on a co-execution strategy that exploits hardware heterogeneity on edge
+  platforms. The enabling tool is Apache TVM, a highly efficient machine-learning compiler compatible with
+  a diversity of hardware back-ends. The proposed approach solves the problem of network partitioning and
+  distributes the workloads to make concurrent use of all the processors available on the board following
+  a pipeline scheme. We conducted experiments on various popular CNNs compiled with TVM on the
+  Jetson TX2 platform. The experimental results based on measurements show a significant improvement in
+  throughput with respect to a single-processor execution, ranging from 14% to 150% over all tested networks.
+  Power-efficient configurations were also identified, accomplishing energy reductions above 10%.
+
+
+  INDEX TERMS Apache TVM, continuous inference, convolutional neural networks, edge vision, hetero-
+  geneous processing, jetson TX2, performance optimization.
+
+
+I. INTRODUCTION                                                                                 resource-constrained embedded devices calls for efficient
+Edge computing, which brings computation close to the data                                      implementations. This remains a challenge, especially in
+acquisition system, i.e., sensors, constitutes the reference                                    the scope of edge applications requiring real-time decision-
+paradigm to replace cloud-based solutions for a wide set                                        making and/or low-energy inference.
+of computer vision applications. It permits to save band-                                          The trade-offs related to the realization of vision at the edge
+width, remove communication latency, and preserve infor-                                        have been addressed from diverse perspectives. Specific and
+mation privacy. However, the execution of computation-                                          progressively more efficient devices have been developed in
+ally demanding convolutional neural networks (CNNs) on                                          the last few years, such as low-power edge GPUs [1], [2], [3],
+                                                                                                neural-network accelerators [4], embedded CPUs [5], or ten-
+   The associate editor coordinating the review of this manuscript and                          sor processor units [6]. Strategies based on multiple devices
+approving it for publication was Giovanni Merlino               .                               have also been proposed, including hybrid cloud-edge
+
+                                           This work is licensed under a Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 License.
+VOLUME 11, 2023                                        For more information, see https://creativecommons.org/licenses/by-nc-nd/4.0/                         35007
+                                     D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+solutions [7], [8], [9], [10], [11], [12], [13] and collaborative        on both ARM CPU and Mali GPU. Pipe-it [22] leverages
+systems in the framework of the Internet of Things [14], [15],           big.LITTLE technology – big and small quad-core CPU
+[16], [17], [18]. These methods are highly dependent on the              clusters – by applying layer-level network distribution in
+availability of effective communication networks and require             a co-execution scheme also based on ARM-CL. Similarly,
+additional algorithms, which increase resource utilization and           the authors in [23] built a pipeline processing scheme on a
+implementation cost. An intermediate solution consists in                multi-core platform by splitting the network into processing
+exploiting hardware heterogeneity (iii). This means properly             stages assigned to groups of cores. An heterogeneous two-
+leveraging the computational resources available on edge                 stage processing pipeline on Jetson AGX Xavier has also
+platforms for the sake of boosting the inference perfor-                 been proposed [24]. In this work, the accelerator included
+mance. The present work applies this intermediate solution,              in the board performs most of the CNN operations and then
+which exploits heterogeneous processors included in an edge              offloads the last layers of the network to the CPU. When
+platform through a co-execution collaborative scheme. The                processing batches of images with that pipeline-based strat-
+advantages of this approach are as follows:                              egy, inference speedups are achieved. A more comprehensive
+   • There is no need for additional infrastructure, which is            framework is represented by DeepX [25], which constitutes
+     particularly relevant given that many edge systems and              a solution to execute neural networks on multiple proces-
+     mobile devices already integrate a variety of processing            sors through layer compression and workload distribution.
+     components: CPU, GPU, TPU, NPU, DSP, etc.                           Scheduling of machine-learning (ML) tasks over heteroge-
+   • Compared to cloud-based and multiple-node collabora-                neous FPGA-GPU or multi-FPGA embedded systems have
+     tive solutions, local mobile computing (1) facilitates data         also been explored [26], [27], as well as layer-pipelined CNN
+     privacy and (2) mitigates the dependency on a commu-                acceleration schemes tailored for FPGAs [28]. In contrast to
+     nication network with enough bandwidth.                             these approaches, our work aims to set the basis for gener-
+   • The cost of inter-device data transmission of cloud-                alized heterogeneous hardware exploitation, by employing
+     dependent solutions is saved. This is important given               1) the TVM library, which is compatible with a great variety
+     that data transfer latencies in the cloud are often high –          of hardware devices; and 2) allowing the scheduler to select
+     especially on 3G and LTE [8], [19].                                 any combination of processing devices and number of stages.
+   • As long as the network model does not change, the                   We also focus on processing continuous image streams, both
+     model partition algorithm only needs to be performed                in a fast-response or energy-saving manner.
+     once; thus, its cost can be amortized over continuous                  On the other hand, cloud-based and edge-only approaches
+     executions.                                                         constitute other heterogeneous techniques enabling edge
+   This manuscript is organized as follows. Next sub-sections            applications. Neurosurgeon [8] employs Jetson TX1 and
+of present Sect. I establish the context and scope of our study          a cloud server to dynamically adapt network partitioning
+within the state-of-the-art and emphasizes the relevance of the          according to estimated runtimes or energy consumption.
+reported results. Section II describes the proposed approach             Low-cost low-energy devices, such as Raspberry Pi and
+and mathematically formulates the optimization problem.                  Odroid, have also been employed in edge-cloud hybrid
+Experimental set-up and practical implementation details are             solutions with dynamic network conditions [15], [29].
+provided in Sect. III. Corresponding performance results are             Multi-node edge-edge solutions can also optimize network
+reported in Sect. IV. Finally, we discuss the strengths of               execution by applying layer fusion, data parallelism, or net-
+the proposed method in Sect. V, highlighting how it can be               work partition over clusters of edge devices [18], [19], [30],
+extended to allow dynamic runtime scheduling.                            [31], [32], [33]. For instance, [34] proposes spatial and chan-
+                                                                         nel partitioning to parallelize convolutional layers in multiple
+A. RELATED WORK                                                          devices using dynamic programming-based search. However,
+The key question we aimed to answer with this study is                   in these methods, the need for data transfer between devices
+whether the hardware resources accessible in heterogeneous               in a network increases communication latency and incurs
+edge platforms can be effectively exploited to attain signif-            high network traffic and privacy risks. Moreover, an extra
+icant performance enhancement. Certainly, previous works                 economic cost is also frequently incurred owing to the com-
+on heterogeneous edge computing evidenced the advan-                     plexity of distributed computing mechanisms.
+tages of this approach. For instance, the effectiveness of                  Finally, an example of approach exploiting heteroge-
+CNN workload distribution on the CPU-GPU architecture                    neous computing resources for real-time applications is
+of Google Pixel 2 was evaluated in [20]. In this case, the               LoPECS [35], which enables running autonomous driving
+proposed strategy is based on hardware allocation accord-                services on a resource-constrained device.
+ing to the system runtime state, in contrast to network par-
+tition schemes. Neural-network acceleration on the ARM
+big.LITTLE architecture through heterogeneous processing                  B. MOTIVATION
+has also been reported [21], [22], [23]. Pipe-all [21] carries           A summary of related works reported in the literature is
+out network partitioning to implement a CPU-GPU pipeline                 provided in Table 1. Although previous studies showed the
+schedule with ARM Compute Library (ARM-CL) running                       potential of heterogeneous execution on specific platforms,
+
+35008                                                                                                                               VOLUME 11, 2023
+D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+TABLE 1. Related approaches to accelerate DNN inference at the edge. We propose a single-platform heterogeneous scheme that  a leverages a general
+open-source machine-learning compiler (Apache TVM). This scheme has been tested for various CNNs runnning on Jetson TX2. throughput denotes
+the performance improvement in terms of that metric with respect to the performance of a single processor. It can be observed that the proposed
+methodology presents state-of-the-art improvements.
+
+
+
+
+the main challenge is to design a general approach that can                    TVM allows CNN compilation with CUDA as the back-end.
+combine the specific strengths/weaknesses of the various                       Alternatively, for CPU execution, LLVM can be also set as
+CPUs and accelerators in a close to optimal way (e.g., power                   the target back-end of TVM. Inference runtimes for some
+or performance wise). Note that the execution of pro-                          popular CNNs running entirely either on the GPU or CPU
+cessing workloads on different components – TPU, VPU,                          of Jetson TX2 are reported in Fig. 1. Let us highlight two
+CPU, etc. – could be impossible due to software or hard-                       relevant aspects at this point:
+ware incompatibilities. A second challenge is to achieve                          • The inference performance on the two hardware
+efficient distribution of CNN layer operation into process-                          back-ends available in Nvidia Jetson TX2 differs signif-
+ing units. The implementation of dynamic scheduling and                              icantly.
+load balancing constitutes a third remaining challenge (note                      • When deploying neural networks on edge platforms with
+that some approaches require prohibitive search optimization                         TVM, a particular target hardware – CPU or GPU in our
+times [21]). To address these issues, we propose a simple but                        case – must be specified. However, this single-device
+efficient method based on layer-level network mapping into                           approach does not permit optimal exploitation of hetero-
+processors using TVM, a powerful general software compiler.                          geneous hardware resources. For example, under some
+   Apache TVM [36], [37] is an open-source framework                                 conditions, a neural network model may execute faster
+that allows compiling ML workflows on a vast set of hard-                            on the CPU than on the GPU (SqueezeNet in Fig. 1).
+ware back-ends. It is compatible with other ML frame-                             These two important factors motivated us to implement
+works, such as TensorFlow, Keras, MXNet, PyTorch, and                          a hybrid co-execution method in order to 1) fully exploit
+DarkNet. In addition, TVM includes auto-tuner tools – i.e.,                    Jetson TX2 resources, in contrast with realizations based on
+autoTVM [37] and Ansor [38] – to automatically apply                           a single processor; 2) overcome the built-in assumption of
+graph-level and operator-level optimizations – e.g., operation                 TVM concerning single-device execution, which had pre-
+fusion or data transformations – to network graphs, generat-                   cluded its application for CNN-based acceleration of video-
+ing highly efficient machine code. Another asset of TVM is                     stream processing based on heterogeneous co-execution. All
+its so-called RPC interface to remotely cross-compile and run                  in all, these are the contributions of this study:
+ML tasks on an edge device. In summary, the main reasons for                      • To the best of our knowledge, we propose the first
+selecting TVM as the enabling tool for leveraging hardware                           fine-grain multi-back-end method that fully exploits the
+heterogeneity are 1) the generation of highly efficient code,                        TVM compiler. It is an easy-to-implement strategy that
+2) the compatibility with a great deal of hardware devices                           sets the basis for advanced co-scheduling approaches
+(thus becoming closer to the aforementioned general                                  on the multitude of devices compatible with TVM
+approach), and 3) its ease of use.                                                   (in contrast to approaches relying on hardware-specific
+   We evaluated heterogeneous CNN inference on the Nvidia                            libraries such as ARM-CL).
+Jetson TX2 board, a powerful edge device. This platform                           • We experimentally demonstrate the benefits from
+integrates an Nvidia Pascal GPU compatible with CUDA                                 exploiting heterogeneous edge platforms based on the
+for intensive workloads and ARM processor cores. First,                              proposed approach, with improvements up to 2.5×
+we assessed the performance of TVM on this platform.                                 in throughput and energy reductions up to 66%.
+
+VOLUME 11, 2023                                                                                                                                35009
+                                          D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+ FIGURE 1. Inference performance of CNNs running entirely either on (a) the GPU, or (b) CPU of Jetson TX2.
+
+
+
+
+    Our extensive set of experiments encompasses five                            • By pipelining sub-network execution on a stream, dif-
+    CNNs under two compiling settings while quantifying                            ferent hardware components collaboratively and concur-
+    both runtime and energy.                                                       rently execute network operators.
+  • For standalone auto-tuned TVM kernels, we report                             This unified scheme of co-execution can simultaneously
+    optimal configurations on Jetson TX2 to achieve                           exploit all processors on a board. Throughput acceleration
+    high-throughput or low-energy visual inference.                           depends on the slowest sub-graph T = 1/ max{tMi } (imgs/s).
+  • We also demonstrate, through additional experiments                                                                 i
+                                                                              Next, we define a generic graph-level partitioning problem
+    conducted under several system states, the advantages of
+                                                                              to optimize inference performance. Additionally, kernel-level
+    applying the proposed methodology to dynamic runtime
+                                                                              optimization is automatically achieved using TVM auto-
+    scheduling.
+                                                                              tuning, which renders highly efficient ML graphs [38].
+
+II. PROPOSED APPROACH                                                          A. PROBLEM FORMULATION
+In most application scenarios, high-performance visual anal-                  Deep neural networks are computational dataflows com-
+ysis is required. These days, this means the realization of                   monly expressed as directed acyclic graphs (DAGs).
+energy-efficient high-throughput CNN inference on input                       In DAGs, nodes represent operators/layers, whereas edges
+streams. Neural-network performance depends on both the                       represent their dependencies. For instance, nodes in CNNs
+network topology and its mapping on the hardware back-end,                    embody convolutional, fully-connected, or softmax layers,
+as evidenced by the dissimilar runtimes tM shown in Fig. 1.                   as well as their intrinsic parameters – kernel size, feature-map
+Continuous CNN processing on a video stream is illustrated                    size, etc.
+in Fig. 2a. In this case, the system processes the next image                    Given a network model M and a set of available hardware
+as soon as the current frame has been processed, delivering                   devices hi ∈ H, the objective is to split M into sub-graphs
+information at a rate of T = 1/tM (processed images per                       Mi ∈ M running on heterogeneous devices to optimize
+second, img/s).1                                                              particular performance metrics. After network mapping, each
+   In contrast to single-device execution setting, we pro-                    sub-graph Mi will contain a set of nodes from the original
+pose a collaborative distributed scheme to accelerate net-                    graph M without modifying it, i.e., M is unambiguously
+work workloads, as illustrated in Fig. 2b and explained                       expressed as the concatenation of all Mi .
+next.                                                                            In this paper we will assume that networks are sequential
+  • An s-stage network partition is built by splitting the                    – or that they contain a limited number of branches with
+    CNN computational graph into s separate sub-graphs.                       parallelism. This is indeed the case of many widely-used
+    Fig. 2b exemplifies two stages that, sequentially exe-                    classification networks such as AlexNet [39], ResNets [40],
+    cuted, are equivalent to the original network. Thus, net-                 MobileNets [41], [42], and VGG [43]. Many networks con-
+    work splitting does not modify network accuracy.                          taining branches can be expressed as a chain; otherwise,
+  • Each sub-graph workload is compiled by TVM with a                         the methodology proposed in this paper can still be applied,
+    different hardware target. This way, we overcome the                      although the scheduling algorithm needs to be replaced by
+    limitation of single-device execution on TVM.                             a more complex algorithm – scheduling algorithms are well
+                                                                              researched [44], [45], [46]. In this work, we will show the
+                                                                              advantages of the heterogeneous scheduling of neural net-
+  1 In this work, T denotes throughput.                                       work chains (models detailed in Sect. III-B).
+
+35010                                                                                                                                    VOLUME 11, 2023
+D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+                    FIGURE 2. CNN inference on input stream based on (a) single-device execution, or (b) pipeline scheme.
+
+
+   As an example, the two-stage network partition shown in                                Once defined the s-stage distribution, and given nh avail-
+Fig. 2b schedules a model M with N sequential nodes over                               able hardware devices, we can assign the s processing work-
+two devices {h0 , h1 }. Layers with indexes {0, 1, 2, . . . , n − 1}                   loads to these processors in (nh )s possible sequential process-
+are assigned to graph0 and mapped into h0 , whereas graph1                             ing orders. For instance, h2 → h0 → h1 , h0 → h2 → h1 ,
+includes operators {n, n + 1, . . . , N − 1} running on h1 . Infer-                    or h1 → h0 → h1 are examples of device processing orders
+ence throughput optimization in this case involves finding the                         for a three-stage pipeline on three available devices.
+point n ∈ [0, N − 1] that minimizes the maximum runtime                                   All in all, the total number of possible configurations to
+among all stages:                                                                      distribute the workload over s stages is:
+                                         h h1
+                                                                                                                       
+                                 0
+                   n̂ = min[max{tM   (n), tM    (n)}]                          (1)                                N −1
+                            n      0          1                                                                            (nh )s                   (2)
+                                                                                                                  s−1
+   In this equation, runtimes are collected in advance through
+                                                                                       Starting from s = 1, the greater the number of stages s, the
+network profiling – see data collection and related issues
+                                                                                       greater the total number of possible configurations. To avoid
+in Sect. III-C.
+                                                                                       combinatorial explosion in the number of configurations to
+   Fig. 3 illustrates CNN inference on three consecutive
+                                                                                       be analyzed, in the next section we will show how to guide
+frames in two scenarios: (i) single-stage graph execution, and
+                                                                                       the search taking the memory transfer cost into account.
+(ii) two-stage network partition, exemplified with n = 5,
+N = 8. Intermediate data at layer n − 1 must be transferred
+                                                                                       2) SCHEDULING SEARCH PROBLEM
+from the first processing device to the second one. These
+                                                                                       In general, the problem is to find the set of partition points n̂
+two scenarios of network workload distribution will be thor-
+                                                                                       that optimize at least one of the following target metrics:
+oughly studied in Sects. III–IV.
+                                                                                                                             hi
+                                                                                                   Throughput: n̂ = min[max{tM      (n)}]           (3)
+                                                                                                                     n   i        i
+1) SCHEDULING SPACE                                                                                                     X h
+                                                                                                                             i
+In a general case with multiple stages (s), the network parti-                                         Energy: n̂ = min    EM     (n)               (4)
+                                                                                                                        n       i
+tion is defined by a vector n of s−1 splitting points producing                                                              i
+                                                                                                                            X h
+the sub-graphs Mi . In total, an s-stage workload distribution                                        Latency: n̂ = min     tM i
+                                                                                                                                    (n)             (5)
+                                                            −1                                                          n         i
+with N − 1 possible partition points renders up to Ns−1                                                                      i
+possible distributions.2
+                                                                                          Note that in practice there will be a transfer cost due to
+   2 This binomial coefficient is obtained assuming N sequential nodes                 copying data between the devices – symbolically represented
+{l0 , l1 , . . . , lN −1 } in the DAG, and s−1 partition points which can be located   in Fig. 3b with diagonal dashed arrows. So that, in the equa-
+at any of the N − 1 intermediate positions.                                            tions above, we are assuming that this transfer cost is already
+
+VOLUME 11, 2023                                                                                                                                   35011
+                                         D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+FIGURE 3. Network workload distribution for single- and two-stage approaches. CNN classification over three frames is shown for (a) single-stage
+execution on a particular hardware, or (b) two-stage concurrent execution on two hardware devices.
+
+
+
+
+ FIGURE 4. Layer-wise runtimes for MobileNet running entirely either on (a) the GPU, or (b) CPU of Jetson TX2.
+
+
+
+                                hi
+included in the stage cost: tM     i
+                                     is the runtime of stage Mi               also depends strongly on the selected hardware back-end.
+running on device hi which also includes the transfer cost to                 Indeed, we will demonstrate that layer-wise operation dis-
+                                     hi
+copy data to hi . This extra cost ttransfer depends on the trans-             tribution approach can benefit from high-performance com-
+ferred data, which will be different for each partition point                 putation on the GPU while offloading less computationally
+and network architecture. To incorporate data-transfer cost                   demanding layers to the CPU.
+in the problem, we can experimentally measure or estimate                         For instance, the simplest pipeline case is a two-stage net-
+it – see Sect. III-C.                                                         work execution in which case the neural network is pipelined
+   For such an optimization problem, an intuitive general                     on CPU and GPU with only one memory transfer. In this
+approach consists of starting with s = 1 and finding the opti-                case, once we know the layer-wise execution runtime profile
+mal solution. Then, we set s = 2, consider all possibilities,                 {t0hi , t1hi , . . . , tNhi−1 } of the CNN on both processors h0 =
+and we find the optimal solution again. Next, we successively                 GPU , h1 = CPU (Fig. 4), we can estimate sub-graph
+minimize the function with increasing number of stages.                       latencies:
+We can introduce a heuristic stopping rule for the search.                                                       n−1
+                                                                                                   h                  h      h0
+                                                                                                                 X
+Given that the transfer cost is usually significant and given                                      0
+                                                                                                  tM   (n) =         tl 0 + ttransfer                 (6)
+                                                                                                     0
+that the number of devices nh is usually limited, eventually                                                     l=0
+no better solution can be found for s = ŝ + 1 than for s = ŝ.                                                  N −1
+                                                                                                   h1                           h1
+                                                                                                                        tlh1 + ttransfer
+                                                                                                                 X
+At this point, it makes no sense to look for other solutions                                      tM    (n) =                                         (7)
+                                                                                                      1
+with more stages. In case of our heterogeneous GPU-CPU                                                           l=n
+device, this will likely be the case for 2 stages (as exemplified                We maximize throughput by solving (1). Then, the
+in Sect. IV-C).                                                               expected throughput (T in img/s) and latency (L in seconds),
+                                                                              respectively, of the optimized 2-stage configuration running
+3) SCHEDULING ON TX2 USING TVM                                                on h0 → h1 are:
+Image-classification neural networks are composed of multi-
+                                                                                                                        1
+ple layers that sequentially process data to produce an output                                    T =                                                 (8)
+                                                                                                                  h0    h1
+vector from an input image. In most architectures, the first                                             max{tM0 (n̂), tM  1
+                                                                                                                             (n̂)}
+layers operate on data with higher dimensionality, whereas                                             0
+                                                                                                  L = tM
+                                                                                                          h        h1
+                                                                                                           (n̂) + tM    (n̂)                          (9)
+smaller feature maps are processed at ending layers. As a                                                0            1
+
+result, the computational demand varies among layers. This is                    This throughput optimization problem for s = 2 can be
+why the performance profile strongly depends on the network                   solved with Algorithm 1. This algorithm assumes that we
+architecture. As an example, Fig. 4 depicts the per-layer                     have collected runtime profiling and we have estimated trans-
+processing time for MobileNet [41] entirely running on one of                 fer costs. It also returns the optimal device order hˆ0 → hˆ1 ,
+the two processing components available in Jetson TX2, i.e.,                  e.g., GPU → CPU. Because (6) and (7) can be pre-computed
+H = {GPU , CPU } (nh = 2). Note that layer performance                        in O(N ) and because the evaluation of (8) is achieved in O(N ),
+
+35012                                                                                                                                      VOLUME 11, 2023
+D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+TABLE 2. Assessed neural networks.
+
+
+
+
+the algorithmic time complexity is O(N ) as well. The algo-                       Using TVM on this platform, we can (1) define, (2) tune,
+rithm starts by assuming a processing order h′0 → h′1 .                        (3) compile, and (4) run ML models:
+Then, for each possible partition point n, it calculates both                     1) ML models are internally represented in TVM as com-
+                     h′0          h′1
+sub-graph runtimes tM    0
+                           (n), t M1 (n) and saves the pipeline                      putational graphs in a so-called Tensor Expression
+             0     h′  1      h′                                                     language. Users can define models in an interme-
+runtime max{tM 0
+                 (n), tM 1
+                           (n)}. After analyzing all possible                        diate representation on TVM, or alternatively net-
+device orders, it finally obtains the minimum runtime over                           works can be loaded from files compatible with other
+all cases.                                                                           ML frameworks, such as TensorFlow, Keras, MXNet,
+                                                                                     PyTorch, or DarkNet.
+Algorithm 1 Two-Stage Network Partitioning                                        2) TVM integrates auto-tuner tools to generate efficient
+Input: {tl }h0 , {tl }h1 , {ttransfer,l }h0 , {ttransfer,l }h1                       code for the targeted platform [37], [38]. Specifically,
+Output: n̂, t̂, hˆ0 , hˆ1                                                            the results presented in this paper regarding auto-tuned
+  t̂ ← ∞                                                                             models were compiled with Ansor [38], [49]. This tool
+  for (h′0 , h′1 ) in all combinations({h0 , h1 }) do                                finds the best compiling options for each back-end to
+     tM0 ← 0                                                                         reduce the corresponding runtime – see Sect. IV-A.
+                 P h′                                                             3) TVM compiles graphs to generate the C++ code that
+     tM1 ← ti 1
+                   i                                                                 will run on the target hardware. We used the TVM
+      for i ← 0 to N − 1 do                                                          Python interface, which greatly facilitates network def-
+                        h′
+        tM0 ← tM0 + ti 0                           /* Partition 0: [0,i] */          inition and execution (other available interfaces are
+                                h′                                                   TVMC [50] and C++).
+          tM1 ← tM1 − ti 1                  /* Partition 1: [i+1,N-1] */
+                                      h′                     h′
+                             0
+         m[i] ← max{tM0 + ttransfer,i , tM1 + ttransfer,i
+                                                 1
+                                                          }
+                                                                               B. NEURAL NETWORKS
+      end for
+                                                                               Table 2 summarizes the architecture of the CNNs considered
+      if min m[i] < t̂ then
+           i                                                                   in this study. We used the TVM definitions of these net-
+          t̂ ← min m[i] /* new optimal found for h′0 → h′1 */                  works [51]. TVM can process them using two types of data
+                   i
+          n̂ ← arg min m[i]                                                    orders called NHWC and NCHW. Experiments in this work
+                        i                                                      refer to channel-first (NCHW) layout. Layers in the network
+        hˆ0 ← h′0
+                                                                               are represented by nodes in the graph, sequentially connected
+        hˆ1 ← h′1                                                              to compose the overall architecture. Although the networks
+     end if                                                                    may contain modules with parallel branches – as in the Fire
+   end for                                                                     module of SqueezeNet and Inception of Inception-v3 –, they
+   return n̂, t̂, hˆ0 , hˆ1                                                    are treated as individual nodes in the proposed procedure.
+                                                                               Therefore, ‘# modules’ in Table 2 refers to the number of
+III. EXPERIMENTAL PROCEDURE                                                    sequential nodes N in the graph. Note that even if these mod-
+A. HARDWARE AND SOFTWARE                                                       els contain layers other than those listed in Table 2, such as
+The selected system, Nvidia Jetson TX2, was designed to                        ReLU, batch normalization, or dropout, TVM automatically
+jointly achieve power efficiency and high performance for                      optimizes the computational graph by fusing these operations
+different embedded applications. It is a popular commercial                    with the previous layer.
+board that integrates a 256-core Nvidia Pascal GPU and
+a 64-bit ARMv8 general-purpose multi-processor. The mem-                       C. LAYER-WISE PERFORMANCE PROFILING
+ory and storage included in the platform are 32-bit 8GB                        In short, the proposed method comprises a first stage of
+LPDDR4 and 32GB eMMC 5.1, respectively. A camera                               layer-level network performance profiling and a second stage
+expansion connector is included to endow the system with                       of operator mapping to the available hardware components.
+on-board video analysis capabilities. The Jetson TX2 plat-                     Concerning the first stage, for each hardware component hi ,
+form was selected due to the (compared to a desktop CPU                        we must obtain a performance profile of the N nodes in
+and GPU) relatively low power consumption (7.5W – 15W),                        the model. Then, in the second stage, we solve the network
+while still providing sufficient throughput for many deep                      partition problem for any of the equations (3)–(5). We assume
+learning applications.                                                         that the neural-network layer execution performance is
+
+VOLUME 11, 2023                                                                                                                        35013
+                                         D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+independent of the input data, that is, we do not consider                               function). In addition, by using multiple streams,
+dynamic neural networks and influences of L1/L2 caching                                  CUDA allows overlapping of memory transfers
+are ignored.                                                                             with the actual computations, reducing the transfer
+   • Runtime. Throughput optimization in Jetson TX2                                      costs. At the time of writing, the TVM support of
+     means solving (1) (or (3), more generally) with the                                 this feature is in an initial stage (see e.g., [52]).
+     profiling of the network expressed as {tl }GPU , {tl }CPU                           However, it is generally known that this tech-
+     ∀l ∈ [0, N − 1]. An example was depicted in Fig. 4                                  nique does not reduce the transfer cost significantly
+     for MobileNet; this figure clearly exemplifies how a                                in most practical cases with a high GPU kernel
+     pipelined approach distributing operations over the GPU                             occupancy.
+     and CPU in TX2 benefits from their dissimilar perfor-                               To experimentally characterize this transfer over-
+     mance. The operation of Algorithm 1 solving (1) for                                 head, we could assume linear dependence w.r.t. the
+     a cooperative GPU → CPU execution is illustrated in                                 size of the transferred data ttransfer = k · B (where
+     Fig. 5, which shows the runtime tMi of the stage as a                               k is an arbitrary constant that depends on the con-
+     function of the selected partition point n. Up to N + 1                             sidered hardware, and B is the number of bytes).
+     solutions are possible, being the optimal one n̂ = 23,                              We thoroughly measured ttransfer in TX2, including
+     which means that 23 nodes run on the GPU and the rest                               several batch sizes and CNN models in experimen-
+     on the CPU.                                                                         tal data. In particular, we measured the time cost of
+                                                                                         the set_input function of the GraphModule
+                                                                                         TVM python class, which transfers data to the CNN
+                                                                                         and incurs high costs. The results confirmed this
+                                                                                         linear dependence – see Fig. 6. Indeed, the method-
+                                                                                         ology assessment presented in Sects. IV–V further
+                                                                                         validated this assumption.
+
+
+
+
+FIGURE 5. Throughput optimization for a two-stage pipeline on
+MobileNet running in Jetson TX2 with order GPU → CPU. Sub-graph
+execution runtimes tM (n) depend on the selected partition point n.
+                      i
+
+
+
+        – As previously stated, data-transfer latency can
+          be incorporated into the scheduling model. Even
+                                                                             FIGURE 6. Data transfer time overhead on TVM-Python.
+          though the GPU memory is integrated in the CPU
+          memory in TX2 through CUDA, the TVM imple-
+          mentation (and many other implementations) uses                       •   Energy. The main power supply to the TX2 module is
+          distinct memory regions for CPU and GPU, still                            provided by a single DC input. According to its docu-
+          requiring a transfer between both. Several tech-                          mentation [53], the voltage of this DC input ranges from
+          niques exist to mitigate or reduce the data trans-                        5.5 V to 19.6 V, with a maximum current of 4000 mA.
+          fer latency, but none of them totally eliminates                          Two INA3221 power monitors are included in the TX2
+          the cost. For example, the transfer latency can be                        carrier board. We measured the per-layer power demand
+          improved by using CUDA pinned host memory,                                of CNNs, {Pl }hi , using the TVM debugger and software
+          but due to the lack of hardware support for cache                         included in Tegra Linux Driver Package [54].
+          coherence between the CPU and GPU caches of the                             – When it comes to taking accurate power consump-
+          Jetson TX2, a costly synchronization step (in prin-                            tion measurements, the limited time resolution of
+          ciple, a call to the cudaDeviceSynchronize                                     the INA3221 sensors plays a major role. Therefore,
+          or cudaStreamSynchronize function) is                                          mismatches between per-layer and overall CNN
+          needed, leading again to a performance cost.                                   power consumption are common [55], [56], [57].
+          Another solution is to use CUDA unified memory;                                For instance, Cai et . [56] showed that per-layer
+          in this case, the transfer is handled transparently by                         energy profiling is lower than actual CNN energy
+          the GPU driver, but there is still a cost (which mani-                         consumption in all of their study cases. An inter-
+          fests as a slower execution of the kernel function of                          esting aspect highlighted in [57] is that monitoring
+          the particular neural network layer(s), as well as the                         system-level power consumption (instead of tak-
+          need for calling the cudaDeviceSynchronize                                     ing separate GPU and CPU measurements) renders
+
+35014                                                                                                                                   VOLUME 11, 2023
+D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+FIGURE 7. Inference performance of various software frameworks for running CNNs on TX2, and comparison with TVM. (a) CNN execution on GPU, and
+(b) CNN execution on CPU.
+
+
+
+           better estimations because, among other aspects,                    The proposed co-execution pipeline scheme was enabled
+           the energy consumed by memory accesses is also                      by developing TVM-Python code to compile network
+           taken into account. This is why we measured power                   sub-graphs and continuously offload the corresponding pro-
+           at system level. Interestingly, the aforementioned                  cessing stage to each back-end. This code of ours is available
+           approaches reported in the literature do not try                    in [60].
+           to correct measurement errors because estimating
+           the energy-consumption trend is enough, instead of                  1) THROUGHPUT-OPTIMIZED CONFIGURATIONS
+           finding exact energy values. As we will discuss in                  Tables 3–4 report the resulting device mapping with high-
+           Sect. V, the proposed scheduling model is indeed                    est inference rate. The last two columns confirm that
+           able to find the optimal cases.                                     the ‘expected’ performance (from the optimization prob-
+                                                                               lem defined by (3) and network profiling data) is remark-
+IV. PERFORMANCE EVALUATION                                                     ably close to the experimental measurements. ‘Measured’
+A. SINGLE-DEVICE EXECUTION                                                     experimental performance is also reported in Fig. 8, with
+The baseline performance of network execution on each                          additional comparison with single-device execution. Interest-
+hardware component of the platform (i.e., on each TVM                          ingly, heterogeneous hardware exploitation achieves through-
+target) is shown in Fig. 1. Notwithstanding, as previously                     put improvements w.r.t. the best single-device case ranging
+pointed out, one of the advantages of TVM is its open-source                   from 22% to 150% for models compiled by default; and up
+auto-tuning tool, which generates highly efficient code and                    to 22% for auto-tuned models. Only for tuned MobileNet and
+boosts inference performance. In this regard, we measured a                    SqueezeNet, the performance resulting from the proposed
+performance improvement (up to 87%) in terms of runtime                        two-stage approach remains similar to GPU-only execution,
+between (i) default TVM network execution (Fig. 1), and                        as otherwise analytically expected.
+(ii)3 tuned network execution (using Ansor [38]), as reported
+in Fig. 7.                                                                     2) ENERGY-OPTIMIZED CONFIGURATIONS
+   Furthermore, for a baseline performance reference on our                    GPU-only execution is the most energy-efficient configu-
+platform, Fig. 7 also presents a inference runtime comparison                  ration for all the networks except for default SqueezeNet.
+that includes other software frameworks. The performance of                    The underlying reason is the combination of reduced
+each library depends on the architecture of the DL model [58],                 runtime on GPU with reduced data-transfer energy cost.
+[59]. TVM definitively constitutes as a promising general                      In the particular case of default SqueezeNet, it is opti-
+framework.                                                                     mized in terms of both frame rate and energy when using
+                                                                               a heterogeneous GPU → CPU pipeline with n̂ = 32.
+B. TWO-STAGE EXECUTION                                                         Experimental energy-consumption measurements agree with
+Once the layer-wise performance measurements were taken                        these analytical expectations, as will be demonstrated
+(as explained in Sect. III-C), performance optimization was                    in Sect. V.
+conducted according to (3)–(5). To define network sub-
+graphs, we edited the pre-defined networks [51] in TVM.                        3) LATENCY-OPTIMIZED CONFIGURATIONS
+  3 We will use ‘‘(i)’’ to denote networks compiled with TVM by default        Similarly, GPU-only execution is the best configuration for
+and ‘‘(ii)’’ for models compiled with compiling optimizations produced by      fast-response applications. Optimal latency metrics corre-
+Ansor auto-tuning tool.                                                        spond to those shown in Fig. 7a.
+
+VOLUME 11, 2023                                                                                                                          35015
+                                        D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+TABLE 3. Throughput-optimized configurations – (i) default TVM models.
+
+
+
+
+TABLE 4. Throughput-optimized configurations – (ii) tuned TVM models.
+
+
+
+
+ FIGURE 8. Throughput (img/s) comparison of one-device execution vs. throughput-optimized cases. Four CNN models were assessed (i) without and
+ (ii) with TVM auto-tuning.
+
+
+
+
+4) GENERAL TRADE-OFFS                                                        C. K-STAGE EXECUTION
+Finally, Fig. 9 shows performance metrics for each CNN                      In the previous results, we considered 2 stages. However,
+under various configurations. Single-device execution is pre-               mathematically, better solutions for more than 2 stages might
+sented with green markers for GPU, and blue ones for                        be possible. Fig. 10 exemplifies an optimal 3-stage pipeline
+CPU. Energy-optimized and latency-optimized configura-                      (e.g., CPU → GPU → CPU). However, network scheduling
+tions match with GPU execution – in green – (except                         with more than one partition point requires 1) execution
+for default SqueezeNet). Two-stage scheduling for optimal                   times on each device matching with each other, thus avoiding
+throughput is shown in black. A particularly remarkable case                timeline gaps (in this example, tMCPU + t CPU ≈ t GPU ), and
+                                                                                                                0     M2       M1
+is precisely default SqueezeNet, whose throughput increases                 2) limited transfer costs (the greater the number of stages,
+150% when running upon a heterogeneous scheme, with an                      the larger the increase in latency). These assumptions are
+energy reduction of 66%.                                                    difficult to meet in practice; and indeed we confirmed it
+   The proposed scheme found the energy-optimized cases,                    experimentally. In general, achieving optimal work balancing
+although no hybrid execution might be needed. If we choose                  on pipelines with more than two stages requires joint kernel
+appropriate lowest-energy configurations, we obtain energy                  code and scheduling optimization. This will be part of our
+savings above 10% w.r.t. best-throughput cases. Concerning                  future work.
+latency, its behaviour is similar to energy in all cases (x-axis
+in Fig. 9): pipelining slightly increases latency, being GPU                 V. DISCUSSION
+the lowest-latency configuration in most cases.                             The tests conducted on networks schedules resulting from
+   We conclude that the proposed optimization approach                      the optimization problem posed in Sect. II-A validated
+leads to throughput enhancement, especially when runtime                    the expected performance metrics. However, the proposed
+on each device match with each other.                                       method relies on experimental measurements, which vary
+
+35016                                                                                                                                  VOLUME 11, 2023
+D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+FIGURE 9. Performance trade-offs for GPU-only (green), CPU-only (blue), and throughput-optimized pipeline (black) for the CNNs considered in this
+study;‘‘(i)’’ denotes networks compiled with TVM by default whereas ‘‘(ii)’’ denotes models compiled with compiling optimizations produced by Ansor
+auto-tuning tool.
+
+
+
+
+                      FIGURE 10. Exemplary optimal CNN workload distribution over a 3-stage pipeline.
+
+
+
+
+among different executions, and depends on per-layer profil-                   low-throughput cases, as well as high- and low-energy con-
+ing, which may differ from actual network performance [9],                     figurations. Indeed, we found no case in which the proposed
+[55], [56], [57] – see related comments in Sect. III-C. This                   optimization procedure were unpredictably outperformed.
+hinders the capability of the proposed procedure to produce                    Therefore, we convincingly state that predicted ‘optimal’
+accurate estimates of performance metrics. This is why all                     cases actually match with the best performance configura-
+performance metrics reported in this paper were averaged                       tions when experimentally assessed.
+over several executions. We conducted additional experi-                          Concerning energy consumption, minimizing the number
+ments to verify that these issues do not greatly affect the                    of memory transfers is expected to minimize the energy
+scheduling optimization results. While our pipeline sched-                     as well. Indeed, we found in our experiments that the
+uler does not provide exact performance values, our exper-                     energy-optimal configuration coincides in most cases with
+imental findings did not reveal any better solutions than                      GPU-only networks execution – Sect. IV-B. However, adding
+those deemed optimal by our method. Fig. 11 shows the                          energy transfer costs in (4) would further improve our
+performance of eight different network schedules for tuned                     scheduling method in general cases.
+SqueezeNet (3 CPU → GPU, 3 GPU → CPU, CPU-only,
+and GPU-only). The ‘estimated’ performance in these plots                      A. DYNAMIC RUNTIME SCHEDULING
+is obtained from (3)–(5) according to per-layer profiling                      As mentioned in Sect. I, the proposed TVM co-execution
+measurements. Note that per-layer profiling measurement                        scheme makes it possible to select the appropriate schedul-
+errors in single-device execution (CPU-, GPU-only) can                         ing according to the current system state, in particular, for
+certainly impact the optimization problem and the corre-                       repeated neural network inferences (e.g., when processing
+sponding estimations. Notwithstanding, for the eight stud-                     video frames in real-time).
+ied cases, although predicted values do not exactly match                         For instance, Algorithm 2 exemplifies a method to dynam-
+experimental ones, the method correctly estimates high- and                    ically select the optimal partition point when there is limited
+
+VOLUME 11, 2023                                                                                                                                 35017
+                                           D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+                                                                               an arbitrary partition point n ∈ [0, N ]; for instance, the
+                                                                               initial value of n can be the optimal configuration when the
+                                                                               system is not executing extra workloads – i.e., configurations
+                                                                                   h
+                                                                               M00 (n) → Mh11 (n) reported in Tables 3–4, with runtimes t.
+                                                                               Then, it dynamically increases (or decreases) n until no better
+                                                                               execution time is found (local minimum). Note that other
+                                                                               optimizations algorithms could be applied that leverage our
+                                                                               heterogeneous pipeline.
+                                                                                  We built TVM pipelines – as explained in Sect. IV-B – to
+                                                                               test this dynamic method. In particular, we performed exper-
+                                                                               iments on MobileNet under different scenarios of system
+                                                                               resources availability. More specifically, our simulations
+                                                                               included (a) reading and displaying a MP4 video file on a
+                                                                               monitor with hardware acceleration enabled; (b) executing
+                                                                               the glmark2 benchmark; (c) executing the stress com-
+                                                                               mand; and (d) executing the glxgears demo application.
+                                                                               Table 5 reports the best solutions found for these cases. Note
+                                                                               that single-device execution is compared with the best het-
+                                                                               erogeneous pipeline. For further clarification, Fig. 10 shows
+
+
+                                                                               TABLE 5. Single-processor cases vs. throughput-optimized configurations
+                                                                               under dynamic scheduling for MobileNet.
+
+
+
+
+FIGURE 11. Experimental performance (darker bars) vs. expected                 Algorithm 2 Dynamic Two-Stage Network Partitioning
+performance from per-layer profiling data (lighter bars) for several
+network partition schedules on SqueezeNet.                                     Input: n, h0 , h1 , t, m   /* n layers h0 → (N-n) layers h1 */
+                                                                               Output: n̂, t̂
+                                                                                 t̂ ← t
+                                                                                 /* Increase n until finding minimum: */
+                                                                                 for i ← n to N do
+                                                                                     m[i] ← m[i] + α ∗ measure{tM0 (i)→M1 (i) }
+                                                                                     if m[i] ≤ t̂ then
+                                                                                        n̂ ← i                        /* new optimal found */
+                                                                                     else
+                                                                                        break for
+                                                                                     end if
+                                                                                 end for
+                                                                                 /* If no better solution was found, then decrease n: */
+FIGURE 12. Pipeline execution time as a function of n. Black points              if n̂ = n then
+represent dynamic scheduling for a two-stage pipeline on MobileNet
+according to Algorithm 2. Best runtime found is marked in red.
+                                                                                     for i ← n − 1 to 0 do
+Performance of additional non-optimal pipeline schedules is shown in                    m[i] ← measure{tM0 (i)→M1 (i) }
+gray dots for the sake of completeness, but they were not explored using                if m[i] ≤ t̂ then
+Algorithm 2.
+                                                                                           n̂ ← i                     /* new optimal found */
+                                                                                        else
+                                                                                           break for
+availability of computational resources. This method depends
+                                       h                                                end if
+on measurements of the pipeline M00 (n) → Mh11 (n) for
+                                                                                     end for
+each n. To better deal with transients (sudden temporary
+                                                                                 end if
+changes in the processing), we can use a recursive mov-
+                                                                                 t̂ ← m[n̂]
+ing averaging filter on these measurements (depending on
+                                                                                 return n̂, t̂, m
+parameter α in Algorithm 2). The method starts by selecting
+
+35018                                                                                                                                     VOLUME 11, 2023
+D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+partial results m[i] from executing Algorithm 2 in Case (b).                      [7] S. S. Ogden and T. Guo, ‘‘Characterizing the deep neural networks infer-
+It starts with n = 23 and stops in n = 27, being n̂ = 26 the                          ence performance of mobile applications,’’ 2019, arXiv:1909.04783.
+                                                                                  [8] Y. Kang, J. Hauswald, C. Gao, A. Rovinski, T. Mudge, J. Mars, and
+optimal partition point found (see Table 5).                                          L. Tang, ‘‘Neurosurgeon: Collaborative intelligence between the cloud and
+   Similar to the results previously presented under                                  mobile edge,’’ in Proc. 22nd Int. Conf. Architectural Support Program.
+full resource availability, the proposed heterogeneous                                Lang. Operating Syst. New York, NY, USA: Association for Computing
+                                                                                      Machinery, Apr. 2017, pp. 615–629, doi: 10.1145/3037697.3037698.
+pipeline keeps outperforming single-device execution for
+                                                                                  [9] S. Zhang, Y. Li, X. Liu, S. Guo, W. Wang, J. Wang, B. Ding, and D. Wu,
+Cases (a)–(d).                                                                        ‘‘Towards real-time cooperative deep inference over the cloud and edge
+                                                                                      end devices,’’ Proc. ACM Interact., Mobile, Wearable Ubiquitous Technol.,
+                                                                                      vol. 4, no. 2, pp. 1–24, Jun. 2020.
+VI. CONCLUSION
+                                                                                 [10] A. E. Eshratifar and M. Pedram, ‘‘Energy and performance efficient com-
+In this paper, we explored TVM as a tool for joint exploitation                       putation offloading for deep neural networks in a mobile cloud computing
+of different processing resources available in edge devices.                          environment,’’ in Proc. Great Lakes Symp. VLSI (GLSVLSI). New York,
+Hardware compatibility, easy implementation, and efficient                            NY, USA: Association for Computing Machinery, 2018, pp. 111–116.
+                                                                                 [11] L. Zeng, E. Li, Z. Zhou, and X. Chen, ‘‘Boomerang: On-demand cooper-
+compiled models are remarkable assets of the proposed                                 ative deep neural network inference for edge intelligence on the industrial
+approach. A large variety of tests demonstrate that an optimal                        Internet of Things,’’ IEEE Netw., vol. 33, no. 5, pp. 96–103, Sep./Oct. 2019.
+co-schedule boosts the performance of edge vision systems                        [12] E. Li, Z. Zhou, and X. Chen, ‘‘Edge intelligence: On-demand deep learning
+in terms of throughput. We also confirmed that the pro-                               model co-inference with device-edge synergy,’’ 2018, arXiv:1806.07840.
+                                                                                 [13] I. Prakash, A. Bansal, R. Verma, and R. Shorey, ‘‘SmartSplit: Latency-
+posed approach can automatically identify whether a particu-                          energy-memory optimisation for CNN splitting on smartphone environ-
+lar pipeline schedule outperforms single-device execution in                          ment,’’ 2021, arXiv:2111.01077.
+terms of energy or latency.                                                      [14] F. M. C. de Oliveira and E. Borin, ‘‘Partitioning convolutional neural
+                                                                                      networks to maximize the inference rate on constrained IoT devices,’’
+   This work sets the basis for extending this method to                              Future Internet, vol. 11, no. 10, p. 209, 2019. [Online]. Available:
+other platforms, such as multi-GPU boards, GPU-FPGA sys-                              https://www.mdpi.com/1999-5903/11/10/209
+tems, or host-accelerator systems. In future work, we will                       [15] C. Hu, W. Bao, D. Wang, and F. Liu, ‘‘Dynamic adaptive DNN surgery
+investigate platforms providing support for integer operation                         for inference acceleration on the edge,’’ in Proc. IEEE Conf. Comput.
+                                                                                      Commun. (INFOCOM), Apr./May 2019, pp. 1423–1431.
+to analyze how integer quantization can improve inference                        [16] R. Hadidi, J. Cao, M. S. Ryoo, and H. Kim, ‘‘Toward collaborative
+performance while affording a small loss in accuracy. We will                         inferencing of deep neural networks on Internet-of-Things devices,’’ IEEE
+also explore the flexibility offered by the Nvidia nvpmodel                           Internet Things J., vol. 7, no. 6, pp. 4950–4960, Jun. 2020.
+                                                                                 [17] X. Wang, Y. Han, C. Wang, Q. Zhao, X. Chen, and M. Chen, ‘‘In-edge AI:
+tool to achieve performance-power trade-offs by adjusting the                         Intelligentizing mobile edge computing, caching and communication by
+GPU and CPU operation frequencies. We will also address                               federated learning,’’ 2018, arXiv:1809.07857.
+the implementation of the method hereby reported in a fully                      [18] Z. Zhao, K. M. Barijough, and A. Gerstlauer, ‘‘DeepThings: Distributed
+automated manner. A model to predict layer performance                                adaptive deep learning inference on resource-constrained IoT edge clus-
+                                                                                      ters,’’ IEEE Trans. Comput.-Aided Design Integr. Circuits Syst., vol. 37,
+from the number of floating-point operations will be also                             no. 11, pp. 2348–2359, Nov. 2018.
+explored. In addition, heterogeneous scheduling with more                        [19] L. Zhou, M. H. Samavatian, A. Bacha, S. Majumdar, and R. Teodorescu,
+than 2 stages is also of interest, especially for multi-GPU                           ‘‘Adaptive parallel execution of deep neural networks on heterogeneous
+                                                                                      edge devices,’’ in Proc. 4th ACM/IEEE Symp. Edge Comput. (SEC).
+configurations. This requires joint kernel code and schedule                          New York, NY, USA: Association for Computing Machinery, Nov. 2019,
+optimization in order to achieve an optimal workload distri-                          pp. 195–208.
+bution, as exemplified in Fig. 10. Finally, an interesting aspect                [20] Z. Xu, D. Yang, C. Yin, J. Tang, Y. Wang, and G. Xue, ‘‘A co-scheduling
+                                                                                      framework for DNN models on mobile and edge devices with het-
+to be pointed out is that our energy-throughput optimized
+                                                                                      erogeneous hardware,’’ IEEE Trans. Mobile Comput., vol. 22, no. 3,
+solution enables us to accommodate application requirements                           pp. 1275–1288, Mar. 2023.
+in real time (energy-saving or fast-response) by selecting the                   [21] E. Aghapour, A. Pathania, and G. Ananthanarayanan, ‘‘Integrated
+appropriate co-execution scheduling.                                                  ARM big.Little-Mali pipeline for high-throughput CNN inference,’’
+                                                                                      Univ. Amsterdam, Amsterdam, The Netherlands, Tech. Rep.
+                                                                                      TCAD-2021-0385, Jul. 2021, doi: 10.36227/techrxiv.14994885.v2.
+REFERENCES                                                                       [22] S. Wang, G. Ananthanarayanan, Y. Zeng, N. Goel, A. Pathania,
+ [1] NVIDIA Developer. Jetson Modules. Accessed: Dec. 16, 2022. [Online].             and T. Mitra, ‘‘High-throughput CNN inference on embedded ARM
+     Available: https://developer.nvidia.com/embedded/jetson-modules                  big.LITTLE multicore processors,’’ IEEE Trans. Comput.-Aided Design
+ [2] NVIDIA Developer. Jetson Nano Developer Kit. Accessed: Dec. 16, 2022.            Integr. Circuits Syst., vol. 39, no. 10, pp. 2254–2267, Oct. 2020.
+     [Online]. Available: https://developer.nvidia.com/embedded/jetson-nano-     [23] H.-I. Wu, D.-Y. Guo, H.-H. Chin, and R.-S. Tsay, ‘‘A pipeline-based
+     developer-kit                                                                    scheduler for optimizing latency of convolution neural network inference
+ [3] NVIDIA Developer. Jetson Xavier NX Developer Kit. Accessed:                      over heterogeneous multicore systems,’’ in Proc. 2nd IEEE Int. Conf. Artif.
+     Dec. 16, 2022. [Online]. Available: https://developer.nvidia.com/                Intell. Circuits Syst. (AICAS), Aug./Sep. 2020, pp. 46–49.
+     embedded/jetson-xavier-nx-devkit                                            [24] B. Kim, S. Lee, A. R. Trivedi, and W. J. Song, ‘‘Energy-efficient accel-
+ [4] A. Shahid and M. Mushtaq, ‘‘A survey comparing specialized hardware              eration of deep neural networks on realtime-constrained embedded edge
+     and evolution in TPUs for neural networks,’’ in Proc. IEEE 23rd Int.             devices,’’ IEEE Access, vol. 8, pp. 216259–216270, 2020.
+     Multitopic Conf. (INMIC), Nov. 2020, pp. 1–6.                               [25] N. D. Lane, S. Bhattacharya, P. Georgiev, C. Forlivesi, L. Jiao, L. Qendro,
+ [5] M. Cloutier, C. Paradis, and V. Weaver, ‘‘A Raspberry Pi cluster                 and F. Kawsar, ‘‘DeepX: A software accelerator for low-power deep learn-
+     instrumented for fine-grained power measurement,’’ Electronics, vol. 5,          ing inference on mobile devices,’’ in Proc. 15th ACM/IEEE Int. Conf. Inf.
+     no. 4, p. 61, Sep. 2016. [Online]. Available: https://www.mdpi.com/2079-         Process. Sensor Netw. (IPSN), Apr. 2016, pp. 1–12.
+     9292/5/4/61                                                                 [26] X. Zhang, C. Hao, P. Zhou, A. Jones, and J. Hu, ‘‘H2H: Heterogeneous
+ [6] K. Seshadri, B. Akin, J. Laudon, R. Narayanaswami, and A. Yazdan-                model to heterogeneous system mapping with computation and com-
+     bakhsh, ‘‘An evaluation of edge TPU accelerators for convolutional neural        munication awareness,’’ in Proc. 59th ACM/IEEE Design Autom. Conf.,
+     networks,’’ 2021, arXiv:2102.10423.                                              Jul. 2022, pp. 601–606.
+
+VOLUME 11, 2023                                                                                                                                             35019
+                                               D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+[27] M. Hosseinabady, M. A. B. Zainol, and J. Núñez-Yáñez, ‘‘Heterogeneous            [49] L. Zheng, C. Jia, M. Sun, Z. Wu, and C. H. Yu. (Mar. 3, 2021).
+     FPGA+GPU embedded systems: Challenges and opportunities,’’ 2019,                      Introducing TVM Auto-Scheduler (A.K.A. Ansor). [Online]. Available:
+     arXiv:1901.06331.                                                                     https://tvm.apache.org/2021/03/03/intro-auto-scheduler
+[28] M. Hall and V. Betz, ‘‘HPIPE: Heterogeneous layer-pipelined and sparse-          [50] The Apache Software Foundation. (2020). TVM. User Tutorial. Com-
+     aware CNN inference for FPGAs,’’ in Proc. ACM/SIGDA Int. Symp. Field-                 piling and Optimizing a Model With TVMC. [Online]. Available:
+     Program. Gate Arrays (FPGA). New York, NY, USA: Association for                       https://tvm.apache.org/docs/tutorial/tvmc_command_line_driver.html
+     Computing Machinery, Feb. 2020, p. 320.                                          [51] (2020). TVM Python API. [Online]. Available: https://tvm.apache.
+[29] H.-J. Jeong, H.-J. Lee, C. H. Shin, and S.-M. Moon, ‘‘IONN: Incremental               org/docs/reference/api/python/relay/testing.html
+     offloading of neural network computations from mobile devices to edge            [52] Y. Ding. (2022). Multi-Stream Execution in Meta VM. [Online].
+     servers,’’ in Proc. ACM Symp. Cloud Comput. (SoCC). New York, NY,                     Available: https://www.tvmcon.org/wp-content/uploads/2022/01/16-15
+     USA: Association for Computing Machinery, Oct. 2018, pp. 401–411.                     _40LT-Yaoyao_Ding-Multi-stream_Support_for_Virtual_Machine
+[30] Y. Hu, C. Imes, X. Zhao, S. Kundu, P. A. Beerel, S. P. Crago, and                     _Executor_in_Meta.pdf
+     J. P. N. Walters, ‘‘Pipeline parallelism for inference on heterogeneous edge     [53] NVIDIA Jetson TX2 NX System-on-Module, NVIDIA Corp., Santa Clara,
+     computing,’’ 2021, arXiv:2110.14895.                                                  CA, USA, 2022.
+[31] R. Hadidi, J. Cao, M. Woodward, M. S. Ryoo, and H. Kim, ‘‘Distributed            [54] NVIDIA Corporation. Tegra Linux Driver Package Release Notes.
+     perception by collaborative robots,’’ IEEE Robot. Autom. Lett., vol. 3, no. 4,        Accessed: Nov. 30, 2021. [Online]. Available: http://developer2.download.
+     pp. 3709–3716, Oct. 2018.                                                             nvidia.com/embedded/L4T/r27_Release_v1.0/Docs/Tegra_Linux_Driver_
+                                                                                           Package_Release_Notes_R27.1.pdf
+[32] M. Xu, F. Qian, M. Zhu, F. Huang, S. Pushp, and X. Liu, ‘‘DeepWear:
+     Adaptive local offloading for on-wearable deep learning,’’ IEEE Trans.           [55] S. Holly, A. Wendt, and M. Lechner, ‘‘Profiling energy consumption of
+     Mobile Comput., vol. 19, no. 2, pp. 314–330, Feb. 2020.                               deep neural networks on NVIDIA Jetson nano,’’ in Proc. 11th Int. Green
+                                                                                           Sustain. Comput. Workshops (IGSC), Oct. 2020, pp. 1–6.
+[33] J. Mao, X. Chen, K. W. Nixon, C. Krieger, and Y. Chen, ‘‘MoDNN: Local
+                                                                                      [56] E. Cai, D.-C. Juan, D. Stamoulis, and D. Marculescu, ‘‘NeuralPower:
+     distributed mobile computing system for deep neural network,’’ in Proc.
+                                                                                           Predict and deploy energy-efficient convolutional neural networks,’’ 2017,
+     Design, Autom. Test Eur. Conf. Exhib. (DATE), 2017, pp. 1396–1401.
+                                                                                           arXiv:1710.05420.
+[34] L. Zhou, H. Wen, R. Teodorescu, and D. H. Du, ‘‘Distributing deep                [57] C. F. Rodrigues, G. Riley, and M. Luján, ‘‘Fine-grained energy profiling
+     neural networks with containerized partitions at the edge,’’ in Proc.                 for deep convolutional neural networks on the Jetson TX1,’’ in Proc. IEEE
+     2nd USENIX Workshop Hot Topics Edge Comput. (HotEdge). Renton,                        Int. Symp. Workload Characterization (IISWC), Oct. 2017, pp. 114–115.
+     WA, USA: USENIX Association, Jul. 2019, pp. 1–7. [Online]. Available:
+                                                                                      [58] B. Jeon, S. Park, P. Liao, S. Xu, T. Chen, and Z. Jia, ‘‘Collage: Seamless
+     https://www.usenix.org/conference/hotedge19/presentation/zhou
+                                                                                           integration of deep learning backends with automatic placement,’’ 2021,
+[35] J. Tang, S. Liu, L. Liu, B. Yu, and W. Shi, ‘‘LoPECS: A low-power                     arXiv:2111.00655.
+     edge computing system for real-time autonomous driving services,’’ IEEE          [59] M. Li, Y. Liu, X. Liu, Q. Sun, X. You, H. Yang, Z. Luan, L. Gan, G. Yang,
+     Access, vol. 8, pp. 30467–30479, 2020.                                                and D. Qian, ‘‘The deep learning compiler: A comprehensive survey,’’
+[36] The Apache Software Foundation. (2020). Apache TVM. [Online]. Avail-                  2020, arXiv:2002.03794.
+     able: https://tvm.apache.org/                                                    [60] D. Velasco-Montero. (2022). TVM Heterogeneous Co-Execution. [Online].
+[37] T. Chen, T. Moreau, Z. Jiang, L. Zheng, E. Yan, M. Cowan, H. Shen,                    Available: https://github.com/DVM000/TVM_deploy.git
+     L. Wang, Y. Hu, L. Ceze, C. Guestrin, and A. Krishnamurthy, ‘‘TVM: An
+     automated end-to-end optimizing compiler for deep learning,’’ in Proc.
+     13th USENIX Conf. Operating Syst. Design Implement. (OSDI). Berkeley,
+     CA, USA: USENIX Association, 2018, pp. 579–594.
+[38] L. Zheng, C. Jia, M. Sun, Z. Wu, C. H. Yu, A. Haj-Ali, Y. Wang, J. Yang,
+     D. Zhuo, K. Sen, J. E. Gonzalez, and I. Stoica, ‘‘Ansor: Generating high-
+     performance tensor programs for deep learning,’’ in Proc. 14th USENIX                                      DELIA VELASCO-MONTERO received the
+     Conf. Operating Syst. Design Implement. Berkeley, CA, USA: USENIX                                          B.Eng., M.Sc., and Ph.D. degrees (Hons.) in
+     Association, 2020, pp. 863–879.                                                                            telecommunication from the University of Seville,
+[39] A. Krizhevsky, I. Sutskever, and G. Hinton, ‘‘ImageNet classification with                                 Spain, in 2014, 2016, and 2023, respectively. She
+     deep convolutional neural networks,’’ in Proc. Adv. Neural Inf. Process.                                   has spent six months with the National Institute
+     Syst. (NIPS), 2012, pp. 1097–1105.                                                                         of Aerospace Technology (INTA), Madrid, Spain,
+[40] K. He, X. Zhang, S. Ren, and J. Sun, ‘‘Deep residual learning for image                                    granted by the Ministry of Defense, Spain. In May
+     recognition,’’ in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR),                                  2017, she joined the Institute of Microelectron-
+     Jun. 2016, pp. 770–778.                                                                                    ics of Seville (University of Seville–CSIC) as a
+[41] A. G. Howard, M. Zhu, B. Chen, D. Kalenichenko, W. Wang, T. Weyand,                                        Ph.D. student, granted by the Spanish Government
+     M. Andreetto, and H. Adam, ‘‘MobileNets: Efficient convolutional neural          (FPU17/02804). She was a Visiting Researcher with Ghent University,
+     networks for mobile vision applications,’’ 2017, arXiv:1704.04861.               Ghent, Belgium, where she worked on neural-network acceleration. Her
+[42] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen,                     main research interests include vision systems and the embedded realization
+     ‘‘MobileNetV2: Inverted residuals and linear bottlenecks,’’ in                   of deep neural networks.
+     Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit., Jun. 2018,
+     pp. 4510–4520.
+[43] K. Simonyan and A. Zisserman, ‘‘Very deep convolutional networks for
+     large-scale image recognition,’’ 2014, arXiv:1409.1556.
+[44] B. W. Kernighan and S. Lin, ‘‘An efficient heuristic procedure for parti-
+     tioning graphs,’’ Bell Syst. Tech. J., vol. 49, no. 2, pp. 291–307, 1970.
+[45] A. Grama, V. Kumar, and A. Sameh, ‘‘Parallel hierarchical solvers and                                    BART GOOSSENS (Member, IEEE) received the
+     preconditioners for boundary element methods,’’ SIAM J. Sci. Comput.,                                    M.S. degree in computer science and the Ph.D.
+     vol. 20, no. 1, pp. 337–358, Jan. 1998.                                                                  degree in engineering from Ghent University, in
+[46] T. Verbelen, T. Stevens, F. De Turck, and B. Dhoedt, ‘‘Graph partitioning                                2006 and 2010, respectively. He is currently a Pro-
+     algorithms for optimizing software deployment in mobile cloud comput-                                    fessor of digital image processing with the Image
+     ing,’’ Future Gener. Comput. Syst., vol. 29, no. 2, pp. 451–459, Feb. 2013.                              Processing and Interpretation Research Group,
+[47] F. N. Iandola, S. Han, M. W. Moskewicz, K. Ashraf, W. J. Dally, and                                      Department of Telecommunications and Informa-
+     K. Keutzer, ‘‘SqueezeNet: AlexNet-level accuracy with 50× fewer param-                                   tion Processing. His research interests include
+     eters and <0.5 MB model size,’’ 2016, arXiv:1602.07360.                                                  medical image reconstruction (CT and magnetic
+[48] C. Szegedy, V. Vanhoucke, S. Ioffe, J. Shlens, and Z. Wojna, ‘‘Rethinking                                resonance image), noise modeling and estimation,
+     the inception architecture for computer vision,’’ in Proc. IEEE Conf.            and medical image quality assessment. He currently serves as an Associate
+     Comput. Vis. Pattern Recognit., Jun. 2016, pp. 2818–2826.                        Editor for IEEE TRANSACTIONS ON IMAGE PROCESSING.
+
+35020                                                                                                                                               VOLUME 11, 2023
+D. Velasco-Montero et al.: Pipelining-Based Heterogeneous Scheduling and Energy-Throughput Optimization Scheme
+
+
+
+
+                          JORGE FERNÁNDEZ-BERNI received the                     three generation of vision chips for high-speed applications, analog
+                          B.Eng. degree (Hons.) in electronics and telecom-      front-ends for XDSL MoDems, ADCs for wireless communications, ADCs
+                          munication, the M.Sc. degree (Hons.) in micro-         for automotive sensors, chaotic signals generators, and complete MoDems
+                          electronics, and the Ph.D. degree (Hons.) from         for power-line communications. Many of these chips were state-of-the-art in
+                          the University of Seville, Seville, Spain, in 2004,    their respective fields. Some of them entered in massive production. He was
+                          2008, and 2011, respectively. From 2005 to 2006,       also active regarding industrial training. He produced teaching materials on
+                          he was with Telecommunication Industry. He was         data converters that were employed by several companies. His courses got
+                          a Visiting Researcher with the Computer                the Quality Label of EuroPractice. His research work has received some
+                          and Automation Research Institute, Budapest,           9100 citations. He has an H-index is 48 and an I10-index is 177 according
+                          Hungary; Ghent University, Ghent, Belgium; the         to Google Scholar. He received several national and international awards,
+University of Notre Dame, Notre Dame, IN, USA; and Institute Pascal,             including the IEEE Rogelio Segovia Torres Award, in 1981, during his
+Université Clermont Auvergne, Clermont-Ferrand, France. He is currently          studies. He has received a number of awards for his research: the IEEE
+an Associate Professor with the Department of Electronics and Electromag-        Guillemin-Cauer Best Paper Award, two Wiley’s IJCTA Best Paper Awards,
+netism, University of Seville. He has authored or coauthored about 80 papers     two IEEE ECCTD Best Paper Awards, one IEEE-ISCAS Best Paper Award,
+in refereed journals, conferences, and workshops, as well as two books and       one SPIE-IST Electronic Imaging Best Paper Award, the IEEE ISCAS Best
+two book chapters. He is also the first inventor of two licensed patents. His    Demo-Paper Award, and the IEEE ICECS Best Demo-Paper Award. He is
+current research interests include smart image sensors, vision chips, and        on the committee of several international journals and conferences. He has
+embedded systems.                                                                chaired several international IEEE (NDES 1996, CNNA 1996, ECCTD 2007,
+                                                                                 ESSCIRC 2010, and ICECS 2013) and SPIE conferences. He served as a VP
+                                                                                 Region 8 for the IEEE Circuits and Systems Society, from 2009 to 2012 and
+                            ÁNGEL RODRÍGUEZ-VÁZQUEZ (Life Fellow,                the Chair for the IEEE CASS Fellow Evaluation Committee, in 2010, 2012,
+                            IEEE) received the bachelor’s and Ph.D. degrees in   2013, 2014, and 2015. He has been the General Chairperson of IEEE ISCAS
+                            physics-electronics from Universidad de Seville,     2020. He has served as an editor, an associate editor, and the guest editor for
+                            in 1976 and 1982, respectively. After research       IEEE and non-IEEE journals.
+                            stays with the University of California at Berke-
+                            ley and Texas A&M University, he became a
+                            Full Professor of electronics with the University
+                            of Seville, in 1995. He co-founded Instituto de
+                            Microelectrónica de Sevilla, jointly undertaken by
+                            Consejo Superior de Investigaciones Científicas
+(CSIC) and the University of Seville. He started a research laboratory on
+analog and mixed-signal circuits for sensors and communications. In 2001,
+he was the main promoter and co-founder of the start-up company AnaFocus
+Ltd., where he served as the CEO, on leave from the university, until June
+2009, when the company reached maturity as a worldwide provider of smart
+CMOS imagers and vision systems-on-chip. AnaFocus was founded on the                                      WILFRIED PHILIPS (Senior Member, IEEE) was
+basis of his early patents. He holds eight patents. While in academia, he has                             born in Aalst, Belgium, in 1966. He received the
+conducted research and development activities on mixed-signal microelec-                                  Diploma and Ph.D. degrees in electrical engi-
+tronics for massive sensory data, including vision chips and neuro-fuzzy                                  neering from the University of Ghent, Belgium,
+controllers. He also pioneered the application of chaos to instrumentation and                            in 1989 and 1993, respectively. From October
+communications. His team designed the first, worldwide, integrated circuits                               1989 to September 1993, he was a Research Assis-
+with controllable chaotic behavior and the design and prototyping of the first                            tant with the Department of Electronics and Infor-
+worldwide chaos-based communication MoDem chips. His team made also                                       mation Systems, Ghent University, for the Flemish
+significant contributions in the areas of structured analog and mixed-signal                              Fund for Scientific Research (FWO). He is cur-
+design and the data converter design, including the elaboration of advanced                               rently a Senior Professor and the Leader of the
+teaching materials on this topic for different industrial courses and the        Image Processing and Interpretation Research Group, TELIN Department,
+production of two widely quoted books on the design of high-performance          Ghent University. His main research interests include image and video
+CMOS sigma–delta converters. Many high-performance mixed-signal chips            restoration, image analysis, lossless and lossy data compression of images
+were successfully designed by him and his co-workers in the framework of         and video, and processing of multimedia data.
+different research and development programs and contracts. These included
+
+
+
+
+VOLUME 11, 2023                                                                                                                                          35021
+

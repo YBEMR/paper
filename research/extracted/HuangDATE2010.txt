@@ -1,0 +1,548 @@
+     Energy-Efficient Task Allocation and Scheduling for
+   Multi-Mode MPSoCs under Lifetime Reliability Constraint
+
+                                        Lin Huang† and Qiang Xu†‡
+                                CUhk REliable computing laboratory (CURE)
+                                     †
+
+                              Department of Computer Science & Engineering
+                        The Chinese University of Hong Kong, Shatin, N.T., Hong Kong
+                     ‡ CAS-CUHK Shenzhen Institute of Advanced Integration Technology
+
+                                   Email: {lhuang,qxu}@cse.cuhk.edu.hk
+
+ABSTRACT                                                                do not stick to a single execution mode throughout their entire service
+In this paper, we consider energy minimization for multiprocessor       lives. Instead, they work across a set of different interacting applica-
+system-on-a-chip (MPSoC) under lifetime reliability constraint of the   tions and operational modes. For instance, modern smart phones not
+system, which has become a serious concern for the industry with        only provide communication service, but also work as MP3 player,
+technology scaling. As today’s complex embedded systems typically       game console, and digital camera. For such multi-mode embedded
+have multiple execution modes, we first identify a set of “good” task   systems [18], the above problem can be further exacerbated due to
+allocation and schedules for each execution mode in terms of life-      inter-mode resource sharing and the associated possible imbalanced
+time reliability and/or energy consumption, and then we introduce       usage of processor cores. For example, an energy-efficient processor
+novel techniques to obtain an optimal combination of these single-      in a heterogeneous MPSoC platform might have higher utilization
+mode solutions, which is able to minimize the energy consumption of     rate in most operational modes, thus aging much faster than other
+the entire multi-mode system while satisfying given lifetime reliabil-  embedded processor due to the excessive stress on it.
+ity constraint. Experimental results on several hypothetical MPSoC         From the above, it is essential to explicitly consider lifetime reli-
+platforms with various task graphs demonstrate the effectiveness of     ability issue in energy-efficient embedded system designs. To tackle
+the proposed approach.                                                  this problem, in this paper, we first show how to conduct energy-
+                                                                        efficient task allocation and scheduling on MPSoC platforms for a
+1. INTRODUCTION                                                         single execution mode, taking the lifetime reliability as a constraint.
+   In response to today’s competitive electronics market, when de- For multi-mode embedded systems, since the overall system’s life-
+signing complex embedded systems, it is increasingly popular to em- time reliability is also related to the mode execution probabilities, it
+ploy pre-designed multiprocessor system-on-a-chip (MPSoC) plat- is not necessary to apply the same constraint to every mode. That is,
+forms and map applications onto them to reduce design risk and achieve we can afford to have task allocation and schedules for certain modes
+short time-to-market [19]. Various platforms with specific function- with lower reliability if such solutions reduce energy consumption
+alities reflecting the need of the expected application domain have dramatically, and compensate the reliability loss from other execu-
+been developed in the industry recently, e.g., ARM PrimeXsys plat- tion modes. Based on this observation, we propose to identify a set of
+form [1].                                                               “good” task allocation and schedules in terms of lifetime reliability
+   When building platform-based embedded systems, a basic issues is and/or energy consumption for each execution mode. Then, we intro-
+to conduct task allocation and scheduling for applications, in which duce novel methodologies to obtain an optimal combination of task
+the allocation of tasks is to effectively utilize the available proces- schedules that minimizes the energy consumption of the entire multi-
+sors while scheduling is to meet various requirements (e.g., timing mode system, while satisfying given systemwide lifetime reliability
+constraints). Recently, minimizing energy consumption has become constraint. Experimental results on various hypothetic multi-mode
+a critical task for embedded system designs, and a widely-used tech- MPSoC platforms show that the proposed solution can significantly
+nique is dynamic voltage scaling (DVS) [9], by which we scale down reduce the system energy consumption under reliability constraint.
+the voltage/frequency of individual processors according to temporal       The reminder of this paper is organized as follows. Section 2
+performance requirements of applications. Various energy-efficient presents preliminaries of this work and formulates the problem stud-
+task allocation and scheduling techniques for DVS-enabled embed- ied in this paper. In Section 3, we present our task allocation and
+ded systems have been presented in the literature (e.g., [11]).         scheduling algorithm for multi-mode embedded systems. Section 4
+   Despite the significant advancement of platform-based embedded presents our experimental results for hypothetical MPSoC platforms.
+system design methodologies in recent years, only limited works have Finally, Section 5 concludes this work.
+considered the lifetime reliability of the system [7, 23]. With the 2. PRELIMINARIES
+ever-increasing on-chip power and temperature densities, however,
+the wearout failures (e.g., negative bias temperature instability on 2.1 Related Work
+PMOS transistors) have become serious concerns for the industry [3,        Recently, a major trend in embedded system design is towards
+12, 21]. As shown in [17], the failure rates for electronic products energy-efficient computing based on the concept of performance on
+can be quite high within its warrantee period and the main reason was demand, by dynamically adjusting the operational voltage and fre-
+traced to excessive stress on the embedded processors.                  quency of processors based on instantaneous processing requirement.
+   Existing energy-efficient task allocation and scheduling techniques There is a rich literature on energy-efficient design methodologies
+target at reducing the overall energy consumption of the system. The (e.g., [11]), which mainly resort to DVS and slack reclaiming to cut
+lifetime of the system, however, is determined by the component with down the energy consumption of the embedded processors. In par-
+the shortest service life. Consequently, it is likely that the solution ticular, Schmitz et al. [20] proposed an energy-efficient co-synthesis
+with the minimum energy consumption results in excessive stress on framework for multi-mode embedded systems under the consider-
+certain components, leading to unexpected low lifetime reliability of ation of mode execution probabilities, in which a single execution
+the system. In addition, today’s complex embedded systems usually mode occupies the entire MPSoC at a time.
+   At the same time, with aggressive technology scaling, the lifetime                  suffering from wearout failures, we mainly consider processor cores
+reliability of today’s high-performance integrated circuits has also be-               in this work due to their heavy stress and varying operational behav-
+come a major concern for the industry [3]. The wearout failure mech-                   iors. Our work can be easily extended to take other hardware compo-
+anisms that lead to permanent errors of IC products include electro-                   nents (with simpler activities) into account, if needed.
+migration on the interconnects, TDDB in the gate oxides, negative                      2.3      Analytical Models
+bias temperature instability (NBTI) on PMOS transistors, and ther-
+                                                                                          The energy consumption model used in this work is mainly based
+mal cycling (TC), and they were shown to be highly related to the
+                                                                                       on [10, 16], by which we are able to compute the power consumption
+temperature and voltage applied to the circuit. Thus, existing thermal-
+                                                                                       and execution time of task j (in the task graph for execution mode i)
+aware task scheduling techniques may improve the MPSoC’s lifetime
+                                                                                       running on processor k given its voltage scaling parameter ρ, denoted
+reliability implicitly, by balancing different processors’ temperatures
+                                                                                       by Pi, j,k (ρ) and wi, j,k (ρ) respectively. Both are normalized to given
+or keeping them under a safe threshold. However, as pointed out
+                                                                                       values Pi, j,k and wi, j,k when ρ = 1 (i.e., no voltage scaling). The
+in [7], since circuit wearout failures are also dependent on many other
+                                                                                       energy consumption of task schedule for execution mode i depends on
+factors (e.g., internal structure, operational frequency and voltage),
+                                                                                       the task assignments and the deadline of entire task graph max j {di, j }.
+without explicitly taking the lifetime reliability into account during
+                                                                                       Denoting by 1{i, j→k} an indicator function that equals 1 if task j is
+task allocation and scheduling, various processor cores may still age
+                                                                                       assigned to processor k while 0 otherwise, the energy consumption of
+differently and thus result in shorter lifetime for the MPSoC-based
+                                                                                       a certain task schedule in unit time is expressed as
+embedded system.
+   Recently, the authors of [7] proposed a novel analytical model for                                    1
+                                                                                                    max j {di, j } ∑ ∑ Pi, j,k (ρi, j,k ) · wi, j,k (ρi, j,k ) · 1{i, j→k} (1)
+                                                                                            Ei =
+the lifetime reliability of multiprocessor platforms, which, unlike prior                                          j k
+work (e.g., [4, 21]), is able to capture the processors’ accumulated
+                                                                                          A lifetime reliability model that captures the accumulated aging
+aging effects. They have also introduced a simulated annealing (SA)
+                                                                                       effects of IC hard errors has been proposed in [7]. We resort to that
+technique to maximize the service life of MPSoC-based embedded
+                                                                                       model to estimate the reliability stress of task schedules in this work.
+systems under performance constraint. However, energy consump-
+                                                                                       Let αk (T ) be the aging effect of processor k in unit time provided
+tion issues are not considered in [7] and it focused on single execution
+                                                                                       operational temperature T . The aging effect of processor k in a certain
+mode only. In practice, it is not necessary to prolong the service life
+                                                                                       task schedule is therefore
+of embedded systems as much as possible. Rather, energy minimiza-
+                                                                                                    h wi, j,k (ρ) · 1            wi, j,k (ρ) · 1{i, j→k} i      di
+tion should be the primary optimization objective with given lifetime                                                 {i, j→k}
+                                                                                         Ai,k = ∑                              −                           +
+reliability being used as a constraint.                                                           j         α   (T
+                                                                                                               k i, j,k )              α   (T
+                                                                                                                                          k amb   )          αk amb )
+                                                                                                                                                               (T
+2.2      Problem Formulation                                                              where, Tamb is the ambient temperature. Then, suppose the system
+ Based on the above, the problem investigated in this paper is for-                    remains in mode i through its service life, we can express system
+mulated as follows:                                                                    reliability at the target service life L with the aging effect additivity
+                                                                                       proved in [7] as
+   Problem: Given
+                                                                                                                    h           Ai,k            i
+    • the floorplan of the platform-based MPSoC embedded system                                           Ri = exp − ∑(                  · L)βk              (2)
+        that consists of ` processor cores;                                                                             k max j {di, j }
+    • n execution modes. Each mode i is represented by a directed
+        acyclic task graph Gi = (Vi , Ei ), wherein each node in Vi indi-              3. PROPOSED ALGORITHM FOR MULTI-
+        cates a task in Gi , and Ei is the set of directed arcs that represent            MODE EMBEDDED SYSTEMS
+        precedence constraints;
+                                                                                          Since the lifetime reliability constraint is a systemwide constraint
+    • the joint probability density function1 that the system is in var-
+                                                                                       (unlike the performance constraint for real-time tasks), it is not neces-
+        ious modes fY1 ,Y2 ,··· ,Yn (y1 , y2 , · · · , yn ), where yi represents the
+                                                                                       sary to apply the same reliability constraint to every execution mode
+        probability that the system is in execution mode i;
+                                                                                       for multi-mode MPSoC embedded systems. In this section, we show
+    • the execution time wi, j,k of task j of mode i on processor k                    how to take advantage of this flexibility to minimize energy consump-
+        under maximum supply voltage Vdd ;                                             tion for multi-mode embedded systems. To be specific, we first gen-
+    • the power consumption Pi, j,k of task j of mode i on processor k                 erate “good” solutions in terms of reliability and/or energy for each
+        under maximum supply voltage Vdd ;                                             execution mode (Section 3.1-3.3) and then we search for an optimal
+    • deadline di, j of task j of mode i, meaning that task j in Gi                    combination of them to obtain minimized energy while satisfying the
+        should be finished before di, j ;                                              systemwide lifetime reliability constraint (Section 3.4).
+    • target service life L and the corresponding reliability require-                 3.1      Feasible Solution Set
+        ment η%;
+                                                                                          When we loosen the lifetime reliability constraint for a single ex-
+    • failure mechanism parameters (e.g., activation energy Ea of
+                                                                                       ecution mode, there are many possible task allocation and schedule
+        electromigration) and the corresponding failure distributions;
+                                                                                       solutions. However, if one solution is associated with higher energy
+   Determine a periodical task allocation and schedule on the given                    consumption and at the same time has lower lifetime reliability when
+MPSoC platform for each execution mode such that the expected en-                      compared to another solution, it definitely should not be considered
+ergy consumption is minimized, under the performance constraints                       for the combination of solutions of all execution modes.
+that real-time tasks are finished before deadlines and the lifetime re-                   Before introducing the searching procedure, we first introduce a
+liability constraint that the system reliability at the target usage life L            key concept in our proposed methodology. Among the task allocation
+is no less than η%.                                                                    and schedule solutions for a certain task graph (denoted as set X),
+   Note that, for the ease of discussion, in this work, we assume each                 there exists a subset Y that satisfies the following two conditions.
+execution mode in a multi-mode system corresponds to one directed
+acyclic task graph only. Our proposed approach, however, could be                      Internal stability Given two solutions u, v ∈ Y , if u consumes more
+easily extended to handle multiple task graphs for a single mode by                    energy than v, it must have higher lifetime reliability at the target
+constructing a hyper task graph and performing task scheduling on                      service life, and vice versa.
+a hyper-period [13], if necessary. In addition, while there are other                  External stability For any solution w ∈ X \ Y , there exists at least
+hardware resources in the MPSoC platform consuming energy and                          one solution u ∈ Y such that u consumes less energy and have higher
+1 The mode execution probabilities can be estimated as in [20].
+                                                                                       lifetime reliability than w.
+   We refer to Y as the feasible solution set (i.e., pareto optimal so-          1 Build an initial solution X and initialize P as {X}
+                                                                                 2 While T > Tend
+lution set), denoted as F in the rest of this paper. Now, our problem            3      For the iteration i from 1 to Niter
+of task allocation and scheduling for a single execution mode comes              4           X’ ← Random_Move(X)
+down to identifying F . Fig. 1 shows an example, wherein several so-             5           Cold ← Cal_Cost(X)
+lutions are plotted on a two-dimensional plane as points according to            6           Cnew ← Cal_Cost(X’)
+                                                                                                                     ¡            ¢
+their lifetime reliability and energy consumption. The feasible solu-            7           If Cnew < Cold or exp Cold −C T
+                                                                                                                              new
+                                                                                                                                    > rand()
+tion set in this case is F = {O, D, E}. Consider a solution outside              8                 X ← X’ // accept X’
+this set, say G. It implies higher energy consumption and lower life-            9                 If X’∈/ P and X’ meet performance constraint
+                                                                                 10                     If static identification
+time reliability than solution D. Note that solution O should be kept            11                           P ← Include(P , X’)
+although it violates the global reliability constraint, because it is a          12                     Else If dynamic identification
+possible candidate in the final combined solutions in our multi-mode             13                           P ← Identify(P , X’) // see Sec. 3.3.2
+systems.                                                                         14     T ← T × Rcooling
+
+3.2    Searching Procedure for a Single Mode                                     15 If static identification
+                                                                                 16       F ← Identify(P ) // see Sec. 3.3.1
+   The simulated annealing technique could be used to obtain a single            17 Else If dynamic identification
+solution with minimum energy consumption under lifetime reliabil-                18       F ←P
+ity and performance constraint for the task scheduling problem (e.g.,
+[7]). To find a set of feasible solutions as candidates for later multi-       Figure 2: Main Flow of Searching for Feasible Solution Set.
+mode combination, we modify the classic procedure and highlight the         the task schedule with higher reliability and lower energy consump-
+difference with Fig. 2.                                                     tion has less cost. Also, to meet the performance constraint, a heavy
+   In a typical SA-based algorithm, it is only necessary to keep the        penalty should be given to the task assignment that cannot meet this
+current solution during the searching procedure and the best solution       constraint. Denoting by mi, j the earliest finish time of task j given
+explored so far, but in our method, every newfound solution is first        resource binding of mode i, we therefore define the cost function as
+checked with its cost, which will be introduced in Section 3.2.2, to
+determine whether it should be accepted (Line 7). If accepted and                                                      Ci = γ · 1{∃ j: mi, j >di, j } − Ri × Ei
+meeting performance constraint, depending on which feasible solu-            Here, γ represents a significant large number. The first term, which
+tion set identification strategy is chosen (detailed in Section 3.3), it  equals γ if there exists at least one task (say, task j) exceeds its dead-
+is either added into the possible solution set P (Line 11) or identified  line (i.e., mi, j > di, j ) while 0 otherwise, is the penalty of violating
+together with original feasible solution set (Line 13). Note that, if     performance constraint. To determine this value, we need to estimate
+the static strategy is chosen, after this searching procedure all found   the schedule length, which depends on not only assignment but also
+solutions are kept in the set P . The static identification is conducted  the schedule. While we can use exhaustive search to obtain the min-
+and yields the feasible solution set F (Line 16). In contrast, if we      imum value and the corresponding task schedule, given the task allo-
+perform the dynamic identification during the searching procedure,        cation solution, we can resort to well-studied heuristics (e.g., [15]) to
+the resulting set P is essentially the feasible solution set F (Line 18). acquire an optimized task schedule.
+ 3.2.1 Solution Representation                                               We use minus for the second term because solutions with lower
+                                                                          Ri are with less lifetime reliability and hence should have higher cost
+   The most straightforward representation to specify schedule X is
+                                                                          during the simulated annealing process. Without considering DVS, Ei
+(schedule order sequence; resource binding sequence), which can
+                                                                          and Ri can be computed by Eq. (1) and Eq. (2). Yet it is very impor-
+be used to construct task schedules directly [7] and corresponds to
+                                                                          tant to note that DVS is helpful to both energy savings and reliability
+unique reliability, energy consumption and schedule length (also known
+                                                                          improvement in most cases, as shown in Fig. 3. We therefore make
+as makespan). This simple representation, however, leads to huge de-
+                                                                          use of the timing slacks to determine appropriate voltage scales for
+sign exploration space. Let vi be the number of nodes in the task graph
+                                                                          DVS-enabled processors to minimize energy under performance and
+for execution mode i. With ` processors in the system, the solution
+                                                                          lifetime reliability constraint.
+exploration space is as high as (vi ! · `vi ).
+                                                                                              100
+   Fortunately, we notice that, without considering DVS, both energy
+consumption and lifetime reliability depend mainly on task allocation                          80
+                                                                                              Aging Effect Ratio (%)
+
+
+
+
+and are almost independent of their schedule orders (see Eq. (1) and
+                                                                                               60
+Eq. (2)). In addition, with known task allocation, there is a rich liter-
+ature (e.g., [14, 15]) on how to conduct task scheduling to meet dead-                         40
+
+lines and reduce the total schedule length. Based on the above, we                             20
+                                                                                                                             P = 5W
+                                                                                                                             P = 7.5W
+propose to represent the solutions with task allocation only, shrink-                                                        P = 10W
+                             v
+ing the solution space to ` i . The random move strategy is also quite                          0
+                                                                                                                             P = 12.5W
+                                                                                                50      60    70       80   90        100
+                                                                                                                 ρ (%)
+simple with this representation, i.e., we randomly pick up a task and
+assign it to another processor core, different from the original one.           Figure 3: Influence of Voltage Scaling on Aging Effect.
+                                                                             To be specific, we first compute the range of possible task execution
+ 3.2.2 Cost Function                                                      time and the associated voltage scaling parameter with the follow-
+   As the simulated annealing searching procedure is guided to the so- ing procedure. Given the task schedule reconstructed with solution
+lution with minimum cost, we should define a cost function such that representation, suppose the entire task schedule is fulfilled ahead of
+                                                                          deadline max j {di, j } without voltage scaling, all tasks in the sched-
+                                                                          ule are uniformly “stretched” and the ratio is denoted by global scale
+                                                                                       g
+                         IV
+                                                                          parameter θi . In addition, we notice that some tasks can be further
+                                                                          elongated without affecting the scheduling of any other tasks. That is
+                                                I                         to say, a task can be further extended if it finishes before the starting
+                                                                          time of all of its successors on task graph and the starting time of the
+                         III                    II                        next task on the same processor core. We define the local scale pa-
+                                                                          rameter for such a task j as θli, j,k , given it is assigned to processor k.
+                                                                          In particular, these values are set to 1 if no extension is appropriate.
+                                                                                                                                          g
+            Figure 1: Feasible Solution Set Identification.               Thus, the execution time of task j is bounded by wi, j,k · θi · θli, j,k and
+thus the upper bound of voltage scaling parameter could be computed          3.3.2       Dynamic Strategy
+accordingly.                                                                    It is important to highlight that the above static identification strat-
+  Then, as in most cases a processor core can only work under a              egy requires to find all solutions and store them before the identifica-
+few voltage levels, we determine voltage assignment for each task by         tion process, thus involving heavy memory overhead, especially when
+choosing the voltage state that results in the maximum cost reduction.       there are a large number of possible solutions. This problem can be
+And finally we reevaluate the energy consumption of the resource             avoided if we can identify feasible solutions in a random order. By
+binding sequence by using Eq. (1).                                           doing so, feasible solution set F is updated whenever a newfound
+3.3     Feasible Solution Set Identification                                 solution is generated, and hence we only need to maintain the cur-
+                                                                             rent feasible solution set. In the following, a dynamic identification
+   With a number of recorded solutions obtained using the above pro-
+                                                                             strategy to achieve the above objective is presented.
+cedure, this section is concerned with identifying the feasible solution
+                                                                                The feasible solution set F is initialized as empty. Every newfound
+set out of them.
+                                                                             solution is processed according to the following three rules.
+3.3.1     Static Strategy                                                    Rule 1 If the new solution is in domain I or III of ALL elements in set
+   Let us start from a simple case in which all solutions have been          F , it should be included into the feasible set F .
+found out and stored before our feasible solution set identification
+                                                                             Rule 2 If the new solution is in domain II of ANY solution X (where
+process (this assumption will be lifted later).
+                                                                             X∈ F ), we include the new solution into F and at the same time
+   Before presenting the proposed approach, we first introduce some
+                                                                             eliminate X from F .
+definitions. All the found task allocation and schedule solutions are
+examined according to the lifetime reliability model and energy model        Rule 3 If the new solution is in domain IV of ANY solution X (where
+in Section 2.3, and marked on a two-dimensional plane whose x-axis           X∈ F ), we ignore the new solution.
+and y-axis represent the lifetime reliability at the end of target service      Rule 1 is consistent with Theorem 2. Rule 2 holds because the new
+life (provided the system remains in this mode) and the expected en-         solution must consume less energy and have higher reliability than
+ergy consumption, respectively. With respect to a point, we divide the       solution X, if it is in domain II of X. Hence, X should be replaced by
+plane into four domains, referred as domain I, II, III, and IV. Fig. 1       the new solution. As for Rule 3, given the new solution is in domain
+illustrates a domain division respect to point O. The positive x-axis        IV of solution X, it is worse than X in terms of both reliability and
+and negative y-axis belong to domain II; while the negative x-axis and       energy saving, and hence is not feasible. Note that, it is impossible
+positive y-axis belong to domain IV. We define original point as the         that a newfound solution is marked in domain II of some feasible set
+point with the lowest energy consumption and, in case of ties, with          elements and domain IV of some other elements simultaneously.
+the highest lifetime reliability on this plane, denoted as point O.             Consider the example shown in Fig. 1 again. Let us examine the
+                                                                             dynamic identification with a random order: C, O, E, D, F, B, A, G.
+Theorem 1 Point O corresponds to a feasible solution, and all other          The procedure is shown in Fig. 4, leading to the same feasible solution
+feasible solutions only exist in its domain I.                               set as that obtained using static strategy (see Section 3.3.1).
+                                                                                                original F new solution updated F
+Proof Since solution O consumes the least energy, there is no points                                  ∅               C              {C}
+falling in its domain II or III. For the solutions in its domain IV, since                          {C}               O              {O}
+they are associated with higher energy consumption and lower relia-                                 {O}               E             {O, E}
+bility than O, they cannot be feasible. Also, solutions with the same                              {O, E}             D            {O, E, D}
+                                                                                                  {O, E, D}           F            {O, E, D}
+energy consumption as that of O but lower lifetime reliability (e.g.,                             {O, E, D}           B            {O, E, D}
+point B and C in Fig. 1) are apparently not feasible. Therefore, all                              {O, E, D}           A            {O, E, D}
+feasible solutions are in domain I of point O. ¤                                                  {O, E, D}           G            {O, E, D}
+   It is also worth noting that the converse of this theorem is not true,               Figure 4: An Example Identification Procedure.
+that is, not all points in domain I of point O are feasible solutions.       3.4      Multi-Mode Combination
+   We propose to sweep domain I with respect to point O in a coun-
+terclockwise manner, and check the reached points (i.e., solutions)             Given the feasible solution set for every execution mode, we show
+according to the following theorem. A feasible solution set F is ini-        how to combine them to achieve minimum energy consumption under
+tialized as {O} before sweeping. If a reached solution is a feasible         systemwide lifetime reliability constraint in this subsection.
+one, it is included into F before examining the next one.                       Suppose the feasible solution set Fi of mode i is composed of qi
+                                                                             elements. We denote by Ei` the energy consumption given the `th
+                                                                             feasible solution (` = 1, · · · , qi ) for execution mode i. In addition,
+Theorem 2 A new solution N is a feasible one if and only if it is in
+                                                                             we introduce a function 1{`⇒i} , which equals to 1 if we choose the
+domain I or III of all elements in set F .
+                                                                             `th solution from the feasible solution set Fi for mode i; otherwise 0.
+Proof Suppose point N is feasible and it is in the domain II of another      With these notations, the energy consumption for a fixed execution
+feasible solution X∈ F , by counterclockwise sweeping we must have           probability combination can be expressed as
+come across point N before X and put it into F already. Therefore, the                         E(y1 , y2 , · · · , yn ) = ∑ yi · ∑ Ei` · 1{`⇒i}
+supposition does not hold. Next, we assume point N is in the domain                                                       i    `
+IV of any solution X in set F . In this case, solution N costs more             Subject to the constraint that
+energy and results in lower reliability when compared to solution X,
+and hence is not a feasible solution. ¤
+                                                                                                         ∀i :       ∑ 1{`⇒i} = 1                              (3)
+                                                                                                                     `
+   Consider the example shown in Fig. 1. By sweeping counterclock-              More generally, when we consider the usage information obtained
+wisely, we first come across point D. It is in the domain I of point         from a large user group, we can use a joint probability density func-
+O, which is the only element in F at this moment, and therefore in-          tion fY1 ,Y2 ,··· ,Yn (y1 , y2 , · · · , yn ) to represent the probabilities that the
+cluded into the feasible solution set. Next one is E. It is in domain I      system is in various execution modes. Thus, the optimization ob-
+of point O and domain III of point D, and hence also included. Then,         jective becomes to minimize the expected energy consumption over
+we come across point F, which is not a feasible solution as it falls into    service life, that is, to minimize E[E(Y1 ,Y2 , · · · ,Yn )], where E[X] in-
+domain IV of point D. The final one is G. As it locates in domain IV         dicates the expectation of random variable X.
+of D and E, it is also not feasible. Therefore, the end result is F ={O,        As the performance constraints of all execution modes have been
+D, E}.                                                                       guaranteed in the proposed searching procedure, besides Eq. (3) we
+need to consider the lifetime reliability constraint only. Similar to the               Task                                                             Resource
+                                                                                                    Solution
+                                                                                        Graph                    Ri (%)       Ei      max{mi, j }         Binding
+energy consumption issue, we compute the expected value given the                       Label
+                                                                                                      No.                               j
+                                                                                                                                                         Sequence
+fixed probabilities yi for execution mode i as
+                                                                                                         1         39.16 23.179         52.835       (0, 0, 1, 0, 1, 1)
+                                £            yi · ∑` A`i,k · 1{`⇒i}          ¤                           2         36.70 22.992         46.742       (1, 0, 1, 0, 1, 0)
+      R(y1 , y2 , · · · , yn ) = exp − ∑(∑                            · L)βk                             3         34.91 22.370         50.028       (0, 0, 1, 1, 1, 1)
+                                k i       max j {di, j }                                  (a)
+                                                                                                         4         34.18 21.312         37.021       (1, 0, 1, 0, 1, 1)
+          `                                                                                              5         27.92 20.503         34.214       (1, 0, 1, 1, 1, 1)
+  where, Ai,k represents the aging effect of task schedule ` on pro-
+                                                                                                         6         17.05 20.061         33.807       (1, 1, 1, 0, 1, 1)
+cessor k in execution mode i. The reliability constraint comes down                                      7         11.80 19.253         31.001       (1, 1, 1, 1, 1, 1)
+to keep the expected lifetime reliability over the execution probability                                 1         65.09 15.437         71.702      (1, 0, 1, 1, 1, 0, 0)
+distribution exceeding a threshold, i.e.,                                                                2         59.19 15.358         78.068      (1, 1, 1, 1, 0, 0, 0)
+                                                                                                         3         56.94 14.921         62.918      (1, 0, 1, 1, 0, 0, 0)
+                    E[R(Y1 ,Y2 , · · · ,Yn )] ≥ η%                                        (b)
+                                                                                                         4         47.54 14.910         57.684      (1, 0, 0, 1, 0, 0, 0)
+  We therefore formulate the multi-mode solution combination prob-                                       5         45.49 14.488         52.101      (1, 0, 1, 0, 0, 0, 0)
+                                                                                                         6         36.51 14.477         46.867      (1, 0, 0, 0, 0, 0, 0)
+lem as follows:                                                                                          1         44.05 23.036         33.275            (1, 1, 0)
+                                                                                                         2         41.98 22.559         25.813            (0, 1, 0)
+                      min     E[E(Y1 ,Y2 , · · · ,Yn )]                                   (c)            3         39.77 19.889         27.235            (1, 0, 1)
+                      st.     E[R(Y1 ,Y2 , · · · ,Yn )] ≥ η%                                             4         35.33 17.034         23.355            (1, 0, 0)
+                                                                                                         5         27.10 16.556         15.892            (0, 0, 0)
+                              ∀i : ∑` 1{`⇒i} = 1                                         Ri : lifetime reliability at the target service life given mode i;
+                              ∀i, ` : 1{`⇒i} =0 or 1                                     Ei : energy consumption for execution mode i;
+                                                                                              Table 1: Feasible Solution Set (End Result).
+   This optimization problem can be solved quite efficiently since the           feasible solutions for each mode, sorted in the order of Ri and listed
+number of execution modes for an embedded system is typically small              in Table 1. Some schedules (e.g., solution 2-7 for task graph (a)) can-
+(tens of modes for very complex systems).                                        not meet the lifetime reliability constraint, but they are kept because
+                                                                                 some other task graphs (e.g., task graph (b)) may provide reliability
+4. EXPERIMENTAL RESULTS                                                          margin.
+4.1 Experimental Setup                                                              Then, by optimization, we obtain the combination with the mini-
+   We conduct two sets of experiments with different task graphs and             mum expected energy consumption 16.875 meeting the lifetime relia-
+hypothetical MPSoC platforms to evaluate the proposed approach.                  bility requirement Ri ≥ 36.8% (or e−1 ) at the target service life L = 10
+All task graphs are generated by TGFF [5]. The power consumption                 years [12]. We choose solution 7, 4, 5 for task graph (a), (b), and (c),
+of tasks on processor cores are randomly generated, while the range              respectively.
+is set according to state-of-the-art technology [22]. Although the pro-             We compare this result with that obtained by the baseline greedy
+posed approach is applicable for the combination of multiple failure             heuristic and the proposed single-mode algorithms. The selected so-
+mechanisms, since there is no public data on the influence weight of             lutions are illustrated in Table 2. The baseline approach cannot pro-
+various hard errors, we use the well-studied electromigration failure            vide a solution meeting this requirement because of task graph (a).
+model presented in [6] for our experiments. The parameters are set               On the other hand, because the single-mode method does not allow
+to cross-sectional area of conductor Ac = 6.4 × 10−8 cm2 , the current           the reliability constraint violation of any modes, it results in signifi-
+density J = 1.5 × 106 A/cm2 and the activation energy Ea = 0.48eV .              cant reliability margin. The multi-mode method, by contrast, makes
+The simulated annealing parameters are set to initial temperature 100,           full use of such margin, and therefore provides 14.1% energy saving
+terminal temperature Tend = 10−5 , cooling rate Rcooling = 0.99, and             when compared with the single-mode approach.
+iteration count I = 20.                                                          4.3     Sensitivity Analysis
+   To demonstrate the effectiveness of the proposed algorithms, we
+                                                                                    It is interesting to analyze the impact of lifetime reliability thresh-
+compare the proposed multi-mode approach, the proposed single-
+                                                                                 old on the effectiveness of the proposed algorithm. As shown in
+mode approach wherein all execution mode needs to satisfy the given
+                                                                                 Fig. 5, no solutions can be found using the baseline method with a
+reliability constraint, and a greedy heuristic constructed by ourselves
+                                                                                 tight reliability threshold (i.e., higher than 32%), while the single-
+due to the lack of prior work on the same topic. In this heuristic, we
+                                                                                 mode approach results in good solutions until the reliability threshold
+first build a task schedule to shorten the schedule length and reduce
+                                                                                 increases to 39%. The proposed multi-mode approach is able to give
+energy consumption with a list scheduling heuristic [2]. Note that, to
+                                                                                 solutions when the reliability threshold is as high as 49%.
+take both energy consumption and performance into account, the crit-
+                                                                                    If the reliability threshold can be relaxed, both the energy con-
+ical path length of task j on processor k is redefined as cpl0 (τ j , pk ) =
+                                                                                 sumptions obtained by the single-mode method and multi-mode one
+cpl(τ j , pk ) − Pj,k according to the heuristics in [8], where cpl(τ j , pk )
+                                                                                 decrease, and finally they converge when the threshold decreases to
+is the critical path length of a task τ j scheduled on processor pk [2].
+                                                                                 11.8%. In the range 11.8–39%, the proposed approach always leads
+We then attempt to meet the reliability constraint in a greedy manner,
+                                                                                 to better result than the single-mode one. The energy consumption of
+that is, if the system reliability constraint is violated, the processor
+                                                                                 the baseline approach also decreases with the relaxation of reliability
+core with the minimum lifetime reliability is selected in each iteration
+                                                                                 requirement, but it always results in the highest energy consumption
+and the task causing the highest stress is assigned onto another core
+                                                                                 among these methods. In particular, when the reliability threshold is
+without violating performance constraints. The moved task is then
+                                                                                 11.8%, the energy consumption obtained with the baseline method is
+locked. The procedure terminates if no more moves are available or
+                                                                                 17.27. With the same energy consumption, the proposed single-mode
+reliability constraint can be met.
+                                                                                 and multi-mode approach are able to achieve much higher lifetime
+4.2     Case Study                                                               reliability 27% and 42% (see the black stars) after 10-year service.
+   We consider three task graphs with task quantities 6, 7, and 3 (de-           Generally speaking, the warrantee period for electronic products are
+noted as task graph (a), (b), and (c) respectively hereafter) in the first       shorter than their designed service life, and we are interested in the
+experiment, each corresponding to a particular execution mode, and               failure rates at this time point. Suppose our system’s warrantee pe-
+schedule them on two processor cores with failure distribution slope             riod is 3-year, the failure rates for these three methods are 17.9%,
+parameter β = 1.5, 2, respectively. The probabilities that the system is         15.2% and 11.7%, respectively. In other words, there are roughly
+in execution modes (a)-(c) are set to be 0.3, 0.3, and 0.4, respectively.        6.2% less failures with our proposed method when compared to the
+By conducting the proposed searching procedure we obtain a set of                greedy heuristic at the end of the warrantee period.
+                 Task                                                               Resource                                                        26
+                                                                                                                                                          Greedy
+    Approach     Graph                      Ri (%)        Ei     max{mi, j }         Binding        E[E]                                            25    Single−Mode
+                                                                    j                                                                                     Multi−Mode
+                 Label                                                              Sequence
+
+
+
+
+                                                                                                                               Energy Consumption
+                                                                                                                                                    24
+
+                           (a)                –         –              –                 –                                                          23
+
+      Baseline             (b)              42.71    15.008         43.283     (0, 0, 0, 1, 0, 0, 0)   –                                            22
+
+                           (c)              41.98    22.559         25.813           (0, 1, 0)                                                      21
+                           (a)              39.16    23.179         52.835      (0, 0, 1, 0, 1, 1)                                                  20
+       Single
+                           (b)              45.49    14.488         52.101     (1, 0, 1, 0, 0, 0, 0) 19.255
+       Mode                                                                                                                                         19
+                           (c)              39.77    19.889         27.235           (1, 0, 1)
+                                                                                                                                                    18
+                           (a)              11.80    19.253         31.001      (1, 1, 1, 1, 1, 1)                                                    0      10         20           30   40   50
+       Multi                                                                                                                                                                 η (%)
+                           (b)              47.54    14.910         57.684     (1, 0, 0, 1, 0, 0, 0) 16.875
+       Mode                                                                                                   Figure 6: Comparison between Energy Consumption of Multi-
+                           (c)              27.10    16.556         15.892           (0, 0, 0)
+                                                                                                              Mode System under Constraints.
+Table 2: Energy Consumption Comparison between the Single-
+Mode Method and the Multi-Mode Combination Approach.                                                          5.    CONCLUSION
+                                                                                                                 In this work, we propose novel task allocation and scheduling algo-
+4.4      Extensive Results                                                                                    rithms to minimize the expected energy consumption of multi-mode
+   In this experiment, we consider relatively large MPSoC platform                                            embedded systems under performance and lifetime reliability con-
+and the associated task graphs, wherein we have 5 execution modes                                             straints. As shown in our experimental results, the proposed method-
+and their task quantities are 69, 7, 14, 3, and 29 (denoted as task graph                                     ology is able to meet tight reliability constraints and results in signif-
+(d)-(h) respectively), mapping onto a 8-core heterogeneous MPSoC.                                             icant energy savings, especially for heterogeneous MPSoCs.
+The maximum in- and out-degree of these task graphs are 3 and 2
+respectively. The task graphs are also generated by TGFF [5]. The
+failure distribution slope parameters β for processor cores are 2, 4,
+                                                                                                              6.    ACKNOWLEDGEMENTS
+and six 1.5, respectively.                                                                                      This work was supported in part by the General Research Fund
+   As shown in Fig. 6, only when the reliability threshold is lower                                           CUHK417406, CUHK417807, and CUHK418708 from Hong Kong
+than 29%, we can obtain solutions for all execution modes using the                                           SAR Research Grants Council (RGC), in part by National Science
+baseline greedy heuristic. In this range, both single-mode and multi-                                         Foundation of China (NSFC) under grant No. 60876029, and in
+mode approaches provide up to 26.3% and 27.8% energy reduction                                                part by a grant N_CUHK417/08 from the NSFC/RGC Joint Research
+when compared with the greedy solutions, respectively.                                                        Scheme.
+   The single-mode approach is able to meet tighter reliability con-                                          7.    REFERENCES
+straints and save more energy when compared to the greedy heuristic.
+                                                                                                               [1] ARM. ARM11 PrimeXsys Platform. http://www.jp.arm.com/event/images/
+But still, when the reliability threshold is higher than 39.7%, there is                                           forum2002/02-print_arm11_primexsys_platform_ian.pdf.
+no solution for some execution modes and hence the entire system.                                              [2] P. Bjorn-Jorgensen and J. Madsen. Critical Path Driven Cosynthesis for
+For instance, when threshold is 45%, no task schedule meeting both                                                 Heterogeneous Target Architectures. In Proc. CODES, pp. 15–19, 1997.
+                                                                                                               [3] S. Borkar. Designing Reliable Systems from Unreliable Components: The
+constraints can be found for modes (d) and (e). With the proposed                                                  Challenges of Transistor Variability and Degradation. In IEEE D&T,
+multi-mode combination approach, however, we can obtain a solu-                                                    25(6):10–16, Nov.-Dec. 2005.
+tion for the entire multi-mode system. This is because some other                                              [4] A. Coskun, et al. Analysis and optimization of mpsoc reliability. Journal of Low
+                                                                                                                   Power Electronics, 15(2):159–172, February 2006.
+modes, such as (g), provides sufficient reliability margin. Besides,                                           [5] R. P. Dick, D. L. Rhodes, and W. Wolf. TGFF: Task Graphs for Free. In Proc.
+the multi-mode approach always achieves lower energy consumption                                                   CODES, pp. 97–101, 1998.
+                                                                                                               [6] A. K. Goel. High-Speed VLSI Interconnections. IEEE Press, 2nd edition, 2007.
+when compared with the single-mode approach, because it explores a                                             [7] L. Huang, F. Yuan, and Q. Xu. Lifetime Reliability-Aware Task Allocation and
+larger solution space that includes the solution obtained by the single-                                           Scheduling for MPSoC Platforms. In Proc. DATE, pp. 51–56, 2009.
+mode method.                                                                                                   [8] W.-L. Hung, et al. Thermal-Aware Task Allocation and Scheduling for Embedded
+                                                                                                                   Systems. In Proc. DATE, pp. 898–899, 2005.
+   Finally, we allocate these task graphs onto a 8-core homogeneous                                            [9] T. Ishihara and H. Yasuura. Voltage Scheduling Problem for Dynamically
+MPSoC platform, where all processor cores have the same architec-                                                  Variable Voltage Processors. In Proc. ISLPED, pp. 197–202, 1998.
+                                                                                                              [10] R. Jejurikar, C. Pereira, and R. Gupta. Leakage Aware Dynamic Voltage Scaling
+ture and hence the same failure distribution (β = 1.5), and consume                                                for Real-Time Embedded Systems. In Proc. DAC, pp. 275–280, 2004.
+the same execution time and power consumption on each task. In                                                [11] N. K. Jha. Low Power System Scheduling and Synthesis. In Proc. ICCAD, pages
+this case, the three methods obtain solutions with the same energy                                                 259–263, 2001.
+                                                                                                              [12] E. Karl, et al. Multi-Mechanism Reliability Modeling and Management in
+consumption when the reliability constraint is set as η% = 27.7%,                                                  Dynamic Systems. IEEE Trans. on VLSI Systems, 16(4):476–487, April 2008.
+but the proposed multi-mode approach is able to achieve higher life-                                          [13] V. Kianzad and S. S. Bhattacharyya. CHARMED: A Multi-objective Co-synthesis
+                                                                                                                   Framework for Multi-mode Embedded Systems. In Proc. ASAP, pp. 28–40, 2004.
+time reliability, η% = 37.3%. This is because, for each single exe-                                           [14] Y.-K. Kwok and I. Ahmad. Static task scheduling and allocation algorithms for
+cution mode, all task schedules in the feasible solution set obtained                                              scalable parallel and distributed systems: Classification and performance
+with the proposed algorithm have the same lifetime reliability and                                                 comparison. In Y. C. Kwong, editor, Annual Review of Scalable Computing, pp.
+                                                                                                                   107–227, 2000.
+energy consumption, but different resource allocation. The proposed                                           [15] G. Liao, et al. A Comparative Study of Multiprocessor List Scheduling Heuristics.
+multi-mode combination step tends to choose the task schedules for                                                 In Proc. Hawaii International Conference on System Sciences, pp. 68–77, 1994.
+multiple execution modes such that all processor cores have similar                                           [16] S. Martin, et al. Combined Dynamic Voltage Scaling and Adaptive Body Biasing
+                                                                                                                   for Lower Power Microprocessors under Dynamic Workloads. In Proc. ICCAD,
+wearout stress. This feature, however, cannot be exploited by the                                                  pp. 721–725, 2002.
+other two methods.                                                                                            [17] NVIDIA Provides Second Quarter Fiscal 2009 Business Update.
+                                      22
+                                                                                                                   http://www.nvidia.com/object/io_1215037160521.html.
+                                            Greedy                                                            [18] H. Oh and S. Ha. Hardware-Software Cosynthesis of Multi-Mode Multi-Task
+                                      21
+                                            Single−Mode
+                                            Multi−Mode
+                                                                                                                   Embedded Systems with Real-Time Constraints. In Proc. CODES, pp. 133–138,
+                                                                                                                   2002.
+                 Energy Consumption
+
+
+
+
+                                      20                                                                      [19] A. Sangiovanni-Vincentelli, et al. Benefits and Challenges for Platform-based
+                                                                                                                   Design. In Proc. DAC, pp. 409–414, 2004.
+                                      19                                                                      [20] M. T. Schmitz, B. M. Al-Hashimi, and P. Eles. Cosynthesis of Energy-Efficient
+                                                                                                                   Multimode Embedded Systems With Consideration of Mode-Execution
+                                      18                                                                           Probabilities. IEEE Trans. on CAD, 24(2):153–169, February 2005.
+                                                                                                              [21] J. Srinivasan, et al. The Case for Lifetime Reliability-Aware Microprocessors. In
+                                      17
+                                                                                                                   Proc. ISCA, pp. 276–287, 2004.
+                                                                                                              [22] S. Zhang and K. S. Chatha. Approximation Algorithm for the Temperature-Aware
+                                      16
+                                        0      10          20           30     40       50                         Scheduling Problem. In Proc. ICCAD, pp. 281–288, 2007.
+                                                                η (%)
+                                                                                                              [23] C. Zhu, et al. Reliable Multiprocessor System-on-Chip Synthesis. In Proc.
+Figure 5: Variation in Energy Consumption with Reliability                                                         CODES, pp. 239–244, 2007.
+Threshold.
+

@@ -1,0 +1,1266 @@
+  ALERT: Accurate Learning for Energy
+            and Timeliness
+Chengcheng Wan, Muhammad Santriaji, Eri Rogers, Henry Hoffmann,
+        Michael Maire, and Shan Lu, University of Chicago
+        https://www.usenix.org/conference/atc20/presentation/wan
+
+
+
+
+   This paper is included in the Proceedings of the
+     2020 USENIX Annual Technical Conference.
+                           July 15–17, 2020
+                           978-1-939133-14-4
+
+
+
+
+                                  Open access to the Proceedings of the
+                                2020 USENIX Annual Technical Conference
+                                        is sponsored by USENIX.
+                     ALERT: Accurate Learning for Energy and Timeliness
+
+      Chengcheng Wan, Muhammad Santriaji, Eri Rogers, Henry Hoffmann, Michael Maire, Shan Lu
+                                  The University of Chicago
+
+
+
+
+                        Abstract                                processing data streamed from a sensor—or a producer—
+   An increasing number of software applications incorporate    returning a series of answers to a human. For example,
+runtime Deep Neural Networks (DNNs) to process sensor data      in motion tracking, a frame must be processed at camera
+and return inference results to humans. Effective deployment    speed [40]; in simultaneous interpretation, translation must be
+of DNNs in these interactive scenarios requires meeting         provided every 2–4 seconds [56]. Violating these deadlines
+latency and accuracy constraints while minimizing energy, a     may lead to severe consequences: if a self-driving vehicle
+problem exacerbated by common system dynamics.                  cannot act within a small time budget, life threatening
+   Prior approaches handle dynamics through either (1)          accidents could follow [53].
+system-oblivious DNN adaptation, which adjusts DNN                 Accuracy and energy requirements are also common and
+latency/accuracy tradeoffs, or (2) application-oblivious        may vary for different applications in different operating
+system adaptation, which adjusts resources to change            environments. On one hand, low inference accuracy can lead
+latency/energy tradeoffs. In contrast, this paper improves      to software failures [67,80]. On the other hand, it is beneficial
+on the state-of-the-art by coordinating application- and        to minimize DNN energy or resource usage to extend mobile-
+system-level adaptation. ALERT, our runtime scheduler,          battery time or reduce server-operation cost [41].
+uses a probabilistic model to detect environmental volatility      These requirements are also highly dynamic. For example,
+and then simultaneously select both a DNN and a system          the latency requirement for a job could vary dynamically
+resource configuration to meet latency, accuracy, and energy    depending on how much time has already been consumed by
+constraints. We evaluate ALERT on CPU and GPU platforms         related jobs before it [53]; the power budget and the accuracy
+for image and speech tasks in dynamic environments.             requirement for a job may switch among different settings
+ALERT’s holistic approach achieves more than 13% energy         depending on what type of events are currently sensed [1].
+reduction, and 27% error reduction over prior approaches that   Additionally, the latency requirement may change based on
+adapt solely at the application or system level. Furthermore,   the computing system’s current context; e.g., in robotic vision
+ALERT incurs only 3% more energy consumption and 2%             systems the latency requirement can change based on the
+higher DNN-inference error than an oracle scheme with           robot’s latency and distance from perceived pedestrians [18].
+perfect application and system knowledge.                          Satisfying all these requirements in a dynamic computing
+                                                                environment where the inference job may compete
+                                                                for resources against unpredictable, co-located jobs is
+1     Introduction                                              challenging. Although prior work addresses these problems
+                                                                at either the application level or system level separately, each
+1.1    Motivation                                               approach by itself lacks critical information that could be used
+Deep neural networks (DNNs) have become a key workload          to produce better results.
+for many computing systems due to their high inference             At the application level, different DNN designs—with
+accuracy. This accuracy, however, comes at a cost of            different depths, widths, and numeric precisions—provide
+long latency, high energy usage, or both. Successful DNN        various latency-accuracy trade-offs for the same inference
+deployment requires meeting a variety of user-defined,          task [26, 39, 42, 77, 85]. Even more dynamic schemes have
+application-specific goals for latency, accuracy, and often     been proposed that adapt the DNN by dynamically changing
+energy in unpredictable, dynamic environments.                  its structure at the beginning of [22, 61, 84, 89] or during
+  Latency constraints naturally arise with DNN deployments      [34, 35, 49, 52, 82, 86, 88] every inference tasks.
+when inference interacts with the real world as a consumer—        Although helpful, these techniques are sub-optimal
+
+
+
+USENIX Association                                                        2020 USENIX Annual Technical Conference           353
+without considering system-level adaptation options. For                                  DNN family
+                                                                                         With Accuracy &                                  Input
+example, under energy pressure, these application-level                                Latency Information                               Stream
+adaptation techniques have to switch to lower-accuracy DNNs,                        Deadline
+sacrificing accuracy for energy saving, even if the energy                          Accuracy Constraint DNN-Model                                    Inference
+                                                                                    Energy Budget        Selection
+                                                                                                                                                      Outputs
+goal could have been achieved by lowering the system power                                                      Predicted
+                                                                                                                                        Inference
+                                                                                                             Inference Time            Computation
+setting (if there is sufficient latency budget).
+                                                                                                              Resource
+   At the system level, machine learning [4, 14, 15, 51, 63, 68,                                              Selection         Inference Time,
+69, 79] and control theory [32, 37, 44, 45, 62, 70, 74, 93] based                                                             Accuracy, and Energy
+techniques have been proposed to dynamically assign system                                                                       Measurement
+resources to better satisfy system and application constraints.
+   Unfortunately, without considering the option of                                                Figure 1: ALERT inference system
+application adaptions, these techniques also reach sub-
+optimal solutions. For example, when the current DNN                                ALERT is a feedback-based run-time. It measures
+offers much higher accuracy than necessary, switching to a                       inference accuracy, latency, and energy consumption; it
+lower-precision DNN may offer much more energy saving                            checks whether the requirements on these goals are met;
+than any system-level adaptation techniques. This problem is                     and, it then outputs both system and application-level
+exacerbated because, in the DNN design space, very small                         configurations adjusted to the current requirements and
+drops in accuracy enable dramatic reductions in latency, and                     operating conditions. ALERT focuses on meeting constraints
+therefore system resource requirements.                                          in any two dimensions while optimizing the third; e.g.,
+   A cross-stack solution would enable DNN applications to                       minimizing energy given accuracy and latency requirements
+meet multiple, dynamic constraints. However, offering such                       or maximizing accuracy given latency and energy budgets.
+a holistic solution is non-trivial. The combination of DNN                          The key is estimating how DNN and system configurations
+and system-resource adaptation creates a huge configuration                      interact to affect the goals. To do so, ALERT addresses
+space, making it difficult to dynamically and efficiently                        three primary challenges: (1) the combined DNN and system
+predict which combination of DNN and system settings will                        configuration space is huge, (2) the environment may change
+meet all the requirements optimally. Furthermore, without                        dynamically (including input, available resources, and even
+careful coordination, adaptations at the application and system                  the required constraints), and (3) the predictions must be low
+level may conflict and cause constraint violations, like missing                 overhead to have negligible impact on the inference itself.
+a latency deadline due to switching to higher-accuracy DNN                          ALERT addresses these challenges with a global slow-
+and lower power setting at the same time.                                        down factor, a random variable relating the current
+                                                                                 runtime environment to a nominal profiling environment.
+                                                                                 After each inference task, ALERT estimates the global
+1.2     Contributions                                                            slow-down factor using a Kalman filter. The global
+This paper presents ALERT, a cross-stack runtime system for                      slow-down factor’s mean represents the expected change
+DNN inference to meet user goals by simultaneously adapting                      compared to the profile, while the variance represents
+both DNN models and system-resource settings.                                    the current volatility. The mean provides a single scalar
+Understanding the challenges We profile DNN inference                            that modifies the predicted latency/accuracy/energy for
+across applications, inputs, hardware, and resource contention                   every DNN/system configuration—a simple mechanism
+confirming there is a high variation in inference time. This                     that leverages commonality among DNN architectures to
+leads to challenges in meeting not only latency but also energy                  allow prediction for even rarely used configurations (tackle
+and accuracy requirements. Furthermore, our profiling of 42                      challenge-1), while incorporating variance into predictions
+existing DNNs for image classification confirms that different                   naturally makes ALERT conservative in volatile environments
+designs offer a wide spectrum of latency, energy, and accuracy                   and aggressive in quiescent ones (tackle challenge-2). The
+tradeoffs. In general, higher accuracy comes at the cost of                      global slow-down factor and Kalman filter are efficient to
+longer latency and/or higher energy consumption. These trade-                    implement and low-overhead (tackle challenge-3). Thus,
+offs offered provide both opportunities and challenges to                        ALERT combines the global slow-down factor with latency,
+holistic inference management (Section 2).                                       power, and accuracy measurements to select the DNN and
+Run-time inference management We design ALERT, a                                 system configuration with the highest likelihood of meeting
+DNN inference management system that dynamically selects                         the constraints optimally.
+and adapts a DNN and a system-resource setting together                             We evaluate ALERT using various DNNs and application
+to handle changing system environments and meet dynamic                          domains on different (CPU and GPU) machines under various
+energy, latency, and accuracy requirements1 (Section 3).                         constraints. Our evaluation shows that ALERT overcomes
+                                                                                 dynamic variability efficiently. Across various experimental
+   1 ALERT provides probabilistic, not hard guarantees, as the latter requires
+
+much more conservative configurations, often hurting both energy and             accuracy. Section 3.6 discusses this issue further.
+
+
+
+
+354    2020 USENIX Annual Technical Conference                                                                                         USENIX Association
+                                   ImageNet Classification Networks                                                                   ResNet50 @ Different Power Limit
+                       35                                                                                                   16.5
+                                                      Top5 Error-latency                                                              Power limit setting (W)
+                                                                                                                             16                                           64
+                       30                             Lower bound of top5 error-latency                                                                              66
+
+
+
+
+                                                                                                       Average Energy (J)
+                                                                                                                                                                          62 60
+                                                                                                                            15.5                                68
+      Error Rate (%)
+
+
+
+                                                                                                                                                                               58
+                       25
+                                                                                                                                                           70                  56 54
+                                                                                                                             15           98
+                                                                                                                                        100           72
+                       20                                                                                                                           74
+                                                                                                                                        96
+                                                                                                                                         92
+                                                                                                                                        94       76
+                                                                                                                            14.5        90 80 78                                    52
+                       15                                                                                                                86
+                                                                                                                                        88
+                                                                                                                                        8482
+                                                                                                                             14
+                                                                                                                                                                                    50 48
+                       10
+                                                                                                                            13.5
+                                                                                                                                                                                         46
+                        5                                                                                                    13                                                             44
+                                                                                                                                                                                                 42
+                                                                                                                                                                                                        40
+                        0                                                                                                   12.5
+                            0       0.05      0.1     0.15       0.2       0.25       0.3                                      0.06    0.08        0.1           0.12           0.14             0.16        0.18
+                                      Inference Time of One Image (s)                                                                      Inference Time of One Image (s)
+                                Figure 2: Tradeoffs for 42 DNNs (CPU2).                             Figure 3: Tradeoffs for ResNet50 at different power settings
+                                                                                                    (CPU2). (Numbers inside circles are power limit settings.)
+settings, ALERT meets constraints while achieving within
+93–99% of optimal energy saving or accuracy optimization.                                           50000 images from ImageNet [16], and measure their average
+Compared to approaches that adapt at application-level or                                           latency, accuracy (error rate), and energy consumption. The
+system-level only ALERT achieves more than 13% energy                                               results from CPU2 are shown in Figure 2. We can clearly see
+reduction, and 27% error reduction (Section 5).                                                     two trends from the figure, which hold on other machines.
+                                                                                                       First, different DNN models offer a wide spectrum of
+                                                                                                    accuracy (error rate in figure), latency, and energy. As shown
+2     Understanding Deployment Challenges                                                           in the figure, the fastest model runs almost 18× faster than
+                                                                                                    the slowest one and the most accurate model has about 7.8×
+We conduct an empirical study to examine the large trade-off                                        lower error rate than the least accurate. These models also
+space offered by different DNN designs and system settings                                          consume a wide range—more than 20×—of energy usage.
+(Sec. 2.1), and the timing variability of inference (Sec. 2.2).                                        Second, there is no magic DNN that offers both the best
+                                                                                                    accuracy and the lowest latency, confirming the intuition that
+                                 Embedded           CPU1          CPU2                    GPU
+                                   ARM                           Xeon(R)                            there exists a tradeoff between DNN accuracy and resource
+                                                Core-i7                               Core-i7
+ CPU                            Cortex A-15                     Gold 6126                           usage. Of course, some DNNs offer better tradeoffs than
+                                               @2.2 GHz                              @2.2 GHz
+                                 @2.0 GHz                       @2.60GHz                            others. In Figure 2, all the networks sitting above the lower-
+ GPU                               none          none              none              RTX 2080       convex-hull curve represent sub-optimal tradeoffs.
+ Memory                          DDR3 2G       DDR4 16G        DDR4 16G*12           DDR4 16G
+ LLC                               2MB           9MB             19.25MB               9MB             Tradeoffs from system settings We run ResNet50 under
+                                                                                                    31 power settings from 40–100W on CPU2. We consider a
+    Table 1: Hardware platforms used in our experiments                                             sensor processing scenario with periodic inputs, setting the
+                                                                                                    period to the latency under 40W cap. We then plot the average
+ ID                         Task                      DNN Models                   Datasets
+IMG1                        Image                     VGG16 [78]             ILSVRC2012
+                                                                                                    energy consumed for the whole period (run-time plus idle
+IMG2                        Classification            ResNet50 [29]          (ImageNet)             energy) and the average inference latency in Figure 3.
+NLP1                        Sentence Prediction       RNN                    Penn Treebank [59]        The results reflect two trends, which hold on other
+NLP2                        Question                  Bert [17]              Stanford Q&A           machines. First, a large latency/energy space is available by
+                            Answering                                        Dataset (SQuAD) [71]
+                                                                                                    changing system settings. The fastest setting (100W) is more
+Table 2: ML tasks and benchmark datasets in our experiments                                         than 2× faster than the slowest setting (40W). The most
+                                                                                                    energy-hungry setting (64W) uses 1.3× more energy than
+   We use two canonical machine learning tasks, with                                                the least (40W). Second, there is no easy way to choose the
+state-of-the-art networks and common data-sets (see Table                                           best setting. For example, 40W offers the lowest energy, but
+2) on a diverse set of hardware platforms, representing                                             highest latency. Furthermore, most of these points are sub-
+embedded systems, laptops (CPU1), CPU servers (CPU2),                                               optimal in terms of energy and latency tradeoffs. For example,
+and GPU platforms (see Table 1). The two tasks, image                                               84W should be chosen for extremely low latency deadlines,
+classification and natural language processing (NLP), are                                           but all other nearby points (from 52–100) will harm latency,
+often deployed with deadlines—e.g., for motion tracking [40]                                        energy or both. Additionally, when deadlines change or when
+and simultaneous interpretation [56]—and both have received                                         there is resource contention, the energy-latency curve also
+wide attention leading to a diverse set of DNN models.                                              changes and different points become optimal.
+                                                                                                       Summary: DNN models and system-resource settings
+2.1                    Understanding the Tradeoffs                                                  offer a huge trade-off space. The energy/latency tradeoff
+                                                                                                    space is not smooth (when accounting for deadlines and
+Tradeoffs from DNNs We run all 42 image classification                                              idle power) and optimal operating points cannot be found
+models provided by the Tensorflow website [76] on the                                               with simple gradient-based heuristics. Thus, there is a great
+
+
+
+USENIX Association                                                                                                                 2020 USENIX Annual Technical Conference                                          355
+                                          Time Variance on Different Inputs and Hardwares                                                                           Time Variance with Co-located Jobs
+       Avg. Inference Time of One Input (s)
+
+
+
+
+                                                                                                                   Avg. Inference Time of One Input (s)
+                                                   1                                             Embedded                                                      1                                            Embedded
+                                              10                                                 CPU1                                                     10                                                CPU1
+                                                                                                 CPU2                                                                                                       CPU2
+                                                                                                 GPU                                                                                                        GPU
+
+
+                                                   0                                                                                                      10 0
+                                              10
+
+
+
+                                                                                                                                                          10 -1
+                                              10 -1
+
+
+                                                                                                                                                          10 -2
+                                                   -2
+                                              10
+
+
+                                                        IMG1         IMG2          NLP1           NLP2                                                             IMG1         IMG2          NLP1           NLP2
+                                                               Settings (explained in Table 2)                                                                            Settings (explained in Table 2)
+Figure 4: Latency variance across inputs for different tasks                                                Figure 5: Latency variance with co-located jobs (the memory-
+and hardware (Most tasks have 3 boxplots for 3 hardware                                                     intensive STREAM benchmark [60] co-located on Embedded,
+platforms, CPU1-2, GPU from left to right; NLP1 has an                                                      CPU1-2; GPU-intensive Backprop [8] co-located on GPU)
+extra boxplot for Embedded; other tasks run out of memory
+on Embedded; every box shows the 25th–75th percentile;                                                      Summary: Deadline violations are realistic concerns and
+points beyond the whiskers are >90th or <10th).                                                             inference latency varies greatly across platforms, under
+                                                                                                            contention, and sometimes across inputs. Clearly, sticking to
+                                                                                                            one static DNN design across platforms and workloads leads
+opportunity and also a great challenge in picking different
+                                                                                                            to an unpleasant trade-off: always meeting the deadline by
+DNN models and system-resource settings to satisfy inference
+                                                                                                            sacrificing accuracy or energy in most settings, or achieving
+latency, accuracy, and energy requirements.
+                                                                                                            a high accuracy some times but exceeding the deadline in
+                                                                                                            others. Furthermore, it is also sub-optimal to make run-time
+2.2       Understanding Variability                                                                         decisions based solely on off-line profiling, considering the
+                                                                                                            variation caused by run-time contention.
+To understand how DNN-inference varies across inputs,
+platforms, and run-time environment and hence how (not)
+helpful is off-line profiling, we run a set of experiments below,                                           2.3       Understanding Potential Solutions
+where we feed the network one input at a time and use 1/10                                                  We now show how confining adaptation to a single layer (just
+of the total data for warm up, to emulate real-world scenarios.                                             application or system) is insufficient. We run the ImageNet
+We plot the inference latency without and with co-located                                                   classification on CPU1. We examine a range of latency
+jobs in Figure 4 and 5, and we see several trends.                                                          (0.1s-0.7s) and accuracy constraints (85%-95%), and try
+   First, deadline violation is a realistic concern. Image                                                  meeting those constraints while minimizing energy by either
+classification on video has deadlines ranging from 1 second                                                 (1) configuring just the DNN (selecting a DNN from a
+to the camera latency (e.g., 1/60 seconds) [40]; the two NLP                                                family, like that in Figure 2) or (2) configuring just the
+tasks, have deadlines around 1 second [64]. There is clearly no                                             system (by selecting resources to control energy–latency
+single inference task that meets all deadlines on all hardware.                                             tradeoffs as in Figure 3). We compare these single-layer
+   Second, the inference variation among inputs is relatively                                               approaches to one that simultaneously picks the DNN and
+small particularly when there are no co-located jobs (Fig. 4),                                              system configuration. As we are concerned with the ideal
+except for that in NLP1, where this large variance is mainly                                                case, we create oracles by running 90 inputs in all possible
+caused by different input lengths. For other tasks, outlier                                                 DNN and system configurations, from which we find the best
+inputs exist but are rare.                                                                                  configuration for each input. The App-level oracle uses the
+   Third, the latency and its variation across inputs are both                                              default system setting. The Sys-level oracle uses the default
+greatly affected by resource contention. Comparing Figure 5                                                 (highest accuracy) DNN.
+with Figure 4, we can see that the co-located job has increased                                                Figure 6 shows the results. As we have a three dimensional
+both the median latency, the tail inference, and the difference                                             problem—meeting accuracy and latency constraints with
+between these two for all tasks on all platforms. This trend                                                minimal energy—we linearize the constraints and show them
+also applies to other contention cases.                                                                     on the x-axis (accuracy is faster changing, with latency slower,
+   While the discussion above is about latency, similar                                                     so each latency bin contains all accuracy goals). There
+conclusions apply to inference accuracy and energy: the                                                     are several important conclusions here. First, the App-only
+accuracy typically drops to close to 0 when the inference time                                              approach meets all possible accuracy and latency constraints,
+exceeds the latency requirement, and the energy consumption                                                 while the Sys-only approach cannot meet any constraints
+naturally changes with inference time.                                                                      below 0.3s. Second, across the entire constraint range, App-
+
+
+
+356   2020 USENIX Annual Technical Conference                                                                                                                                                        USENIX Association
+                           ∞                                                                       We omit the discussion of meeting energy and accuracy
+      Average Energy (J)
+                           80                                           Sys-level
+                                                                        App-level               constraints while minimizing latency as it is a trivial extension
+                           60                                           Combined                of the discussed techniques and we believe it to be the least
+                                                                                                practically useful. We also omit the problem of optimizing
+                           40
+                                                                                                all three dimensions, as it creates a feasibility problem,
+                           20                                                                   leaving nothing for optimization—lowest latency and highest
+                                                                                                accuracy are impractical to achieve simultaneously.
+         deadline 0.1s                      0.2s   0.3s   0.4s   0.5s   0.6s       0.7s
+                                 Constraint Settings (deadline × accuracy_goal)
+Figure 6: Minimize energy task with latency and accuracy
+                                                                                                Generality Along the DNN-adaptation side, the input DNN
+constraint @ CPU1. (∞ means unable to meet the constraints)
+                                                                                                set can consist of any DNNs that offer different accuracy,
+                                                                                                latency, and energy tradeoffs; e.g., those in Figure 3. In
+only consumes significantly more energy than Combined                                           particular, ALERT can work with either or both of the broad
+(60% more on average). The intuition behind Combined’s                                          classes of DNN adaptation approaches that have arisen
+superiority is that there are discrete choices for DNNs; so                                     recently, including: (1) traditional DNNs where the adaptation
+when one is selected, there are almost always energy saving                                     option should be selected prior to starting an inference task
+opportunities by tailoring resource usage to that DNN’s needs.                                  [20,22,61,84,89] and (2) anytime DNNs that produce a series
+  Summary: Combining DNN and system level approaches                                            of outputs as they execute [34, 35, 49, 52, 82, 86, 88]. These
+achieves better outcomes. If left solely to the application,                                    two classes are similar in that they both vary things like the
+energy will be wasted. If left solely to the system, many                                       network depth or width to create latency/accuracy tradeoffs.
+achievable constraints will not be met.                                                            On the system-resource side, ALERT uses a power cap
+                                                                                                as the proxy to system resource usage. Since both hardware
+                                                                                                [13] and software resource managers [33, 72, 90] can convert
+3       ALERT Run-time Inference Management                                                     power budgets into optimal performance resource allocations,
+                                                                                                ALERT is compatible with many different schemes from both
+ALERT’s runtime system navigates the large tradeoff space
+                                                                                                commercial products and the research literature.
+created by combining DNN-level and system-level adaptation.
+ALERT meets user-specified latency, accuracy, and energy
+constraints and optimization goals while accounting for run-
+time variations in environment or the goals themselves.                                         3.2    ALERT Workflow
+                                                                                                ALERT works as a feedback controller. It follows four steps
+3.1                        Inputs & Outputs of ALERT                                            to pick the DNN and resource settings for each input n:
+ALERT’s inputs are specifications about (1) the adaption                                           1) Measurement. ALERT records the processing time,
+options, including a set of DNN models D = {di | i = 1 · · · K}                                 energy usage, and computes inference accuracy for n − 1.
+and a set of system-resource settings, expressed as different                                      2) Goal adjustment. ALERT updates the time goal Tgoal
+power-caps P = {Pj | j = 1 · · · L}; and (2) the user-specified                                 if necessary, considering the potential latency-requirement
+requirements on latency, accuracy, and energy usage, which                                      variation across inputs. In some inference tasks, a set of inputs
+can take the form of meeting constraints in any two of these                                    share one combined requirement (e.g., in the NLP1 task in
+three dimensions while optimizing the third. ALERT’s output                                     Table 2, all the words in a sentence are processed by a DNN
+is the DNN model di ∈ D and the system-resource setting                                         one by one and share one sentence-wise deadline) and hence
+p j ∈ P for the next inference-task input.                                                      delays in previous input processing could greatly shorten the
+   Formally, ALERT selects a DNN di and a system-resource                                       available time for the next input [1, 47]. Additionally, ALERT
+setting p j to fulfill either of these user-specified goals.                                    sets the goal latency to compensate for its own, worst-case
+   Maximizing inference accuracy q (minimizing error) for                                       overhead so that ALERT itself will not cause violations.
+an energy budget Egoal and inference deadline Tgoal :                                              3) Feedback-based estimation. ALERT computes the
+                                                                                                expected latency, accuracy, and energy consumption for every
+                                arg max qi, j s.t. ei, j ≤ Egoal ∧ ti, j ≤ Tgoal          (1)   combination of DNN model and power setting.
+                                     i, j
+                                                                                                   4) Picking a configuration. ALERT feeds all the updated
+  Minimizing the energy use e for an accuracy goal Qgoal                                        estimations of latency, accuracy, and energy into Eqs. 1 and 2,
+and inference deadline Tgoal :                                                                  and gets the desired DNN model and power-cap setting for n.
+                                arg min ei, j s.t. qi, j ≥ Qgoal ∧ ti, j ≤ Tgoal                   The key task is step 3: the estimation needs to be accurate
+                                     i, j                                                 (2)   and fast. In the remainder of this section, we discuss key ideas
+                                                                                                and the exact algorithm of our feedback-based estimation.
+
+
+
+USENIX Association                                                                                        2020 USENIX Annual Technical Conference           357
+3.3    Key Ideas of ALERT Estimation                                 inputs. The second feature refers to the fact that as DNNs in a
+                                                                     family scale in latency, the proportion of different operations
+Strawman Solving Eqs. 1 and 2 would be trivially easy                tend to be similar, so what ALERT learns about one DNN
+if the deployment environment is guaranteed to match the             in the family generally applies to other DNNs in the same
+training and profiling environment: we could estimate ti, j to       family. These properties of DNNs do not hold for many
+                                                         prof
+be the average (or worst case, etc) inference time ti, j over        other types of software, where different inputs or additional
+a set of profiling inputs under model di and power setting           functionality can invoke entirely different code paths, with
+p j . However, this approach does not work given the dynamic         different resource requirements or responses.
+input, contention, and requirement variation.                            How to estimate the accuracy under a deadline? Given
+    Next, we present the key ideas behind how ALERT                  a deadline Tgoal , the inference accuracy delivered by model
+estimates the inference latency, accuracy, and energy                di and power setting p j is determined by three factors, as
+consumption under model di and power setting p j .                   shown in Eq. 3: (1) whether the inference result, which takes
+    How to estimate the inference latency ti, j ? To handle the      time ti, j , can be generated before the deadline Tgoal ; (2) if yes,
+run-time variation, a potential solution is to apply an estimator,   the accuracy is determined by the model di ;2 (3) if not, the
+like a Kalman filter [55], to make dynamic predictions based         accuracy drops to that offered by a backup result qfail . For
+on recent history about inferences under model di and power          traditional DNN models, without any output at the deadline, a
+p j . The problem is that most models and power settings             random guess will be used and qfail will be much worse than
+will not have been picked recently and hence would have              qi . For anytime DNN models that output multiple results as
+no recent history to feed into the estimator. This problem is a      they are ready, the backup result is the latest output [34, 35,
+direct example of the challenge imposed by the large space           49, 52, 82, 86, 88], which we discuss more in Section 3.5.
+of combined application and system options.                                                            (
+                                                                                                          qi , if ti, j ≤ Tgoal
+    Idea 1: Handle the large selection space with a single                            qi, j [Tgoal ] =                                 (3)
+scalar value. To make effective online estimation for                                                   qfail , otherwise
+all combinations of models and power settings, ALERT
+                                                                        A potential solution to estimate accuracy qi, j at the deadline
+introduces a global slow-down factor ξ to capture how the
+                                                                     Tgoal is to simply feed the estimated ti, j into Eq. 3. However,
+current environment differs from the profiled environment
+                                                                     this simple approach fails to account for two issues. First,
+(e.g., due to co-running processes, input variation, or other
+                                                                     while DNNs are generally well-behaved, significant tail
+changes). Such an environmental slow-down factor is
+                                                                     effects are possible (see Figure 4). Second, Eq. 3 is not linear,
+independent from individual model or power selection. It
+                                                                     and is best understood as a step function, where a failure
+can fully leverage execution history, no matter which models
+                                                                     to complete inference by the deadline results in a worthless
+and power settings were recently used; it can then be used to
+                         prof                                        inference output (q f ail ). Combined, these two issues mean
+estimate ti, j based on ti, j for all di and p j combinations.       that for tail inputs, inference will produce a worthless result;
+    Applying a global slowdown factor for all combinations           i.e., accuracy is not proportional to latency, but can easily fall
+of application and system-level settings is crucial for ALERT        to zero for tail inputs. The tail will, of course, be increased if
+to make quick decisions for every inference task. Although           there is any unexpected resource contention. Therefore, the
+it is possible that some perturbations may lead to different         simple approach of using the mean latency prediction fails to
+slowdowns for different configurations, the slight loss of           account for the non-linear affects of latency on accuracy.
+accuracy here is out-weighed by the benefit of having a simple          Idea 2: handle the runtime variation and account for
+mechanism that allows prediction even for configurations that        tail behavior To handle the run-time variability mentioned in
+have not been used recently.                                         Section 1, ALERT treats the execution time ti, j and the global
+    This idea is also novel for ALERT, as previous cross-stack       slow-down factor ξ as random variables drawn from a normal
+management systems all use much more complicated models              distribution. ALERT uses a recently proposed extension to the
+to estimate and select different setting combinations (e.g.,         Kalman filter to adaptively update the noise covariance [2].
+using model predictive control to estimate combinations of           While this extension was originally proposed to produce better
+settings [57]). ALERT’s global slowdown factor is based              estimates of the mean, a novel approach in ALERT is using
+on several unique features of DNN families that accomplish           this covariance estimate as a measure of system volatility.
+the same task with different accurarcy/latency tradeoffs. We         ALERT uses this Kalman filter extension to predict not just
+categorize these features as: (1) similarity of code paths           the mean accuracy, but also the likelihood of meeting the
+and (2) proportionality of structure. The first is based on          accuracy requirements in the current operating environment.
+the observation that DNNs do not have complex conditional            Section 5.3 shows the advantages of our extensions.
+code dependences, so we do not need to worry about the                  2 Since it could be infeasible to calculate the exact inference accuracy at
+case where different inputs would exercise very different            run time, ALERT uses the average training accuracy of the selected DNN
+code paths. Thus, what ALERT learns about latency, accuracy,         model di , denoted as qi , as the inference accuracy, as long as the inference
+and energy for one input will always inform it about future          computation finishes before the specified deadline.
+
+
+
+
+358   2020 USENIX Annual Technical Conference                                                                           USENIX Association
+   How to minimize energy or satisfy energy constraints?                      R is a constant reflecting the measurement noise; Q(n) is the
+Minimizing energy or satisfying energy constraints is                         process noise capped with Q(0) . We set a forgetting factor of
+complicated, as the energy is related to, but cannot be easily                process variance α = 0.3 [2]. ALERT initially sets K (0) = 0.5,
+calculated by, the complexity of the selected model di and                    R = 0.001, Q(0) = 0.1, µ(0) = 1, (σ(0) )2 = 0.1, following the
+the power cap p j . As discussed in Section 2.2, the energy                   standard
+                                                                                       convention [55].
+                                                                                       (n)
+consumption includes both that used during the inference                        
+                                                                                    Q     = max{Q(0) , αQ(n−1) + (1-α)(K (n−1) y(n−1) )2 }
+under a given model di and that used during the inference-
+                                                                                
+                                                                                               (1 − K (n−1) )(σ(n−1) )2 + Q(n)
+                                                                                
+                                                                                
+                                                                                       (n)
+                                                                                
+idle period, waiting for the next input. Consequently, it is not                     K     =
+                                                                                
+                                                                                
+                                                                                             (1 − K (n−1) )(σ(n−1) )2 + Q(n) + R
+                                                                                
+                                                                                
+straightforward to decide which power setting to use.
+                                                                                
+                                                                                           (n−1) prof
+   Idea 3. ALERT leverages insights from previous research,                     
+                                                                                  y(n) = ti, j /ti, j − µ(n−1)
+which shows that energy for latency-constrained systems
+                                                                                
+                                                                                
+                                                                                   µ(n) = µ(n−1) + K (n) y(n)
+                                                                                
+                                                                                
+can be efficiently expressed as a mathematical optimization
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                 (n) 2
+problem [7, 48, 50, 62]. These frameworks optimize energy by                     (σ ) = (1 − K (n−1) )(σ(n−1) )2 + Q(n)
+scheduling available configurations in time. Time is assigned                                                                                (5)
+to configurations so that the average performance hits the                       Then, using ξ(n) , ALERT estimates the inference time of
+                                                                                                                                (n)         prof
+desired latency target and the overall energy (including idle                 input n under any model di and power cap p j : ti, j = ξ(n) ∗ti, j .
+energy) is minimal. The key is that while the configuration                      Probability of meeting the deadline. Given the Kalman
+space is large, the number of constraints is small (typically just            Filter estimation for the global slowdown factor, we can
+two). Thus, the number of configurations assigned a non-zero                  calculate Pri, j , the probability that the inference completes
+time is also small (equal to the number of constraints) [48].                 before the deadline Tgoal . ALERT computes this value using
+Given this structure, the optimization problem can be solved                  a cumulative distribution function (CDF) based on the normal
+using a binary search over available configurations, or even                  distribution of ξ(n) estimated by the Kalman Filter:
+more efficiently with a hash table [62].                                                            prof                                  prof
+                                                                                Pri, j = Pr[ξ(n) ·ti, j ≤ Tgoal ] = CDF(ξ(n) ·ti, j , Tgoal )
+   The only difficulty applying prior work to ALERT is that                                                                                       (6)
+                                                                                                        prof
+prior work assumed there was only a single job running                                = CDF(µ(n) ·ti, j , σ(n) , Tgoal )
+at a time, while ALERT assumes that other applications
+might contend for resources. Thus, ALERT cannot assume                         Accuracy. As discussed in Idea-2, ALERT computes the
+that there is a single system-idle state that will be used                    estimated inference accuracy q̂i, j [Tgoal ] by considering ti, j as
+whenever the DNN is not executing. To address this challenge,                 a random variable that follows normal distribution with its
+ALERT continually estimates the system power when DNN                         mean and variance computed based on that of ξ. Here qi, j
+inference is idle (but other non-inference tasks might be                     represents the inference accuracy when the DNN inference
+active), pDNNidle , transforming Eq. 1 is transformed into:                   finishes before the deadline, and q f ail is the accuracy of a
+                                                                              random guess:
+ arg max qi, j [Tgoal ] s.t. pi, j ·ti, j + pDNNidle ·tDNNidle ≤ Egoal                                                         (n)
+       i, j                                                                              q̂i, j [Tgoal ] =E(qi, j [Tgoal ] | ti, j )
+                                                                       (4)
+                                                                                                                                       prof
+                                                                                                       =E(qi, j [Tgoal ] | ξ(n) ·ti, j )
+                                                                                                                                                  (7)
+3.4     ALERT Estimation Algorithm                                                                     =Pri, j · qi, j + (1 − Pri, j )· q f ail
+
+Global Slow-down Factor ξ. As discussed in Idea-1, ALERT                                         ξ(n) ∼N (µ(n) , (σ(n) )2 )
+uses ξ to reflect how the run-time environment differs from
+the profiling environment. Conceptually, if the inference                        Energy. As discussed in Idea-3, ALERT predicts energy
+task under model di and power-cap p j took time ti, j at run                  consumption by separately estimating energy during (1) DNN
+                prof                                                          execution: estimated by multiplying the power limit by the
+time and took ti, j on average to finish during profiling, the
+                                     pro f
+                                                                              estimated latency and (2) between inference inputs: estimated
+corresponding ξ would be ti, j /ti, j . ALERT estimates ξ using               based on the recent history of inference idle power using
+recent execution history under any model or power setting.                    the Kalman Filter in Eq. 8. φ(n) is the predicted DNN-idle
+   Specifically, after an input n − 1, ALERT computes ξ(n−1)                  power ratio, M (n) is process variance, S is process noise, V
+                                       (n−1)
+as the ratio of the observed time ti, j      to the profiled time             is measurement noise, and W (n) is the Kalman Filter gain.
+prof
+ti, j , and then uses a Kalman Filter3 to estimate the mean µ(n)              ALERT initially sets M (0) = 0.01, S = 0.0001, V = 0.001.
+and variance (σ(n) )2 of ξ(n) at input n. ALERT’s formulation
+                                                                                     
+                                                                                                  M (n−1) + S
+                                                                                       W (n) = (n−1)
+                                                                                     
+is defined in Eq. 5, where K (n) is the Kalman gain variable;
+                                                                                     
+                                                                                     
+                                                                                     
+                                                                                               M       + S +V
+    3 A Kalman Filter is an optimal estimator that assumes a normal                       (n)          (n)
+                                                                                       M = (1 −W )(M (n−1) + S)                         (8)
+                                                                                     
+distribution and estimates a varying quantity based on multiple potentially          
+                                                                                     
+noisy observations [55].
+                                                                                      φ(n) = φ(n−1) +W (n) (p /p(n−1) − φ(n−1) )
+                                                                                     
+                                                                                                                        idle    i, j
+
+
+
+
+USENIX Association                                                                      2020 USENIX Annual Technical Conference                   359
+  ALERT then predicts the energy by Eq. 9. Unlike Eq. 7 that                     recent input processing. Consequently, it requires at least one
+uses probabilistic estimates, energy estimation is calculated                    input to react to sudden changes. Additionally, the Kalman
+without the notion of probability. The inference power is the                    filter formulations assume that the underlying distributions
+same no matter the inference misses or meets the deadline, as                    are normal, which may not hold in practice. If the behavior is
+ALERT sets power limits. Therefore it is safe to estimate the                    not Gaussian, the Kalman filter will produce bad estimations
+energy by its mean without considering the distribution of its                   for the mean of ξ for some amount of time.
+possible latency. See our extended report [87] on estimating                         ALERT is specifically designed to handle data that is
+energy by its worst case latency percentile.                                     not drawn from a normal distribution, using the Kalman
+      (n)               prof                                     prof
+                                                                                 Filter’s covariance estimation to measure system volatility
+   ei, j = pi, j · ξ(n) ·ti, j + φ(n) · pi, j · (Tgoal − (ξ(n) ·ti, j ))   (9)   and accounting for that in the accuracy/energy estimations.
+                                                                                 Consequently, after just 2–3 such bad predictions of means,
+3.5         Integrating ALERT with Anytime DNNs                                  the estimated variance will increase, which will then trigger
+                                                                                 ALERT to pick anytime DNN over traditional DNNs or pick a
+An anytime DNN is an inference model that outputs a series of                    low-latency traditional DNN over high-latency ones, because
+increasingly accurate inference results—o1 , o2 , ... ok , with ot               the former has a higher expected accuracy under high variance.
+more reliable than ot−1 . A variety of recent works [35, 49, 52,                 So—worst case—ALERT will choose a DNN with slightly
+82,86,88] have proposed DNNs supporting anytime inference,                       less accuracy than what could have been used with the right
+covering a variety of problem domains. ALERT easily works                        model. Users can also compensate for extremely aberrant
+with not only traditional DNNs but also Anytime DNNs. The                        latency distributions by increasing the value of Q(0) in Eq.
+only change is that qfail in Eq. 3 no longer corresponds to a                    5. Section 5.3 shows ALERT performs well even when the
+random guess. That is, when the inference could not generate                     distribution is not normal.
+its final result ok by the deadline Tgoal , an earlier result ox can                 Probabilistic guarantees. ALERT provides probabilistic,
+be used with a much better accuracy than that of a random                        not hard, guarantees. As ALERT estimates not just average
+guess. The updated accuracy equation is below:                                   timing, but the distributions of possible timings, it can provide
+                      
+                         qk , if tk, j ≤ tgoal                                  arbitrarily many nines of assurance that it will meet latency
+                                                                                or accuracy goals but cannot provide 100% guarantee (see
+                         k−1 , if tk−1, j ≤ tgoal < tk, j
+                      
+                      q
+              q., j =                                           (10)             our extended report [87] on how to configure ALERT to
+                      
+                              ···                                               provide guarantees with a specific probability). Providing
+                      
+                      
+                        qfail , otherwise                                        100% guarantees requires the worst case execution time
+                                                                                 (WCET), an upper bound on the highest possible latency.
+   Existing anytime DNNs consider latency but not energy
+                                                                                 ALERT does not assume the availability of such information
+constraints—an anytime DNN will keep running until the
+                                                                                 and hence cannot provide hard guarantees [6].
+latency deadline arrives and the last output will be delivered
+                                                                                     Safety guarantees. While ALERT does not explicitly
+to the user. ALERT naturally improves Anytime DNN
+                                                                                 model safety requirements, it can be configured to prioritize
+energy efficiency, stopping the inference sometimes before
+                                                                                 accuracy over other dimensions. When users particularly
+the deadline based on its estimation to meet not only latency
+                                                                                 value safety (e.g., auto-driving), they could set a high accuracy
+and accuracy, but also energy requirements.
+                                                                                 requirement or even remove the energy constraints.
+   Furthermore, ALERT can work with a set of traditional
+                                                                                     Concurrent inference jobs. ALERT is currently designed
+DNNs and an Anytime DNN together to achieve the best
+                                                                                 to support one inference job at a time. To support multiple
+combined result. The reason is that Anytime DNNs generally
+                                                                                 concurrent inference jobs, future work needs to extend
+sacrifice accuracy for flexibility. When we feed a group of
+                                                                                 ALERT to coordinate across these concurrent jobs. We expect
+traditional DNNs and one Anytime DNN to construct the
+                                                                                 the main idea of ALERT, such as using a global slowdown
+candidacy set D, with Eq. 7, ALERT naturally selects the
+                                                                                 factor to estimate system variation, to still apply.
+Anytime DNN when the environment is changing rapidly
+                                                                                     Finally, how the inference behaves ultimately depends not
+(because the expected accuracy of an anytime DNN will be
+                                                                                 only on ALERT, but also on the DNN models and system-
+higher given that variance), and the regular DNN, which has
+                                                                                 resource setting options. As shown in Section 5, ALERT
+slightly higher accuracy with similar computation, when it is
+                                                                                 helps make the best use of supplied DNN models, but does
+stable, getting the best of both worlds.
+                                                                                 not eliminate the difference between different DNN models.
+   In our evaluation, we will use the nested design from [86],
+which provides a generic coverage of anytime DNNs.
+                                                                                 4    Implementation
+3.6         Limitations and Discussions
+                                                                                 We implement ALERT for both CPUs and GPUs. On CPUs,
+Assumptions of the Kalman Filter. ALERT’s prediction,                            ALERT adjusts power through Intel’s RAPL interface [13],
+particularly the Kalman Filter, relies on the feedback from                      which allows software to set a hardware power limit. On
+
+
+
+360         2020 USENIX Annual Technical Conference                                                                        USENIX Association
+                Run-time environment setting
+
+
+
+
+                                                                            Norm Performance
+                                                                                               1.2                                      72
+                                                                                                                                                             Violations
+Default         Inference task has no co-running process
+
+
+
+
+                                                                                                                                             Violations(%)
+                                                                                                1                                       60                   App-only
+                Co-locate with memory-hungry STREAM [60] (@CPU)                                                                                              Sys-only
+Memory                                                                                         0.8                                      48
+                Co-locate with Backprop from Rodinia-3.1 [8] (@GPU)                                                                                          No-coord
+                Co-locate with Bodytrack from PARSEC-3.0 [5] (@CPU)                            0.6                                      36                   App+Sys
+Compute                                                                                                                                                      (ALERT-Any)
+                Co-locate with the forward pass of Backprop [8] (@GPU)                         0.4                                      24                   Oracle
+                Ranges of constraint setting                                                   0.2                                      12
+Latency         0.4x–2x mean latency* of the largest Anytime DNN
+Accuracy        Whole range achievable by trad. and Anytime DNN                                 0                                       0
+                                                                                                     Minimize Energy   Minimize Error
+Energy          Whole feasible power-cap ranges on the machine
+Task            Trad. DNN        Anytime [86]          Fixed deadline?     Figure 7: Average performance normalized to OracleStatic .
+Image Classifi. Sparse ResNet Depth-Nest               Yes                 Violations% is %-of-constraint-settings under which a scheme
+Sentence Pred. RNN               Width-Nest            No                  incurs >10% violation of all inputs. (Smaller is better)
+Scheme ID       DNN selection                          Power selection
+Oracle          Dynamic optimal                        Dynamic optimal
+OracleStatic    Static optimal                         Static optimal      tasks4 , image classification and sentence prediction, under
+App-only        One Anytime DNN                        System Default      three different resource-contention scenarios:
+Sys-only        Fastest traditional DNN                State-of-Art [37]      • No contention: the inference task is the only job running,
+No-coord        Anytime DNN w/o coord. with Power State-of-Art [37]
+ALERT           ALERT default                          ALERT default
+                                                                                referred to as “Default”;
+ALERTAny        ALERT w/o traditional DNNs             ALERT default          • Memory dynamic: the inference task runs together with
+ALERTTrad       ALERT w/o Anytime DNNs                 ALERT default            a memory-intensive job that repeatedly stops and restarts,
+Table 3: Settings and schemes under evaluation (* measured                      representing dynamic memory resource contention,
+under default setting without resource contention)                              referred to as “Memory”;
+                                                                              • Computation dynamic: the inference task runs together
+                                                                                with a computation-intensive job that repeatedly stops
+GPUs, ALERT uses PyNVML to control frequency and builds
+                                                                                and restarts, representing dynamic computation resource
+a power-frequency lookup table. ALERT can also be applied
+                                                                                contention, referred to as “Compute”.
+to other approaches that translate power limits into settings
+for combinations of resources [33, 36, 72, 90].                              Schemes in evaluation. We give ALERT three different
+   In our experiments, ALERT considers a series of power                   DNN sets, traditional DNN models (ALERTTrad ), an Anytime
+settings within the feasible range with 2.5W interval on our               DNN (ALERTAny ), and both (ALERT), and compare it with
+test laptop and a 5W interval on our test CPU server and GPU               two oracle and three state-of-the-art schemes (Table 3).
+platform, as the latter has a wider power range than the former.             The two Oracle∗ schemes have perfect predictions for
+The number of power buckets is configurable.                               every input under every DNN/power setting (i.e., impractical).
+   ALERT incurs small overhead in both scheduler                           Specifically, the “Oracle" allows DNN/power settings to
+computation and switching from one DNN/power-setting                       change across inputs, representing the best possible results;
+to another, just 0.6–1.7% of an input inference time. We                   the “OracleStatic ” has one fixed setting across inputs,
+explicitly account for overhead by subtracting it from the                 representing the best results without dynamic adaptation.
+user-specified goal (see step 2 in Section 3.2).                             The three state-of-the-art approaches include the following:
+   Users may set goals that are not achievable. If ALERT                                • “App-only” conducts adaptation only at the application
+cannot meet all constraints, it prioritizes latency highest, then                         level through an Anytime DNN [86];
+accuracy, then power. This hierarchy is configurable.
+                                                                                        • “Sys-only”adapts only at the system level following an
+                                                                                          existing resource-management system that minimizes
+5     Experimental Evaluation                                                             energy under soft real-time constraints [62]5 and uses
+                                                                                          the fastest candidate DNN to avoid latency violations;
+We apply ALERT to different inference tasks on both CPU                                 • “No-coord” uses both the Anytime DNN for application
+and GPU with and without resource contention from co-                                     adaptation and the power-management scheme [62] to
+located jobs. We set ALERT to (1) reduce energy while                                     adapt power, but with these two working independently.
+satisfying latency and accuracy requirements and (2) reduce
+error rates while satisfying latency and energy requirements.
+We compare ALERT with both oracle and state-of-the-art                     5.2                       Overall Results
+schemes and evaluate detailed design decisions.                            Table 4 shows the results for all schemes for different tasks
+                                                                           on different platforms and environments. Each cell shows
+5.1       Methodology                                                          4 For GPU, we only run image classification task there, as the RNN-based
+
+                                                                           sentence prediction task is better suited for CPU [91].
+Experimental setup. We use the three platforms listed in                       5 Specifically, this adaptation uses a feedback scheduler that predicts
+
+Table 1: CPU1, CPU2, and GPU. On each, we run inference                    inference latency based on Kalman Filter.
+
+
+
+
+USENIX Association                                                                                     2020 USENIX Annual Technical Conference                       361
+                                 ALERT-     Sys-     App-      No-                      ALERT-      Sys-     App-       No-
+   Plat.   DNN   Work.   ALERT                                        Oracle   ALERT                                            Oracle
+                                  Any       only     only     coord                      Any        only     only      coord
+                                  Energy in Minimizing Energy Task                       Error Rate in Minimizing Error Task
+                Idle      0.64    0.68    1.0819     1.19     0.941    0.64     0.91     0.92       1.35     1.023     0.913     0.89
+       Sparse
+              Comp.       0.57    0.58    0.8019     1.30     1.391    0.57     0.38     0.39       0.51    1.3524     0.396     0.36
+       Resnet                                  19
+  CPU1
+               Mem.       0.53    0.55    0.76       1.43     1.372    0.53     0.34     0.34       0.46    1.47 28    0.392     0.33
+                Idle      0.61    0.65    1.0130     1.34     0.952    0.61     0.87     0.87       0.87    0.8721     0.8714    0.86
+        RNN Comp.         0.60    0.57    0.9330     1.21     1.265    0.60     0.42     0.44       0.50    0.4628     0.4623    0.42
+               Mem.       0.54    0.56    0.9531     1.45     1.249    0.54     0.45     0.45       0.50    0.5728     0.5427    0.44
+                Idle      0.93    0.88    0.9620     0.99      1.18    0.91     0.68     0.68       0.97     0.792     0.7124    0.66
+       Sparse
+              Comp.       0.59    0.57    0.6023     1.00      1.01    0.58     0.58     0.57       0.85    0.7416     0.7129    0.55
+       Resnet
+  CPU2
+               Mem.       0.38    0.37    0.3919     0.65    0.6313    0.38     0.24     0.82       0.32    0.3317     0.7531    0.21
+                Idle      0.87    0.99    0.8034     1.04     1.006    0.83     0.84     0.85       0.99    0.8914     0.891     0.84
+        RNN Comp.         0.60    0.60    0.5534     0.99     0.867    0.60     0.51     0.52       0.60    0.5321     0.5417    0.52
+               Mem.       0.52    0.51    0.43 33    0.70    0.8514    0.52     0.26     0.27       0.31    0.2821     0.2717    0.26
+                Idle      0.97    0.99    0.9220     1.36      1.37    0.92     0.90     0.92       1.22     1.092     1.7412    0.86
+       Sparse
+  GPU         Comp.       0.96    0.97    0.9420     1.66      1.77    0.89     0.32     0.34       1.28    1.21 23    2.5018    0.30
+       Resnet
+               Mem.       0.97    1.01    0.9120     1.39      1.43    0.91     0.89     0.92       1.22     1.112     1.8114    0.86
+    Harmonic mean         0.64    0.64    0.7327     1.11     1.084    0.62     0.46     0.47       0.63    0.67 16    0.6315    0.45
+Table 4: Average energy consumption and error rate normalized to OracleStatic , smaller is better. (Each cell is averaged over 35–40
+constraint settings; superscript: # of constraint settings violated for >10% inputs and hence excluded from energy average.)
+
+the average energy or accuracy under 35–40 combinations               classification and 98.5% of those for sentence prediction. For
+of latency, accuracy, and energy constraints (the settings            the latter, due to the large input variability (NLP1 in Figure 4),
+are detailed in Table 3), normalized to the OracleStatic              some input sentences simply cannot complete by the deadline
+result. Figure 7 compares these results, where lower bars             even with the fastest DNN. There the Oracle fails, too.
+represent better results and lower *s represent fewer constraint        Note that, these Oracle schemes not only have perfect—
+violations. ALERT and ALERT Any both work very well                   and hence, impractical—prediction capability, but they also
+for all settings. They outperform state-of-the-art approaches,        have no overhead. In contrast, ALERT is running on the same
+which have a significant number of constraint violations, as          machines as the DNN workloads. All results include ALERT’s
+visualized by the many superscripts in Table 4 and the high           run-time latency and power overhead.
+* positions in Figure 7. ALERT outperforms OracleStatic
+                                                                        Comparing with State-of-the-Art. For a fair comparison,
+because it adapts to dynamic variations. ALERT also comes
+                                                                      we focus on ALERTAny , as it uses exactly the same DNN
+very close to the theoretically optimal Oracle.
+                                                                      candidate set as "Sys-only", "App-only", and "No-coord".
+   Comparing with Oracles. As shown in Table 4,
+                                                                      Across all settings, ALERTAny outperforms the others.
+ALERT achieves 93-99% of Oracle’s energy and accuracy
+optimization while satisfying constraints. Oraclestatic , the            The System-only solution suffers from not being able to
+baseline in Table 4, represents the best one can achieve by           choose different DNNs under different runtime scenarios.
+selecting 1 DNN model and 1 power setting for all inputs.             As a result, it performs much worse than ALERTAny in
+ALERT greatly out-performs Oraclestatic , reducing its energy         satisfying accuracy requirements or optimizing accuracy. For
+consumption by 3–48% while satisfying accuracy constraints            the former (left side of Table 4 and Figure 7), it creates
+(36% in harmonic mean) and reducing its error rate by 9-66%           accuracy violations in 68% of the settings as shown in Figure
+while satisfying energy constraints (54% in harmonic mean).           7; for the latter (right side of Table 4 and Figure 7), although
+   Figure 8 shows a detailed comparison for the energy                capable of satisfying energy constraints, it introduces 34%
+minimization task. The figure shows the range of performance          more error than ALERTAny .
+under all requirement settings (i.e., the whiskers). ALERT               The Application-only solution that uses an Anytime
+not only achieves similar mean energy reduction, its whole            DNN suffers from not being able to adjust to the energy
+range of optimization behavior is also similar to Oracle. In          requirements: it consumes 73% more energy in energy-
+comparison, OracleStatic not only has the worst mean but also         minimizing tasks (left side of Table 4 and Figure 7) and
+the worst tail performance. Due to space constraints, we omit         introduces many energy-budget violations particularly under
+the figures for other settings, where similar trends hold.            resource contention settings (right side of Table 4 and Fig. 7).
+   ALERT has more advantage over Oraclestatic on CPUs than              The no-coordination scheme is worse than both System-
+on GPUs. The CPUs have more empirical variance than the               and Application-only. It violates constraints in both tasks
+GPU, so they benefit more from dynamic adaptation. The                with 69% more energy and 34% more error than ALERTAny .
+GPU experiences significantly lower dynamic fluctuation so            Without coordination, the two levels can work at cross
+the static oracle makes good predictions.                             purposes; e.g., the application switches to a faster DNN to
+   ALERT satisfies the constraint in 99.9% of tests for image         save energy while the system makes more power available.
+
+
+
+362    2020 USENIX Annual Technical Conference                                                                    USENIX Association
+                       2                                                         15                                                       25                                                                                 80
+                            Orcale-Static                                             Orcale-Static                                                     Orcale-Static                                                             Orcale-Static
+ Average Energy (J)
+
+
+
+
+                                                            Average Energy (J)
+
+
+
+
+                                                                                                                     Average Energy (J)
+
+
+
+
+                                                                                                                                                                                                        Average Energy (J)
+                            ALERT                                                     ALERT                                               20            ALERT                                                                     ALERT
+                      1.5                                                                                                                                                                                                    60
+                            Oracle                                               10   Oracle                                                            Oracle                                                                    Oracle
+                                                                                                                                          15
+                       1                                                                                                                                                                                                     40
+                                                                                                                                          10
+                                                                                  5
+                      0.5                                                                                                                  5                                                                                 20
+
+                       0                                                          0                                                        0                                                                                  0
+                            Default      Compute   Memory                             Default     Compute   Memory                                        Default                   Compute    Memory                             Default     Compute     Memory
+                       (a) CPU1, Image Classification                            (b) CPU1, Sentence Prediction                            (c) CPU2, Image Classification                                                     (d) CPU2, Sentence Prediction
+Figure 8: ALERT versus Oracle and OracleStatic on minimize energy task (Lower is better). (whisker: whole range; circle: mean)
+
+                                    ALERT Any Trad ALERT Any Trad
+
+
+
+
+                                                                                                                                               Latency (s)
+                       Plat.     Work.                                                                                                                                   0.1                                                                        ALERT-Trad
+                                    Minimize Energy Task Minimize Error Task                                                                                                                                                                        ALERT
+                              Idle   0.64 0.68 0.651      0.91 0.92 0.93                                                                                                0.05                                                                        Constraint
+                      CPU1 Comp.     0.57 0.58 0.656      0.38 0.39 0.41
+                             Mem.    0.53 0.55 0.533      0.34 0.34 0.35                                                                                                  0
+                              Idle   0.93 0.88 0.951      0.68 0.68 0.69                                                                                                 40
+
+
+
+
+                                                                                                                                               Accuracy (%) Power (W)
+                      CPU2 Comp.     0.59 0.57 0.604      0.58 0.57 0.59
+                             Mem.    0.38 0.37 0.408      0.23 0.24 0.32                                                                                                 30
+                              Idle   0.97 0.99 0.95       0.90 0.92 0.89
+                      GPU Comp.      0.97 1.01 0.96       0.89 0.92 0.89                                                                                                 20
+                                                                                                                                                                         94
+                             Mem.    0.96 0.97 0.95       0.32 0.34 0.32
+                      Harmonic mean  0.66 0.66 0.673      0.47 0.48 0.50
+                                                                                                                                                                         92
+Table 5: ALERT normalized average energy consumption and
+                                                                                                                                                                         90
+error rate to OracleStatic @ Sparse ResNet (Smaller is better)
+                                                                                                                                                                        Any
+                                                                                                                                               DNN
+
+5.3                         Detailed Results and Sensitivity
+                                                                                                                                                                    Trad
+Different DNN candidate sets. Table 5 compares the                                                                                                                             0      20      40   60                        80      100      120   140     160
+performance of ALERT working with an Anytime DNN                                                                                                                                       Image Classification Time (Input Number)
+(Any), a set of traditional DNN models (Trad), and both.                                                                                  Figure 9: Minimize error rates w/ latency, energy constraints
+At a high level, ALERT works well with all three DNN                                                                                      on CPU1. (Memory contention occurs from about input 46 to
+sets. Under close comparison, ALERTTrad violates more                                                                                     119; Deadline: 1.25× mean latency of largest Anytime DNN
+accuracy constraints than the others, particularly under                                                                                  in Default; power limit: 35W.)
+resource contention on CPUs, because a traditional DNN
+has a much larger accuracy drop than an anytime DNN when                                                                                  before the deadline. Only able to choose from traditional
+missing a latency deadline. Consequently, when the system                                                                                 DNNs, ALERTTrad conservatively switches to much simpler
+variation is large, ALERTTrad selects a faster DNN to meet                                                                                and hence lower-accuracy DNNs to avoid deadline misses.
+latency and thus may not meet accuracy goals. Of course,                                                                                  This switch does eliminate deadline misses under the highly
+ALERTAny is not always the best. As discussed in Section                                                                                  dynamic environment, but many of the conservatively chosen
+3.5, Anytime DNNs sometimes have lower accuracy then a                                                                                    DNNs finish before the deadline (see the Latency panel),
+traditional DNN with similar execution time. This difference                                                                              wasting the opportunity to produce more accurate results and
+leads to the slightly better results for ALERT over ALERTAny .                                                                            causing ALERTTrad to have a lower accuracy than ALERT.
+   Figure 9 visualizes the different dynamic behavior of                                                                                  When the system quiesces, both schemes quickly shift back
+ALERT (blue curve) and ALERTTrad (orange curve) when                                                                                      to the highest-accuracy, traditional DNN.
+the environment changes from Default to Memory-intensive                                                                                     Overall, these results demonstrate how ALERT always
+and back. At the beginning, due to a loose latency constraint,                                                                            makes use of the full potential of the DNN candidate set to
+ALERT and ALERTTrad both select the biggest traditional                                                                                   optimize performance and satisfy constraints.
+DNN, which provides the highest accuracy within the energy                                                                                   ALERT probabilistic design. A key feature of ALERT is
+budget. When the memory contention suddenly starts, this                                                                                  its use of not just mean estimations, but also their variance.
+DNN choice leads to a deadline miss and an energy-budget                                                                                  To evaluate the impact of this design, we compare ALERT to
+violation (as the idle period disappeared), which causes an                                                                               an alternative design ALERT*, which only uses the estimated
+accuracy dip. Fortunately, both quickly detect this problem                                                                               mean to select configurations.
+and sense the high variability in the expected latency. ALERT                                                                                Figure 10 shows the performance of ALERT and ALERT*
+switches to use an anytime DNN and a lower power cap.                                                                                     in the minimize error task for sentence prediction. Here,
+This switch is effective: although the environment is still                                                                               ALERT (blue circles) always performs better than ALERT*.
+unstable, the inference accuracy remains high, with slight                                                                                Its advantage is the biggest when the DNN candidates include
+ups and downs depending on which anytime output finished                                                                                  both traditional and Anytime DNNs (i.e., the “Standard”
+
+
+
+USENIX Association                                                                                                                                                                 2020 USENIX Annual Technical Conference                                       363
+                     150                                                                              300
+Average Perplexity
+
+
+
+
+                                                                                 Average Perplexity
+                                     ALERT
+                                     ALERT*                                                           250
+                                                                                                               ALERT
+                                                                                                               ALERT*
+                                                                                                                                                        usage [21, 31, 32, 46]. Although related, they manage
+                     140
+                                                                                                                                                        applications separately from system resources, which is
+                                                                                                      200
+                     130                                                                                                                                fundamentally different from ALERT’s holistic design. When
+                                                                                                      150                                               an environmental change occurs, prior approaches first adjust
+                     120
+
+                                 Standard     Trad. Only      Any. Only
+                                                                                                      100
+                                                                                                              Standard Tradition OnlyAnytime Only
+                                                                                                                                                        the application and then the system serially (or vice versa)
+                                 (a) Default Contention                                                      (b) Memory Contention                      so that the change’s effects on each can be established
+Figure 10: Minimize error for sentence prediction@ CPU1                                                                                                 independently [31, 32]. That is, coordination is established
+(Lower is better). (whisker: whole range; circle: mean)                                                                                                 by forcing one level to lag behind the other. In practice
+                                                                                                                                                        this design forces each level to keep its own independent
+                               0.2
+                                                                                                                                                        model and delays response to environmental changes. In
+                     Default
+
+
+
+
+                                                                                                                                     Observation
+                               0.1                                                                                                   Estimation         contrast, ALERT’s global slowdown factor allows it to easily
+                                 0                                                                                                                      model and update prediction about all application and system
+                                 0.99         1           1.01            1.02                              1.03            1.04      1.05       1.06
+                               0.1                                                                                                                      configurations simultaneously, leading to very fast response
+         Compute
+
+
+
+
+                          0.05                                                                                                                          times, like the single input delay demonstrated in Figure 9.
+                                 0                                                                                                                         Much work accelerates DNNs through hardware [3, 10–12,
+                                 1.1              1.2         1.3                            1.4                         1.5         1.6         1.7
+                               0.2                                                                                                                      19, 23, 24, 27, 30, 38, 43, 54, 58, 66, 73, 75, 83], compiler [9, 65],
+                     Memory
+
+
+
+
+                               0.1
+                                                                                                                                                        system [28,53], or design support [25,25,26,39,42,77,81,85].
+                                                                                                                                                        They essentially shift and extend the tradeoff space, but do
+                                0
+                                1.1         1.2         1.3         1.4                      1.5                   1.6         1.7         1.8   1.9    not provide policies for meeting user needs or for navigating
+                       Figure 11: Distribution of ξ for image class. on CPU1.                                                                           tradeoffs dynamically, and hence are orthogonal to ALERT.
+                                                                                                                                                           Some research supports hard real-time guarantees for
+                                                                                                                                                        DNNs [92], providing 100% timing guarantees while
+in Figure 10). The reason is that traditional DNNs and
+                                                                                                                                                        assuming that the DNN model gives the desired accuracy,
+Anytime DNN have different accuracy/latency curves, Eq.
+                                                                                                                                                        the environment is completely predictable, and energy
+3 for the former and Eq. 10 for the latter. ALERT* is
+                                                                                                                                                        consumption is not a concern. ALERT provides slightly
+much worse in distinguishing these two by simply using the
+                                                                                                                                                        weaker timing guarantees, but manages accuracy and power
+mean of estimated latency to predict accuracy. ALERT also
+                                                                                                                                                        goals. ALERT also provides more flexibility to adapt to
+clearly outperforms ALERT* under memory contention with
+                                                                                                                                                        unpredictable environments. Hard real-time systems would
+traditional DNN candidates, as ALERT’s estimation better
+                                                                                                                                                        fail in the co-located scenario unless they explicitly account
+captures dynamic system variation. Overall, these results
+                                                                                                                                                        for all possible co-located applications at design time.
+show ALERT’s probabilistic design is effective.
+   Sensitivity to latency distribution. ALERT assumes a
+Gaussian distribution, but is designed to work for other
+distributions (see Section 3.6). As shown in Figure 11, the
+                                                                                                                                                        7    Conclusion
+observed ξs (red bars) are indeed not a perfect fit for Gaussian
+                                                                                                                                                        This paper demonstrates the challenges behind the important
+distribution (blue lines), which confirms ALERT’s robustness.
+                                                                                                                                                        problem of ensuring timely, accurate, and energy efficient
+                                                                                                                                                        neural network inference with dynamic input, contention, and
+6                              Related work                                                                                                             requirement variation. ALERT achieves these goals through
+                                                                                                                                                        dynamic and coordinated DNN model selection and power
+Past resource management systems have used machine                                                                                                      management based on feedback control. We evaluate ALERT
+learning [4, 51, 68, 69, 79] or control theory [32, 37, 44, 45,                                                                                         with a variety of workloads and DNN models and achieve
+62, 74, 93] to make dynamic decisions and adapt to changing                                                                                             high performance and energy efficiency.
+environments or application needs. Some also use Kalman
+filter because it has optimal error properties [37, 44, 45, 62].
+There are two major differences between them and ALERT:                                                                                                 Acknowledgement
+1) prior approaches use the Kalman filter to estimate physical
+quantities such as CPU utilization [45] or job latency [37],                                                                                            We thank the reviewers for their helpful feedback and Ken
+while ALERT estimates a virtual quantity that is then used to                                                                                           Birman for shepherding this paper. This research is supported
+update a large number of latency estimates. 2) while variance                                                                                           by NSF (grants CNS-1956180, CNS-1764039, CNS-1764039,
+is naturally computed as part of the filter, ALERT actually                                                                                             CNS-1514256, CNS-1823032, CCF-1439156), ARO (grant
+uses it, in addition to the mean, to help produce estimates that                                                                                        W911NF1920321), DOE (grant DESC0014195 0003),
+better account for environment variability.                                                                                                             DARPA (grant FA8750-16-2-0004) and the CERES Center
+    Past work designed resource managers explicitly to                                                                                                  for Unstoppable Computing. Additional support comes from
+coordinate approximate applications with system resource                                                                                                the DARPA BRASS program and a DOE Early Career award.
+
+
+
+364                              2020 USENIX Annual Technical Conference                                                                                                                             USENIX Association
+References                                                      [13] H. David, E. Gorbatov, U. R. Hanebutte, R. Khanna, and
+                                                                     C. Le. Rapl: Memory power estimation and capping. In
+ [1] Baidu AI. Apollo open vehicle certificate platform.             ISLPED, 2010.
+     Online document, http://apollo.auto, 2018.
+                                                                [14] Christina Delimitrou and Christos Kozyrakis. Paragon:
+ [2] S. Akhlaghi, N. Zhou, and Z. Huang.         Adaptive            Qos-aware scheduling for heterogeneous datacenters. In
+     adjustment of noise covariance in kalman filter for             ASPLOS, 2013.
+     dynamic state estimation. In IEEE Power Energy Society
+     General Meeting, 2017.                                     [15] Christina Delimitrou and Christos Kozyrakis. Quasar:
+                                                                     resource-efficient and qos-aware cluster management.
+ [3] Jorge Albericio, Patrick Judd, Tayler Hetherington, Tor         In ASPLOS, 2014.
+     Aamodt, Natalie Enright Jerger, and Andreas Moshovos.
+     Cnvlutin: Ineffectual-neuron-free deep neural network      [16] J. Deng, W. Dong, R. Socher, L. Li, Kai Li, and Li Fei-
+     computing. In ISCA, pages 1–13, 2016.                           Fei.   Imagenet: A large-scale hierarchical image
+                                                                     database. In CVPR, 2009.
+ [4] Jason Ansel, Maciej Pacula, Yee Lok Wong, Cy Chan,
+     Marek Olszewski, Una-May O’Reilly, and Saman               [17] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and
+     Amarasinghe. Siblingrivalry: online autotuning through          Kristina Toutanova.      Bert: Pre-training of deep
+     local competitions. In CASES, 2012.                             bidirectional transformers for language understanding.
+                                                                     arXiv preprint arXiv:1810.04805, 2018.
+ [5] Christian Bienia, Sanjeev Kumar, Jaswinder Pal
+     Singh, and Kai Li. The parsec benchmark suite:             [18] Piotr Dollar, Christian Wojek, Bernt Schiele, and Pietro
+     Characterization and architectural implications. In             Perona. Pedestrian detection: An evaluation of the state
+     PACT, October 2008.                                             of the art. TPAMI, 2011.
+ [6] Giorgio C Buttazzo, Giuseppe Lipari, Luca Abeni, and       [19] Zidong Du, Robert Fasthuber, Tianshi Chen, Paolo
+     Marco Caccamo. Soft Real-Time Systems: Predictability           Ienne, Ling Li, Tao Luo, Xiaobing Feng, Yunji Chen, and
+     vs. Efficiency: Predictability vs. Efficiency. Springer,        Olivier Temam. Shidiannao: Shifting vision processing
+     2006.                                                           closer to the sensor. In ISCA, pages 92–104, 2015.
+ [7] Aaron Carroll and Gernot Heiser. Mobile multicores:
+                                                                [20] Biyi Fang, Xiao Zeng, and Mi Zhang. Nestdnn:
+     Use them or waste them. In HotPower, 2013.
+                                                                     Resource-aware multi-tenant on-device deep learning
+ [8] Shuai Che, Michael Boyer, Jiayuan Meng, David                   for continuous mobile vision. In Mobicom, 2018.
+     Tarjan, Jeremy W Sheaffer, Sang-Ha Lee, and Kevin
+                                                                [21] Anne Farrell and Henry Hoffmann. MEANTIME:
+     Skadron. Rodinia: A benchmark suite for heterogeneous
+                                                                     achieving both minimal energy and timeliness with
+     computing. In IISWC, 2009.
+                                                                     approximate computing. In USENIX ATC, 2016.
+ [9] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin
+     Zheng, Eddie Yan, Haichen Shen, Meghan Cowan,              [22] Michael Figurnov, Maxwell D Collins, Yukun Zhu,
+     Leyuan Wang, Yuwei Hu, Luis Ceze, et al. Tvm: An                Li Zhang, Jonathan Huang, Dmitry P Vetrov, and Ruslan
+     automated end-to-end optimizing compiler for deep               Salakhutdinov. Spatially adaptive computation time for
+     learning. In OSDI, pages 578–594, 2018.                         residual networks. In CVPR, page 7, 2017.
+
+[10] Tianshi Chen, Zidong Du, Ninghui Sun, Jia Wang,            [23] Mingyu Gao, Christina Delimitrou, Dimin Niu,
+     Chengyong Wu, Yunji Chen, and Olivier Temam.                    Krishna T Malladi, Hongzhong Zheng, Bob Brennan,
+     Diannao: A small-footprint high-throughput accelerator          and Christos Kozyrakis. Draf: a low-power dram-based
+     for ubiquitous machine-learning. SIGPLAN Not., pages            reconfigurable acceleration fabric.     ISCA, pages
+     269–284, 2014.                                                  506–518, 2016.
+
+[11] Yu-Hsin Chen, Tushar Krishna, Joel S Emer, and             [24] Song Han, Xingyu Liu, Huizi Mao, Jing Pu, Ardavan
+     Vivienne Sze.        Eyeriss: An energy-efficient               Pedram, Mark A Horowitz, and William J Dally. Eie:
+     reconfigurable accelerator for deep convolutional               efficient inference engine on compressed deep neural
+     neural networks. JSSC, 2016.                                    network. In ISCA, pages 243–254, 2016.
+
+[12] Yunji Chen, Tao Luo, Shaoli Liu, Shijin Zhang, Liqiang     [25] Song Han, Huizi Mao, and William J Dally. Deep
+     He, Jia Wang, Ling Li, Tianshi Chen, Zhiwei Xu,                 compression: Compressing deep neural networks with
+     Ninghui Sun, et al. Dadiannao: A machine-learning               pruning, trained quantization and huffman coding. arXiv
+     supercomputer. In MICRO 47, pages 609–622, 2014.                preprint arXiv:1510.00149, 2015.
+
+
+
+USENIX Association                                                       2020 USENIX Annual Technical Conference         365
+[26] Soheil Hashemi, Nicholas Anthony, Hokchhay Tann,            [37] C. Imes, D. H. K. Kim, M. Maggio, and H. Hoffmann.
+     R Iris Bahar, and Sherief Reda. Understanding the                Poet: a portable approach to minimizing energy under
+     impact of precision quantization on the accuracy and             soft real-time constraints. In RTAS, pages 75–86, April
+     energy of neural networks. In DATE, pages 1474–1479,             2015.
+     2017.
+                                                                 [38] Animesh Jain, Michael A Laurenzano, Gilles A Pokam,
+[27] Johann Hauswald, Yiping Kang, Michael A Laurenzano,              Jason Mars, and Lingjia Tang. Architectural support
+     Quan Chen, Cheng Li, Trevor Mudge, Ronald G                      for convolutional neural networks on modern cpus. In
+     Dreslinski, Jason Mars, and Lingjia Tang. Djinn and              PACT, 2018.
+     tonic: Dnn as a service and its implications for future
+     warehouse scale computers. In ISCA, pages 27–40,            [39] Shubham Jain, Swagath Venkataramani, Vijayalakshmi
+     2015.                                                            Srinivasan, Jungwook Choi, Pierce Chuang, and Leland
+                                                                      Chang.      Compensated-dnn: energy efficient low-
+[28] Johann Hauswald, Michael A Laurenzano, Yunqi Zhang,              precision deep neural networks by compensating
+     Cheng Li, Austin Rovinski, Arjun Khurana, Ronald G               quantization errors. In DAC, pages 1–6, 2018.
+     Dreslinski, Trevor Mudge, Vinicius Petrucci, Lingjia
+     Tang, et al. Sirius: An open end-to-end voice and           [40] Junchen Jiang, Ganesh Ananthanarayanan, Peter Bodik,
+     vision personal assistant and its implications for future        Siddhartha Sen, and Ion Stoica. Chameleon: scalable
+     warehouse scale computers. In ASPLOS, pages 223–238,             adaptation of video analytics. In ACM SIGCOMM,
+     2015.                                                            pages 253–266, 2018.
+
+[29] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian           [41] Norman P. Jouppi, Cliff Young, Nishant Patil, David
+     Sun. Deep residual learning for image recognition. In            Patterson, Gaurav Agrawal, Raminder Bajwa, Sarah
+     CVPR, pages 770–778, 2016.                                       Bates, Suresh Bhatia, Nan Boden, Al Borchers,
+                                                                      Rick Boyle, Pierre-luc Cantin, Clifford Chao, Chris
+[30] Parker Hill, Animesh Jain, Mason Hill, Babak Zamirai,            Clark, Jeremy Coriell, Mike Daley, Matt Dau,
+     Chang-Hong Hsu, Michael A Laurenzano, Scott Mahlke,              Jeffrey Dean, Ben Gelb, Tara Vazir Ghaemmaghami,
+     Lingjia Tang, and Jason Mars. Deftnn: Addressing                 Rajendra Gottipati, William Gulland, Robert Hagmann,
+     bottlenecks for dnn execution on gpus via synapse vector         C. Richard Ho, Doug Hogberg, John Hu, Robert
+     elimination and near-compute data fission. In MICRO,             Hundt, Dan Hurt, Julian Ibarz, Aaron Jaffey, Alek
+     pages 786–799, 2017.                                             Jaworski, Alexander Kaplan, Harshit Khaitan, Daniel
+                                                                      Killebrew, Andy Koch, Naveen Kumar, Steve Lacy,
+[31] Henry Hoffmann. Coadapt: Predictable behavior for                James Laudon, James Law, Diemthu Le, Chris Leary,
+     accuracy-aware applications running on power-aware               Zhuyuan Liu, Kyle Lucke, Alan Lundin, Gordon
+     systems. In ECRTS, pages 223–232, 2014.                          MacKean, Adriana Maggiore, Maire Mahony, Kieran
+                                                                      Miller, Rahul Nagarajan, Ravi Narayanaswami, Ray Ni,
+[32] Henry Hoffmann. Jouleguard: energy guarantees for
+                                                                      Kathy Nix, Thomas Norrie, Mark Omernick, Narayana
+     approximate applications. In SOSP, 2015.
+                                                                      Penukonda, Andy Phelps, Jonathan Ross, Matt Ross,
+[33] Henry Hoffmann and Martina Maggio. PCP: A                        Amir Salek, Emad Samadiani, Chris Severn, Gregory
+     generalized approach to optimizing performance under             Sizikov, Matthew Snelham, Jed Souter, Dan Steinberg,
+     power constraints through resource management. In                Andy Swing, Mercedes Tan, Gregory Thorson, Bo Tian,
+     ICAC, pages 241–247, 2014.                                       Horia Toma, Erick Tuttle, Vijay Vasudevan, Richard
+                                                                      Walter, Walter Wang, Eric Wilcox, and Doe Hyun
+[34] Hanzhang Hu, Debadeepta Dey, Martial Hebert, and                 Yoon. In-datacenter performance analysis of a tensor
+     J Andrew Bagnell. Learning anytime predictions in                processing unit. In ISCA, 2017.
+     neural networks via adaptive loss balancing. In AAAI,
+     2019.                                                       [42] Patrick Judd, Jorge Albericio, Tayler Hetherington,
+                                                                      Tor M Aamodt, Natalie Enright Jerger, and Andreas
+[35] Gao Huang, Danlu Chen, Tianhong Li, Felix Wu,                    Moshovos. Proteus: Exploiting numerical precision
+     Laurens van der Maaten, and Kilian Q. Weinberger.                variability in deep neural networks. In ICS, page 23,
+     Multi-scale dense convolutional networks for efficient           2016.
+     prediction. In CoRR, 2017.
+                                                                 [43] Patrick Judd, Jorge Albericio, Tayler Hetherington,
+[36] C. Imes and H. Hoffmann. Bard: A unified framework               Tor M Aamodt, and Andreas Moshovos. Stripes: Bit-
+     for managing soft timing and power constraints. In               serial deep neural network computing. In MICRO, pages
+     SAMOS, pages 31–38, 2016.                                        1–12, 2016.
+
+
+
+366   2020 USENIX Annual Technical Conference                                                           USENIX Association
+[44] Evangelia Kalyvianaki, Themistoklis Charalambous,            [56] ATLAS         LS.                 What       is
+     and Steven Hand. Self-adaptive and self-configured                simultaneous/conference         interpretation?
+     cpu resource provisioning for virtualized servers using           Online       document,  https://atlasls.com/
+     kalman filters. In ICAC, 2009.                                    what-is-simultaneousconference-interpretation/,
+                                                                       2010.
+[45] Evangelia Kalyvianaki, Themistoklis Charalambous,
+     and Steven Hand. Adaptive resource provisioning for          [57] Martina Maggio, Alessandro Vittorio Papadopoulos,
+     virtualized servers using kalman filters. TAAS, 2014.             Antonio Filieri, and Henry Hoffmann. Automated
+                                                                       control of multiple software goals using multiple
+[46] Aman Kansal, Scott Saponas, AJ Brush, Kathryn S                   actuators. In FSE, 2017.
+     McKinley, Todd Mytkowicz, and Ryder Ziola. The
+     latency, accuracy, and battery (lab) abstraction:            [58] Divya Mahajan, Jongse Park, Emmanuel Amaro, Hardik
+     programmer productivity and energy efficiency for                 Sharma, Amir Yazdanbakhsh, Joon Kyung Kim, and
+     continuous mobile context sensing. In OOPSLA, 2013.               Hadi Esmaeilzadeh. Tabla: A unified template-based
+                                                                       framework for accelerating statistical machine learning.
+[47] Shinpei Kato, Shota Tokunaga, Yuya Maruyama, Seiya                In HPCA, pages 14–26. IEEE, 2016.
+     Maeda, Manato Hirabayashi, Yuki Kitsukawa, Abraham
+                                                                  [59] Mitchell P. Marcus, Beatrice Santorini, Mary Ann
+     Monrroy, Tomohito Ando, Yusuke Fujii, and Takuya
+                                                                       Marcinkiewicz, and Ann Taylor. Treebank-3 - linguistic
+     Azumi. Autoware on board: Enabling autonomous
+                                                                       data consortium. Online document, https://catalog.
+     vehicles with embedded systems. In ICCPS, pages 287–
+                                                                       ldc.upenn.edu/LDC99T42, 1999.
+     296, 2018.
+                                                                  [60] John D McCalpin. Memory bandwidth and machine
+[48] D. H. K. Kim, C. Imes, and H. Hoffmann. Racing and                balance in current high performance computers. TCCA,
+     pacing to idle: Theoretical and empirical analysis of             1995.
+     energy optimization heuristics. In ICCPS, 2015.
+                                                                  [61] Mason McGill and Pietro Perona. Deciding how to
+[49] Gustav Larsson, Michael Maire, and Gregory                        decide: Dynamic routing in artificial neural networks.
+     Shakhnarovich. Fractalnet: Ultra-deep neural networks             arXiv preprint arXiv:1703.06217, 2017.
+     without residuals. arXiv preprint arXiv:1605.07648,
+     2016.                                                        [62] Nikita Mishra, Connor Imes, John D. Lafferty, and
+                                                                       Henry Hoffmann. CALOREE: learning control for
+[50] Etienne Le Sueur and Gernot Heiser. Slow down or                  predictable latency and low energy. In ASPLOS, 2018.
+     sleep, that is the question. In USENIX ATC, June 2011.
+                                                                  [63] Nikita Mishra, Huazhe Zhang, John D. Lafferty,
+[51] Benjamin C Lee and David Brooks. Efficiency trends                and Henry Hoffmann.        A probabilistic graphical
+     and limits from comprehensive microarchitectural                  model-based approach for minimizing energy under
+     adaptivity. ASPLOS, 2008.                                         performance constraints. ASPLOS, 2015.
+
+[52] Hankook Lee and Jinwoo Shin. Anytime neural                  [64] Jakob Nielsen. Usability engineering. Elsevier, 1994.
+     prediction via slicing networks vertically. arXiv preprint
+                                                                  [65] NVIDIA. Nvidia tensorrt: Programmable inference
+     arXiv:1807.02609, 2018.
+                                                                       accelerator. Online document, https://developer.
+[53] Shih-Chieh Lin, Yunqi Zhang, Chang-Hong Hsu, Matt                 nvidia.com/tensorrt, 2018.
+     Skach, Md E Haque, Lingjia Tang, and Jason Mars.             [66] Kalin Ovtcharov, Olatunji Ruwase, Joo-Young Kim,
+     The architectural implications of autonomous driving:             Jeremy Fowers, Karin Strauss, and Eric S Chung.
+     Constraints and acceleration. In ASPLOS, pages 751–               Accelerating deep convolutional neural networks using
+     766, 2018.                                                        specialized hardware. Microsoft Research Whitepaper,
+                                                                       2015.
+[54] Daofu Liu, Tianshi Chen, Shaoli Liu, Jinhong Zhou,
+     Shengyuan Zhou, Olivier Teman, Xiaobing Feng,                [67] Kexin Pei, Yinzhi Cao, Junfeng Yang, and Suman
+     Xuehai Zhou, and Yunji Chen. Pudiannao: A polyvalent              Jana. Deepxplore: Automated whitebox testing of deep
+     machine learning accelerator. In ISCA, pages 369–381,             learning systems. In SOSP, 2017.
+     2015.
+                                                                  [68] Paula Petrica, Adam M Izraelevitz, David H Albonesi,
+[55] Jun S Liu and Rong Chen. Sequential monte carlo                   and Christine A Shoemaker. Flicker: A dynamically
+     methods for dynamic systems. Journal of the American              adaptive architecture for power limited multicore
+     statistical association, 1998.                                    systems. In ISCA, 2013.
+
+
+
+USENIX Association                                                         2020 USENIX Annual Technical Conference        367
+[69] Dmitry Ponomarev, Gurhan Kucuk, and Kanad Ghose.          [81] Hokchhay Tann, Soheil Hashemi, R Iris Bahar, and
+     Reducing power requirements of instruction scheduling          Sherief Reda. Hardware-software codesign of accurate,
+     through dynamic allocation of multiple datapath                multiplier-free deep neural networks. In DAC, 2017.
+     resources. In MICRO, 2001.
+                                                               [82] Surat Teerapittayanon, Bradley McDanel, and H.T.
+[70] Amir M. Rahmani, Bryan Donyanavard, Tiago Mück,                Kung. Branchynet: Fast inference via early exiting from
+     Kasra Moazzemi, Axel Jantsch, Onur Mutlu, and                  deep neural networks. In CVPR, 2016.
+     Nikil D. Dutt. SPECTR: formal supervisory control
+     and coordination for many-core systems resource           [83] Vincent Vanhoucke, Andrew Senior, and Mark Z Mao.
+     management. In ASPLOS, pages 169–183, 2018.                    Improving the speed of neural networks on cpus. In Proc.
+                                                                    Deep Learning and Unsupervised Feature Learning
+[71] Pranav Rajpurkar, Jian Zhang, Konstantin Lopyrev,              NIPS Workshop, page 4, 2011.
+     and Percy Liang. Squad: 100,000+ questions for
+     machine comprehension of text.     arXiv preprint         [84] Andreas Veit and Serge Belongie. Convolutional
+     arXiv:1606.05250, 2016.                                        networks with adaptive inference graphs. In ECCV,
+                                                                    2018.
+[72] S. Reda, R. Cochran, and A. K. Coskun. Adaptive
+     power capping for servers with multithreaded workloads.   [85] Swagath Venkataramani, Ashish Ranjan, Kaushik Roy,
+     MICRO, 2012.                                                   and Anand Raghunathan. Axnn: energy-efficient
+                                                                    neuromorphic systems using approximate computing.
+[73] Minsoo Rhu, Natalia Gimelshein, Jason Clemons,                 In ISLPED, 2014.
+     Arslan Zulfiqar, and Stephen W Keckler.          vdnn:
+     Virtualized deep neural networks for scalable, memory-    [86] Chengcheng Wan, Henry Hoffmann, Shan Lu, and
+     efficient neural network design. In MICRO, page 18,            Michael Maire. Orthogonalized SGD and nested
+     2016.                                                          architectures for anytime neural networks. In ICML
+                                                                    2020, to appear.
+[74] Muhammad Husni Santriaji and Henry Hoffmann.
+     Grape: Minimizing energy for gpu applications with        [87] Chengcheng Wan, Muhammad Santriaji, Eri Rogers,
+     performance requirements. In MICRO, 2016.                      Henry Hoffmann, Michael Maire, and Shan Lu. Alert:
+                                                                    Accurate learning for energy and timeliness. arXiv
+[75] Hardik Sharma, Jongse Park, Divya Mahajan,                     preprint arXiv:1911.00119, 2020.
+     Emmanuel Amaro, Joon Kyung Kim, Chenkai Shao,
+     Asit Mishra, and Hadi Esmaeilzadeh. From high-level       [88] Yan Wang, Zihang Lai, Gao Huang, Brian H Wang,
+     deep neural models to fpgas. In MICRO, page 17, 2016.          Laurens van der Maaten, Mark Campbell, and Kilian Q
+                                                                    Weinberger. Anytime stereo image depth estimation
+[76] N Silberman and Guadarrama. S. Tensorflow-slim                 on mobile devices. arXiv preprint arXiv:1810.11408,
+     image classification model library. Online document,           2018.
+     https://github.com/tensorflow/models/tree/
+     master/research/slim, 2016.                               [89] Zuxuan Wu, Tushar Nagarajan, Abhishek Kumar, Steven
+                                                                    Rennie, Larry S Davis, Kristen Grauman, and Rogerio
+[77] Hyeonuk Sim, Saken Kenzhegulov, and Jongeun                    Feris. Blockdrop: Dynamic inference paths in residual
+     Lee. Dps: dynamic precision scaling for stochastic             networks. In CVPR, pages 8817–8826, 2018.
+     computing-based deep neural networks. In DAC,
+     page 13, 2018.                                            [90] Huazhe Zhang and Henry Hoffmann. Maximizing
+                                                                    performance under a power cap: A comparison of
+[78] Karen Simonyan and Andrew Zisserman.         Very              hardware, software, and hybrid techniques. In ASPLOS,
+     deep convolutional networks for large-scale image              2016.
+     recognition. In ICLR, 2015.
+                                                               [91] Minjia Zhang, Samyam Rajbhandari, Wenhan Wang,
+[79] Srinath Sridharan, Gagan Gupta, and Gurindar S Sohi.           and Yuxiong He. Deepcpu: Serving rnn-based deep
+     Holistic run-time parallelism management for time and          learning models 10x faster. In ATC, pages 951–965,
+     energy efficiency. In ICS, 2013.                               2018.
+[80] Youcheng Sun, Min Wu, Wenjie Ruan, Xiaowei Huang,         [92] H. Zhou, S. Bateni, and C. Liu. S3dnn: Supervised
+     Marta Kwiatkowska, and Daniel Kroening. Concolic               streaming and scheduling for gpu-accelerated real-time
+     testing for deep neural networks. In ASE, 2018.           DNN workloads. In RTAS, 2018.
+
+
+
+
+368   2020 USENIX Annual Technical Conference                                                         USENIX Association
+[93] Yanqi Zhou, Henry Hoffmann, and David Wentzlaff.
+     Cash: Supporting iaas customers with a sub-core
+     configurable architecture. In ISCA, 2016.
+
+
+
+
+USENIX Association                                      2020 USENIX Annual Technical Conference   369
+

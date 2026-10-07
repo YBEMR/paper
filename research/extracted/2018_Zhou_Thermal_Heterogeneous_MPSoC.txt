@@ -1,0 +1,985 @@
+                                                                   Journal of Systems Architecture 82 (2018) 1–11
+
+
+
+                                                                   Contents lists available at ScienceDirect
+
+
+                                                          Journal of Systems Architecture
+                                                         journal homepage: www.elsevier.com/locate/sysarc
+
+
+
+
+Thermal-aware correlated two-level scheduling of real-time tasks with                                                                                        T
+reduced processor energy on heterogeneous MPSoCs
+                                                                                                                      ⁎
+Junlong Zhoua,b, Jianming Yana, Kun Caoa, Yanchao Tanc, Tongquan Wei ,a, Mingsong Chend,
+Gongxuan Zhangb, Xiaodao Chene, Shiyan Huf
+a
+  Department of Computer Science and Technology, East China Normal University, Shanghai 200241, China
+b
+  School of Computer Science and Engineering, Nanjing University of Science and Technology, Nanjing 210094, China
+c
+  College of Computer Science, Zhejiang University, Hangzhou 310027, China
+d
+  Shanghai Key Laboratory of Trustworthy Computing, East China Normal University, Shanghai 200241, China
+e
+  School of Computer Science, China University of Geosciences, Wuhan 430074, China
+f
+  Department of Electrical and Computer Engineering, Michigan Technological University, Houghton, MI 49931, USA
+
+
+
+
+A R T I C L E I N F O                                      A B S T R A C T
+
+Keywords:                                                  With the exponential increase in power density and the relentless scaling of transistors in VLSI circuits over the
+Energy eﬃciency                                            past decades, modern high-performance processors fall into a predicament of high energy consumption and
+Thermal-aware                                              elevated chip temperature. Such increased energy consumption and chip temperature could induce signiﬁcant
+Task precedence                                            economic, ecological, and technical problems. Thus, energy-eﬃcient task scheduling with thermal consideration
+Real-time MPSoC heterogeneous systems
+                                                           has become a pressing research issue in sustainable computing systems, especially for battery-powered real-time
+Co-scheduling
+                                                           embedded systems with limited cooling techniques.
+                                                              This paper tackles the above challenge through scheduling tasks leveraging correlated optimizations at two
+                                                           diﬀerent scales. Precisely, a two-level thermal-aware energy-eﬃcient scheduling algorithm for real-time tasks on
+                                                           DVFS-enabled heterogeneous MPSoC systems is developed considering the constraints of task deadlines, task
+                                                           precedences, and chip peak temperature limit. At the processor level, a multi-processor model supporting dy-
+                                                           namic voltage/frequency scaling is transformed to a virtual multi-processor model supporting only one ﬁxed
+                                                           frequency level. At the core level, real-time tasks are assigned to individual cores of the virtual processor under
+                                                           the constraints of task precedence and peak temperature limit. Through nicely interleaving optimizations at both
+                                                           levels, high quality task scheduling solutions can be computed eﬃciently. Extensive simulations of synthetic
+                                                           real-time tasks and real-life benchmarks are performed to validate the proposed algorithm. Experimental results
+                                                           demonstrate the eﬀectiveness of the proposed algorithm as compared to the benchmarking schemes.
+
+
+
+
+1. Introduction                                                                                research issue in the design of battery-powered sustainable computing
+                                                                                               systems.
+    As needs for high performance computing in sustainable systems                                 Heterogeneous multiprocessors have been extensively adopted in
+continue to increase, the energy consumption of VLSI systems explodes,                         various real-time embedded applications due to their relatively better
+which poses adverse impact on the lifespan of portable devices with                            performance and lower energy consumption when compared to
+limited battery capacity. Meanwhile, the soaring integration level of                          homogeneous processors [4,5]. A multiprocessor system on chip
+transistors in VLSI circuits strikingly increases chip power density and                       (MPSoC) is naturally heterogeneous in the sense that its processing
+thus elevates chip temperature. Such high temperature degrades system                          units such as customized hardware modules, programmable micro-
+reliability by accelerating the device wearout mechanisms through                              processors, and embedded FPGAs have distinctive functionalities and
+electro-migration, dielectric breakdown, thermal cycling, or stress mi-                        demonstrate varying computing capability [6]. In this paper, we focus
+gration [1–3]. It also results in high leakage power due to strong tem-                        on temperature-aware energy-eﬃcient task scheduling issues for het-
+perature/leakage dependency, which in turn increases the chip tem-                             erogeneous real-time MPSoC systems.
+perature and consequently incurs signiﬁcant packaging and cooling                                  Speciﬁcally, we proposed a task allocation and frequency selection
+costs. Hence, temperature-aware energy minimization is a pressing                              method that minimizes the energy consumed by MPSoC systems
+
+
+    ⁎
+        Corresponding author.
+        E-mail address: tqwei@cs.ecnu.edu.cn (T. Wei).
+
+https://doi.org/10.1016/j.sysarc.2017.09.007
+Received 2 March 2017; Received in revised form 31 July 2017; Accepted 22 September 2017
+Available online 07 November 2017
+1383-7621/ © 2017 Elsevier B.V. All rights reserved.
+J. Zhou et al.                                                                                                             Journal of Systems Architecture 82 (2018) 1–11
+
+
+                                                                                 Table 1
+                                                                                 Deﬁnition of main notations in Section 3 and 4.
+
+                                                                                   Notation          Deﬁnition
+
+                                                                                  P                  The MPSoC containing M processors P1, P2, ⋅⋅⋅, PM
+                                                                                  Pm                 The mth processor in system P
+                                                                                  vm, k, fm, k       The kth voltage and frequency level of processor Pm
+                                                                                  xm                 The number of voltage/frequency levels of processor Pm
+                                                                                  G = (V , E )       The directed acyclic graph (DAG)
+                                                                                  V                  The set of V tasks
+                                                                                  E                  The set of edges representing task precedency
+                                                                                  τi, τj             The ith and jth task in set V
+                                                                                  μi                 The active factor of task τi
+                                                                                  ci                 The worst case execution cycles of task τi
+                                                                                  D                  The common deadline (frame size) of tasks in set V
+                                                                                  ETi, m, k          The execution time of τi on processor Pm at frequency fm, k
+                                                                                      leak
+                                                                                   Powm              The leakage power consumption of processor Pm at fm, k
+                                                                                        ,k
+                 Fig. 1. Design ﬂow of the proposed two-level scheduling.          αm, γm, δm        Non-negative architecture-dependent constants of processor Pm
+                                                                                   T(t), T0, Te      The processor operating temperature at time instance t, t0, te
+                                                                                   Tm(t)             The instantaneous temperature of processor Pm at time instance t
+supporting discrete voltage/frequency levels. The algorithm takes as               Powidyn           The dynamic power consumed by executing τi on Pm at fm, k
+                                                                                       , m, k
+input a given set of precedence constrained real-time tasks and peak               Pow(t)            The processor power consumption at time instance t
+temperature limit. It generates an energy-eﬃcient schedule that meets              amb
+                                                                                  Tm                 The ambient temperature of processor Pm
+the design requirements by wisely determining the tasks assigned to               Tamb               The processor ambient temperature
+processors and the operating frequency of assigned tasks. Energy sav-             R, C               The processor thermal resistance and capacitance
+ings are achieved by utilizing heterogeneities of both MPSoC systems              Rm, Cm             The thermal resistance and capacitance of processor Pm
+and precedence-constrained real-time tasks. As shown in Fig. 1, the                ECDtot            The total energy consumed by system P during frame D
+                                                                                   ECDleak           The leakage energy consumed by system P during frame D
+proposed two-level scheme is speciﬁcally tailored for heterogeneous
+                                                                                  ECDdyn             The dynamic energy consumed by system P during frame D
+multi-scale computing system. The scheme operates as follows. Given
+an input application that consists of a set of precedence constrained             Vm, k              The subset of tasks allocated to Pm and executed at fm, k
+                                                                                  TDpeak             The peak temperature of system P during frame D
+tasks, it ﬁrst transforms the real multiprocessor system MPSoC to a
+virtual multicore system at the processor level, then conducts task to            ts(τi)             The start execution time of task τi
+                                                                                  tf(τj)             The ﬁnish execution time of task τj
+core mapping to generate an output task assignment at the core level.
+                                                                                  Λi, j              The binary variable used to represent if task τj precedes task τi
+The generated task assignment can minimize the system energy con-
+sumption under all the constraints. High quality task scheduling solu-
+tions can be computed eﬃciently via optimization at both levels. This            Table 2
+paper makes the following major contributions:                                   Deﬁnition of main notations used in Section 5.
+
+
+ • We presented a transformation method for the MPSoC system that                  Notation         Deﬁnition
+
+     converts the processor model with multiple voltage and frequency             a                 The vector that captures (real) processor dependent parameters
+     levels to multiple virtual cores each of which has a ﬁxed supply             b                 The vector that captures task related parameters
+     voltage and frequency level. This method can eﬀectively decrease             am, k ∈ a         The power dissipation factor of processor Pm at frequency fm, k
+     one dimension for optimization of system energy consumption by               bm, k ∈ b         The power dissipation factor of subset Vm, k
+                                                                                  μici              The power dissipation factor of task τi
+     reducing task-to-(real) processor assignment and frequency selec-
+                                                                                  Y                 The sum of power dissipation factor of tasks in the application V
+     tion problem to task-to-(virtual) core assignment problem.                   X                 The total number of virtual cores
+ •   We analyzed the energy optimality of assigning tasks to multiple             Θ
+                                                                                  Θℓ
+                                                                                                    The set of virtual cores Θ1, Θ2 , ⋯, ΘX
+                                                                                                    The ℓth virtual core in set Θ
+     virtual cores of an MPSoC system, and proposed a theorem on op-
+     timum task assignment. Based on the theorem, we developed a task-            Vℓ                The subset of tasks assigned to virtual core Θℓ
+                                                                                  η                 The vector that captures virtual core dependent parameters
+     to-(virtual) core assignment heuristic algorithm to reduce the energy
+                                                                                  ζ                 The vector that captures task related parameters
+     consumption.                                                                 ηℓ, ηκ ∈ η        The power dissipation factor of virtual core Θℓ, Θκ
+ •   We conducted extensive simulation experiments to validate the ef-            ζℓ, ζκ ∈ ζ
+                                                                                  ζ*
+                                                                                                    The power dissipation factor of subset assigned to core Θℓ, Θκ
+                                                                                                    The vector that characterizes the optimum task assignment solution
+     fectiveness of the proposed algorithm in energy eﬃciency.
+                                                                                  ζℓ*, ζ κ* ∈ ζ *   The ℓth and κth elements in vector ζ*
+     Simulation results have demonstrated that the proposed algorithm
+     achieves better performance when compared to the benchmarking
+     schemes.
+                                                                                 Table 3
+                                                                                 Deﬁnition of some notations used in Algorithm 1.
+    In this paper, we explore the energy minimization of precedence
+constrained real-time tasks on DVFS-enabled MPSoCs by utilizing het-               Notation            Deﬁnition
+erogeneities of both MPSoCs and real-time tasks. The remainder of this
+                                                                                  U(τi, Θℓ)            The utilization of task τi when assigned to virtual core Θℓ
+paper is organized as follows. Section 2 discusses the related works,
+                                                                                  U(Θℓ)                The utilization of virtual core Θℓ
+Section 3 presents the system models, Section 4 deﬁnes and analyzes               Θℓ                   Virtual cores transformed from the same real processor as Θℓ is
+the concerned energy minimization problem, and Section 5 describes                U (Θℓ )              The utilization of virtual cores denoted by Θℓ
+the proposed energy-eﬃcient task assignment and frequency selection               Vtemp                A temporary task subset Vtemp prepared for Vℓ
+scheme. The eﬀectiveness of the proposed scheme is veriﬁed in                      ETi, ℓ              The execution time of task τi on virtual core Θℓ
+Section 6 and concluding remarks are given in Section 7. For the sake of           ET (Vℓ)             The execution time of tasks assigned to virtual core Θℓ
+easy presentation and better comprehension, we summarize the deﬁ-                  ET (Vtemp)          The execution time of tasks in temporary subset Vtemp
+
+nition of main notations used in the whole paper in Tables 1–3.
+
+
+
+                                                                             2
+J. Zhou et al.                                                                                                         Journal of Systems Architecture 82 (2018) 1–11
+
+
+2. Related work                                                                  tasks, He et al. [17] developed a graph-based scheduling algorithm to
+                                                                                 ﬁnd the optimal co-scheduling solution for serial and parallel jobs on
+    The study on energy eﬃciency of a heterogeneous MPSoC platform               multicores. However, energy and timing are not considered as a design
+aims to maximize energy savings by allocating limited computational              constraint. Energy and timing are taken into account in the literature
+resources of the platform to individual real-time tasks under various            [18–20] when scheduling precedence-constrained real-time tasks on
+design constraints. Colin et al. showed in the literature [7] that neither       multiprocessor computers using DVFS. However, heterogeneities of
+balancing the load nor assigning all load to a particular processor is the       neither multiprocessors nor real-time tasks are employed for energy
+best strategy for energy optimization. Hence, researchers often start            savings. In addition, temperature is not considered as a design con-
+from an analytically justiﬁed target task-to-processor assignment for            straint in the above works.
+energy optimization and then derive an energy-eﬃcient task assign-
+ment heuristic that approximates it. For example, Li and Wu [8] for-
+                                                                                 3. System models
+mulated the energy optimization problems as binary integer program-
+ming problems, relaxed them as convex optimization problems, and
+                                                                                    In this section, we brieﬂy introduce our system models, including
+proposed a relaxation-based iterative rounding algorithm to approx-
+                                                                                 the processor and application model, power model, and temperature
+imate the optimal solution of the relaxed problems. Similarly, Wang
+                                                                                 model.
+et al. [9] ﬁrst presented an integer linear programming-based method
+to solve the problem of task and data allocation for energy minimiza-
+tion. Then two heuristic algorithms were designed to generate near-              3.1. Processor and application model
+optimal solutions for real-time applications in polynomial time. Zhang
+et al. [10] proposed a novel genetic algorithm based approach to im-                 The MPSoC system considered in this paper consists of M processors,
+prove energy savings and system reliability for scheduling workﬂow               denoted by P = {P1, P2, ⋯, PM } . Each processor Pm (1 ≤ m ≤ M) is a
+with precedence constraints in heterogeneous multicore systems. Zahaf            typical DVFS-enabled processor that can operate with a set of discrete
+et al. [11] presented a general methodology to model the energy con-             supply voltage and frequency pairs (vm, k, fm, k) (1 ≤ k ≤ xm), where
+sumption of sporadic tasks on heterogeneous multicore architectures              vm,1 < vm,2 < ⋯< vm, k < ⋯< vm, xm, fm,1 < fm,2 < ⋯< fm, k < ⋯< fm, xm , and
+such as ARM big/LITTLE. They also developed a heuristic for paralle-             xm is the voltage/frequency level of processor Pm. Real-time applica-
+lizing and allocating threads on the multicore, and setting the frequency        tions are supposed to execute on the MPSoC system. Such an applica-
+and power state of the cores to reduce the total energy consumption              tion is a set of precedence constrained tasks and can be represented by a
+without missing deadlines. Although the above work can eﬀectively                directed acyclic graph (DAG) G = (V , E ) . The set of vertices V re-
+reduce the energy consumption of MPSoC systems, the temperature                  presents the set of tasks τi(1 ≤ i ≤ V ), and the set of edges represents a
+design constraint is not taken into account, which may result in de-             partial order corresponding to the precedence constraints among tasks.
+graded system performance.                                                       For example, edge (τi, τj ) ∈ E (1 ≤ i, j ≤ V ) indicates the task τi cannot
+    Energy and temperature are two design constraints that interplay.            start to execute until task τj has been completed. A task without any
+Energy-aware schemes alone have insuﬃcient impact on chip tem-                   parent is called an entry task and a task without any child is called an
+perature and may lead to unnecessarily high temperature such that                end task. Same as the literature [21], we assume that a DAG G has only
+system temperature constraint is violated [12]. As a result, extensive           one entry node and one end node. Fig. 2 presents an example appli-
+investigation has been conducted on temperature-constrained task                 cation with six tasks and precedence constraints. As described in the
+scheduling for energy minimization. Liu et al. [13] ﬁrst introduced              ﬁgure, τ1 is the entry task since it has no parent and τ6 is the end task
+dynamic voltage/frequency scaling (DVFS) in design-time thermal op-              since it has no child. The execution of tasks needs to meet the
+timization for uniprocessor systems. They compared the energy and
+thermal-optimal solutions, and proposed a thermal-constrained energy
+optimization procedure to minimize system energy consumption under
+a constraint on peak temperature. Motivated by this work, Deogun et al.
+[14,15] investigated thermal-constrained partitioning of periodic real-
+time tasks for energy minimization in heterogeneous multiprocessor
+systems. They designed genetic algorithm and branch-and-bound based
+methods to assign real-time tasks to individual processors, adopted a
+power model that captures the impact of temperature and voltage on
+the leakage current, and utilized heterogeneities of MPSoCs to save
+energy and improve system performance.
+    In addition to heterogeneities of MPSoCs, the heterogeneous char-
+acteristics of real-time tasks also can be utilized for temperature-con-
+strained energy minimization. Tasks are deemed to be heterogeneous
+when diﬀerent tasks exhibit distinctive power consumptions on the
+same processor with exactly the same conﬁguration [13]. We exploited
+heterogeneities of both MPSoCs and real-time tasks for the ﬁrst time in
+the literature [16] to minimize energy consumption of a system under
+the temperature constraint. Heterogenous real-time tasks are initially
+allocated to individual processors to minimize dynamic energy con-
+sumption, then slack time is distributed among allocated tasks to
+minimize the chip temperature, which in turn reduces the leakage
+power. However, this work assumes a heterogenous MPSoC which
+supports ﬁxed voltage levels and operating frequencies. Moreover, real-
+time tasks are assumed to be independent, which limits the application
+of the presented schemes in scenarios like streams where real-time tasks
+have precedence or data dependencies.
+                                                                                            Fig. 2. An example application with precedence constraints.
+    Unlike the above works that concentrate on independent real-time
+
+                                                                             3
+J. Zhou et al.                                                                                                                    Journal of Systems Architecture 82 (2018) 1–11
+
+
+                                                                                                  amb
+precedence constraints that tasks τ2 − τ4 cannot start to execute until            dTm (t )   Tm        + αm·Rm ·vm, k + γm·Rm ·vm, k ·Tm (t ) + μi ·δm·Rm ·vm2 , k ·fm, k
+task τ1 is ﬁnished, task τ5 cannot start to execute until tasks τ2 − τ3 are                 =
+                                                                                     dt                                             Rm ·Cm
+ﬁnished, and task τ6 cannot start to execute until tasks τ4 − τ5 are ﬁn-                          T (t )
+ished. Since tasks τ2 − τ4 are independent, they could be either executed                       − m
+                                                                                                 Rm ·Cm                                                                                (5)
+serially in an arbitrary order or executed in parallel. An execution order
+of tasks τ1 − τ6 that meets the precedence constraints can be obtained
+                                                                                      te          Te                                  dTm (t )
+through topological sorting algorithm [22].                                        ∫t dt = ∫T           amb + α ·R ·v
+                                                                                                       Tm                            2
+                                                                                                               m m m, k + μi ·δm·Rm·vm, k·fm, k
+    Each task τi in an application is characterized using a triplet τi: {μi,
+ci, D}, where μi is the task active factor, ci is the worst case execution
+                                                                                     0            0
+                                                                                                                       Rm·Cm
+                                                                                                                                                  −   (   1 − γm·Rm·vm, k
+                                                                                                                                                              Rm·Cm         )·T (t )
+                                                                                                                                                                               m
+
+
+cycles, and D is the common deadline that is also the frame size of tasks                                                                                                              (6)
+in the application. Besides the operating frequency of the MPSoC
+system, the power consumption of a task highly depends upon the                        ⎛      Tmamb + αm·Rm ·vm, k + μi ·δm·Rm ·vm2 , k ·fm, k ⎞ −⎛ 1 − γm·Rm·vm, k ⎞ (te − t0)
+                                                                                                                                                                  ⎜                ⎟
+
+
+
+                                                                                   Te= ⎜T0 −                                                             Rm·Cm
+circuit activity and the usage frequency of diﬀerent functional units                                     1 − γm·Rm ·vm, k                     ⎟·e ⎝                ⎠
+
+when executing the task [23]. Hence, the task activity factor μ (ranging               ⎝                                                       ⎠
+in (0,1]) that deﬁnes how intensively functional units are being utilized                 Tmamb + αm·Rm ·vm, k + μi ·δm·Rm ·vm2 , k ·fm, k
+                                                                                       +
+by the task is adopted to capture the diﬀerent switching factors of                                   1 − γm·Rm ·vm, k
+diﬀerent tasks [24]. Let ETi, m, k denote the execution time of task τi on                                                                                                             (7)
+processor Pm at the frequency fm, k, then it is calculated by
+                                                                                   where Pow(t) is the power consumption at time instance t, and it can be
+                 ci                                                                obtained using Eqs. (8) and (9). R and C are thermal resistance and
+ETi, m, k =           .
+              fm, k                                                     (1)        capacitance, and are hardware dependent constants. Tamb is the ambient
+                                                                                   temperature.
+                                                                                       Let Tmamb, Tm(t), Rm, and Cm be the ambient temperature, in-
+                                                                                   stantaneous temperature, thermal resistance, and capacitance of pro-
+3.2. Power model
+                                                                                   cessor Pm, respectively. Then, for a given time interval [t0, te], if the
+                                                                                   initial temperature is T0, the ending temperature of executing task τi on
+    The power consumption of an CMOS device can be modeled as the
+                                                                                   processor Pm at the supply voltage and frequency (vm, k, fm, k), denoted
+sum of leakage power dissipation and dynamic power dissipation. The
+                                                                                   as Te, can be derived by solving Eq. (4). The derivation of ending
+leakage power is temperature dependent and consumed by the leakage
+                                                                                   temperature Te is described in Eqs. (2)-(7). (See the top of this page).
+current required to maintain basic state of circuits [25]. As leakage
+current changes super linearly with temperature, the leakage power
+consumption of processor Pm at the kth supply voltage and frequency                4. Energy minimization problem deﬁnition and analysis
+can be eﬀectively estimated as [26]
+                                                                                       The focus of this work is to minimize the energy consumption of
+Powmleak
+      , k = αm· vm, k + γm· vm, k · Tm (t ),                            (2)        precedence-dependent real-time tasks on the target MPSoC system
+                                                                                   under the constraints of task deadline and maximum temperature limit.
+where αm and γm are both non-negative architecture-dependent con-
+                                                                                   We solve the energy minimization problem by designing thermal-aware
+stants of processor Pm, and Tm(t) is the operating temperature of pro-
+                                                                                   energy-eﬃcient task assignment and frequency selection algorithm that
+cessor Pm at time instance t. Clearly, the leakage power varies with the
+                                                                                   determines the tasks assigned to every processor and the operating
+instantaneous temperature.
+                                                                                   frequency of every assigned task. Before presenting our algorithm, we
+    The dynamic power consumption of a processor is independent of
+                                                                                   ﬁrst give the formulation and the analysis of our energy minimization
+the temperature and can be estimated by a strictly increasing and
+                                                                                   problem below.
+convex function of the supply voltage and operating frequency, that is,
+                                                                                       The energy consumption is calculated as the product of power
+Powdyn∝v2f [27], where v is the supply voltage and f is the operating
+                                                                                   consumption and execution time. Unlike the traditional works
+frequency. The dynamic power is only consumed when executing tasks.
+                                                                                   [18,22,31] that ignore the temperature dependency in leakage power
+Thus the dynamic power consumption of executing task τi on processor
+                                                                                   when calculating energy consumption, this paper adopts a more precise
+Pm at the kth supply voltage and frequency is
+                                                                                   power model that takes into account the dependency. Speciﬁcally,
+                                                                                   based on the power model given in Section 3.2 and the temperature
+Powidyn                2
+    , m, k = μi · δm· vm, k · fm, k ,                                   (3)        model given in Section 3.3, the total energy consumption of executing
+                                                                                   the tasks in application V on the MPSoC system P during the frame D is
+where μi is the active factor of task τi and δm is a non-negative constant
+                                                                                   formulated as
+depending on the architecture of processor Pm.
+                                                                                   ECDtot = ECDleak + ECDdyn.                                                                          (8)
+3.3. Temperature model
+                                                                                   ECDleak is the energy consumption due to leakage power, which is always
+    An accurate and practical dynamic model of temperature is needed               consumed unless the processor is turned oﬀ. Thus the leakage energy
+to accurately characterize the thermal behavior of an application. In              consumption is expressed as
+this paper, it is assumed that there is negligible or no heat transfer                           M                       M
+among processor units and among other diﬀerent units [26,28,29].                   ECDleak = ∑ Powmleak ·D = ∑ αm·vm,1·D
+Hence, a heat-independent thermal model proposed by Skadron et al.                              m=1                     m=1
+                                                                                                 M
+[30] that is widely used in the literature is adopted to predict the                                      D
+temperature of the core. Let T(t) be the temperature at time instance t,                    + ∑        ∫0 γm·vm,1·Tm (t ) dt.
+                                                                                                m=1                                                                                    (9)
+then the temperature model is given by
+                                                                                   ECDdyn is the energy consumption due to dynamic power, which is only
+       dT (t )
+R·C·           + T (t ) − R·Pow (t ) = T amb,                                      consumed when executing tasks. Thus the dynamic energy consumption
+        dt                                                              (4)
+                                                                                   is calculated as
+
+                                                                               4
+J. Zhou et al.                                                                                                                      Journal of Systems Architecture 82 (2018) 1–11
+
+
+                 M    xm                                                            the interval is calculated under the assumption of a ﬁxed peak tem-
+ECDdyn = ∑ ∑                   ∑      Powidyn
+                                          , m, k · ETi, m, k                        perature [13], and the static energy consumed in the whole scheduling
+             m = 1 k = 1 τi ∈ Vm, k
+                                                                                    horizon is derived by summing up the static energy consumed in all
+                 M    xm
+                                                                 ci                 intervals [16]. Since the leakage power positively depends upon chip
+         = ∑ ∑                 ∑      μi ·δm·vm2 , k ·fm, k ·
+             m = 1 k = 1 τi ∈ Vm, k
+                                                                fm, k               peak temperature [13], the leakage energy consumption is then mini-
+                                                                                    mized by deriving the lowest peak temperature for all intervals of the
+                 M    xm
+         = ∑ ∑⎛     2
+              ⎜δm· vm, k ·                  ∑          μi · c i ⎞
+                                                                ⎟,
+                                                                                    scheduling horizon.
+                                                                                        It can be deduced from the above description that the total energy
+             m=1 k=1       ⎝              τi ∈ Vm, k          ⎠         (10)
+                                                                                    consumption of the system is mainly determined by the dynamic energy
+where Vm, k denotes the subset of tasks allocated to processor Pm and               for the scenario where peak temperature reaches temperature limit of
+executed at frequency fm, k.                                                        the system. This is because the peak temperature dependent leakage
+    To avoid temperature-induced failures and hence enable the system               energy consumption can not be further reduced in this case. In this
+in a safe and reliable mode, the processor temperature should be below              work, we concentrate on energy minimization for this case.
+a temperature limit (threshold) Tmax . The threshold Tmax is typically
+speciﬁed based on the system design requirements. The peak tem-                     5. The proposed processor model transformation and task
+perature of the MPSoC system P when executing the application V                     scheduling heuristics
+during the frame D is given by
+                                                                                        As introduced above, the target of this work is to design a two-level
+  TDpeak = max{T (t ) ∀ t ∈ [0, D]},                                    (11)        correlated optimization process for energy minimization. At the ﬁrst
+where T(t) is the instantaneous temperature of processors in P at time              level of the optimization, a real processor model supporting multiple
+instance t and can be calculated using Eq. (7).                                     voltage and frequency levels is transformed to a virtual processor
+    Considering the above design constraints, the task assignment and               consisting of multiple cores of ﬁxed voltage and frequency levels. At the
+frequency selection problem for energy minimization can be formulated               second level of the optimization, real-time tasks are assigned to in-
+as follows. Given an application V of precedence constrained real-time              dividual virtual cores in such a way that the system energy consump-
+tasks, and an MPSoC system P of heterogeneous processors, it is ex-                 tion is minimized.
+pected to derive a task assignment and frequency selection strategy to                  We ﬁrst design a Real_Processor_to_Virtual_Core (RPVC) transfor-
+minimize the system energy consumption while satisfying the con-                    mation for the MPSoC system. This transformation maps a real pro-
+straint of peak temperature, task deadlines, and task precedence. In                cessor with multiple voltage and frequency levels to a virtual processor
+other words, the problem can be formulated into the below form.                     with multiple virtual cores. Each virtual core has a ﬁxed voltage and
+                                                                                    frequency level corresponding to one level of the real processor model.
+  Minimize: ECDtot                                                                  Through the transformation, task-to-(real) processor assignment and
+  Subject to: TDpeak ≤ T max                                            (12)        frequency selection can be translated into task-to-(virtual) core as-
+                                                                                    signment, which reduces one dimension for optimization and hence
+                               xm
+                                                   ci                               simpliﬁes our problem. We then analyze the energy optimality of as-
+  ∀ m = 1, 2, ⋯, M ,           ∑ ∑                fm, k
+                                                        ≤D
+                                                                                    signing tasks to virtual cores and present a theorem on optimum task
+                               k = 1 τi ∈ Vm, k                         (13)
+                                                                                    assignment. We ﬁnally develop a task-to-(virtual) core assignment
+  ∀ τi, τj ∈ V , ts (τi ) ≥ t f (τj )·Λi, j                                         heuristic algorithm based on the theorem.
+                                                                        (14)
+where     ECDtot     and TDpeak
+                           are given in Eqs. (8) and (11), respectively.            5.1. Real_processor_to_virtual_core transformation
+Eq. (12) indicates that the processor peak temperature cannot exceed
+the threshold, and Eq. (13) indicates that the execution of tasks on                    The dynamic energy consumption given in Eq. (10) can be written
+processors should be ﬁnished before the common deadline. ts(τi) is the              as a product of two vectors, that is,
+start time of execution of task τi, and tf(τj) is the ﬁnish time of execution
+of task τj. Λi, j is a binary variable that takes the value of 1 if task τj                      M    xm
+                                                                                                 ⎛δm·vm2 ,k ·                                ⎞
+                                                                                    ECDdyn = ∑ ∑ ⎜                       ∑          μi · c i ⎟
+precedes task τi, otherwise takes the value of 0. Eq. (14) indicates the
+precedence constraint among tasks.
+                                                                                                m=1 k=1    ⎝           τi ∈ Vm, k          ⎠
+                                                                                                 M    xm
+    It has been shown in Eqs. (8)-(10) that the system energy con-
+                                                                                             = ∑ ∑ am, k ·bm, k = a ·b,
+sumption is the sum of leakage and dynamic part, and the leakage                                m=1 k=1                                                                      (15)
+energy is dependent on temperature while the dynamic energy is not.
+Since the leakage power varies with temperature and temperature is                  where         am, k = δm·vm2 , k       and               bm, k = ∑τi∈ Vm, k μi ·ci .   Vector
+changing with time, it is challenging to rapidly and accurately estimate            a = [a1,1, a1,2, ⋯, a1, x1, ⋯⋯,aM ,1, aM ,2, ⋯, aM , xM ]T captures processor de-
+the leakage energy consumption. To be speciﬁc, either using Eq. (7) to              pendent            parameters            and          vector        b = [b1,1, b1,2 , ⋯,
+compute the temperature at every time instance is computationally                    b1, x1, ⋯⋯,bM ,1, bM ,2 , ⋯, bM , xM ] captures task related parameters. Here,
+expensive or using thermal modeling tool (e.g., HotSpot [32]) to obtain             am, k ∈ a is referred to as the power dissipation factor of processor Pm,
+the temperature proﬁles is time consuming. Some early literatures such              bm, k ∈ b is referred to as the power dissipation factor of subset Vm, k , and
+as [18,22,31,33,34] either simply assume a constant leakage power or                μici is referred to as the power dissipation factor of task τi. It is clear that
+totally ignore it since leakage energy consumption used to be a small               a is constant since δm and vm, k are known for the given MPSoC system P
+part of overall energy consumption. However, the portion of leakage                 while b is not since it depends on the task assignment and frequency
+part in overall power dissipation is ever-increasing with the continuous            selection (e.g., Vm, k ). In addition, for a given application of V tasks,
+scaling of integrated circuits, thus, these energy models are not prac-             the sum of power dissipation factor of tasks in the application is a
+tical any more.                                                                     constant (e.g., denoted by Y ) and can be calculated as
+                                                                                       M       x              M     x                            V
+    Temperature-aware leakage energy consumption can be reduced by                  ∑m = 1 ∑km= 1 bm, k = ∑m = 1 ∑km= 1 ∑τi∈ Vm, k μi ·ci = ∑i = 1 μi ·ci = Y .
+using a task splitting method proposed in the literature Zhou et al. [16].                The power dissipation of the concerned MPSoC system
+In this method, task scheduling horizon is divided into suﬃciently short            can        be        characterized        by      using       the      vector        a=
+intervals of equal length such that the peak temperature in the interval            [a1,1, a1,2, ⋯, a1, x1, ⋯⋯,aM ,1, aM ,2, ⋯, aM , xM ]T deﬁned in Eq. (15). How-
+is constant. The leakage dominated static energy consumption during                 ever, the current form of a doesnot support a one-to-one
+
+                                                                                5
+J. Zhou et al.                                                                                                                            Journal of Systems Architecture 82 (2018) 1–11
+
+
+                                                                                         that the dynamic energy consumption is minimized when the virtual
+                                                                                         core with smaller power dissipation factor ends up with the subset of its
+                                                                                         allocated tasks having a larger power dissipation factor.
+                                                                                         Theorem         1.    If  the     virtual core       power       dissipation
+                                                                                         factorη1 ≤ η2 ≤ ⋯≤ηℓ ≤ ⋯≤ηX holds forη = [η1, η2, ⋯, ηℓ, ⋯, ηX ]T , and
+                                                                                         the sum of the corresponding task subset power dissipation
+                                                                                         factorζ1* + ζ2*+⋯+ζℓ*+⋯+ζX* is ﬁxed forζ * = [ζ1*, ζ2*, ⋯, ζℓ*, ⋯, ζX* ], then
+                                                                                         the dynamic energy consumptionECDdyn is minimized toECDdyn                   ,*
+                                                                                         ifζ1* ≥ ζ2* ≥ ⋯≥ζℓ* ≥ ⋯≥ζX* holds.
+
+                                                                                         Proof. Let ECD′ dyn denote the dynamic energy consumption where
+                                                                                         positions of exactly two elements in the energy optimal assignment ζ*
+                                                                                         are exchanged. Assume that the position of ζ κ* and ζℓ*(1 ≤ ℓ < κ ≤ X ) in
+                                                                                         ζ*        is       exchanged               for          ECD′ dyn,       then        ζ*       becomes
+                                                                                         [ζ1*, ζ2*, ⋯, ζℓ*− 1, ζ κ*, ζℓ*+ 1, ⋯, ζ κ*− 1, ζℓ*, ζ κ*+ 1, ⋯, ζX* ] in this case. According
+                                                                                         to the deﬁnition of dynamic energy consumption given in Eq. (16),
+                                                                                         we have ECDdyn             , * = η1 ζ1* + η2 ζ 2*+⋯+ ηℓ ζℓ*+⋯+ ηκ ζ κ*+⋯+ ηX ζX              *     and
+                                                                                         ECD′ dyn = η1 ζ1* + η2 ζ2*+⋯+ηℓ ζ κ*+⋯+ηκ ζℓ*+⋯+ηX ζX* . Since ECDdyn                           ,*   is
+                  Fig. 3. An illustration of the RPVC transformation.                    optimum, we have ECD′ dyn − ECDdyn                        ,*  = (η ℓ  − η κ )(ζ *
+                                                                                                                                                                         κ − ζ *
+                                                                                                                                                                               ℓ ) ≥ 0 .  It  is
+                                                                                         known that ηℓ ≤ ηκ holds for ℓ < κ, then ζℓ* ≥ ζ κ* is derived. It can be
+correspondence between the number of processors (i.e. M) and the                         observed from the above proof that for any two virtual cores of an
+                                                   M
+number of power dissipation factors (i.e. ∑m = 1 x m ) sine every processor              optimum task assignment solution, the virtual core with smaller core
+could have multiple supply voltage levels. Thereby, for the sake of easy                 power dissipation factor has a subset of tasks with larger task power
+presentation and to simplify the optimization, we perform an RPVC                        dissipation.
+transformation that takes as input the MPSoC system and outputs a                             Given            the           optimum                task         assignment            solution
+sorted virtual core system. In the transformation, a one-to-one corre-                   ζ * = [ζ1*, ζ2*, ⋯, ζℓ*− 1, ζℓ*, ζℓ*+ 1, ⋯, ζ κ*− 1, ζ κ*, ζ κ*+ 1, ⋯, ζX* ] that minimizes the
+lation between cores and core power dissipation factors is created and                   dynamic energy consumption, any feasible solution in the solution
+the virtual cores are arranged in the increasing order of their power                    space1 can be obtained by exchanging elements in ζ* multiple times. In
+dissipation factors. This can be realized by transforming a real pro-                    each iteration of the exchange, it can be deduced that ζℓ* ≥ ζ κ* holds for
+cessor model supporting multiple supply voltage and frequency levels                     ℓ < κ. In other words, the dynamic energy consumption is minimized
+into a virtual processor of multiple virtual cores each of which supports                when the virtual core with smaller power dissipation factor ends up
+a ﬁxed voltage and frequency pair, and sorting the virtual cores in the                  with the subset of its assigned tasks having a larger power dissipation
+increasing order of their power dissipation factors. The obtained virtual                factor. The theorem is proved. □
+cores are assumed to share the same characteristics as the real processor
+except for the supply voltage and frequency.
+     An illustration of the RPVC transformation is shown in Fig. 3. As                   5.3. Task-to-(virtual) core assignment heuristic
+demonstrated in the ﬁgure, the real MPSoC system P is transformed into
+a     virtual     processor Θ = {Θ1, Θ2 , ⋯, Θℓ , ⋯, ΘX − 1, ΘX },         where             Assigning multiple tasks to individual cores is well known as an NP-
+         M
+X = ∑m = 1 x m and every core Θℓ ∈ Θ (1 ≤ ℓ ≤ X ) is supplied with a                     hard problem, which necessitates the designing of a sub-optimal task
+ﬁxed voltage and frequency pair (vℓ, fℓ). The virtual core system Θ is                   assignment heuristics. In this work, we propose a sub-optimal task as-
+then characterized by vector η = [η1, η2, ⋯, ηℓ, ⋯, ηX − 1, ηX ]T and                    signment heuristics which is motivated by the theorem presented in
+η1 ≤ η2 ≤ ⋯≤ηℓ ≤ ⋯≤ηX − 1 ≤ ηX holds, where ηℓ = δℓ·vℓ2 is referred to                   Section 5.2, that is, assigning the subset having a larger power dis-
+as the power dissipation factor of virtual core Θℓ. Accordingly, the                     sipation factor to the virtual core having a smaller power dissipation
+power dissipation of subsets assigned to virtual cores can be re-                        factor can minimize the dynamic energy consumption. The heuristics
+presented        by       vector     ζ = [ζ1, ζ2, ⋯, ζ ℓ, ⋯, ζX − 1, ζX ], where         operates as follows. Tasks in the subset with the maximum power dis-
+ζ ℓ = ∑τi∈ Vℓ μi ·ci is referred to as the power dissipation factor of subset            sipation factor is assigned to the virtual core with the minimum power
+assigned to core Θℓ and ζ1 + ζ2 + ⋯+ζ ℓ + ⋯+ζX = Y holds. Thus the                       dissipation factor, and tasks in the subset with the next maximum
+dynamic energy consumption given in Eq. (15) can be expressed as the                     power dissipation factor is assigned to the virtual core with the next
+product of η and ζ, that is,                                                             minimum power dissipation factor. This process repeats until all subsets
+ECDdyn = η ·ζ .                                                                          of tasks are assigned to individual cores. In addition, the constraints of
+                                                                             (16)
+                                                                                         task deadline and precedence, and system peak temperature limit are
+Through the RPVC transformation, our problem of assigning tasks to                       examined during the task assignment.
+real processors and determining operating frequency of assigned tasks                        The details of the task assignment heuristics are described in
+for energy minimization can be converted into the problem of designing                   Algorithm 1. It partitions the tasks in task set (i.e., application V ) into
+an energy-optimum task-to-(virtual) core assignment.                                     subsets, then assigns subsets of selected tasks to individual virtual cores.
+                                                                                         Since the X virtual cores in set Θ are sorted in the non-decreasing order
+5.2. Optimality analysis of task-to-(virtual) core assignment                            of core power dissipation factors, the focus of the algorithm becomes to
+                                                                                         derive a task-to-(virtual) core assignment that partitions tasks into X
+    As we have pointed out earlier, the dynamic energy consumption                       subsets, arranged in the non-increasing order of subset power dissipa-
+can be minimized by optimally assigning V tasks to X virtual cores.                      tion factors, then assigns them to corresponding virtual cores. This can
+Let ζ * = [ζ1*, ζ2*, ⋯, ζℓ*, ⋯, ζX* − 1, ζX* ] denote the power dissipation factor       be achieved by assigning tasks with larger task power dissipation
+of the optimum task assignment solution, where ζℓ* is the power dis-
+sipation factor of task subset assigned to processor ℓ. The power dis-                     1
+                                                                                             The feasible solution space includes all task assignments that meet system timing and
+sipation factor vector η = [η1, η2, ⋯, ηℓ, ⋯, ηX − 1, ηX ]T of the virtual core          temperature constraints. The optimum task assignment consumes minimum energy in the
+system Θ is also given. We then present a theorem below which shows                      solution space.
+
+
+                                                                                     6
+J. Zhou et al.                                                                                                                     Journal of Systems Architecture 82 (2018) 1–11
+
+
+Input: Application represented by G = (V, E), MPSoC system represented by P, and peak temperature limit T max
+Require: Maintain a task queue Qtask where independent tasks are in the non-increasing order of their power dissipation factors
+    and dependent tasks are in sequence to satisfy their precedence constraints in E
+Output: Task-to-(virtual) core assignment represented by subsets V1 , V2 , · · · , V , · · · , VX
+ 1: transform the real processor system P to the virtual core system Θ by Θ = RPVC(P), where the X cores of Θ are in the
+    non-decreasing order of power dissipation factors;
+ 2: for  = 1 to X do
+ 3:    initialize the utilization and subset of virtual core Θ by U(Θ ) = 0 and V = ∅, respectively;
+ 4: end for
+ 5: move all tasks in application V to the queue Qtask ;
+ 6:  = 1;
+ 7: for i = 1 to len(Qtask ) do
+ 8:     f lag[i] = true;
+ 9: end for
+10: create the queue Qassign to copy the assigned tasks and initialize the queue to ∅;
+11: while Qtask  NULL &&  ≤ X do
+12:    create a temporary subset Vtemp ;
+13:    ET (V ) = 0;
+14:    for i = 1 to len(Qtask ) do
+15:        Vtemp = V + τi ;
+16:        ET (Vtemp ) = ET (V ) + ET i, ;
+17:        if ET (Vtemp ) ≤ D && U(Θ ) + U(τi , Θ ) + U(Θ ) ≤ 1 && T Dpeak (Vtemp ) ≤ T max then
+18:           for j = 1 to len(Qassign ) do
+19:              if t s (τi ) < t f (τ j ) · Λi, j then
+20:                  f lag[i] = false; // Precedence is violated
+21:                 break;
+22:              end if
+23:           end for
+24:           if f lag[i] == true then
+25:              V = V + τi ;
+26:              U(Θ ) = U(Θ ) + U(τi , Θ );
+27:              ET (V ) = ET (V ) + ET i, ;
+28:              Qtask = Qtask − τi ;
+29:              Qassign = Qassign + τi ;
+30:           end if
+31:        end if
+32:    end for // Use first-fit to group tasks into subsets
+33:     =  + 1;
+34: end while
+35: if Qtask  NULL &&  > X then
+36:    exit(1); // Exit when infeasible
+37: end if
+38: return the subsets V1 , V2 , · · · , V , · · · , VX ;
+
+                                         Algorithm 1. Energy-eﬃcient task-to-(virtual) core assignment under system constraints.
+
+
+factors to virtual cores with smaller core power dissipation factors.                  account this constraint when assigning tasks to virtual cores. Let ETi, ℓ,
+    For the sake of better understanding of Algorithm 1, the deﬁnition                 ET (Vℓ), and ET (Vtemp) denote the execution time of task τi on virtual
+of some notations used in the algorithm are listed in Table 3. As shown                core Θℓ, tasks assigned to virtual core Θℓ, and temporary task subset
+in the table, U(τi, Θℓ) denotes the utilization of task τi if it is assigned to        Vtemp, respectively. All of ETi, ℓ, ET (Vℓ), and ET (Vtemp) can be calcu-
+virtual core Θℓ, which is calculated as the quotient of task execution                 lated based on Eq. (1).
+time and frame size. U(Θℓ) denotes the utilization of virtual core Θℓ,                     Inputs to Algorithm 1 are the application G = (V , E ), MPSoC
+which is calculated as the sum of utilization of tasks assigned to the                 system P, and peak temperature limit Tmax . In addition to these inputs,
+core. Let Θℓ represent the virtual cores that are transformed from the                 the algorithm maintains a task queue Qtask, in which tasks are classiﬁed
+same real processor as Θℓ is, then the utilization of such cores is re-                into two categories. That is, tasks without precedence constraints are
+presented by U (Θℓ ) . Due to the processor capacity constraint, the sum               regarded as independent tasks while tasks with precedence constraints
+of utilization of all the virtual cores transformed from the same real                 are regarded as dependent tasks. The independent tasks are sorted in
+processor cannot be greater than 1, which is expressed as                              the non-increasing order of power dissipation factors for following the
+U (Θℓ) + U (τi, Θℓ) + U (Θℓ ) ≤ 1. The algorithm needs to take into                    idea of our heuristics, in order to construct the energy-optimum task
+
+
+                                                                                   7
+J. Zhou et al.                                                                                                                 Journal of Systems Architecture 82 (2018) 1–11
+
+
+assignment. The dependent tasks are sorted to satisfy task precedence                 design constraints [28]. The worst-ﬁt based partition heuristics assigns
+constraints in E , which can be achieved by topological sorting algo-                 the task with the highest priority to the core with maximum remaining
+rithm [22]. The head and tail of task queue Qtask are the entry task and              capacity. A*-search [35] is an optimum path ﬁnding algorithm that
+end task, respectively.                                                               combines heuristic approaches like greedy best-ﬁrst-search and formal
+    The algorithm ﬁrst transforms the MPSoC system to a virtual core                  approaches like Dijsktras algorithm. It is widely used in pathﬁnding and
+system using Θ = RPVC (P ) where the cores are arranged in the non-                   graph traversal. In this experiment, we take the A*-search algorithm as
+decreasing order of power dissipation factors, and initializes the utili-             a benchmarking method to ﬁnd the optimal solution of task assignment
+zation and subset of virtual cores using U (Θℓ) = 0 and Vℓ = ⌀ (lines                 in terms of energy eﬃciency by treating the assignment of a task to a
+1–4). All the tasks in application V are moved to queue Qtask and the                 core as a path and the energy consumption of the task on its assigned
+core index ℓ is set to 1 (lines 5–6). Lines 7–9 initialize the value of ﬂag[i]        core as the weight of the path. Finding the optimal task assignment is
+for every task in the queue Qtask, which is utilized to judge if the pre-             then equivalent to ﬁnding the path with minimal overall weight from
+cedence constraint of task τi is satisﬁed. The queue Qassign is created to            the entry task to the end task.
+copy the assigned tasks and is initialized to empty (line 10). The al-                    All the algorithms were implemented in C++, and the simulations
+gorithm then iteratively implements the process of task-to-(virtual) core             were performed on a machine with Intel Dual-Core 3.0 GHz processor
+assignment if the queue Qtask is not empty and not all the cores in Θ                 and 8GB memory. For the sake of fair comparison, the same simulation
+have been considered (lines 11–34).                                                   settings are adopted for our heuristic algorithm and benchmarking al-
+    In each round of iteration, lines 12–13 create a temporary subset                 gorithms HWGA [28] and A*-search [35].
+Vtemp for feasibility test of assigning tasks to virtual core Θℓ and in-
+itialize the execution time ET (Vℓ) of tasks in subset Vℓ, and lines 14–32
+                                                                                      6.1. Simulation for synthetic real-time tasks
+iteratively assign tasks in queue Qtask to core Θℓ and construct subset Vℓ
+of tasks in a ﬁrst-ﬁt manner according to the schedulability require-
+                                                                                          The simulated MPSoC system P is assumed to consist of 8 inter-
+ment. During the assignment of task in queue Qtask to core Θℓ, a tem-
+                                                                                      connected heterogeneous processing units (i.e., M = 8), and each pro-
+porary subset Vtemp is constructed by copying the subset Vℓ and task τi
+                                                                                      cessing unit is assumed to support multiple discrete supply voltage and
+(line 15) and used to facilitate the feasibility analysis of assigning task τi
+                                                                                      frequency pairs. The parameters of the simulated platform [28], in-
+to core Θℓ under the constraints of task deadline (i.e., ET (Vtemp) ≤ D ),
+                                                                                      cluding the maximal frequency f mmax , hardware-dependent constants
+processor capacity (i.e., U (Θℓ) + U (τi, Θℓ) + U (Θℓ ) ≤ 1), and peak
+                                                                                      αm, γm, δm, thermal resistance Rm, and thermal capacitance Cm of pro-
+temperature (i.e., TDpeak (Vtemp) ≤ T max ) (lines 16–17). Lines 18–23
+                                                                                      cessor Pm, are given in Table 4. The number of frequency levels sup-
+check whether the task precedence constraint (i.e., ts(τi) < tf(τj) · Λi, j) is
+                                                                                      ported by processor Pm, denoted by xm, is assumed to be varied from 3
+satisﬁed or not. If the assignment can satisfy these constraints, the task
+                                                                                      to 5 for 1 ≤ m ≤ M. In other words, each processor could have three
+is assigned to the core, then task τi is added to subset Vℓ (line 25), the
+                                                                                      levels of frequency at least and ﬁve levels of frequency at most. Given
+utilization U(Θℓ) of core Θℓ is increased by U (Θℓ) = U (Θℓ) + U (τi, Θℓ)
+                                                                                      the maximal frequency f mmax of processor Pm, the other x m − 1 fre-
+(line 26), the execution time ET (Vℓ) of subset Vℓ is updated to
+                                                                                      quency levels are derived by the decrement of f mmax with a step size of
+ET (Vℓ) + ETi,ℓ (line 27). Since task τi is assigned to core Θℓ, the queue
+                                                                                      0.2. The corresponding parameters such as hardware-dependent con-
+Qtask of unassigned tasks and the queue Qassign of assigned tasks both
+                                                                                      stants of the x m − 1 frequency levels can be obtained using curve ﬁtting
+need to be updated by Qtask = Qtask − τi (line 28) and Qassign = Qassign + τi
+                                                                                      techniques [26]. 30 synthetic real-time applications are utilized in the
+(line 29), respectively. The procedure then moves to the next iteration
+                                                                                      simulation, where the number of real-time tasks in an application is set
+and considers the allocation of the next task in queue Qtask. Otherwise,
+                                                                                      to 100. The real-time tasks in an application are generated by assuming
+the task is not assigned and the procedure directly moves to the next
+                                                                                      a common deadline D and the worst case execution cycles of tasks in the
+iteration. If there is no feasible schedule for the system under the
+                                                                                      application are assumed to be in the range of [4 × 107, 6 × 108].
+constraints, the algorithm exits (lines 35–37). The target task-to-(vir-
+                                                                                      Precedence constraint is applied to randomly selected tasks in the ap-
+tual) core assignment, represented by subsets V1, V2, ⋯, Vℓ, ⋯, VX ,
+                                                                                      plication. The task activity factors μ are uniformly distributed in the
+are returned in line 38.
+                                                                                      interval [0.4, 1], which demonstrates the heterogeneous nature of
+    Algorithm 1 is developed to generate an energy-eﬃcient task-to-
+                                                                                      tasks [24].
+(virtual) core assignment under system requirements. Once the task-to-
+                                                                                          Table 5 shows the energy consumed by the system when executing
+(virtual) core assignment is generated, the task-to-(real) processor as-
+                                                                                      30 synthetic real-time applications under four thermal constraints using
+signment can be obtained accordingly. The execution of tasks on each
+                                                                                      our proposed algorithm and two benchmarking algorithms HWGA [28]
+real processor follows the order that they are assigned to the virtual
+                                                                                      and A*-search [35]. In addition to the energy consumption, the sche-
+cores of the processor. Since tasks in the frame-based application are
+                                                                                      dule feasibility of these applications using the three algorithms under
+executed consecutively [2,22,33], the schedule of tasks on processors
+                                                                                      the four thermal constraints are also given in the table. The thermal
+can be readily derived when the assignment and execution order of
+                                                                                      constraint takes the values of T max = 65∘ , 70°, 75°, and 80°. NF indicates
+tasks are determined. The time complexity of Algorithm 1 is O ( V 2 ·X ),
+                                                                                      that tasks in an application cannot be feasibly scheduled under the
+where V is the number of tasks in set V and X is the number of
+                                                                                      constraints of task deadline, task precedence, and peak temperature
+virtual cores.
+                                                                                      limit. The schedule feasibility, denoted by Feasibility, is calculated as the
+
+6. Experimental results                                                               Table 4
+                                                                                      Parameters of the simulated platform [28].
+    Two sets of simulation experiments have been carried out to vali-
+date our task assignment heuristics in energy eﬃciency under the de-                    P         f mmax      αm             γm             δm           Rm            Cm
+sign constraints. In the ﬁrst set of simulations, synthetic real-time tasks
+                                                                                        P1       3.3          20.5060        0.1666         3.656        0.282         340
+were generated to verify our heuristics while in the second set of si-                  P2       3.4          5.0187         0.1942         2.138        0.487         295
+mulations, real-life benchmarks were utilized to validate our heuristics.               P3       3.3          12.7880        0.2043         3.645        0.288         320
+In the two sets of simulations, we compare the energy consumption of                    P4       3.0          15.6262        0.1942         4.556        0.238         320
+our task assignment heuristics with that of hybrid worst-ﬁt genetic al-                 P5       3.2          20.6393        0.1574         3.204        0.278         295
+                                                                                        P6       3.1          11.9759        0.1586         2.719        0.480         255
+gorithm (HWGA) [28] and A*-search [35]. HWGA integrates a worst-ﬁt
+                                                                                        P7       3.0          10.3490        0.1124         2.074        0.661         335
+based partition heuristics with the genetic algorithm to generate a task                P8       2.6          13.1568        0.1754         2.332        0.680         380
+assignment that reduces the energy consumption while satisfying all the
+
+                                                                                  8
+J. Zhou et al.                                                                                                                         Journal of Systems Architecture 82 (2018) 1–11
+
+
+Table 5
+Energy consumption of 30 applications and schedule feasibility using our proposed algorithm and two benchmarking algorithms under four system thermal constraints.
+
+                  T max = 65 ∘C                             T max = 70 ∘C                             T max = 75 ∘C                          T max = 80 ∘C
+
+  Application     Proposed        HWGA         A*-search    Proposed        HWGA         A*-search    Proposed        HWGA      A*-search    Proposed        HWGA        A*-search
+
+  1               482.228         506.427      476.568      452.089         467.988      446.725      421.950         429.491   415.918      391.811         406.044     385.826
+  2               490.698         497.805      485.312      460.029         472.000      453.982      429.361         436.778   424.346      398.692         413.229     393.632
+  3               507.584         512.605      498.251      475.860         481.568      470.584      444.136         451.924   436.904      412.412         419.549     406.288
+  4               453.556         460.159      444.299      425.208         446.328      419.479      396.861         412.671   390.915      368.514         388.233     363.365
+  5               457.452         470.486      449.825      428.862         441.862      423.350      400.271         413.017   394.670      371.680         390.136     366.284
+  6               477.664         489.138      NF           447.810         466.089      440.326      417.956         424.602   411.798      388.102         400.758     382.957
+  7               531.941         NF           526.061      498.695         512.196      491.594      465.448         471.996   458.844      432.202         444.893     425.498
+  8               446.369         452.795      432.817      418.471         431.285      412.138      390.573         402.029   382.654      362.675         383.410     355.570
+  9               505.489         NF           NF           473.896         NF           NF           442.303         453.935   436.803      410.710         418.109     405.396
+  10              485.435         494.051      478.776      455.095         461.686      449.022      424.755         439.897   418.345      394.416         409.431     389.357
+  11              488.123         498.365      481.883      457.615         481.264      450.403      427.107         443.397   419.262      396.600         405.428     391.330
+  12              500.842         513.972      494.739      469.539         479.676      462.303      438.237         445.092   429.675      406.934         427.327     401.831
+  13              487.772         506.865      480.653      457.286         471.735      451.516      426.800         442.913   421.195      396.315         410.895     389.049
+  14              480.649         495.976      473.142      450.609         479.333      444.715      420.568         432.750   408.831      390.528         404.564     385.509
+  15              504.477         516.137      492.976      472.947         481.738      466.518      441.417         451.412   428.322      409.888         416.215     404.142
+  16              476.658         488.782      467.039      446.867         458.826      437.785      417.076         428.075   412.060      387.285         402.364     377.406
+  17              469.505         474.798      464.176      440.161         446.242      432.030      410.817         422.121   405.650      381.472         390.985     373.809
+  18              498.723         507.706      NF           467.553         476.240      NF           436.383         455.402   NF           405.213         416.184     398.115
+  19              427.506         439.832      421.298      400.787         426.220      392.632      374.068         395.864   366.580      347.349         365.681     342.165
+  20              519.028         533.134      513.742      486.589         498.886      479.880      454.149         464.580   446.207      421.710         430.893     413.132
+  21              503.147         512.793      495.077      471.700         483.977      464.183      440.253         445.522   432.895      408.807         425.162     402.179
+  22              486.329         501.361      477.218      455.933         463.495      450.749      425.538         440.754   419.941      395.142         407.663     389.943
+  23              502.422         518.660      496.205      471.021         478.478      461.182      439.619         450.448   428.530      408.218         423.009     400.609
+  24              508.554         520.061      502.602      476.769         484.221      471.418      444.985         450.425   439.078      413.200         418.294     405.728
+  25              483.440         490.729      NF           453.225         464.227      NF           423.010         436.123   NF           392.795         400.772     384.852
+  26              492.310         498.886      485.066      461.540         479.612      456.422      430.771         441.679   422.911      400.002         417.019     392.488
+  27              514.671         520.028      508.552      482.504         496.335      476.282      450.337         460.938   442.237      418.170         423.311     412.986
+  28              487.877         500.144      480.047      457.385         465.145      452.210      426.893         435.066   416.592      396.400         411.564     390.579
+  29              455.779         485.258      NF           427.293         461.245      419.694      398.807         417.818   392.252      370.320         393.833     360.958
+  30              475.506         485.741      468.291      445.787         465.433      437.745      416.068         434.566   408.832      386.349         392.088     377.816
+  Eavg            486.724         496.168      479.985      456.304         469.77       448.699      425.884         437.710   418.295      395.464         408.568     388.960
+  Feasibility     100%            93.3%        83.3%        100%            96.7%        90%          100%            100%      93.3%        100%            100%        100%
+
+
+
+
+                                                                                                in our task assignments. As a result, a higher schedule feasibility can be
+Table 6                                                                                         achieved by using our algorithm, as is shown in Table 5.
+Parameters of the real-life benchmarks [31].
+
+  Application    Description       Expected task     Standard       Number of tasks             6.2. Simulation for real-Life benchmarks
+                                   execution time    deviation      in the application
+                                                                                                    A heterogeneous MPSoC system [31] that consists of an AMD Athlon
+  mpegplay       MPEG video        113.4             38.9           30
+                 decoder
+                                                                                                processor with three supply voltage/frequency levels and an TI DSP
+  madplay        MP3 audio         43.1              34.8           40                          processor with two supply voltage/frequency levels is adopted in this
+                 decoder                                                                        simulation. The three supply voltage and frequency pairs of AMD
+  tmndec         H.263 video       89.5              34.7           20                          Athlon are (0.89V,1.8GHz), (1.12V,2.4GHz), (1.34V,3GHz), and the
+                 decoder
+                                                                                                two supply voltage and frequency pairs of TI DSP are (0.98V,2.0GHz),
+  toast          GSM speech        5.6               4.7            30
+                 encoder                                                                        (1.42V,3.0GHz) [31], respectively. Four real-life multimedia applica-
+                                                                                                tions, that is, mpegplay, madplay, tmndec, and toast, are adopted for
+                                                                                                evaluations. The parameters of tasks in the four practical applications,
+ratio of the number of applications that can be successfully scheduled to                       including the expected value and standard deviation of task execution
+the total number of applications adopted in the test.                                           time, and the number of tasks in each application, are listed in Table 6.
+    As can be seen in the table, our proposed algorithm consumes less                               Table 7 shows the energy consumption, schedule feasibility, and
+energy for a given thermal constraint when compared to HWGA [28],                               peak temperature of four benchmarks using our proposed algorithm
+but more energy for a given thermal constraint when compared to A*-                             and two benchmarking algorithms under four system thermal con-
+search [35]. For example, the average energy consumption Eavg of 30                             straints (i.e., T max = 65∘ , 70°, 75°, and 80°). From the simulation results
+applications using our proposed algorithm, HWGA [28], and A*-search                             of real-life benchmarks, we can draw the same conclusion as in Table 5
+[35] under the thermal constraint of T max = 80∘ are 395.464, 408.568,                          that our algorithm consumes less energy when compared to HWGA [28]
+and 388.960, respectively. The results in the table demonstrate that our                        but higher energy when compared to A*-search [35] for a given thermal
+algorithm is more eﬃcient in saving energy than HWGA [28], which is                             constraint. For instance, the average energy consumption Eavg of four
+due to the energy-optimality of our task assignment method, as ana-                             benchmarks using our algorithm, HWGA [28], and A*-search [35]
+lyzed in Section 5.2.                                                                           under the thermal constraint of T max = 75∘ are 122.975, 129.001, and
+    A*-search [35] consumes the least energy among the three algo-                              113.020, respectively.
+rithms, but incurs the lowest schedule feasibility. This is because it                              In this set of simulations, all the four benchmarks can be feasibly
+attempts to ﬁnd an energy-optimal solution without considering the                              scheduled under the design constraints, thus we further compare the
+design constraints. Unlike A*-search [35], the constraints of task                              peak temperature of the four benchmarks using our algorithm, HWGA
+deadline, task precedence and peak temperature limit are all examined                           [28], and A*-search [35]. As demonstrated in Table 6, the peak
+
+                                                                                            9
+J. Zhou et al.                                                                                                                                Journal of Systems Architecture 82 (2018) 1–11
+
+
+Table 7
+Energy consumption, schedule feasibility, and peak temperature of four benchmarks using our proposed algorithm and two benchmarking algorithms under four system thermal
+constraints.
+
+                  T max = 65 ∘C                               T max = 70 ∘C                                T max = 75 ∘C                             T max = 80 ∘C
+
+  Application     Proposed        HWGA         A*-search      Proposed        HWGA         A*-search       Proposed        HWGA       A*-search      Proposed        HWGA        A*-search
+
+  mpegplay        275.932         284.663      266.606        258.686         264.093      231.949         241.441         251.042    230.639        224.195         234.021     213.645
+  madplay         153.966         159.139      138.501        144.343         151.029      128.777         134.720         142.019    122.580        125.098         131.144     116.070
+  tmndec          119.256         125.494      106.916        111.802         124.371      104.443         104.349         109.790    88.681         96.895          101.948     91.080
+  toast           13.017          14.303       11.716         12.204          13.363       10.630          11.390          13.152     10.179         10.577          11.723      9.463
+  Eavg            140.543         145.900      130.935        131.759         138.214      118.950         122.975         129.001    113.020        114.191         119.709     107.565
+  Feasibility     100%            100%         100%           100%            100%         100%            100%            100%       100%           100%            100%        100%
+   peak
+  Tavg            61.051          61.752       64.130         66.328          67.494       69.822          71.682          72.363     74.643         75.154          77.602      79.349
+
+
+
+               peak
+temperature Tavg    achieved by our algorithm is lower than that of                                      810–823.
+benchmarking algorithms HWGA [28] and A*-search [35] on average.                                     [9] Y. Wang, K. Li, H. Chen, L. He, K. Li, Energy-aware data allocation and task sche-
+                                                                                                         duling on heterogeneous multiprocessor systems with time constraints, IEEE Trans.
+Taking the case of T max = 65∘ as an example, the average peak tem-
+                                                                                                         Emerg. Top. Comput. 2 (2) (2014) 134–148.
+perature of four benchmarks achieved by our algorithm, HWGA [28],                                   [10] L. Zhang, K. Li, C. Li, K. Li, Bi-objective workﬂow scheduling of the energy con-
+and A*-search [35] are 61.051°, 61.752°, and 64.130°, respectively.                                      sumption and reliability in heterogeneous computing systems, Inf. Sci. 379 (2017)
+                                                                                                         241–256.
+                                                                                                    [11] H. Zahaf, A. Benyaminab, R. Olejnika, G. Lipari, Energy-eﬃcient scheduling for
+7. Conclusion                                                                                            moldable real-time tasks on heterogeneous computing platforms, J. Syst. Archit. 74
+                                                                                                         (2017) 46–60.
+    In this paper, we propose a two-level scheduling approach to reduce                             [12] W. Hung, Y. Xie, N. Vijaykrishnan, M. Kandemir, Thermal-aware task allocation and
+                                                                                                         scheduling for embedded systems, The Proceedings of Design, Automation, & Test
+energy consumption of DVFS-enabled heterogeneous MPSoCs under                                            in Europe (DATE), (2005), pp. 898–899.
+constraints of task deadline, task precedence, and peak temperature                                 [13] Y. Liu, R. Dick, L. Shang, H. Yang, Thermal vs energy optimization for DVFS-en-
+limit. The proposed algorithm computes high quality scheduling solu-                                     abled processors in embedded systems, The Proceedings of the International
+                                                                                                         Symposium on Quality Electronic Design (ISQED), (2007), pp. 204–209.
+tions in two correlated optimization steps of diﬀerent scales. At the                               [14] S. Saha, Y. Lu, J. Deogun, Thermal-constrained energy-aware partitioning for het-
+processor level, a multi-processor model supporting DVFS is trans-                                       erogeneous multi-core multiprocessor real-time systems, The Proceedings of the
+formed to a virtual multi-processor model supporting only one ﬁxed                                       International Conference on Embedded and Real-Time Computing Systems and
+                                                                                                         Applications (RTCSA), (2012), pp. 41–50.
+frequency level. At the core level, real-time tasks are assigned to in-                             [15] B. Barrefors, Y. Lu, S. Saha, J. Deogun, A novel thermal-constrained energy-aware
+dividual cores of the virtual processor under the constraints of task                                    partitioning algorithm for heterogeneous multiprocessor real-time systems, The
+precedence and peak temperature limit. Two sets of simulation ex-                                        Proceedings of the International Conference on Performance Computing and
+                                                                                                         Communications (IPCCC), (2014), pp. 1–8.
+periments have been conducted to validate the eﬀectiveness of the
+                                                                                                    [16] J. Zhou, T. Wei, M. Chen, Y. Ma, X. Hu, Thermal-aware task scheduling for energy
+proposed algorithm in saving energy and improving schedule feasi-                                        minimization in heterogeneous real-time MPSoc systems, IEEE Trans. Comput.
+bility. Simulation results have demonstrated that the proposed algo-                                     Aided Des. Integr. Circuits Syst. 35 (8) (2016) 1269–1282.
+                                                                                                    [17] L. He, H. Zhu, S. Jarvis, Developing graph-based co-scheduling algorithms on
+rithm achieves better performance when compared to the bench-
+                                                                                                         multicore computers, IEEE Trans. Parallel Distrib. Syst. 27 (6) (2016) 1617–1632.
+marking schemes.                                                                                    [18] K. Li, Scheduling precedence constrained tasks with reduced processor energy on
+                                                                                                         multiprocessor computers, IEEE Trans. Comput. 61 (12) (2012) 1668–1681.
+Acknowledgements                                                                                    [19] M. Gerards, J. Hurink, J. Kuper, On the interplay between global DVFS and sche-
+                                                                                                         duling tasks with precedence constraints, IEEE Trans. Comput. 64 (6) (2015)
+                                                                                                         1742–1754.
+   This work was partially supported by Natural Science Foundation of                               [20] Y. Lee, A. Zomaya, Minimizing energy consumption for precedence-constrained
+Shanghai under the grant 16ZR1409000, and National Natural Science                                       applications using dynamic voltage scaling, The Proceedings of the International
+                                                                                                         Symposium on Cluster Computing and the Grid (CCGRID), (2009), pp. 92–99.
+Foundation of China under the grant 61672230.                                                       [21] J. Liu, K. Li, D. Zhu, J. Han, K. Li, Minimizing cost of scheduling tasks on hetero-
+                                                                                                         geneous multicore embedded systems, ACM Trans. Embedded Comput. Syst. 16 (2)
+References                                                                                               (2016) 1–25.
+                                                                                                    [22] B. Zhao, H. Aydin, D. Zhu, On maximizing reliability of real-time embedded ap-
+                                                                                                         plications under hard energy constraint, IEEE Trans. Ind. Inf. 6 (3) (2010) 316–328.
+ [1] J. Srinivasan, S. Adve, P. Bose, J. Rivers, Exploiting structural duplication for life-        [23] Y. Liu, R. Dick, L. Shang, H. Yang, Thermal vs energy optimization for DVFS-en-
+     time reliability enhancement, The Proceedings of the International Symposium on                     abled processors in embedded systems, The Proceedings of the International
+     Computer Architecture (ISCA), (2005), pp. 520–531.                                                  Symposium on Quality Electronic Design (ISQED), (2007), pp. 204–209.
+ [2] J. Zhou, X. Hu, Y. Ma, T. Wei, Balancing lifetime and soft-error reliability to im-            [24] H. Huang, V. Chaturvedi, G. Quan, J. Fan, M. Qiu, Throughput maximization for
+     prove system availability, The Proceedings of Asia and South Paciﬁc Design                          periodic real-time systems under the maximal temperature constraint, ACM Trans.
+     Automation Conference (ASPDAC), (2016), pp. 685–690.                                                Embedded Comput. Syst. 13 (2014). 2s.
+ [3] J. Zhou, J. Yan, J. Chen, T. Wei, Peak temperature minimization via task allocation            [25] W. Liao, L. He, K. Lepak, Temperature and supply voltage aware performance and
+     and splitting for heterogeneous MPSoC real-time systems, J. Signal Process. Syst. 84                power modeling at microarchitecture level, IEEE Trans. Comput. Aided Des. Integr.
+     (1) (2016) 111–121.                                                                                 Circuits Syst. 24 (7) (2006) 1042–1053.
+ [4] R. Kumar, D.M. Tullsen, Core architecture optimization for heterogeneous chip                  [26] G. Quan, V. Chaturvedi, Feasibility analysis for temperature constraint hard real-
+     multiprocessors, The Proceedings of International Conference on Parallel                            time periodic tasks, IEEE Trans. Ind. Inf. 6 (3) (2010) 329–339.
+     Architectures and Compilation Techniques (PACT), (2006), pp. 23–32.                            [27] N. Weste, K. Eshraghian, Principles of CMOS VLSI Design: A System Perspective,
+ [5] J. Zhou, J. Yan, T. Wei, M. Chen, X. Hu, Energy-adaptive scheduling of imprecise                    Addison-Wesley Publishing Company, 1992.
+     computation tasks for QoS optimization in real-time MPSoC systems, The                         [28] S. Saha, Y. Lu, J. Deogun, Thermal-constrained energy-aware partitioning for het-
+     Proceedings of Design, Automation & Test in Europe (DATE), (2017), pp.                              erogeneous multi-core multiprocessor real-time systems, The Proceedings of the
+     1402–1407.                                                                                          International Conference on Embedded and Real-Time Computing Systems and
+ [6] F. Wang, C. Nicopoulos, X. Wu, X. Xie, N. Vijaykrishnan, Variation-aware task al-                   Applications (RTCSA), (2012), pp. 41–50.
+     location and scheduling for MPSoC, The Proceedings of the International                        [29] J. Zhou, T. Wei, Stochastic thermal-aware real-time task scheduling with con-
+     Conference on Computer-Aided Design (ICCAD), (2007), pp. 598–603.                                   siderations of soft errors, 102 (2015), pp. 123–133.
+ [7] A. Colin, A. Kandhalu, R. Rajkumar, Energy-eﬃcient allocation of real-time appli-              [30] K. Skadron, M. Stan, K. Sankaranarayanan, W. Huang, S. Velusamy, D. Tarjan,
+     cations onto heterogeneous processors, The Proceedings of the International                         Temperature-aware microarchitecture: modeling and implementation, ACM Trans.
+     Conference on Embedded and Real-Time Computing Systems and Applications                             Archit. Code Optim. 1 (1) (2004) 94–125.
+     (RTCSA), (2014), pp. 1–10.                                                                     [31] K. Li, X. Tang, K. Li, Energy-eﬃcient stochastic task scheduling on heterogeneous
+ [8] D. Li, J. Wu, Minimizing energy consumption for frame-based tasks on hetero-                        computing systems, IEEE Trans. Parallel Distrib. Syst. 25 (11) (2014) 2867–2876.
+     geneous multiprocessor platforms, IEEE Trans. Parallel Distrib. Syst. 26 (3) (2015)            [32] Hotspot. University of Virginia, [Online]. Available: http://lava.cs.virginia.edu/
+
+
+                                                                                               10
+J. Zhou et al.                                                                                                                              Journal of Systems Architecture 82 (2018) 1–11
+
+
+     HotSpot.                                                                                                                  Tongquan Wei received his Ph.D. degree in electrical en-
+[33] D. Zhu, R. Melhem, B. Childers, Scheduling with dynamic voltage/speed adjustment                                          gineering from Michigan Technological University in 2009.
+     using slack reclamation in multiprocessor real-time systems, The Proceedings of the                                       He is currently an associate professor in the Department of
+     International Symposium on Real-Time Systems (RTSS), (2001), pp. 84–94.                                                   Computer Science and Technology at the East China
+[34] J. Chen, H. Hsu, T. Kuo, Leakage-aware energy-eﬃcient scheduling of real-time                                             Normal University. His research interests are in the areas of
+     tasks in multiprocessor systems, The Proceedings of the International Symposium                                           Internet of Things, real-time embedded systems, green and
+     on Real-Time and Embedded Technology and Applications (RTAS), (2006), pp.                                                 reliable computing, parallel and distributed systems, and
+     408–417.                                                                                                                  cloud computing. He serves as a Regional Editor for Journal
+[35] S. Russell, P. Norvig, Artiﬁcial intelligence: a modern approach, third ed., Prentice                                     of Circuits, Systems, and Computers since 2012. He is a
+     Hall, 2009.                                                                                                               member of the IEEE.
+
+
+
+                              Junlong Zhou received the Ph.D. degree in computer sci-
+                              ence from East China Normal University, Shanghai, China,
+                              in 2017. He was a research visitor with the University of
+                              Notre Dame, Notre Dame, IN, USA, during 2014–2015. He                                            Mingsong Chen (S’08–M’11) received the B.S. and M.E.
+                              is currently an assistant professor with the School of                                           degrees from Department of Computer Science and
+                              Computer Science and Engineering, Nanjing University of                                          Technology, Nanjing University, Nanjing, China, in 2003
+                              Science and Technology, Nanjing, China. His research in-                                         and 2006 respectively, and the Ph.D. degree in computer
+                              terests include real-time embedded systems, cyber physical                                       engineering from the University of Florida, Gainesville, in
+                              systems, and cloud computing. Dr. Zhou has been an                                               2010. He is currently a full Professor with the Department
+                              Associate Editor for the Journal of Circuits, Systems, and                                       of Embedded Software and Systems of East China Normal
+                              Computers since 2017. He is a member of the IEEE.                                                University. His research interests are in the area of design
+                                                                                                                               automation of cyber-physical systems, formal veriﬁcation
+                                                                                                                               techniques and mobile cloud computing. He is a member of
+                                                                                                                               the IEEE.
+
+                              Jianming Yan received the masterí¯s degree from the
+                              Department of Computer Science and Technology, East
+                              China Normal University, Shanghai, China, in 2016. He is
+                              currently a senior software engineer with Meituan.com                                            Gongxuan Zhang received the BEng degree in computing
+                              Corporation, Beijing, China. His research interests include                                      from Tianjin University and the MEng and Ph.D. degrees in
+                              task allocation and scheduling techniques in heterogeneous                                       computer application from the Nanjing University of
+                              real-time MPSoC systems.                                                                         Science and Technology. Also, he was a Senior Visiting
+                                                                                                                               Scholar in Royal Melbourne Institute of Technology from
+                                                                                                                               2001.9 to 2002.3. Since 1991, he has been with the Nanjing
+                                                                                                                               University of Science and Technology, where he is currently
+                                                                                                                               a professor in the School of Computer Science and
+                                                                                                                               Engineering. He is a senior member of the IEEE.
+
+
+
+
+                              Kun Cao is currently pursuing the Ph.D. degree with the
+                              Department of Computer Science and Technology, East
+                              China Normal University, Shanghai, China. His current re-
+                              search interests are in the areas of high performance com-                                       Xiaodao Chen received the B.Eng. degree in tele-
+                              puting, multiprocessor systems-on-chip and cyber physical                                        communication from the Wuhan University of Technology,
+                              systems.                                                                                         Wuhan, China, in 2006, the M.Sc. degree in electrical en-
+                                                                                                                               gineering from Michigan Technological University,
+                                                                                                                               Houghton, USA, in 2009, and the Ph.D. in computer en-
+                                                                                                                               gineering from Michigan Technological University,
+                                                                                                                               Houghton, USA, in 2012. He is currently an associate pro-
+                                                                                                                               fessor with School of Computer Science, China University of
+                                                                                                                               Geosciences, Wuhan, China. His research interests include
+                                                                                                                               Design Automation for petroleum system, High
+                                                                                                                               Performance Computing and Optimization.
+
+                              Yanchao Tan received the B.S. degree from the
+                              Department of Computer Science and Technology, East
+                              China Normal University, Shanghai, China, in 2017. She is
+                              currently pursuing the Ph.D. degree in the College of                                             Shiyan Hu received his Ph.D. in computer engineering
+                              Computer Science, Zhejiang University, Hangzhou, China.                                           from Texas A&M University in 2008. He is an associate
+                              Her current research interests include the resource man-                                          professor at Michigan Tech, and he was a visiting associate
+                              agement and recommendation system.                                                                professor at Stanford University from 2015 to 2016. His
+                                                                                                                                research interests include Cyber-Physical Systems (CPS),
+                                                                                                                                CPS Security, Data Analytics, and Computer-Aided Design
+                                                                                                                                of VLSI Circuits, where he has published more than 100
+                                                                                                                                refereed papers. He is an ACM Distinguished Speaker, an
+                                                                                                                                IEEE Systems Council Distinguished Lecturer, an IEEE
+                                                                                                                                Computer Society Distinguished Visitor, and a recipient of
+                                                                                                                                National Science Foundation (NSF) CAREER Award. Prof.
+                                                                                                                                Hu is the Chair for IEEE Technical Committee on Cyber-
+                                                                                                                                Physical Systems. He is the Editor-In-Chief of IET Cyber-
+                                                                                                  Physical Systems: Theory & Applications. He is an Associate Editor for IEEE Transactions
+                                                                                                  on Computer-Aided Design, IEEE Transactions on Industrial Informatics, and IEEE
+                                                                                                  Transactions on Circuits and Systems. He is also a Guest Editor for a number of IEEE/ACM
+                                                                                                  Journals such as Proceedings of the IEEE and IEEE Transactions on Computers. He has
+                                                                                                  held chair positions in numerous IEEE/ACM conferences. He is a Fellow of IET.
+
+
+
+
+                                                                                             11
+

@@ -1,0 +1,1485 @@
+Thermal Implications of Energy-Saving Schedulers
+Sandeep D’souza1 and Ragunathan (Raj) Rajkumar2
+
+1    Carnegie Mellon University, Pittsburgh, PA, United States
+     sandeepd@andrew.cmu.edu
+2    Carnegie Mellon University, Pittsburgh, PA, United States
+     rajkumar@andrew.cmu.edu
+
+
+
+      Abstract
+In many real-time systems, continuous operation can raise processor temperature, potentially
+leading to system failure, bodily harm to users, or a reduction in the functional lifetime of a
+system. Static power dominates the total power consumption, and is also directly proportional
+to the operating temperature. This reduces the effectiveness of frequency scaling and necessitates
+the use of sleep states. In this work, we explore the relationship between energy savings and
+system temperature in the context of fixed-priority energy-saving schedulers, which utilize a
+processor’s deep-sleep state to save energy. We derive insights from a well-known thermal model,
+and are able to identify proactive design choices which are independent of system constants and
+can be used to reduce processor temperature. Our observations indicate that, while energy savings
+are key to lower temperatures, not all energy-efficient solutions yield low temperatures. Based on
+these insights, we propose the SysSleep and ThermoSleep algorithms, which enable a thermally-
+effective sleep schedule. We also derive a lower bound on the optimal temperature achievable
+by energy-saving schedulers. Additionally, we discuss partitioning and task phasing techniques
+for multi-core processors, which require all cores to synchronously transition into deep sleep, as
+well as those which support independent deep-sleep transitions. We observe that, while energy
+optimization is straightforward in some cases, the dependence of temperature on partitioning
+and task phasing makes temperature minimization non-trivial. Evaluations show that compared
+to the existing purely energy-efficient design methodology, our proposed techniques yield lower
+temperatures along with significant energy savings.
+
+1998 ACM Subject Classification C.3 Real-time and embedded systems
+
+Keywords and phrases Thermal Analysis, Real-Time Scheduling
+
+Digital Object Identifier 10.4230/LIPIcs.ECRTS.2017.21
+
+
+ 1      Introduction
+
+Computationally-intensive real-time applications are becoming ubiquitous. Autonomous
+vehicles are a prime example where, computational requirements are driven by the need to
+process streams of data from multiple sensors. Advancements in semiconductor technology
+have enabled such applications by increasing the number of transistors available to system
+designers. However, the side effects of rising transistor density include increased power and
+heat dissipation [23]. Hence, continuous operation may cause the temperature of a processor
+to exceed its operating limits, forcing it to reduce its frequency or shut down. This in turn
+can lead to missed deadlines, and possibly catastrophic failure. Similarly, violating thermal
+constraints in implantable medical devices can cause bodily harm [8]. Moreover, it is critical
+that the components used in such systems perform reliably over their lifetime. System
+temperature is one of the key factors which influence reliability. High temperatures degrade
+           © Sandeep D’souza and Ragunathan (Raj) Rajkumar;
+           licensed under Creative Commons License CC-BY
+29th Euromicro Conference on Real-Time Systems (ECRTS 2017).
+Editor: Marko Bertogna; Article No. 21; pp. 21:1–21:23
+                  Leibniz International Proceedings in Informatics
+                  Schloss Dagstuhl – Leibniz-Zentrum für Informatik, Dagstuhl Publishing, Germany
+21:2   Thermal Implications of Energy-Saving Schedulers
+
+
+       the system reliability over a period of time [31][32], and a 10-15○ C difference in operating
+       temperature can result in a 2x difference in the lifespan of a device [32].
+           Energy savings and system temperature are intricately tied together. Modern processors
+       are equipped with energy-management features such as Dynamic Voltage and Frequency
+       Scaling (DVFS) [35], and the use of low-power sleep states [28]. DVFS enables the processor
+       to change its operating frequency and voltage, thereby reducing dynamic switching power,
+       while low-power sleep states use power gating and/or clock gating [3] to reduce static leakage
+       power dissipation when the processor is idle. As transistor geometries get smaller, the
+       dominance of static power as a contributor to total power consumption is only expected
+       to increase [22]. Since static power is also directly dependent on operating temperature,
+       scheduling techniques will increasingly need to take advantage of processor sleep states.
+
+       1.1      Contributions of the Paper
+       In this work, we analyze the thermal properties of Energy-Saving (ES) Schedulers [12], which
+       utilize the processor’s deep-sleep state. Our contributions are as follows:
+       1. We analyze the thermal performance of ES Schedulers using the well-known thermal
+           model based on Fourier’s Law, and derive design choices to pro-actively (i.e. a priori)
+           minimize the maximum temperature for both uni-core and multi-core processors.
+       2. We present the SysSleep algorithm to maximize the time the processor can be in deep
+           sleep, and the ThermoSleep heuristic that yields a thermally-effective sleep schedule.
+       3. We derive a lower bound on the optimal maximum temperature achievable by ES
+           Schedulers.
+       4. We propose task-partitioning heuristics that significantly reduce the maximum temperat-
+           ure for multi-core processors using ES Schedulers.
+       5. We analyze the impact of phasing each core’s forced-sleep task on temperature, in the
+           context of multi-core processors where cores can independently transition into deep sleep.
+
+       1.2      Background
+       We now introduce the background material and notation relevant to our work. Consider
+       a task set Γ consisting of n independent1 periodic real-time tasks τ1 , τ2 , ..., τn . Each task
+       τi ∈ Γ is characterized by {Ci , Ti , Di }, where Ci is the worst-case execution time, Ti is the
+       period, and Di is the relative deadline from its arrival time. We assume that for each task
+       Di = Ti , i.e., deadlines are implicit. The utilization of a task τi is given by Ui = Ci /Ti and
+       task priorities are assigned using the rate-monotonic scheduling policy [27]. The task set is
+       listed in non-increasing order of task priorities such that T1 ≤ T2 ≤ .. ≤ Tn . Each task has
+       an initial arrival time (or phase) of φi , such that its arrival times are φi , φi + Ti , φi + 2Ti , ....
+       Without loss of generality, we assume that the initial arrival time of task τ1 , φ1 = 0.
+           The following Energy-Saving (ES) Schedulers have been defined in [28] and [12]: Energy-
+       Saving Rate-Harmonized Scheduling+ [28][12] (ES-RHS+), Energy-Saving Rate-Monotonic
+       Scheduling [12] (ES-RMS) and Energy-Saving Deadline-Monotonic Scheduling [12] (ES-DMS).
+       These techniques are characterized by a high-priority periodic Energy-Saver task (also referred
+       to as an ES-task or forced-sleep task) τsleep , which puts the processor into an uninterrupted
+       deep sleep for a duration Csleep ≥ CSleepM in every period Tsleep ≤ T1 . This ensures that the
+       ES-task executes at the highest priority in accordance with the Rate-Monotonic (RM) [27]
+
+
+       1
+           Task release jitter and task dependence can be incorporated using the frameworks proposed in [6] and
+           [30], and are beyond the scope of this work.
+S. D’souza and R. Rajkumar                                                                          21:3
+
+
+priority assignment. If any idle durations precede and are contiguous with the ES-task, they
+can be used to put the processor into deep sleep [12]. CSleepM in is a system constraint that
+represents the minimum round-trip time required for the processor to go into the deep-sleep
+state and return back to the active state. We assume that CSleepM in captures the overhead
+involved in transitioning to deep sleep. While using ES Schedulers, the processor can be in
+one of the following states:
+    Busy: The processor is executing a task τi ∈ Γ.
+    Forced Sleep: The processor is forced into deep sleep by the Energy-Saver task τsleep .
+    Idle: The processor is neither busy nor in forced sleep.
+   For ES Schedulers, the generalized worst-case response time test for a task τi is given by
+the following recurrence relation:
+                                              i−1
+                              Wk                  Wk
+   W0 = Ci , Wk+1 = Ci + ⌈          ⌉Csleep + ∑ ⌈    ⌉Cj                                   (1)
+                             Tsleep           j=1 Tj
+
+where, Wk+1 is the worst-case response time of the task τi . If Wk+1 ≤ Di′ , then τi will be
+schedulable, otherwise τi will miss its deadline, where, Di′ is the generalized deadline of a
+task τi and depends on the type of ES Scheduler used. Based on this notation, we briefly
+describe each of the ES Schedulers:
+    (1) ES-RMS: Tasks execute as per rate-monotonic priorities and deadlines are assumed
+to be implicit (Di = Ti ). Here, the generalized deadline, Di′ = Ti .
+    (2) ES-DMS: Tasks execute as per deadline-monotonic priorities. This implies that the
+generalized deadline, Di′ = Di .
+    (3) ES-RHS+: Tasks execute as per rate-monotonic priorities, and deadlines are implicit.
+However, tasks become eligible to execute based on the principle of harmonization: A task
+is eligible to execute only when the processor is busy or a Harmonizing Period boundary
+has been reached [12]. The use of harmonization enables every idle duration in the ES-
+RHS+ schedule to precede and be contiguous with the ES-task. Hence, all the processor’s
+idle durations can be utilized to put it into deep sleep, thereby providing maximal energy
+savings [12]. Due to harmonization, each task can be delayed by at most Tsleep − Csleep [12].
+This implies that the generalized deadline, Di′ = Ti − (Tsleep − Csleep ), and provides a tight
+schedulability test compared to the slightly looser one proposed in [12]. An example schedule
+for ES-RHS+ and ES-RMS using a taskset with 3 tasks is illustrated in Figure 1.
+    Multi-core processors also support a number of low-power states called C -states. In some
+processors, individual cores can transition to intermediary idle states. However, in many
+processors, cores cannot individually transition into deep sleep. Based on the ability to
+transition into deep sleep, two types of problems were defined in [12] for ES Schedulers:
+    (1) Synchronized-Sleep or SyncSleep Scheduling where, all cores transition synchronously
+into deep sleep. Example processors include Intel Core2 Duo [13] and AMD Opteron [15].
+    (2) Independent-Sleep or IndSleep Scheduling where, each core can independently transition
+into deep sleep. Example processors with this flexibility include Samsung Exynos 5800 [2]
+and the 4th generation Intel Core processors [1].
+    In the SyncSleep context, only for the idle durations that overlap across all cores and
+exceed CSleepM in can the processor be put into deep sleep. Given the same Tsleep , ES-RMS
+can guarantee higher forced-sleep utilization Usleep than ES-RHS+ [12]. This makes ES-RMS
+a better choice for SyncSleep [12]. For IndSleep, it was proved that using ES-RHS+ can
+yield an energy-optimal schedule for all feasible partitions [12].
+    The rest of the paper is organized as follows. Section 2 discusses related work. Section 3
+introduces the thermal model used in the paper. Section 4 introduces the SysSleep algorithm,
+
+
+
+                                                                                                  ECRTS 2017
+21:4   Thermal Implications of Energy-Saving Schedulers
+
+
+
+                                       0   10   20      30      40      50     60   70   80   90   100   110
+
+
+
+
+                          Deep Sleep
+
+                                                                    time (t)
+                                                     Energy-Saving RHS+
+                                       0   10   20      30     40       50     60   70   80   90   100   110
+
+
+
+
+                          Deep Sleep
+
+                                                                    time (t)
+                                                     Energy-Saving RMS
+
+
+
+
+            Figure 1 Energy-Saving Schedulers: ES-RHS+ & ES-RMS (Csleep = 5, CSleepM in = 5, Tsleep = 10)
+
+
+       and discusses utilizing ES Schedulers for reducing temperature in uni-core processors. Section
+       5 discusses utilizing ES Schedulers for reducing temperature in multi-core processors. Section
+       6 presents comparative evaluations, and Section 7 provides concluding remarks.
+
+
+        2      Related Work
+       Thermal Management can be done reactively at runtime [8, 17, 11, 36] or proactively at
+       design time [20, 5, 16, 33, 10, 9, 4]. In the scope of reactive techniques, Fu. et al. [17]
+       proposed a control-theoretic algorithm to meet the desired temperature requirement on a
+       multi-core processor, subject to timing constraints. Yun et al. [36] used a machine-learning
+       technique (SVM) to predict the temperature profile of a multi-processor system. Based on the
+       predicted value, a dynamic temperature management scheme is used. In [8], Chandarli et al.
+       proposed an optimal reactive scheduler for fixed-priority uniprocessor sleep scheduling along
+       with an associated response-time based analysis framework. However, reactive schedulers
+       require temperature sensors, which may not always be present in real platforms.
+           In the scope of proactive techniques, [10] describes a real-time scheduling algorithm for
+       uniprocessors, based on a thermal model approximated by Fourier's Law. The algorithm
+       derives a speed schedule by minimizing temperature under both timing and thermal con-
+       straints. In [9], an assignment and scheduling technique for an MPSoC was proposed, which
+       utilizes a mixed-integer linear program solver to optimize the peak temperature. In [16], an
+       optimal speed schedule is derived for a multi-core platform, based on a thermal model given
+       at design time. In [4], Masud et al. proposed the use of a thermal-aware periodic resource to
+       minimize peak temperature, in the context of uniprocessor Earliest Deadline First (EDF)
+       scheduling. The processor slack is utilized to put the processor into a sleep state.
+           Most of the pieces of work stated [17, 11, 36, 16, 20, 5] have focused on the use of
+       DVFS to optimize the processor temperature. However, the dominance of static power
+       makes it necessary to investigate techniques which utilize sleep states. Additionally, many
+       low-powered devices often lack DVFS, but support sleep states [28]. The work in [8] and [4]
+       propose thermal-aware techniques which utilize processor sleep states. However, [4] assumes
+       dynamic-priority EDF scheduling. On the other hand, [8] presents a reactive framework for
+       uniprocessor fixed-priority scheduling. To the best of our knowledge, no thermal analysis
+       framework for proactive fixed-priority sleep scheduling exists in the literature.
+S. D’souza and R. Rajkumar                                                                             21:5
+
+
+    Fixed-priority energy-saving schedulers, which periodically utilize the processor’s deep-
+sleep state, were proposed in [28][12]. For these schedulers, the work in [12] proposed various
+techniques to design energy-efficient schedules in both the uni-core and multi-core processor
+contexts. In this paper, we analyze the thermal implications of ES Schedulers in light of their
+energy-saving properties. Based on a well-known thermal model, we derive practical insights
+and algorithms. Our proposed techniques focus on minimizing the maximum temperature,
+rather than optimizing to meet a set of thermal constraints.
+
+ 3      Thermal Modeling of ES Schedulers
+In this section, we introduce the thermal model used in the paper, and derive insights in
+the context of ES Schedulers. The temperature of a processor is dependent on the power
+consumption, and the variation in power consumption over time. Therefore, we can broadly
+define three factors responsible for a processor’s thermal profile: (i) Heat generation by a core
+(due to power consumption). (ii) Heat dissipation to the environment (using heat sinks). (iii)
+Heat dissipation between adjacent cores (due to difference in power consumption patterns).
+
+3.1     Power and Thermal Model
+The power consumption of a CMOS circuit is modeled as a combination of two components:
+     (1) Dynamic Switching Power is dependent on the processor operating frequency, and is
+consumed when the processor is busy. The dynamic power consumption, PD , can be modeled
+as a convex function of the operating frequency s as [8]: PD = κ0 sα where, α and κ are
+system constants which depend on the semiconductor technology used.
+     (2) Static Leakage Power is due to leakage current, which depends on the semiconductor
+technology and the operating temperature. Static power is consumed even when the processor
+is idle, but can be nearly eliminated by putting the processor into deep sleep. Static power, PS ,
+can be conservatively modeled as a linear function of temperature [8]: PS = κ1 Θ + κ2 where,
+κ1 and κ2 are technology-dependent system constants, and Θ is the operating temperature.
+     Hence, the total power consumption P , as a function of time t, can be modeled as:
+P (t) = PD (t) + PS (t). This model can be used to derive the thermal model for a uniprocessor.
+As OS schedulers control task execution at the granularity of a processor core, each core
+can be treated as a single unit producing heat and can be modeled as an RC circuit [8] [37].
+When a core is busy, it generates heat. Using the RC thermal model, Fourier’s Law [8] can
+be used to state the differential equation of the temperature, Θ∗ with respect to time:
+
+     dΘ∗ (t)/dt = [P (t)/C] − [(Θ∗ (t) − ΘA )/RC]                                             (2)
+
+where, ΘA is the ambient temperature of the environment. By substituting PD and PS in
+Equation 2, we can rewrite Equation 2 as a classical linear differential equation [8]:
+
+     dΘ(t)/dt = a − bΘ(t)                                                                     (3)
+
+where, a = κ0 sα /C, b = (1 − κ1 R)/RC and the temperature has been offset from Θ∗ (t) −
+[(κ2 R + ΘA )/(1 − κ1 R)] to Θ(t). Solving Equation 3 gives the temperature at time t as:
+
+     Θ(t) = a/b + (Θ(t0 ) − a/b)e−b(t−t0 )                                                    (4)
+
+   When the processor is in deep sleep, the power consumption can be assumed to be
+negligible. This is a valid assumption as the difference in power consumption between the
+busy and deep-sleep states is different by several orders of magnitude [28]. Hence, the
+
+
+
+                                                                                                     ECRTS 2017
+21:6   Thermal Implications of Energy-Saving Schedulers
+
+
+       processor can be deemed to be cooling when in the deep-sleep state. Using this assumption,
+       one can set a = 0 in Equation 4 to obtain the model for cooling:
+
+            Θ(t) = Θ(t0 )e−b(t−t0 )                                                                   (5)
+
+       3.2     Thermal-Aware ES Scheduler Design
+       Consider a uni-core processor. For ES Schedulers, the processor is guaranteed to be in deep
+       sleep atleast for a duration Csleep every Tsleep . Hence, in the worst case, a core is busy
+       for a duration of Tsleep − Csleep every Tsleep . Therefore, in the worst case, a processor core
+       heats up from kTsleep to kTsleep + Csleep and cools down from kTsleep + Csleep to (k + 1)Tsleep ,
+       where k is a non-negative integer. As the heating function is monotonic in the period
+       Tsleep , the temperature would be maximum at the end of the heating duration. We call this
+       temperature Θmax . Similarly, as the cooling function is monotonic in the period Tsleep , the
+       temperature would be minimum at the end of the cooling duration. We call this temperature
+       Θmin . Applying the heating and cooling models from Equations 4 and 5 in the duration
+       [kTsleep , (k + 1)Tsleep ), we can write Θmax and Θmin as recurrent equations:
+                                        −b(T sleep−Csleep)
+            Θkmax = a/b + (Θk−1
+                            min − a/b)e                    , Θkmin = Θkmax e−bCsleep                  (6)
+
+                                                   min and Θmax = Θmax . Hence, the steady state
+          At steady state, as k → ∞, then Θkmin = Θk−1      k      k−1
+
+       worst-case values of Θmax and Θmin are given by:
+
+            Θmin = (a/b) ∗ [(ebTsleep (1−Usleep ) − 1)/(ebTsleep − 1)], Θmax = Θmin ebUsleep Tsleep   (7)
+
+       where, Usleep = Csleep /Tsleep denotes the guaranteed utilization of the ES-task. Based on the
+       steady state temperatures, we can draw the following conclusions:
+           Increasing Usleep , keeping Tsleep constant, decreases the maximum temperature Θmax .
+           Decreasing Tsleep , keeping Usleep constant, decreases the maximum temperature Θmax .
+
+           Hence, minimizing Tsleep , while maximizing Usleep , leads to a low maximum temperature.
+       Thus, while it is advantageous to increase the total fraction of time the processor cools, i.e.
+       Usleep ↑ (also increases guaranteed energy savings), the cooling durations should be smaller
+       but more frequent, i.e. Tsleep ↓. Note that these statements hold regardless of the system’s
+       thermal constants. Hence, using these principles, we can design techniques which can be
+       used to minimize the temperature across a range of different systems.
+           In prior work [28][12], it was assumed that the period of the ES-task is a sub-harmonic
+       of the highest-priority task. In the following section, we relax this constraint and provide
+       techniques to design a thermally-effective ES schedule. Additionally, we show how choosing
+       a proper Tsleep can maximize energy savings and improve schedulability.
+
+
+        4      SysSleep Algorithm
+       Consider a uni-core processor. To lower the worst-case maximum temperature for a taskset, we
+       need to find an ES-task with a small period Tsleep , which also maximizes Usleep . Maximizing
+       Usleep corresponds to finding the maximum highest-priority workload that can be added to
+       a taskset without making it unschedulable. In [29], Saewong et al. proposed the SysClock
+       algorithm which calculates the lowest processor frequency at which all tasks (with RM/DM
+       priority assignment) meet their deadlines. SysClock calculates the slack at all scheduling
+       points in the critical zone [24] to determine the optimal operating frequency. We extend that
+       algorithm in the context of ES Schedulers, and use it to compute the set of Tsleep values
+S. D’souza and R. Rajkumar                                                                                  21:7
+
+
+which maximize Usleep . Our algorithm is called SysSleep, and its pseudo-code is presented in
+Algorithm 1. We illustrate the working of SysSleep by proving its optimality.
+
+▸ Theorem 1. For a taskset Γ using ES-RMS, SysSleep yields the maximum possible forced-
+                   max
+sleep utilization Usleep .
+
+Proof. Consider the critical zone theorem [24] where, in the worst case, the requests of
+all tasks arrive simultaneously. In order to be schedulable, a task τi must complete before
+its deadline Di , i.e., its worst-cast response time Ri ≤ Di . If an ES-task is added to the
+system, all tasks will now complete at a later time, which should still be less than Di for the
+task to remain schedulable. Since the workload changes at every scheduling point, SysSleep
+determines the maximum workload αit , that can be added to the system, such that a task
+τi completes exactly at the end of each idle period t between Ri and Di . This maximum
+workload corresponds to the slack utilization in the schedule up to time t. While calculating
+αit , we consider a task’s execution as well as all other higher-priority tasks. For a task, the
+maximum workload that can be added is chosen to be the maximum of these candidate
+values. We refer to this as the maximum additional workload, ρmax   i     = maxt (αit ) for a task τi .
+      For a taskset Γ, the maximum highest-priority workload that can be added also corresponds
+to the maximum possible forced sleep Usleepmax
+                                               , which is the minimum of the maximum additional
+workload of all the tasks, i.e., Usleep = minτi Γ (ρmax
+                                   max
+                                                     i   ). Hence, Usleep
+                                                                     max
+                                                                           corresponds to the task,
+τc with the lowest maximum additional workload, i.e. minτi Γ (ρi ). If the added workload
+                                                                      max
+
+exceeds Usleep
+             max
+                 , then τc will miss its deadline and the taskset will become unschedulable. ◂
+
+   Example: Consider a taskset Γ consisting of two tasks τ1 = (1, 5) and τ2 = (1, 7). For τ1 ,
+the only end-of-idle period to consider is 5.
+
+    α15 = (t − C1 )/t = 0.8, ρmax
+                              1   = max(α15 ) = 0.8
+
+For τ2 , the end-of-idle periods to consider are 5 and 7.
+
+    α25 = [t − (C1 + C2 )]/t = 0.6, α27 = [t − (2C1 + C2 )]/t = 0.57, ρmax
+                                                                       2   = max(α25 , α27 ) = 0.6
+
+Hence, the maximum workload Usleep     max
+                                            that can be added is: Usleep
+                                                                     max
+                                                                         = min(ρmax
+                                                                                 1    , ρmax
+                                                                                         2   ) = 0.6
+    We now need to find the set of Tsleep values which yield the maximum forced-sleep
+utilization Usleep
+               max
+                   . For each task τi , let the end-of-idle period to which ρmax
+                                                                              i    corresponds be
+its critical deadline, tcritical
+                        i        . Using this notation, we can state the following lemma:
+
+▸ Lemma 2. If Tsleep is a sub-harmonic of tcritical
+                                                  i      , then the ES-task τsleep can utilize all
+the slack ρmax
+           i   till tcritical
+                     i        , such that τi completes at tcritical
+                                                           i        .
+
+Proof. If Tsleep is a sub-harmonic of tcriticali     , the effective utilization [34] of τsleep in the
+duration [0, ticritical
+                        ] is equal to its utilization Usleep . The effective utilization of a task in a
+duration [0, t] is the fraction of processor time used by a task in that duration. The actual
+utilization of a task cannot exceed its effective utilization in any duration. Hence, τsleep can
+optimally utilize all the slack ρmax i     in the duration [0, tcritical
+                                                                 i       ], such that its effective and
+actual utilizations are equal in the duration, i.e. Usleep = ρi .  max
+                                                                                                      ◂
+
+   The calculated Usleepmax
+                             corresponds to the task with the minimum ρmax    i   . Let us call this
+the critical task τc , and let the end-of-idle period to which ρmaxc    corresponds  be its critical
+deadline, tcritical
+           c        . Applying Lemma  2 in the context of τc , we can state the following corollary:
+
+▸ Corollary 3. If Tsleep is a sub-harmonic of tcritical
+                                                     c    , then the ES-task, τsleep , optimally
+utilizes all the slack, such that the critical task τc completes at tcritical
+                                                                     c        .
+
+
+
+                                                                                                          ECRTS 2017
+21:8   Thermal Implications of Energy-Saving Schedulers
+
+
+       Algorithm 1 SysSleep Algorithm
+        1: procedure SysSleep(Γ)
+        2:       for τi ∈ Γ do
+        3:          (ρmax
+                       i   , tcritical
+                              i        ) = CalculateMaxSlack(τi , Γ)
+        4:         max
+                 Usleep  = min(ρmax i  , τi ∈ Γ)                                          ▷ Max Sleep Utilization
+        5:       tcritical
+                           = tcritical
+                              argmin(ρ max  )                                                ▷ Critical Deadline
+                                        i
+                         max critical
+        6:       return Usleep ,t
+        7: procedure CalculateMaxSlack(τi , Γ)
+        8:       /* S = slack, I = idle duration, BusyFlag is set if core busy, β = workload */
+        9:       S = I = β = ∆ = 0, µ = 1, BusyFlag=TRUE
+       10:       ω = Ci , ω ′ = 0
+       11:       while ω < Di do
+       12:          if BusyFlag == TRUE then                                     ▷ Start of a busy period
+       13:               ∆ = Di − ω
+       14:               while ω < Di AND ∆ > 0 do
+       15:                    ω ′ = ∑ij=0 [Cj ∗ (⌊ω/Tj ⌋ + 1)] + S                ▷ Workload Calculation
+       16:                    ∆ = ω ′ − ω, ω = ω ′
+       17:               BusyFlag = FALSE
+       18:          else                                                         ▷ Start of an idle period
+       19:               I = min∀j<i [(Tj ∗ ⌈ω/Tj ⌉ − ω), Di − ω]                   ▷ Slack Computation
+       20:               S = S + I, ω = ω + I, t = ω, β = ω − S
+       21:               if β/t < µ then
+       22:                    µ = β/t, tcritical = t, ρ = 1 − µ ▷ Update the maximum additional workload
+       23:             BusyFlag = TRUE
+       24:       return ρ, tcritical
+
+
+           Unfortunately, choosing any sub-harmonic of tcritical
+                                                              c      may not guarantee schedulability for
+       other tasks in Γ. If the effective utilization of τsleep exceeds ρmax
+                                                                         k   in the duration [0, tcritical
+                                                                                                  k        ],
+       for another task τk ∈ Γ, then τk will become unschedulable. Hence, we need to choose Tsleep
+       such that the effective utilization of τsleep is always less than ρmax
+                                                                           i   ∀τi ∈ Γ.
+       ▸ Theorem 4. Choosing Tsleep as a common divisor of all tcritical
+                                                                   i     ∀τi ∈ Γ such that Tsleep ≤ T1 ,
+                                                                           max
+       always yields a schedule with the optimal forced-sleep utilization Usleep .
+       Proof. From Lemma 2, choosing Tsleep as a common divisor of all tcritical    i     ensures that the
+                                ef f
+       effective utilization Usleep  of the energy-saver task τsleep is equal to its maximum utilization
+         max
+       Usleep  in all the critical durations [0, tcritical
+                                                  i        ]∀τi ∈ Γ. The optimal forced-sleep utilization is
+                                                         ef f
+       given by, Usleep = minτi Γ (ρi ). Hence, Usleep = Usleep
+                     max               max                         max
+                                                                       ≤ ρmax
+                                                                          i   ∀τi ∈ Γ.                    ◂
+
+           It is very important to note that, in practice, the choice of Tsleep is constrained by the
+       system constraint CSleepM in on the lower side and the period of the highest-priority task T1
+       (τsleep must execute at the highest priority) on the higher side. Given this system constraint,
+       we can state the following theorem:
+       ▸ Theorem 5. Consider a taskset Γ, schedulable by an ES scheduler, running on a system
+       with the minimum deep sleep round-trip duration CSleepM in . Then for Γ, the lower bound on
+       the optimal worst-case maximum temperature Θbest
+                                                      max achievable by ES schedulers is:
+
+                             bTsleep (1−Usleep )
+                                  min       max             min              max   min
+             Θbest
+              max = (a/b)[(e                     − 1)/(ebTsleep − 1)] ∗ ebUsleep Tsleep                       (8)
+S. D’souza and R. Rajkumar                                                                                     21:9
+
+
+Algorithm 2 ThermoSleep Heuristic
+ 1: procedure ThermoSleep(Γ, CSleepM in , num_core)
+ 2:     while True do
+ 3:         max critical
+          Usleep , tj        = SysSleep(Γ)                                   ▷ Invoke SysSleep
+                           ′
+ 4:       if tcritical
+              j        ≤ Dj   then break   ▷ If critical deadline is within generalized deadline
+ 5:                        max
+        if CSleepM in /Usleep    < T1 then                             ▷ Check if feasible solution exists
+ 6:                 max
+            µ = ⌊Usleep ∗ t  critical
+                                      /CSleepM in ⌋, ν = ⌈t critical
+                                                                     /T1 ⌉           ▷ Range of divisors
+ 7:         if µ < ν then
+ 8:             µ=ν
+ 9:         Θbest = ∞
+10:         for k = µ to ν do
+                  k
+11:             Tsleep  = tcritical /k
+12:             Θk = CalcTemperature(Usleep
+                  best                              max     k
+                                                         , Tsleep )      ▷ Lowest temperature for Tsleep
+                                                                                                      k
+
+13:             if Θbest < Θk then
+                               best
+
+14:                 break
+15:             else
+16:                    best
+                    Usleep  = FindSleepUtil(Γ, Tsleep  k
+                                                            , num_core) ▷ Find best Usleep for Tsleep k
+
+17:                 Θmax = CalcTemperature(Usleep , Tsleep )
+                                                         best     k
+
+18:                 if Θmax < Θbest then
+19:                                   k
+                         Tsleep = Tsleep               best
+                                          , Usleep = Usleep  , Θbest = Θmax       ▷ Best Solution found
+20:     else
+21:        return NotSchedulable                                        ▷ No feasible solution exists
+22:     return Tsleep , Usleep
+23: procedure FindSleepUtil(Γ, Tsleep , m)
+24:     /* m = num_cores, Γi = tasks allocated to core i */
+25:     for i = 1 to m do
+26:           i
+           Usleep = FindBestSleep(Γi , Tsleep )                              ▷ Invoke FindBestSleep
+                      i
+27:     return mini (Usleep )
+
+
+Proof. For a taskset Γ, SysSleep returns the maximum possible forced-sleep utilization
+  max
+Usleep . Hence, given the system constraint CSleepM in , the smallest feasible ES-task period is
+  min                 max
+Tsleep = CSleepM in /Usleep . From Equation 7, the worst-case maximum temperature Θmax is
+minimized by simultaneously minimizing Tsleep and maximizing Usleep . Hence, substituting
+the smallest feasible ES-task period, Tsleep
+                                       min
+                                             , and the largest schedulable forced-sleep utilization
+Usleep in Equation 7 yields the lower bound on the optimal worst-case maximum temperature
+  max
+
+  max achievable by ES Schedulers, corresponding to the taskset Γ.
+Θbest                                                                                             ◂
+
+    From a thermal perspective, for a fixed Usleep , a smaller Tsleep yields a lower worst-
+case maximum temperature. Hence, a possible thermally-effective solution with optimal
+forced-sleep utilization can be the smallest common divisor of all tcriticali     ∀τi ∈ Γ that lies in
+the range [CSleepM in /USleep
+                            max
+                                , T1 ]. If CSleepM in /Usleep
+                                                        max
+                                                              > T1 , then no feasible solution exists.
+Note that, choosing Tsleep as any common divisor of tcritical  i       ∀τi ∈ Γ that lies in the range
+[CSleepM in /USleep , T1 ] would yield solutions with equivalent energy consumption. However,
+              max
+
+the dependence of temperature on Tsleep would yield different thermal profiles.
+    Unfortunately, in many cases, no common divisor of the critical deadlines may lie in
+              max
+[CSleepM in /USleep , T1 ]. Hence, we present the ThermoSleep heuristic. ThermoSleep invokes
+
+
+
+                                                                                                             ECRTS 2017
+21:10   Thermal Implications of Energy-Saving Schedulers
+
+
+        SysSleep to compute Usleepmax
+                                      , along with the critical deadline tcritical
+                                                                             c       corresponding to Usleep
+                                                                                                        max
+                                                                                                             .
+        ThermoSleep uses these values to return the smallest possible sub-harmonic of the critical
+        deadline tcritical
+                  c        corresponding to the critical task τc , that yields a thermal and energy-efficient
+        schedule. The pseudo-code for ThermoSleep is presented in Algorithm 2.
+            Given an ES-task period Tsleep ≤ T1 , ThermoSleep uses the FindBestSleep (FBS) algorithm
+        to compute the optimal Csleep for a core, which allows a taskset Γ to be schedulable. The
+        pseudo-code for FBS is provided in Algorithm 3. We now prove the optimality of FBS.
+
+        ▸ Theorem 6. For a taskset Γ schedulable by ES-RMS, with an ES-task τsleep having a period
+                                                                             ′
+        Tsleep , FindBestSleep returns the optimal forced-sleep utilization Usleep .
+
+        Proof. Consider the critical zone theorem [24] where, in the worst case, the requests of all
+        tasks arrive simultaneously. In order to be schedulable, a task τi must complete before its
+        deadline Di . Given that a new job of τsleep is dispatched every Tsleep , for each task τi ∈ Γ,
+        FBS determines the maximum workload that can be added to the taskset, such that τi
+        completes by t where, t is an integer multiple of Tsleep , i.e., (k ∗ Tsleep ≤ Di ) or Di . This
+        gives the effective slack, αit , that τsleep can utilize, if τi and all higher-priority tasks complete
+        by t. For a task τi , the maximum highest-priority workload with period Tsleep that can be
+        added is the maximum of these calculated values ρmax         i    = maxt (αit ). For a taskset Γ with
+        an ES-task period Tsleep , this workload corresponds to the maximum possible forced sleep,
+          ′                                                                              ′
+        Usleep , which is the minimum of the ρmax    i    of all the tasks. Hence, Usleep    = minτi Γ (ρmax
+                                                                                                          i   ),
+        which corresponds to the task, τc ∣ c = argminτi Γ (ρi ). If the added workload exceeds
+                                                                       max
+          ′
+        Usleep , then τc will miss its deadline and Γ will become unschedulable.                              ◂
+
+            For ES-RHS+, the total deep-sleep utilization USleepT otal is given by 1 − ∑τi ∈Γ (Ci /Ti ).
+        Hence, for a schedulable taskset, ES-RHS+ guarantees a sleep schedule with optimal energy
+        savings. However, this deep-sleep utilization is not uniformly distributed over each period.
+        To reduce the worst-case maximum temperature, the ES-task utilization Usleep must be
+        increased, and its period Tsleep must be decreased. In Section 1.2 the schedulability test for
+        ES-RHS+ was discussed, and for each task the generalized deadline Di′ = Ti − (Tsleep − Csleep ),
+        is a function of both Csleep and Tsleep . Hence, ThermoSleep invokes SysSleep multiple times to
+        compute Usleep
+                    max
+                         until the critical deadline of the critical task lies within its generalized deadline.
+        To calculate the generalized deadline, we choose Tsleep to be the smallest sub-harmonic of
+        the critical deadline in the feasible range [CSleepM in /Usleepmax
+                                                                           , T1 ], and Csleep = Usleep
+                                                                                                  max
+                                                                                                       ∗ Tsleep .
+            Given a forced-sleep period, Tsleep , ES-RMS can provide a higher forced-sleep utilization,
+        Usleep , than ES-RHS+ [12]. Hence, for a taskset Γ, in most cases, ES-RMS will yield a lower
+        worst-case maximum temperature compared to ES-RHS+. In practice, ES-RHS+ can yield
+        lower temperatures, as it utilizes all idle durations to put the processor into deep sleep.
+
+         5     Thermal-Aware Multi-Core ES Scheduling
+        Consider a task set Γ consisting of n periodic real-time tasks τ1 , τ2 , ..., τn that need to be
+        scheduled on a homogeneous multi-core processor with m cores, M1 , M2 , ..., Mm . Each core
+        Mk has an ES-task, τsleep,k , which has a forced-sleep duration of Csleep,k ≥ CSleepM in every
+        Tsleep,k . As mentioned in Section 1.2, two types of multi-core ES scheduling problems were
+        defined in [12]. In this section, we analyze the thermal implications of SyncSleep and Indsleep
+        scheduling, and propose techniques to derive thermally-effective partitioned schedules.
+            In multi-core processors, heat also dissipates between adjcacent cores, and the rate of
+        dissipation depends on the temperature differences between them. Hence, each core can
+        be modeled using the RC model with the addition of thermal resistances between adjacent
+S. D’souza and R. Rajkumar                                                                                21:11
+
+
+Algorithm 3 FindBestSleep Algorithm
+ 1: procedure FindBestSleep(Γ, CSleepM in , Tsleep )
+ 2:      for τi ∈ Γ do
+ 3:         (ρmax
+               i   , tcritical
+                      i        ) = CalculateSlack(τi , Γ, Tsleep )
+ 4:    Usleep = min(ρmax i   , τi ∈ Γ)                                ▷ Max Sleep Utilization
+ 5:    if Usleep ∗ Tsleep ≥ CSleepM in then                   ▷ Check if feasible solution exists
+                       max
+ 6:        return Usleep    ∗ Tsleep
+ 7:    else
+ 8:        return NotSchedulable
+ 9: procedure CalculateSlack(τi , Γ, Ts )
+10:    /* S = slack, I = idle duration, BusyFlag is set if core busy, β = workload */
+11:    S = I = β = ∆ = 0, µ = 1, BusyFlag=TRUE, ω = Ci , ω ′ = 0
+12:    while ω < Di do
+13:        if BusyFlag == TRUE then                                  ▷ Start of a busy period
+14:            ∆ = Di − ω
+15:            while ω < Di AND ∆ > 0 do
+16:                ω ′ = ∑ij=0 [Cj ∗ (⌊ω/Tj ⌋ + 1)] + S               ▷ Workload Calculation
+17:                ∆ = ω ′ − ω, ω = ω ′
+18:            BusyFlag = FALSE
+19:        else                                                      ▷ Start of an idle period
+20:            Ω = {j ∈ Z + ∣ (j − 1) ∗ Ts ≤ Di < j ∗ Ts }
+21:            I = min∀j∈Ω [(j ∗ Ts ∗ ⌈ω/j ∗ Ts ⌉ − ω)]                   ▷ Slack computation
+22:            S = S + I, ω = ω + I, t = ω, β = ω − S
+23:            if β/t < µ then
+24:                µ = β/t, ρ = 1 − µ               ▷ Update the maximum additional workload
+25:            BusyFlag = TRUE
+26:      return ρ
+
+
+cores [16]. Let the instantaneous temperature on each core be Θj , for j = 1, 2, ..., m. Using
+Fourier’s Law, the differential equation for each core’s temperature can be given by:
+
+      dΘj (t) Pj (t) Θj (t) − ΘA m Θj (t) − Θk (t)
+             =      −           −∑                                                                (9)
+        dt     C         RC      k=1   Rjk C
+
+where, Pj is the instantaneous power dissipated by the core, and Rjk is the thermal resistance
+between the cores j and k. For non-adjacent cores one can reasonably assume there is no
+heat dissipation between them and hence, Rjk = ∞ [16].
+
+5.1     SyncSleep Scheduling
+For SyncSleep scheduling, the forced-sleep task must be synchronized across all cores [12]. As
+the sleep transition is synchronous, for all cores Tsleep,k = Tsleep , and the initial ES-task phase
+can be taken as φsleep,k = 0 [12]. Additionally, the minimum amount of time for which the
+system can be in deep sleep is dictated by the core which has the least forced-sleep duration
+[12]. Hence, if the system synchronous sleep CSyncSleep = minm     k=1 (Csleep,k ) ≥ CSleepM in , then
+the minimum guaranteed deep-sleep utilization is given by minm         k=1 (Csleep,k )/Tsleep .
+    Based on the synchronous-sleep constraint, in the worst case, we can assume that all
+the cores are in deep sleep for the durations [kTsleep , kTsleep + CSyncSleep ), and busy from
+
+
+
+                                                                                                         ECRTS 2017
+21:12   Thermal Implications of Energy-Saving Schedulers
+
+
+        Algorithm 4 SyncSleep Partitioning Heuristic
+         1: procedure PartitionTaskset(Γ, CSleepM in , m)
+         2:      /* m = number of cores, Γi = tasks allocated to core i */
+         3:      Ts = 1                                                ▷ Set forced-sleep period to 1
+         4:      Γi ∀i ∈ 1 to m = MaxSyncSleep(Γ, CSleepM in , Ts , m)                   ▷ from [12]
+         5:      Us , Ts = ThermoSleep(Γ, CSleepM in , m)                    ▷ Invoke ThermoSleep
+         6:      return Us , Ts                                        ▷ SyncSleep task parameters
+
+
+        [kTsleep + CSyncSleep , (k + 1)Tsleep ). Hence, all cores will have the same worst-case execution
+        profile (as illustrated in Figure 2(a)), and we can assume that in the worst case, at any time
+        instant, all cores share the same temperature. Thus, the worst-case inter-core temperature
+        difference is always zero, and the model reduces to the uniprocessor thermal model. Hence,
+        from a worst-case perspective, we can consider the entire system as one thermal unit. Applying
+        these assumptions in Equation 9, the worst-case SyncSleep temperature model is given by:
+
+              dΘj (t)/dt = Pj (t)/C − (Θj (t) − ΘA )/RC                                                 (10)
+
+            Figure 2(b) presents an example using SyncSleep ES-RMS for a quad-core system with
+        cores Mi , i = {1, 2, 3, 4}. The taskset Γ = {τ1 (6, 10), τ2 (7, 10), τ3 (5, 10), τ4 (4, 10)} is used,
+        such that, during partitioning, each core receives one task (τi is assigned to Mi ). Due to
+        the synchronous nature of forced sleep, all cores have similar temperature profiles, making
+        the heat dissipation between cores negligible. Hence, like the uniprocessor case, the problem
+        reduces to finding a forced-sleep task τsleep which minimizes Tsleep while maximizing Usleep .
+        However, given that we have multiple cores, partitioning the tasks among them also plays
+        a major role in determining the thermally-effective τsleep . The temperature minimization
+        problem can be stated as the following task-partitioning problem: “Find a partition that has
+        a synchronized ES-task which minimizes the worst-case maximum temperature, such that
+        the workload allocated to each core can be scheduled feasibly by an ES Scheduler.”
+            The stated partitioning problem is a more constrained form of the feasibility problem in
+        multi-core processor scheduling, which is known to be NP-hard in the strong sense [18][25].
+        Hence, the thermal-aware SyncSleep scheduling problem is also NP-hard. Consider the trivial
+        case where all tasks have the same periods, with different computation times. In this case,
+        choosing the optimal Tsleep is trivial (from Theorem 4, it is a sub-harmonic of the task
+        period). Given Tsleep , the temperature across all cores will be minimized if all cores have
+        the same load. Hence, the problem reduces to calculating the optimal balanced partition for
+        independent tasks with known computation times, which is known to be equivalent to the
+        Partition problem [21] which is NP-Complete [21].
+            We now present a two-stage heuristic for the partitioning problem:
+            Partitioning for Thermal Performance: In the first stage, we choose the best possible
+        hypothetical Tsleep = 1 to find the best synchronous forced sleep that a partitioning heuristic
+        can achieve. Theorem 4 states that, on a single core, the optimal Usleep is achieved when
+        Tsleep is a common divisor of the critical deadline. Since 1 is a divisor of all integers, choosing
+        Tsleep = 1 enables a heuristic to achieve its best possible forced-sleep utilization. If a taskset
+        cannot be scheduled when Tsleep = 1, we consider it unschedulable. Setting Tsleep = 1 and
+        maximizing the forced-sleep utilization is similar to the energy minimization problem for
+        SyncSleep Scheduling [12]. To realize energy savings and minimize temperature in multi-core
+        systems, load balancing is often used [12]. Worst-Fit Decreasing (also referred to as WFD or
+        List Scheduling when the number of cores is fixed a priori) is commonly used to obtain a
+S. D’souza and R. Rajkumar                                                                                                     21:13
+
+
+
+
+             ∈ [ ∗       , ∗       +              )
+                 “Synchronized Deep-Sleep”
+                                                                :
+                                                          ( ,       )
+                                                                :
+                                                          ( ,       )
+                                                                :
+                                                          ( ,       )
+                                                                :
+           ∈ [ ∗       +          , + ∗               )
+                                                          ( ,       )
+             “Synchronous Worst-Case Execution”
+                                                                        0        10          20      30          40      50
+
+                 Task Execution        Forced Sleep                         Task Execution        Forced Sleep        Idle
+
+              (a) Synchronous Sleep Transition                                        (b) Thermal Profile
+
+
+   Figure 2 SyncSleep Scheduling for a quad-core system with cores Mi .
+
+
+load-balanced partition. WFD allocates tasks to the core with the least utilization, one by
+one in non-increasing order of their utilization. For ES Schedulers, the period ratios also
+play an important role in dictating the forced-sleep utilization, something that WFD does
+not take into account. In [12], the MaxSyncSleep (MSS) partitioning heuristic was proposed.
+Instead of using utilization to allocate tasks to cores, MSS measures the impact of a task’s
+allocation on the synchronous forced-sleep duration.
+    Choosing the SyncSleep Period: In the second stage, we find a thermally-effective
+Tsleep . For an m-core system, let the best possible synchronous forced-sleep utilization
+(setting Tsleep = 1) obtained by a partitioning heuristic A be USyncSleep
+                                                                 max
+                                                                           , which corresponds to
+the core k with the minimum forced-sleep utilization. The feasible range for Tsleep can now
+be given by [CSleepM in /USyncSleep
+                            max
+                                    , T1 ]. To find a good value for Tsleep , we run ThermoSleep
+on the partition. The proposed partitioning technique is described in Algorithm 4.
+
+
+5.2    IndSleep Scheduling
+Some processors allow each core to individually transition into deep sleep, enabling better
+energy savings. Hence, each core Mk has a forced-sleep task, τsleep,k , which has a forced-sleep
+duration of Csleep,k ≥ CSleepM in every Tsleep,k , with a phasing φsleep,k . Note that, compared
+to SyncSleep scheduling, each core’s forced-sleep task can have a different Csleep,k , as well
+as a different phasing φsleep,k . Hence, we need to consider heat dissipation between cores.
+Thus, the IndSleep thermal model is given by Equation 9, and takes into account both heat
+dissipation to the environment, as well as between cores.
+    For IndSleep scheduling, the thermal-aware scheduling problem can be defined as follows:
+“Find a partition and forced-sleep task parameters (including phasing) on each core, that
+minimizes the maximum temperature of the system, under the constraint that the workload
+allocated to each core can be scheduled by an ES Scheduler.”
+    In [12], it was proved that using ES-RHS+ can yield an energy-optimal schedule for all
+feasible partitions. A partition is feasible if the tasks allocated to each core are schedulable.
+However, unlike the energy-minimization problem, all the feasible partitions are not optimal
+from a thermal perspective. This is due to the dependence of temperature on the ES-task
+period, as well as the execution pattern between cores, i.e. relative ES-task phasing.
+
+
+
+                                                                                                                              ECRTS 2017
+21:14   Thermal Implications of Energy-Saving Schedulers
+
+
+
+
+                    ∈ [        ,          +      (     , ,      , ))
+                             “Odd cores in Deep-Sleep”
+
+                                                                             :
+                                                                       ( ,       )
+                                                                             :
+                                                                       ( ,       )
+                                                                             :
+                                                                       ( ,       )
+                    ∈[                (       , ,    , ),         )          :
+                             “Even cores in Deep-Sleep”                ( ,       )
+                                                                                     0        10          20     30           40      50
+
+                          Task Execution         Forced Sleep                            Task Execution        Forced Sleep        Idle
+
+                     (a) Independent Sleep Transitions                                              (b) Thermal Profile
+
+            Figure 3 IndSleep Scheduling with uniform sleep periods for a quad-core system with cores Mi .
+
+
+            The heat flow between two objects is primarily dependent on their thermal properties as
+        well as the temperature difference between them. At any instant, the temperature difference
+        between two adjacent cores will always be less than the temperature difference between a
+        core and the environment. This is based on the practical assumption that the environmental
+        temperature is always lower than that of any core. Thus, we can safely assume that heat
+        dissipation to the environment is the dominant factor for cooling. Hence, from an optimization
+        standpoint, we first optimize the schedule on each core to reduce its own temperature, and
+        then optimize the schedule between cores to ensure maximal heat dissipation between them.
+        Based on this practical assumption, we propose a two-stage solution:
+            Partitioning for Thermal Performance: The objective of partitioning is to ensure
+        that the worst-case maximum temperature of the system is minimized. If there were no heat
+        dissipation between cores, then the worst-case maximum temperature Θkmax on a core k is a
+        function of Tsleep,k and Usleep,k . A balanced partition helps ensure that all cores have similar
+        Θkmax . In an unbalanced partition, a core with a significantly lower Usleep,k would yield a
+        higher temperature, thus raising the maximum temperature of the system. This is similar to
+        the SyncSleep problem, and hence is also NP-Hard. Hence, like SyncSleep, we initially set
+        Tsleep,k = 1 on each core, and use MaxSyncSleep [12] (or WFD) to create a balanced partition.
+        Applying ThermoSleep to all the cores together gives a single Tsleep that is suitable for all
+        the cores. We refer to this as uniform sleep. However, since each core can independently
+        transition into deep sleep, each core’s ES-task can have a different period, that we refer to as
+        non-uniform sleep. These non-uniform sleep periods Tsleep,k can be calculated by applying
+        ThermoSleep to each core individually. FindBestSleep is then used to obtain each Csleep,k
+        using the corresponding Tsleep,k . While uniform sleep ensures that all cores have a similar
+        temperature profile, non-uniform sleep can allow each core to attain a lower temperature.
+            Forced-Sleep Phasing: The phasing between ES-tasks plays an important role in the
+        heat dissipation between cores. In the worst case, we can assume that each core Mj , j = 1
+        to m is in deep sleep for the durations [φsleep,j + kTsleep,j , φsleep,j + kTsleep,j + Csleep,j ), and
+        busy from [φsleep,j + kTsleep,j + Csleep,j , φsleep,j + (k + 1)Tsleep,j ). To ensure maximal heat
+        dissipation between adjacent cores, the temperature difference between them needs to be
+        maximal. For two adjacent cores i and j, the largest temperature difference between them
+        occurs when core i is at the start of its forced-sleep period and core j is at the end of its
+S. D’souza and R. Rajkumar                                                                                  21:15
+
+
+forced-sleep period. Hence, if τsleep,i starts exactly after τsleep,j ends, then the instantaneous
+temperature difference between the cores can be maximized. This leads to an execution
+pattern where core i is busy while core j is in deep sleep and vice versa.
+    Figure 3(b) presents an example using IndSleep ES-RMS with uniform periods for a
+quad-core system with cores Mi , i = {1, 2, 3, 4}. The taskset Γ = {τ1 (6, 10), τ2 (7, 10), τ3 (5, 10),
+τ4 (4, 10)} is used, such that, during partitioning, each core receives one task (τi is assigned
+to Mi ). Note that, each core has its own distinct thermal profile. Additionally, phasing the
+ES-task on each core, to minimize execution overlap can yield thermal benefits. For the
+IndSleep example, the odd-even execution pattern illustrated in Figure 3(a) is noteworthy,
+where execution overlap is minimized by ensuring that odd-numbered cores are busy (i.e.
+execute tasks), while even-numbered cores are in deep sleep, and vice-versa. From the thermal
+profile, observe that this phasing causes the temperature difference between adjacent cores
+to be maximized, thus yielding better heat dissipation between adjacent cores.
+    As a simplification, we formulate the phasing problem as one of: “minimizing the execution
+(or forced-sleep) overlap between adjacent cores”. By considering busy durations as hot and
+forced-sleep durations as cool, the execution overlap metric captures the durations where
+hot regions overlap, hence acting as a proxy for temperature difference. In most processor
+designs, cores are rectilinear, and adjacent cores are of the same size. Hence, to compute
+a thermally-effective phasing, the overlap between every pair of adjacent cores needs to
+be minimized. This execution overlap (also referred to as overlap) needs to be calculated
+over the relative hyperperiod, TR , of all the cores. We define the relative hyperperiod as the
+least common multiple of all the cores’ forced-sleep periods. In the simplest case, consider a
+dual-core system, with two adjacent cores. Let the cores be M1 and M2 , and their forced-sleep
+tasks be τsleep,i = (Csleep,i , Tsleep,i ) with phasing φsleep,i where, i = 1, 2. Assume that all the
+terms are integers, which is reasonable as we can convert timescales to arbitrarily small units
+(like nanoseconds). We have four possible cases:
+    1) Tsleep,1 = Tsleep,2 , i.e. uniform sleep. The phasing with the minimum overlap is
+computed over TR = Tsleep,1 = Tsleep,2 . The minimum overlap possible is TR −Csleep,1 −Csleep,2 .
+Then, φsleep,1 = 0, φsleep,2 = Csleep,1 , is one of the phasings which guarantees minimum overlap.
+    2) Tsleep,1 and Tsleep,2 are relatively prime, i.e. non-uniform sleep whose greatest common
+divisor is 1. The minimum overlap needs to be computed over TR = Tsleep,1 ∗ Tsleep,2 . In this
+case, any relative integer phasing of τsleep,1 and τsleep,2 guarantees the same overlap, which
+is the minimum overlap. This stems from the fact that all possible relative integer phasings
+between two periods are encountered, before the relative phasing is equal to that at the start.
+    3) Tsleep,1 and Tsleep,2 are harmonic, i.e. non-uniform sleep where one is a multiple of the
+other. Let Tsleep,2 = a ∗ Tsleep,1 , a ∈ Z + . Hence, TR = Tsleep,2 , and only one iteration of τsleep,2
+occurs in TR . Then φsleep,1 = 0, φsleep,2 = Csleep,1 can guarantee the minimum overlap.
+    4) Tsleep,1 and Tsleep,2 are not relatively prime and not harmonic, i.e. non-uniform
+sleep which share a common divisor, but one is non-divisible by the other. Here, TR <
+Tsleep,1 ∗ Tsleep,2 . In this case, no property can be stated on the relative phasing which
+guarantees minimum overlap.
+    Based on the above properties, we see that while simple approaches work for phasing
+uniform sleep, using non-uniform sleep requires more complex optimization techniques.
+    However, using uniform sleep does not always guarantee lower execution overlap than
+using non-uniform sleep. This can be seen from the following 3 cases:
+    Case 1: Uniform Sleep performs better than Non-Uniform Sleep. Consider a taskset with
+two tasks, τ1 = (6, 9) and τ2 = (10, 15). τ1 is assigned to core M1 , and τ2 to core M2 . In the
+uniform sleep case the best ES-task periods in terms of sleep utilization are τsleep,1 = (3, 9)
+
+
+
+                                                                                                           ECRTS 2017
+21:16   Thermal Implications of Energy-Saving Schedulers
+
+
+                                           100                                                                                            1
+
+                                           90                                                                                            0.9
+
+                                           80                                                                                            0.8
+               % of Schedulable Tasksets
+
+
+
+
+                                                                                                              ES Utilization (Usleep )
+                                           70                                                                                            0.7
+
+                                           60                                                                                            0.6
+
+                                           50                                                                                            0.5
+
+                                           40                                                                                            0.4
+
+                                           30                                                                                            0.3
+
+                                           20         ES-RHS+                                                                            0.2        ES-RHS+
+                                                      ES-RMS                                                                                        ES-RMS
+                                           10         ES-RHS+ ThermoSleep                                                                0.1        ES-RHS+ ThermoSleep
+                                                      ES-RMS ThermoSleep                                                                            ES-RMS ThermoSleep
+                                            0                                                                                             0
+                                                 0   0.1    0.2     0.3     0.4     0.5     0.6   0.7   0.8                                    0   0.1    0.2     0.3     0.4     0.5     0.6   0.7   0.8
+                                                            Taskset Utilization (CSleepMin = 5)                                                           Taskset Utilization (CSleepMin = 5)
+
+
+
+                 Figure 4 % of task sets schedulable w.r.t     Figure 5 Utilization of the ES-task w.r.t
+             taskset utilization, for uniprocessors        taskset utilization, for uniprocessors
+
+
+        and τsleep,2 = (2.5, 9). Using the best possible phasing, achieves a guaranteed minimum
+        execution overlap of 3.5 every 9 (38.89%). In the non-uniform case, the best ES-task periods
+        are τsleep,1 = (3, 9) and τsleep,2 = (5, 15). By searching the entire search space of unique
+        relative integer phasings, the minimum execution overlap achievable is 20 every 45 (44.44%).
+        Hence, in this case, using uniform sleep provides lower execution overlap.
+            Case 2: Uniform Sleep performs equal to Non-Uniform Sleep. Consider a taskset with
+        two tasks, τ1 = (6, 9) and τ2 = (9, 12). τ1 is assigned to core M1 , and τ2 to core M2 . In the
+        uniform sleep case, the best ES-task periods in terms of sleep utilization are τsleep,1 = (3, 9)
+        and τsleep,2 = (1.5, 9). By using the best phasing, we can achieve a guaranteed minimum
+        execution overlap of 4.5 every 9 (50%). In the non-uniform case, the best ES-task periods are
+        τsleep,1 = (3, 9) and τsleep,2 = (3, 12). By searching the entire search space of unique relative
+        integer phasings, the minimum execution overlap achievable is 18 every 36 (50%). Hence,
+        both provide a solution with the same execution overlap.
+            Case 3: Uniform Sleep performs worse than Non-Uniform Sleep. Consider a taskset with
+        two tasks, τ1 = (6, 9) and τ2 = (9, 11). τ1 is assigned to core M1 , and τ2 to core M2 . In the
+        uniform sleep case, the best ES-task periods are τsleep,1 = (3, 9) and τsleep,2 = (1, 9). Using
+        the best phasing, achieves a guaranteed minimum execution overlap of 5 every 9 (55.55%). In
+        the non-uniform case, the best ES-task periods are τsleep,1 = (3, 9) and τsleep,2 = (2, 11). By
+        searching the entire search space of unique relative phasings, the minimum execution overlap
+        achievable is 54 every 99 (54.54%). Hence, in this case using non-uniform sleep provides
+        lower execution overlap.
+            Since there is no exact solution for choosing ES-task periods for minimizing execution
+        overlap, we examine the properties of using uniform sleep versus non-uniform sleep:
+            Best Phasing: While uniform sleep can be phased easily and optimally (using the odd-even
+        execution pattern from Figure 3(a)) for a rectilinear multi-core processor, no such simple
+        technique can be used for non-uniform sleep.
+            Temperature Profile: Uniform sleep will ensure that all cores have similar temperatures.
+        However, using non-uniform sleep allows each individual core to choose the best Tsleep , to
+        further reduce its temperature, based on the tasks allocated to it.
+
+
+         6                     Comparative Evaluation
+        We now evaluate our proposed techniques on the basis of schedulability and worst-case
+        maximum temperature Θmax with an offset. Results are obtained using both static worst-
+S. D’souza and R. Rajkumar                                                                                                                                                                                                                 21:17
+
+
+                                                  9                                                                                                              9
+
+
+        Worst-case Maximum Temperature (Θ max )
+
+
+
+
+                                                                                                                      Worst-case Maximum Temperature (Θ max )
+                                                  8                                                                                                             8.5
+
+                                                  7
+                                                                                                                                                                 8
+
+                                                  6
+                                                                                                                                                                7.5
+                                                  5
+                                                                                                                                                                 7
+                                                  4
+                                                                                                                                                                6.5
+                                                  3
+
+                                                                                              ES-RHS+                                                            6                                             ES-RHS+
+                                                  2
+                                                                                              ES-RMS                                                                                                           ES-RMS
+                                                                                              ES-RHS+ ThermoSleep                                               5.5                                            ES-RHS+ ThermoSleep
+                                                  1
+                                                                                              ES-RMS ThermoSleep                                                                                               ES-RMS ThermoSleep
+                                                                                              Optimal Lower Bound                                                                                              Optimal Lower Bound
+                                                  0                                                                                                              5
+                                                      0   0.1   0.2    0.3      0.4     0.5     0.6     0.7     0.8                                                   5   6   7   8    9      10     11        12    13    14        15
+                                                                Taskset Utilization (CSleepMin = 5)                                                                               CSleepMin (Utaskset = 0.4)
+
+
+
+          Figure 6 Worst-case maximum temperat-           Figure 7 Worst-case maximum temperat-
+      ure w.r.t taskset utilization, for uniprocessors ure w.r.t CSleepM in , for uniprocessors
+
+
+case analysis as well as dynamic simulations using Hotspot [37]. Static analysis experiments
+were performed on 100,000 tasksets generated randomly using UUniFast-Discard [14] for each
+data-point. In a taskset, each task is randomly assigned a period between 15 and 400 time
+units, and the number of tasks varies from 1 to 20. CSleepM in is set to 5 time units. The
+system thermal parameters were set to a = 2 and b = 0.228 [8]. To the best of our knowledge,
+no other proactive techniques exist for designing thermal-aware fixed-priority sleep schedules.
+Hence, we compare against the purely energy-efficient design methodology proposed in [12].
+
+
+6.1        Static Worst-Case Analysis
+Uniprocessor Comparisons: We compare ES-RMS and ES-RHS+ with and without using
+ThermoSleep on the basis of schedulability, and the worst-case maximum temperature, Θmax .
+Figure 4 plots schedulability versus taskset utilization. In terms of schedulability: ES-RMS
+performs better than ES-RHS+. Observe that, using ThermoSleep, ES-RMS can schedule
+up to 62.5% more task sets than before. Figure 5 plots the ES-task utilization versus taskset
+utilization for tasksets schedulable by all techniques. By using SysSleep, ThermoSleep-based
+techniques yield slightly greater ES-task utilization —up to 3.3% greater for ES-RMS. Figure
+6 plots Θmax versus taskset utilization for tasksets schedulable by all techniques. Despite the
+ES-task utilization being similar, by choosing a smaller ES-task period, ThermoSleep can
+achieve significantly lower temperatures —on average up to 4○ K lower for ES-RMS, while
+simultaneously yielding better energy savings. Figure 6 also plots the average of the lower
+bound on Θmax for the tasksets. On average, the worst-case deviation between the solution
+provided by ES-RMS and ThermoSleep, and the optimal lower bound was 0.028○ K. Figure
+7 plots Θmax as a function of CSleepM in , when taskset utilization Utaskset = 0.4. Observe
+that, despite varying CSleepM in , our approach yields solutions with a worst-case temperature
+difference of 0.067○ K compared to the optimal lower bound.
+    Multi-core SyncSleep Comparisons: We compare ES-RMS and ES-RHS+ on the
+basis of schedulability and the worst-case maximum temperature, Θmax . We consider each
+technique using both WFD and Max-SyncSleep (MSS) for task partitioning, with and without
+using ThermoSleep. For a quad-core (m = 4) processor, Figure 8 plots schedulability versus
+taskset utilization, and Figure 10 plots the utilization of the synchronized ES-task USyncSleep .
+In terms of schedulability and USyncSleep ES-RMS performs better than ES-RHS+ for all
+partitioning techniques. For partitioning techniques, MSS marginally dominates WFD in
+terms of schedulability and USyncSleep , both with and without using ThermoSleep. Using
+
+
+
+                                                                                                                                                                                                                                          ECRTS 2017
+21:18   Thermal Implications of Energy-Saving Schedulers
+
+
+                                                            100                                                                                                            9
+
+
+
+
+                                                                                                                                Worst-case Maximum Temperature (Θ max )
+                                                            90
+                                                                                                                                                                          8.5
+                                                            80
+                     % of Schedulable Tasksets                                                                                                                             8
+                                                            70
+                                                                                                                                                                          7.5
+                                                            60
+
+                                                            50                                                                                                             7
+
+                                                            40      ES-RHS+ WFD                                                                                                                                     ES-RHS+ WFD
+                                                                                                                                                                          6.5
+                                                                    ES-RMS WFD                                                                                                                                      ES-RMS WFD
+                                                            30      ES-RHS+ MSS                                                                                                                                     ES-RHS+ MSS
+                                                                    ES-RMS MSS                                                                                             6                                        ES-RMS MSS
+                                                            20      ES-RHS+ WFD+ThermoSleep                                                                                                                         ES-RHS+ WFD+ThermoSleep
+                                                                    ES-RMS WFD+ThermoSleep                                                                                5.5                                       ES-RMS WFD+ThermoSleep
+                                                            10      ES-RHS+ MSS+ThermoSleep                                                                                                                         ES-RHS+ MSS+ThermoSleep
+                                                                    ES-RMS MSS+ThermoSleep                                                                                                                          ES-RMS MSS+ThermoSleep
+                                                             0                                                                                                             5
+                                                              0.5    1           1.5         2         2.5            3   3.5                                               0.5     1           1.5         2         2.5            3       3.5
+                                                                         Taskset Utilization (CSleepMin = 5, M = 4)                                                                     Taskset Utilization (CSleepMin = 5, M = 4)
+
+
+
+                 Figure 8 % of task sets schedulable w.r.t     Figure 9 Worst-case maximum temperat-
+              taskset utilization, for multi-core SyncSleep ure w.r.t taskset utilization, for multi-core
+              scheduling (m = 4)                            SyncSleep scheduling (m = 4)
+
+
+                                                            0.6                                                                                                            9
+
+
+
+                                                                                                                                Worst-case Maximum Temperature (Θ max )
+                Synchronized ES Utilization (U SyncSleep)
+
+
+
+
+                                                                                                                                                                          8.5
+                                                            0.5
+
+                                                                                                                                                                           8
+
+                                                            0.4
+                                                                                                                                                                          7.5
+
+
+                                                            0.3                                                                                                            7
+
+                                                                    ES-RHS+ WFD                                                                                           6.5                                      ES-RHS+ WFD
+                                                            0.2     ES-RMS WFD                                                                                                                                     ES-RMS WFD
+                                                                    ES-RHS+ MSS                                                                                                                                    ES-RHS+ MSS
+                                                                    ES-RMS MSS                                                                                             6                                       ES-RMS MSS
+                                                                    ES-RHS+ WFD+ThermoSleep                                                                                                                        ES-RHS+ WFD+ThermoSleep
+                                                            0.1
+                                                                    ES-RMS WFD+ThermoSleep                                                                                                                         ES-RMS WFD+ThermoSleep
+                                                                                                                                                                          5.5
+                                                                    ES-RHS+ MSS+ThermoSleep                                                                                                                        ES-RHS+ MSS+ThermoSleep
+                                                                    ES-RMS MSS+ThermoSleep                                                                                                                         ES-RMS MSS+ThermoSleep
+                                                             0                                                                                                             5
+                                                              0.5    1           1.5         2         2.5            3   3.5                                                   0   1            2          3          4             5        6
+                                                                         Taskset Utilization (CSleepMin = 5, M = 4)                                                                     Taskset Utilization (CSleepMin = 5, M = 8)
+
+
+
+                  Figure 10 Synchronized ES-task utiliza-       Figure 11 Worst-case maximum temper-
+              tion w.r.t taskset utilization, for multi-core ature w.r.t taskset utilization, for multi-core
+              SyncSleep scheduling (m = 4)                   SyncSleep scheduling (m = 8)
+
+
+        ThermoSleep provides marginally better USyncSleep —up to 11.59% greater for ES-RMS with
+        MSS. Figures 9 and 11 plot Θmax , versus taskset utilization, for a quad-core (m = 4), and
+        an octa-core (m = 8) processor respectively. Using ThermoSleep can give significantly lower
+        Θmax —on average up to 2.89○ K lower for ES-RMS with MSS for m = 4.
+            Multi-core IndSleep Comparisons: We compare ES-RMS and ES-RHS+ using Max-
+        SyncSleep to generate partitions. We consider using both uniform and non-uniform sleep for
+        each core’s ES-task. MSS along with ThermoSleep is used to determine the sleep periods.
+        Figure 12 plots the percentage of schedulable tasksets. Note that using non-uniform sleep
+        allows for greater schedulability —up to 1.2% greater for ES-RMS. Figure 13 plots Θmax
+        without considering inter-core heat dissipation. Note that, while ES-RHS+ provides maximal
+        energy savings, in all cases ES-RMS yields lower temperatures than ES-RHS+. Additionally,
+        due to better use of each core’s idle durations, non-uniform sleep provides slightly lower
+        temperatures than uniform sleep —up to 0.08○ K.
+
+        6.2                              Dynamic Simulations
+        To perform dynamic thermal simulation, we have designed a real-time multi-core scheduling
+        simulation tool called Inferno (v1.0). Based on the processor floor-plan, prior temperature,
+        power consumption in the interval and the interval length, Inferno uses Hotspot [37] to
+S. D’souza and R. Rajkumar                                                                                                                                                                                                         21:19
+
+
+                                      100                                                                                                                   9
+
+
+
+
+                                                                                                                 Worst-case Maximum Temperature (Θ max )
+                                      90
+                                                                                                                                                           8.5
+                                      80
+          % of Schedulable Tasksets
+
+
+                                                                                                                                                            8
+                                      70
+                                                                                                                                                           7.5
+                                      60
+
+                                      50                                                                                                                    7
+
+                                      40
+                                                                                                                                                           6.5
+                                      30
+                                                                                                                                                            6
+                                      20        ES-RHS+ UniformSleep                                                                                                                                ES-RHS+ UniformSleeo
+                                                ES-RMS UniformSleep                                                                                                                                 ES-RMS UniformSleep
+                                                                                                                                                           5.5
+                                      10        ES-RHS+ Non-UniformSleep                                                                                                                            ES-RHS+ Non-UniformSleep
+                                                ES-RMS Non-UniformSleep                                                                                                                             ES-RMS Non-UniformSleep
+                                       0                                                                                                                    5
+                                        0.5       1           1.5          2        2.5            3       3.5                                               0.5   1           1.5         2         2.5            3       3.5
+                                                      Taskset Utilization (CSleepMin = 5, M = 4)                                                                       Taskset Utilization (CSleepMin = 5, M = 4)
+
+
+
+       Figure 12 % of task sets schedulable w.r.t    Figure 13 Worst-case maximum temper-
+    taskset utilization, for multi-core IndSleep ature w.r.t taskset utilization, for multi-core
+    scheduling (m = 4)                            IndSleep scheduling (m = 4)
+
+                                              Maximum Temperature vs Taskset Utilization (m=4)                                                                     Average Power vs Taskset Utilization (m=4)
+                                      345                                                                                                                  80
+
+
+                                                                                                                                                           70
+      Maximum Temperature (°K)
+
+
+
+
+                                      344
+                                                                                                                            Average Power (W)
+
+
+
+                                                                                                                                                           60
+                                      343
+
+                                                                                                                                                           50
+                                      342
+                                                                                                                                                           40
+
+                                      341
+                                                                                                                                                           30
+
+                                                                                     ES-RMS SyncSleep                                                                                                ES-RMS SyncSleep
+                                      340
+                                                                                     ES-RMS IndSleep NonUni                                                20                                        ES-RHS+ IndSleep Uni
+                                                                                     ES-RMS IndSleep UniOrig                                                                                         ES-RHS+ IndSleep UniOrig
+                                                                                     RMS SysClock                                                                                                    RMS SysClock
+                                      339                                                                                                                  10
+                                        0.5       1           1.5          2        2.5            3       3.5                                              0.5    1           1.5         2         2.5            3       3.5
+                                                              Taskset Utilization                                                                                              Taskset Utilization
+
+
+       Figure 14 Dynamic simulation: maximum         Figure 15 Dynamic simulation: average
+    temperature w.r.t taskset utilization (m = 4) power w.r.t taskset utilization (m = 4)
+
+
+
+calculate each core’s temperature, in each scheduler-simulation interval. Inferno supports
+fully-partitioned fixed-priority scheduling. Simulation parameters such as the number of cores,
+simulation cycles, simulation granularity, CSleepM in , floorplan and thermal configuration
+can be specified by the user. The power consumption of each core for different operating
+frequencies in the busy, idle and deep-sleep states are specified in a look-up table. Based on
+the taskset and partition provided by the user, Inferno provides a trace of the power and
+temperature values at each simulation instant. The source code for Inferno can be found at
+https://github.com/sandeepdsouza93/Inferno.
+    In order to use realistic power values, we considered the automotive benchmark from the
+MiBench suite [19]. The benchmark was compiled and executed in the SniperSim [7] cycle-
+accurate x86 emulator (for a Nehalem-class x86 processor) for a range of frequency settings
+(1.22-2.66 GHz). The execution trace obtained from SniperSim is then fed to the McPAT [26]
+power simulator, which calculates the power consumption based on an x86 Nehalem power
+model (45 nm technology node). To model the dependency of static power on temperature,
+McPAT power calculations were done for the range of temperatures: 300-400○ K, and the
+values were stored in a look-up table. Inferno uses these values to compute the core power
+consumption value, based on the previously calculated core temperature. The scheduling
+simulation granularity was set to 10µs, and Hotspot’s default thermal configuration was used.
+    We have simulated a quad-core processor, with the floor-plan consisting of cores laid out
+
+
+
+                                                                                                                                                                                                                                  ECRTS 2017
+21:20   Thermal Implications of Energy-Saving Schedulers
+
+
+        in a square grid (as shown in Figures 2(a) and 3(a)). 10,000 randomly generated tasksets
+        were considered, each containing 1 to 20 tasks. The taskset utilization varied from 0.8 to 3.2.
+        Each taskset was simulated up to thermal steady state (Hotspot warm-up was considered).
+            Figure 14 plots maximum temperature versus taskset utilization. Observe that ES-RMS
+        IndSleep with non-uniform sleep yields the lowest temperature. We also compared techniques
+        from [12] following a purely energy-efficient design (UniOrig), and it returned the highest
+        temperature —on average up to 3.91○ K of difference between ES-RMS IndSleep without
+        thermal considerations (UniOrig), and ES-RMS IndSleep with non-uniform sleep. We also
+        compare our techniques with SysClock, which is the energy-optimal fixed-priority technique
+        for static frequency scaling. We simulate SysClock with RMS where each core could have its
+        own frequency. SysClock yields higher temperatures than IndSleep —up to 1.5○ K higher.
+            Figure 15 plots the average power consumption versus taskset utilization. We find that by
+        better utilizing the idle durations, ES-RHS+ IndSleep yields lower power consumption than
+        ES-RMS SyncSleep —up to 5.04 W lower. ES-RHS+ IndSleep on average yields a power
+        consumption that is 8.52 W lower than SysClock with a maximum difference of 21.74 W. This
+        highlights the importance of energy-saving techniques based on sleep states. Our techniques
+        also provide greater power savings compared to the purely energy-efficient design methodology
+        presented in [12] —up to 8.36 W additional power-savings for ES-RHS+ IndSleep. Note that,
+        although ES-RHS+ IndSleep provides greater energy savings, ES-RMS IndSleep yields lower
+        temperatures. Additionally, even though SysClock consumes significantly more power than
+        ES Schedulers, they both yield similar maximum temperatures. This highlights the fact that
+        energy efficiency does not always imply lower temperatures.
+
+
+         7     Conclusions
+
+        In this paper, we analyze the thermal implications of fixed-priority energy-saving schedulers,
+        which utilize the processor’s deep-sleep state to save energy. We infer design choices from a
+        well-known thermal model, and present two techniques for designing thermally-effective ES
+        Schedulers: the SysSleep algorithm to provide optimal sleep utilization and the ThermoSleep
+        heuristic to design a thermally-effective ES-task. Specifically, we derive a lower bound on the
+        optimal maximum temperature, thus quantifying the best thermal performance achievable by
+        ES Schedulers. In the multi-core context, we extend our analysis to two classes of scheduling
+        problems [12]: SyncSleep, where cores need to synchronously transition into deep sleep, and
+        IndSleep, where cores can independently transition into deep sleep. We consider the impact
+        of both task partitioning and ES-task phasing on temperature. In the SyncSleep context, we
+        observe that the synchronous deep-sleep constraint reduces the temperature-minimization
+        problem to the energy-minimization problem, with the exception of the synchronous ES-task
+        period calculation. On the other hand, while energy minimization is straightforward in the
+        IndSleep context (all feasible partitions are optimal using ES-RHS+[12]), the same cannot be
+        said for temperature minimization. The dependence of temperature on the ES-task periods
+        and relative phasing makes the IndSleep problem non-trivial.
+            Since we focus on fully-partitioned scheduling, our proposed framework can be extended
+        to heterogeneous multi-core processors. Additionally, our techniques do not require significant
+        knowledge of a system’s thermal parameters, and hence are applicable to a range of multi-core
+        platforms. Static analysis and dynamic simulation validate our approach, yielding lower
+        temperatures and better energy savings than both the purely energy-efficient ES Scheduler
+        design [12], and frequency scaling based techniques [29]. Our results show that, while energy
+        savings is key to lower temperatures, not all energy-efficient solutions yield low temperatures.
+S. D’souza and R. Rajkumar                                                                         21:21
+
+
+     References
+ 1   Intel Core Processor Family (4th Generation). [online]: www.intel.com/content/dam/www/
+     public/us/en/documents/datasheets/4th-gen-core-family-desktop-vol-1-datasheet.pdf.
+ 2   Samsung Exynos 5800. [online]: www.samsung.com/semiconductor/minisite/exynos/w
+     /solution/mobile_ap/5420/.
+ 3   K. Agarwal, K. Nowka, H. Deogun, and D. Sylvester. Power gating with multiple sleep
+     modes. In International Symposium on Quality Electronic Design, pages 633–637, 2006.
+     doi:10.1109/ISQED.2006.102.
+ 4   M. Ahmed, N. Fisher, S. Wang, and P. Hettiarachchi. Minimizing peak temperature in
+     embedded real-time systems via thermal-aware periodic resources. Sustainable Computing:
+     Informatics and Systems, 1(3):226–240, 2011. doi:doi.org/10.1016/j.suscom.2011.05.
+     006.
+ 5   R. Ahmed, P. Ramanathan, and K. K. Saluja. On thermal utilization of periodic task sets in
+     uni-processor systems. In International Conference on Embedded and Real-Time Computing
+     Systems and Applications, pages 267–276, 2013. doi:10.1109/RTCSA.2013.6732227.
+ 6   N. Audsley, A. Burns, M. Richardson, K. Tindell, and A. J. Wellings. Applying new
+     scheduling theory to static priority pre-emptive scheduling. Software Engineering Journal,
+     8:284–292, 1993. doi:10.1.1.132.2794.
+ 7   T. E. Carlson, W. Heirman, S. Eyerman, I. Hur, and L. Eeckhout. An evaluation of high-
+     level mechanistic core models. ACM Trans. Archit. Code Optim., 11(3):28:1–28:25, 2014.
+     doi:10.1145/2629677.
+ 8   Y. Chandarli, N. Fisher, and D. Masson. Response time analysis for thermal-aware real-time
+     systems under fixed-priority scheduling. In IEEE International Symposium on Real-Time
+     Distributed Computing, pages 84–93, 2015. doi:10.1109/ISORC.2015.34.
+ 9   T. Chantem, R. P. Dick, and X. S. Hu. Temperature-aware scheduling and assignment for
+     hard real-time applications on mpsocs. In Design, Automation and Test in Europe, pages
+     288–293, 2008. doi:10.1109/DATE.2008.4484694.
+10   J. J. Chen, S. Wang, and L. Thiele. Proactive speed scheduling for real-time tasks un-
+     der thermal constraints. In IEEE Real-Time and Embedded Technology and Applications
+     Symposium, pages 141–150, 2009. doi:10.1109/RTAS.2009.30.
+11   A. K. Coskun, T. S. Rosing, and K. Whisnant. Temperature aware task scheduling in
+     mpsocs. In Design, Automation Test in Europe Conference Exhibition, pages 1–6, 2007.
+     doi:10.1109/DATE.2007.364540.
+12   S. D’souza, A. Bhat, and R. Rajkumar. Sleep scheduling for energy-savings in multi-
+     core processors. In Euromicro Conference on Real-Time Systems, pages 226–236, 2016.
+     doi:10.1109/ECRTS.2016.16.
+13   Intel Core2 Duo. [online]: download.intel.com/design/processor/datashts/ 320390.pdf.
+14   P. Emberson, R. Stafford, and R. Davis. Techniques for the synthesis of multiprocessor
+     tasksets. In International Workshop on Analysis Tools and Methodologies for Embedded
+     and Real-Time Systems, pages 6–11, 2010.
+15   AMD Opteron Family. [online]: support.amd.com/techdocs/40036.pdf.
+16   N. Fisher, J. J. Chen, S. Wang, and L. Thiele. Thermal-aware global real-time scheduling
+     on multicore systems. In IEEE Real-Time and Embedded Technology and Applications
+     Symposium, pages 131–140, 2009. doi:10.1109/RTAS.2009.34.
+17   Y. Fu, N. Kottenstette, C. Lu, and X. D. Koutsoukos. Feedback thermal control of real-time
+     systems on multicore processors. In ACM International Conference on Embedded Software,
+     pages 113–122, 2012. doi:10.1145/2380356.2380379.
+18   M. R. Garey and D. S. Johnson. Computers and Intractability: A Guide to the Theory of
+     NP-Completeness. W. H. Freeman & Co, 1990. doi:10.1137/1024022.
+
+
+
+
+                                                                                                  ECRTS 2017
+21:22   Thermal Implications of Energy-Saving Schedulers
+
+
+        19   M. R. Guthaus, J. S. Ringenberg, D. Ernst, T. M. Austin, T. Mudge, and R. B. Brown.
+             Mibench: A free, commercially representative embedded benchmark suite. In IEEE In-
+             ternational Workshop on Workload Characterization, pages 3–14, 2001. doi:10.1109/WWC.
+             2001.15.
+        20   P. M. Hettiarachchi, N. Fisher, M. Ahmed, L. Y. Wang, S. Wang, and W. Shi. The design
+             and analysis of thermal-resilient hard-real-time systems. In IEEE Real Time and Embedded
+             Technology and Applications Symposium, pages 67–76, 2012. doi:10.1109/RTAS.2012.17.
+        21   R. M. Karp. Reducibility among combinatorial problems. In Complexity of Computer
+             Computations: Symposium on the Complexity of Computer Computations, pages 85–103,
+             1972. doi:10.1007/978-1-4684-2001-2_9.
+        22   N. S. Kim, T. Austin, D. Baauw, T. Mudge, K. Flautner, J. S. Hu, M. J. Irwin, M. Kan-
+             demir, and V. Narayanan. Leakage current: Moore’s law meets static power. Computer,
+             36(12):68–75, 2003. doi:10.1109/MC.2003.1250885.
+        23   T. Kuroda. Cmos design challenges to power wall. In International Microprocesses and
+             Nanotechnology Conference, pages 6–7, 2001. doi:10.1109/IMNC.2001.984030.
+        24   J. Lehoczky, L. Sha, and Y. Ding. The rate monotonic scheduling algorithm: exact char-
+             acterization and average case behavior. In IEEE Real-Time Systems Symposium, pages
+             166–171, 1989. doi:10.1109/REAL.1989.63567.
+        25   J. Y. T. Leung and J. Whitehead. On the complexity of fixed-priority scheduling of
+             periodic, real-time tasks. Performance Evaluation, 2(4):237 – 250, 1982. doi:10.1016/
+             0166-5316(82)90024-4.
+        26   S. Li, J. H. Ahn, R. D. Strong, J. B. Brockman, D. M. Tullsen, and N. P. Jouppi. Mcpat:
+             An integrated power, area, and timing modeling framework for multicore and manycore
+             architectures. In IEEE/ACM International Symposium on Microarchitecture, pages 469–
+             480, 2009. doi:10.1145/1669112.1669172.
+        27   C. L. Liu and James W. Layland. Scheduling algorithms for multiprogramming in a hard-
+             real-time environment. Journal of the ACM, 20(1):46–61, 1973. doi:10.1145/321738.
+             321743.
+        28   A. Rowe, K. Lakshmanan, H. Zhu, and R. Rajkumar. Rate-harmonized scheduling for
+             saving energy. In IEEE Real-Time Systems Symposium, pages 113–122, 2008. doi:10.
+             1109/RTSS.2008.50.
+        29   S. Saewong and R. Rajkumar. Practical voltage-scaling for fixed-priority rt-systems. In
+             IEEE Real-Time and Embedded Technology and Applications Symposium, pages 106–115,
+             2003. doi:10.1.1.123.1440.
+        30   L. Sha, R. Rajkumar, and J. P. Lehoczky. Priority inheritance protocols: An approach
+             to real-time synchronization. IEEE Transactions on Computers, 39(9):1175–1185, 1990.
+             doi:10.1109/12.57058.
+        31   J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers. The impact of technology scaling
+             on lifetime reliability. In International Conference on Dependable Systems and Networks,
+             pages 177–186, 2004. doi:10.1109/DSN.2004.1311888.
+        32   R. Viswanath, V. Wakharkar, A. Watwe, and V. Lebonheur. Thermal performance chal-
+             lenges from silicon to systems. Intel Corp. Manufacturing Group, 2000. doi:10.1.1.14.
+             8322.
+        33   S. Wang, J. J. Chen, Z. Shi, and L. Thiele. Energy-efficient speed scheduling for real-time
+             tasks under thermal constraints. In IEEE International Conference on Embedded and Real-
+             Time Computing Systems and Applications, pages 201–209, 2009. doi:10.1109/RTCSA.
+             2009.29.
+        34   H. Wei, K. Lin, W. Lu, and W. Shih. Generalized rate monotonic schedulability bounds
+             using relative period ratios. Information Processing Letters, 107(5):142 – 148, 2008. doi:
+             10.1016/j.ipl.2008.02.006.
+S. D’souza and R. Rajkumar                                                                         21:23
+
+
+35   F. Yao, A. Demers, and S. Shenker. A scheduling model for reduced cpu energy. In IEEE
+     Annual Foundations of Computer Science, pages 374–382, 1995. doi:10.1109/SFCS.1995.
+     492493.
+36   B. Yun, K. G. Shin, and S. Wang. Predicting thermal behavior for temperature management
+     in time-critical multicore systems. In IEEE Real-Time and Embedded Technology and
+     Applications Symposium, pages 185–194, 2013. doi:10.1109/RTAS.2013.6531091.
+37   R. Zhang, M. R. Stan, and K. Skadron. Hotspot 6.0: Validation, acceleration and extension.
+     University of Virginia, CS-2015-04.
+
+
+
+
+                                                                                                  ECRTS 2017
+

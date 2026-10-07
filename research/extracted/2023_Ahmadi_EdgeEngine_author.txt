@@ -1,0 +1,1097 @@
+EdgeEngine: A Thermal-Aware Optimization Framework for Edge
+                         Inference
+                Amirhossein Ahmadi, Hazem A. Abdelhafez, Karthik Pattabiraman and Matei Ripeanu
+                                                              {amirhmi,hazem,karthikp,matei}@ece.ubc.ca
+                                                                    University of British Columbia
+
+ABSTRACT                                                                                            1    INTRODUCTION
+Heterogeneous edge platforms enable the efficient execution of ma-                                  Context. Recent advances in machine learning (ML) research have
+chine learning inference applications. These applications often have                                led to numerous applications (e.g., computer vision, autonomous
+a critical constraint (such as meeting a deadline) and an optimiza-                                 driving) that are deployed on resource-constrained edge platforms
+tion goal (such as minimizing energy consumption). To navigate                                      (e.g., drones, autonomous vehicles, IoT devices) [19, 33]. These ap-
+this space, existing optimization frameworks adjust the platform’s                                  plications usually have specific Quality of Service (QoS) objectives
+frequency configuration for the CPU, the GPU and/or the mem-                                        (e.g., latency, energy budget, accuracy) for the target inference tasks.
+ory controller. However, existing optimization frameworks have                                      Violating these objectives can have severe consequences [14], e.g.,
+two limitations. First, edge applications are frequently deployed                                   an autonomous vehicle colliding with an obstacle due to missing
+in environments where they are exposed to ambient temperature                                       an object detection deadline, a drone crashing after running out of
+variations. Second, a recent study has shown that temperature                                       battery.
+has a significant impact on edge platform characteristics. In this                                     At the same time, the advent of heterogeneous embedded edge
+context, today’s frequency optimization frameworks (which are                                       platforms with a System on Chip (SoC) design that integrate mul-
+thermal-oblivious) select frequency configurations that either vio-                                 tiple processing units (e.g., CPU, GPU) on the same chip, such as
+late the application’s constraints, or are sub-optimal in terms of the                              the NVIDIA Jetson platform family, has enabled the execution of
+optimization goal.                                                                                  ML inference workloads at the edge [14, 16]. These platforms are
+   To address these shortcomings, we propose EdgeEngine, a light-                                   designed to speed up ML-related tasks in a power-efficient manner,
+weight thermal-aware optimization framework. EdgeEngine mon-                                        and employ tunable processing units and memory components
+itors the platform’s temperature and uses reinforcement learn-                                      [3, 5].
+ing to adjust the frequency configuration of all underlying plat-                                      Frequency optimization frameworks [7, 8, 10, 11, 14, 17, 31] (§3.3)
+form resources to meet the application’s constraints. We find that                                  have the important role of adjusting the frequency configuration of
+EdgeEngine meets the application’s constraint, and achieves 29%                                     the underlying components of the edge platform aiming to satisfy
+lower energy consumption (up to 2x) and 41% fewer violations com-                                   application constraints while simultaneously optimizing one or
+pared to existing state-of-the-art thermal-oblivious optimization                                   more unconstrained dimensions, e.g., meet a target deadline while
+frameworks.                                                                                         minimizing energy consumption.
+                                                                                                    Problem Statement. A significant challenge for such optimiza-
+CCS CONCEPTS                                                                                        tion frameworks is that edge devices are often deployed in un-
+• Computer systems organization → Embedded systems.                                                 controlled environments with high temperature variations. For
+                                                                                                    example, temperatures in the desert can vary from below 0°C at
+KEYWORDS                                                                                            night to 70°C when exposed directly to the sun [13]. Our work
+Performance and power variation, Edge computing, Reinforcement                                      (summarized in §2, [6]) has found that there is significant variation
+Learning                                                                                            in edge platforms’ power consumption (up to 40%) and running
+                                                                                                    time (to 5%) when the ambient temperature changes from 25°C to
+ACM Reference Format:                                                                               70°C. Unfortunately, existing frequency optimization frameworks
+Amirhossein Ahmadi, Hazem A. Abdelhafez, Karthik Pattabiraman and                                   are thermal-oblivious, i.e., their design does not consider the am-
+Matei Ripeanu. 2023. EdgeEngine: A Thermal-Aware Optimization Frame-                                bient temperature. As a result, these frameworks either provide
+work for Edge Inference. In The Eighth ACM/IEEE Symposium on Edge                                   sub-optimal solutions or, more importantly, fail to meet their QoS
+Computing (SEC ’23), December 6–9, 2023, Wilmington, DE, USA. ACM, New
+                                                                                                    objectives (§3.2 and §3.3). To tackle the challenge posed by ambient
+York, NY, USA, 13 pages. https://doi.org/10.1145/3583740.3626616
+                                                                                                    temperature fluctuations, optimization frameworks must adapt in
+                                                                                                    real-time. The adaptation should be: (i) swift, ensuring timely adjust-
+Permission to make digital or hard copies of all or part of this work for personal or               ments to changing temperatures, and (ii) conservative, minimizing
+classroom use is granted without fee provided that copies are not made or distributed               the number of violations during the adaptation.
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the                     However, the large frequency configuration space of current
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or              heterogeneous edge platforms poses a challenge for achieving real-
+republish, to post on servers or to redistribute to lists, requires prior specific permission
+and/or a fee. Request permissions from permissions@acm.org.
+                                                                                                    time adaptation, and identifying efficient configurations. This is
+SEC ’23, December 6–9, 2023, Wilmington, DE, USA                                                    influenced by two factors. First, these platforms have numerous
+© 2023 Copyright held by the owner/author(s). Publication rights licensed to ACM.                   components that are frequency configurable, namely the process-
+ACM ISBN 979-8-4007-0123-8/23/12. . . $15.00
+https://doi.org/10.1145/3583740.3626616
+                                                                                                    ing units (e.g., CPU, GPU, application-specific accelerators) as well
+                                                                                                1
+SEC ’23, December 6–9, 2023, Wilmington, DE, USA                                                                                               Ahmadi et al.
+
+
+as the memory controller. Second, each component offers a wide                        ■ Highlighting the effect of thermal-obliviousness on existing edge
+range of configurable frequencies, often spanning over a 10x range                      inference frequency optimizers (§3.2). We analyze the effect of
+with dozens of available levels. This leads to an overall configura-                    ambient temperature changes on energy-constrained applica-
+tion space with tens of thousands of unique configurations, where                       tions in the absence of thermal adaptation (§3.2 and §3.3). We
+the impact of the frequency configuration choice on application                         find that, depending on the framework and evaluation scenario,
+execution time or power consumption leads to a range spanning                           temperature changes can lead to high rates of energy constraint
+two orders of magnitude (§3.1).                                                         violations and up to 20% higher execution time. To conduct this
+                                                                                        study, we build on prior work that reveals that ambient tem-
+Objectives. To address this issue, this study explores the design
+                                                                                        perature variation can lead to significant differences in power
+of a practical thermal-aware frequency optimization framework
+                                                                                        consumption (up to 40%), and non-negligible differences in the
+for edge inference that aims to satisfy the following six objec-
+                                                                                        execution time (up to 5%) of edge inference applications (sum-
+tives: (𝑂 1 ) Adaptation to platform temperature: ability to adjust
+                                                                                        marized in (§2).
+the system’s frequency configuration based on the current platform
+                                                                                      ■ Proposing, EdgeEngine, a thermal-aware optimization framework
+temperature; (𝑂 2 ) Cover the full configuration space: able to select
+                                                                                        based on RL (§4). EdgeEngine supports both deadline- and energy-
+energy/performance efficient configuration by adjusting frequen-
+                                                                                        constrained applications (§5.5). EdgeEngine incorporates ther-
+cies for all the underlying components (e.g., CPU, GPU, memory
+                                                                                        mal awareness and leverages RL and several domain-specific
+controller); (𝑂 3 ) Real-time adaptation: ability to swiftly adapt with a
+                                                                                        heuristics to enable rapid adaptation with minimal violations in
+low number of violations during the adaptation process; (𝑂 4 ) Robust
+                                                                                        response to temperature changes. Importantly, EdgeEngine is
+to noise: ability to handle the inherent variability in execution time
+                                                                                        capable of adjusting the frequency for all the underlying compo-
+and power consumption during application execution; (𝑂 5 ) Light-
+                                                                                        nents to identify the most efficient settings. Finally, EdgeEngine
+weight design: low resource overheads such that it can be deployed
+                                                                                        is robust to variability during inference execution, ensuring com-
+on resource-constrained edge devices; and (𝑂 6 ) Generalizability:
+                                                                                        pliance with the application’s constraints (§6.2).
+ability to be deployed in different environments and support a large
+                                                                                      ■ Evaluating EdgeEngine on various workloads, constraints, and
+class of inference applications.
+                                                                                        environments as well as comparing it to related work (§6). We
+Approach. To this end, we propose EdgeEngine1 , a lightweight                           design and implement an emulation environment (§5.4 to sys-
+thermal-aware optimization framework for real-time inference on                         tematically expose the platform to different ambient tempera-
+heterogeneous edge devices. EdgeEngine configures the platform’s                        tures, while running various ML inference workloads with both
+CGM2 frequency configuration to efficiently satisfy the applica-                        loose and tight energy and deadline constraints (§5.5). We com-
+tions’ constraints and optimization objectives in response to varia-                    pare EdgeEngine with two state-of-art optimization frameworks
+tions in platform temperature.                                                          NeuOS [7] and AutoScale [17], with TOF (a thermal-oblivious
+   In EdgeEngine, users specify the application’s constraints in the                    variant of EdgeEngine), as well as with a perfect-knowledge ORA-
+energy or time dimensions (i.e., an energy budget or target deadline)                   CLE (that always selects the optimal configuration) in terms of (i)
+and an optimization objective. At execution time, EdgeEngine con-                       satisfying the application constraint, (ii) optimization goal - en-
+tinuously observes the platform’s temperature and the application                       ergy efficiency (energy per inference) for deadline-constrained
+behavior, and selects a CGM frequency configuration to satisfy the                      applications, and runtime (i.e., inference execution time) for
+constraint while optimizing in the unconstrained dimension.                             energy-constrained applications.
+   EdgeEngine uses Reinforcement Learning (RL) to adapt to the                              We demonstrate that EdgeEngine adapts successfully in set-
+changes in edge device characteristics induced by platform tem-                         tings that have energy or runtime constraints. When compared
+perature variations (§4). EdgeEngine employs two domain-specific                        to existing state-of-the-art thermal-oblivious optimization frame-
+heuristics that enable real-time adaptation when a temperature is                       works, EdgeEngine demonstrates significant improvements. It
+observed for the first time. These heuristics accelerate the adapta-                    achieves an average of 29% lower energy consumption and 26%
+tion process and minimize constraint violations. First, EdgeEngine                      fewer violations for deadline-constrained applications, as well
+can identify and discard configurations that have a high probability                    as an average of 8% lower runtime and 41% fewer violations for
+of violating constraints, thus preventing their selection. Second,                      energy-constrained applications. Notably, EdgeEngine’s selected
+whenever EdgeEngine detects a constraint violation, it chooses a                        configurations incur only a slight increase of up to 3% in run-
+frequency configuration that leads to efficient space exploration                       time and energy consumption compared to those selected by the
+while avoiding future violations.                                                       perfect knowledge ORACLE (and lead to no violations).
+                                                                                            Finally, the lightweight version of reinforcement learning
+Contributions. To the best of our knowledge, EdgeEngine is the first                    used (Q-Learning) leads to low performance and memory over-
+thermal-aware frequency optimization framework for edge inference.                      heads thus making EdgeEngine well-suited for deployment on
+EdgeEngine incorporates real-time adaptation, and adjusts the fre-                      computationally-constrained embedded devices.
+quency configuration of all the underlying components in response
+to platform temperature changes during execution, without relying
+on prior knowledge. Our contributions are:                                            2   THE IMPACT OF AMBIENT TEMPERATURE
+1 Available at: https://github.com/DependableSystemsLab/EdgeEngine                    Our prior work [6] characterized the impact of ambient tempera-
+2 A CGM frequency configuration is a unique combination of CPU, GPU, and Memory       ture on the runtime and power consumption of machine learning
+frequencies.                                                                          inference tasks on Nvidia Jetson TX2 heterogeneous edge devices.
+                                                                                  2
+EdgeEngine: A Thermal-Aware Optimization Framework for Edge Inference                                                                           SEC ’23, December 6–9, 2023, Wilmington, DE, USA
+
+
+This section briefly presents the methodology and the characteriza-                             12                                                                                                            25ºC
+                                                                                                                                                                                                              70ºC
+tion results. Additional details on the methodology are available                               10
+
+
+
+
+                                                                                Power consumption (watt)
+in our study characterizing variability among nominally identical                                8
+heterogeneous edge boards [4]                                                                    6                       18.7%      18.9%       15.1%         17.8%       17.4%       14.5%          27.1%
+                                                                                                                                                   high frequency
+                                                                                                                                                                                                              25ºC
+2.1    Methodology                                                                                         5                                                                                                  70ºC
+
+                                                                                                           4
+Temperature-Controlled Chamber. We place the Edge platform in-
+                                                                                                           3
+side a temperature-controlled chamber (similar to [2]), which can
+                                                                                                           2             20.7%      25.2%       20.2%         24.6%       20.0%       18.7%          38.1%
+control the temperature and humidity conditions experienced by                                                         Squeezenet Mobilenetv2   Alexnet     Googlenet   Inception3    Resnet   Shufflenetv2
+
+the board during its operation. We systematically expose the board                                                                              medium frequency
+to different ambient temperatures.
+                                                                               Figure 1: Boxplots present the distribution of measured power
+    Environmental Setup. To create a controlled and stable environ-            while executing different CNN inference workloads at 25 (left, grey
+ment for accurate data collection, the environmental setup involves            boxplots) and 70ºC (right) in the high (top plot) and medium (bottom)
+various steps to reduce experiment bias [23] (i.e., noise) including:          frequency configurations. Boxplots present the median, top and
+(i) maintaining the fan on all the time, (ii) CPU core isolation and           bottom quartiles, and 5th/95th %-tiles (shown by whiskers). Outliers
+thread affinity, (iii) disabling concurrent user-space applications,           were omitted for clarity. For each model, the differences (as %-tiles)
+(iv) preventing I/O operations and remote access, and (v) enabling             between the medians are shown on the x-axis. Lower values are
+PyTorch-specific optimizations at all times. We also make sure that            better.
+hardware throttling does not kick in.
+    Data Collection. To collect runtime and power data, we follow a
+two-step procedure. First, we reboot the board, and run the target                                                                                                                                            25ºC
+                                                                                                                  17                                                                                          70ºC
+benchmark five times to avoid cold start effects at both the applica-
+tion and board levels. Second, we repeatedly perform a sequence                                                   16
+                                                                                                   Runtime (ms)
+
+that involves: (i) sending input from the CPU to the GPU, (ii) run-
+ning the benchmark on the GPU, and (iii) sending the result back.                                                 15
+We refer to this sequence as a block. We use the block, rather than a
+single benchmark execution, to eliminate the overhead associated                                                  14
+with the CUDA timers and synchronization. We determine the size
+                                                                                                                  13
+of each block based on two criteria: (i) it must have at least 100 it-
+erations, and (ii) the CUDA runtime and synchronization overhead                                                  12             1.4%       1.7%          5.1%          1.6%         2.5%           3.1%
+
+should be less than 0.1% of the block runtime.                                                                              Squeezenet Mobilenetv2        Alexnet     Googlenet      Resnet    Shufflenetv2
+
+
+    Terminology. We define a runtime observation as the average
+                                                                               Figure 2: Boxplots present the distribution of the medians of the
+benchmark execution time during a block, and a power observation
+                                                                               collected runtime samples for different CNN inference workloads
+as the average power readings of onboard power monitors during                 at 25 (left, grey boxplots) and 70ºC (right) in the high frequency
+the block execution. We refer to a collection of observations as a             configurations. Boxplots have the same meaning as in Figure 1. For
+sample.                                                                        each model, the differences (%) between the medians at different
+    Non-Parametric Statistical Techniques. We ran Anderson-Darling             temperatures are shown on the x-axis. Lower values are better.
+normality test [12] on runtime and power samples, and found that
+the data does not follow a normal distribution. As a consequence,
+we employ non-parametric statistical analysis. We determine the
+stopping point for data collection based on observed values (similar           higher: 21.6%, with Shufflenetv2 again demonstrating the maximum
+to [20]) such that our estimation of the median is robust. Specifically,       increase: 38.1%.
+we define two stop criteria for collecting observations for a sample:
+(i) the sample must contain at least 50 observations, and (ii) the             2.3                                Impact on Runtime
+Relative Margin of Error (RME) for the estimation of the median                Due to the time-consuming nature of collecting runtime data, par-
+should be ≤ 0.5% with a confidence level of 99%.                               ticularly in the medium frequency configuration, we focus solely on
+                                                                               the high frequency configuration3 . Figure 2 indicates an increase
+                                                                               in median runtime at 70ºC compared to 25ºC for all models. On
+2.2    Impact on Power Consumption                                             average, there is a 2.5% increase in median runtime, with a maxi-
+Figure 1 presents power consumption for each workload in the high              mum of 5.1% observed for Alexnet. For visual clarity, Inception3 is
+(top plot) and medium (bottom plot) frequency settings at both low             omitted from the plot, but it also shows a similar increase (2.1%) in
+(left, grey boxplots) and high (right) temperatures. In the high-              median runtime.
+frequency configuration, the average increase of the median power
+consumption across all workloads is 18.4% at 70°C compared to
+25°C, with the Shufflenetv2 exhibiting the highest increase: 27.1%.            3 The data collected for only a few benchmarks in the medium frequency configuration
+In the medium frequency setting, the average increase is even                  supports the conclusion we present here.
+                                                                           3
+SEC ’23, December 6–9, 2023, Wilmington, DE, USA                                                                                                Ahmadi et al.
+
+
+                                                                                     ■ impactful: given that, for each processing element (CPU, GPU,
+                   1.50                                                                accelerators) and the memory controller the configurable fre-
+                   1.25                                                                quency range has a range of 10× or more, the frequency choice
+Normlized Energy
+
+
+
+
+                                                                                       has a significant impact on the application runtime and energy
+                   1.00                                                                consumption (over 100× for TX2);
+                   0.75                           CGM
+                                                  GM                                 ■ interdependent - that is, the configuration choice for each in-
+                                                  CM
+                   0.50                           CG
+                                                                                       dividual component is essential to maximize application level
+                                                  M                                    objectives. To highlight this feature, Figure 3 demonstrates that
+                   0.25                           G                                    the minimum possible energy consumption can only be achieved
+                                                  C
+                   0.00 Googlenet   Mobilenetv2   Shufflenetv2   Squeezenet            by configuring all CGM components. Taking Squeezenet as an
+                                                                                       example, the minimum energy consumption per inference is
+                                                                                       101mJ. However, if we do not adjust all components, the en-
+Figure 3: The impact of restricting the configuration space. The
+plot presents the energy consumption of various ML inference work-
+                                                                                       ergy consumption is higher. For instance, failing to configure
+loads choosing the best frequency configuration that meets a 50FPS                     the memory controller frequency, yet optimizing the configura-
+(i.e., 20 ms deadline) QoS constraint and optimizes for energy. Dif-                   tion for both CPU and GPU results in a 46% increase in optimal
+ferent bars consider a different (restricted) configuration space – the                energy consumption (146mJ per inference). Hence, to achieve op-
+components tuned for each bar are represented by ‘C‘ for CPU, ‘G‘                      timal configuration, it is necessary to configure all components
+for GPU, and ‘M‘ for the Memory controller. Data is normalized by                      simultaneously.
+the (best) CGM combination. (Lower is better.)
+
+                                                                                     3.2     The Impact of Thermal-Obliviousness
+                                                                                     To highlight the shortcomings of thermal-oblivious frequency opti-
+3                  THERMAL-OBLIVIOUS OPTIMIZATION                                    mization frameworks, we emulate an optimal (yet thermal-oblivious)
+                   FRAMEWORKS                                                        frequency optimization framework: the decisions of this framework
+                                                                                     are optimal in the sense that, at application startup, it chooses an
+Frequency optimization frameworks [8, 10, 11, 14] control the de-
+                                                                                     optimal frequency configuration by evaluating all the possible con-
+vice’s frequency configuration and work on a two-dimensional con-
+                                                                                     figurations. However, this decision is static: the framework does
+straint space: time and energy. For a given workload, the framework
+                                                                                     not take into account the impact of temperature variations after
+will adjust the frequency configuration for some/all components
+                                                                                     the application’s start-up.
+of the device (§3.1), to find a configuration that: (i) satisfies the
+                                                                                        We assume an energy-constrained scenario: the objective is to
+critical constraint dimension, and (ii) is efficient for the other un-
+                                                                                     select the optimal CGM configuration (𝐶𝐺𝑀optimal ) such that the
+constrained dimension (e.g., for a deadline-constrained application,
+                                                                                     energy budget per inference is not exceeded while maximizing per-
+the frequency configuration must both meet the target deadline
+                                                                                     formance (i.e., minimizing runtime per inference). The challenge
+and be energy efficient).
+                                                                                     is the variation in energy consumption and runtime at different
+   This section highlights the importance of taking into account
+                                                                                     platform temperatures. In other words, the energy and runtime of
+the effects of temperature on power and runtime in the context
+                                                                                     𝐶𝐺𝑀𝑖 at temperature 𝜃 1 are different from those at temperature 𝜃 2
+of a frequency optimization framework (§3.2), and discusses the                              𝜃1               𝜃2                 𝜃1                 𝜃2
+                                                                                     (𝑒𝑛𝑒𝑟𝑔𝑦𝐶𝐺𝑀     ≠ 𝑒𝑛𝑒𝑟𝑔𝑦𝐶𝐺𝑀    and 𝑟𝑢𝑛𝑡𝑖𝑚𝑒𝐶𝐺𝑀        ≠ 𝑟𝑢𝑛𝑡𝑖𝑚𝑒𝐶𝐺𝑀     ).
+limitations of existing thermal-oblivious frameworks in achieving                                 𝑖              𝑖                    𝑖                 𝑖
+the objectives highlighted in §1. All experiments use the experi-                    Consequently, the optimal frequency configuration may depend on
+                                                                                                                       𝜃1               𝜃2
+mental setup described later in §5. The section starts by describing                 the platform’s temperature (𝐶𝐺𝑀optimal   ≠ 𝐶𝐺𝑀optimal   ). A thermal-
+the characteristics of the frequency configuration space (§3.1) and                  oblivious framework, however, lacks the ability to adapt to thermal
+concludes with a brief introduction to RL, the key technique we                      variations, and determines the optimal configuration at a fixed tem-
+use to support thermal-awareness (§4).                                               perature at bootstrap without adjusting it later if the temperature
+                                                                                     changes.
+                                                                                        We have implemented such a framework to study the effect of
+3.1                   The Frequency Configuration Space
+                                                                                     temperature variation on four different ML inference workloads.
+Today’s edge systems have highly configurable processing units                       Figure 4 demonstrates two unfavorable scenarios:
+and memory controllers. Nvidia Jetson TX2, for example, consists of
+four big Nvidia Denver cores, two little ARM cores, 256-core Nvidia                                                               25𝐶 ) and using the op-
+                                                                                     ■   Bootstraping at low temperature (𝐶𝐺𝑀optimal
+Pascal GPU, and 8 GB of shared memory. Each of these components
+has voltage and frequency gates that can be configured using the                         timization decision at a higher temperature: This leads to energy
+DVFS software module [7].                                                                constraint violations for all the applications (Figure 4). For in-
+   The resulting frequency configuration space is:                                       stance, in the case of Squeezenet, if the framework selects the
+                                                                                         optimal configuration at 25°C, it satisfies the energy constraint
+■          large: with over 2,000 unique configurations for the Jetson TX2               (consumes less than 120mJ energy per inference). However, as
+           and over 50,000 for the more recent Jetson AGX, thus exhaus-                  the temperature increases, this CGM configuration’s energy con-
+           tively exploring all configurations at runtime, and even offline is           sumption becomes 140mJ, which is 20% higher than the energy
+           impractical.                                                                  budget.
+                                                                                 4
+EdgeEngine: A Thermal-Aware Optimization Framework for Edge Inference                                                                                                       SEC ’23, December 6–9, 2023, Wilmington, DE, USA
+
+
+               140                                                                                                                        Table 1: Optimization frameworks classification based on two di-
+                                                                                   110                                                    mensions: (i) Model-based vs. Model-free, (ii) Non-adaptive vs. Adap-
+Energy (mJ)
+
+
+
+
+                                                                     Energy (mJ)
+               130
+               120                                                                 100                                                    tive. The asterisk (*) indicates that a framework is thermal-aware.
+               110                                                                  90
+                                     Squeezenet                                                       Mobilenetv2                         Optimization Frameworks            Model-based                           Model-free
+                         13.5 14.0 14.5 15.0 15.5 16.0 16.5                                   13.0   13.5     14.0      14.5   15.0       Non-adaptive
+                                    Runtime (ms)                                                      Runtime (ms)                        Adaptive
+                                                                                                                                                                              MOSAIC[11]
+                                                                                                                                                                    NeuOS[7], PredJoule[8], POET[10]
+                                                                                                                                                                                                                     Herti[14]
+                                                                                                                                                                                                       Autoscale[17], Alert[31], EdgeEngine*
+
+                                                                                   180                    25ºC run at 25ºC
+                                                                                                      CGMoptimal
+Energy (mJ)
+
+
+
+
+                                                                     Energy (mJ)
+               140                                                                                        70ºC run at 25ºC
+                                                                                                      CGMoptimal
+                                                                                                          25ºC run at 70ºC
+                                                                                                      CGMoptimal
+                                                                                   160                    70ºC run at 70ºC
+                                                                                                      CGMoptimal
+               120                                                                                    energy budget                         characterization, prior knowledge, and analytical modeling) to
+                                          Alexnet                                  140                 Googlenet
+                           14.0    14.5      15.0      15.5   16.0                       17          18           19           20           perform the optimization task, while model-free frameworks
+                                    Runtime (ms)                                                      Runtime (ms)
+                                                                                                                                            optimize the frequency configuration based on the observa-
+                                                                                                                                            tions/feedback obtained by direct interactions with the envi-
+Figure 4: Temperature impact on thermal oblivious frequency opti-
+mization frameworks: (i) constraint violations, and (ii) sub-optimal
+                                                                                                                                            ronment without any prior knowledge.
+                                                                                                                                          ■ Adaptive vs. Non-adaptive. Adaptive frameworks attempt to ad-
+solutions. The figure presents the effect of running a configuration
+that is optimal at one temperature (25 and 70ºC) after the tempera-                                                                         just the frequency configuration at runtime, while non-adaptive
+ture changes (to 70, and respectively 25ºC) and compares this with                                                                          frameworks find the optimal configuration only in an initial
+the actual optimal configuration. Circles represent running with                                                                            phase and do not change the configuration later.
+the 25ºC optimal CGM, while triangles represent running with the
+                                                                                                                                          Unfortunately, all current optimization frameworks (Table 1) have
+70ºC optimal CGM. Filled shapes indicate an ambient temperature
+of 25ºC, and empty shapes represent 70ºC. Four applications are                                                                           a common drawback - thermal obliviousness. Model-based non-
+presented under tight energy constraints (Table 4).                                                                                       adaptive frameworks are unable to perform well when facing plat-
+                                                                                                                                          form temperature changes, as their models rely on information
+                                                                                                                                          collected at a fixed temperature. Section §3.2 has demonstrated
+               20.00                                                      20.25                                                           this for an optimal non-adaptive model-based framework. Figure
+Runtime (ms)
+
+
+
+
+               19.75                                                      20.00                                                           5 (and additional experiments in §6.1) highlight that even adap-
+               19.50                                                      19.75                                                           tive, frameworks perform sub-optimally when their design does
+               19.25                                                      19.50                                                           not take temperature into account. Figure 5 focuses on an state-of-
+                                           Googlenet                                                      Mobilenetv2                     the-art adaptive, model-based (yet thermal-oblivious) framework:
+                  20.2                                                       20.0                                                         NeuOS [7], specifically designed to meet deadlines for autonomous
+   Runtime (ms)
+
+
+
+
+                  20.0
+                                                                                                                                          vehicles using pre-characterized data. As the figure shows, NeuOS
+                                                                             19.8
+                                                                                                                                          fails to effectively adapt to the platform’s temperature changes. It
+                  19.8
+                                                                             19.6                           deadline                      exhibits multiple instances of deadline violations when tested with
+                          1 2 3 4 5 6 7 8 9 1011121314151617181920                       1 2 3 4 5 6 7 8 9 1011121314151617181920         pre-populated data at 25°C and exposed to 70°C, highlighting its
+                                        Shufflenetv2                                                    Squeezenet
+                                                                                                                                          inability to handle temperature variations.
+Figure 5: Plots present the application runtime of 20 consecutive                                                                             On the other hand, adaptive model-free frameworks attempt to
+inference tasks of different ML models at 70ºC while using NeuOS                                                                          adapt to constraint violations, including those caused by tempera-
+with pre-populated 25ºC characterization data as the frequency op-                                                                        ture changes without having any prior knowledge of the system.
+timization framework. The QoS objective for all workloads is set to                                                                       However, these frameworks suffer from two drawbacks due to the
+50 FPS (i.e., 20 ms deadline).                                                                                                            lack of platform temperature considerations in their design: (i) they
+                                                                                                                                          do not retain any knowledge of previously observed temperatures.
+                                                     70𝐶 ) and using the                                                                  Consequently, each temperature change is treated as an entirely
+■         Bootstraping at a high temperature (𝐶𝐺𝑀optimal
+                                                                                                                                          new environment, requiring the adaptation process to start from
+          optimization decision at a lower temperature: While this does                                                                   scratch. This limitation hinders their ability to achieve real-time
+          not violate the energy constraints, it results in a significant in-                                                             adaptation and results in a high number of violations (demonstrated
+          crease in runtime compared to the optimal runtime. Again, using                                                                 in Section 6.1). (ii) they may not adjust the frequency configuration
+          Squeezenet as an example, if the framework selects the opti-                                                                    if the constraint is not violated. As a result, the frameworks may
+          mal configuration at 70°C, the per-inference runtime is 16.2ms.                                                                 settle for suboptimal configurations instead of actively seeking the
+          However, when the temperature decreases, this configuration is                                                                  best configuration (demonstrated in Section 6.1).
+          21% slower than the optimal configuration at 25°C (which has a                                                                      Table 2 summarizes the objectives thermal-oblivious frameworks
+          runtime of 13.5ms).                                                                                                             fail to meet highlighting the advantages of EdgeEngine, our solution
+                                                                                                                                          based on RL.
+3.3                       Existing Work and Limitations of
+                          Thermal-Obliviousnes                                                                                            3.4    Thermal-Awareness through Reinforcement
+Existing optimization frameworks can be classified based on two                                                                                  Learning (RL)
+dimensions (Table 1):                                                                                                                     RL is a machine learning technique in which a computer agent
+ ■ Model-based vs. Model-free: Model-based frameworks use ex-                                                                             learns to optimize a task via repeated interactions in a dynamic
+   plicit models (often obtained through a combination of platform                                                                        environment [21]. This learning approach enables the agent to
+                                                                                                                                      5
+SEC ’23, December 6–9, 2023, Wilmington, DE, USA                                                                                                                                                     Ahmadi et al.
+
+
+Table 2: Comparative Analysis of Edge Optimization Frame-                                                                                    We consider three main categories of objectives when designing
+works in Achieving each of the Thermal-Aware Framework                                                                                     EdgeEngine (mapped to 𝑂 1−6 introduced in section 1).
+Objectives
+                                                                                                                                           1. High Accuracy Adaptation (𝑂 1−4 ). EdgeEngine must choose
+        Framework               Approach
+                                                        (𝑂 1 )
+                                                    Temperature
+                                                                     (𝑂 2 )
+                                                                  Cover Full
+                                                                                  (𝑂 3 )
+                                                                               Real-Time
+                                                                                                 (𝑂 4 )
+                                                                                            Runtime Noise
+                                                                                                                (𝑂 5 )
+                                                                                                            Lightweight
+                                                                                                                            (𝑂 6 )
+                                                                                                                          Generaliz-
+                                                                                                                                           the near-optimal frequency configurations with high accuracy at
+MOSAIC                   Non-adaptive Model-based
+                                                     Adaptation
+                                                         #
+                                                                    Spage
+                                                                      #
+                                                                               Adaptation
+                                                                                   #
+                                                                                             Adaptation
+                                                                                                  #
+                                                                                                               Design
+                                                                                                                 #
+                                                                                                                           ability
+                                                                                                                             #
+                                                                                                                                           execution time. Selecting an incorrect configuration may cause: (i)
+NeuOS, PredJoule, POET                                   #            "            #              "              "           #
+Herti
+                         Adaptive Model-based
+                         Non-adaptive Model-free
+                                                        "            "             #             "              #            "
+                                                                                                                                           constraint violations, which are unacceptable for real-time edge
+                         (Deep RL)
+Autoscale
+                         Adaptive Model-free
+                                                        "            #             #             "              "            "
+                                                                                                                                           inference, and/or (ii) a sub-optimal configuration that results in
+                         (Q-Learning)
+Alert
+                         Adaptive Model-free
+                         (Adaptive Kalman-filter)
+                                                        "            "             #             "              "            #             higher energy consumption or lower performance.
+EdgeEngine
+                         Adaptive Model-free
+                         (Q-Learning)
+                                                        "            "             "             "              "            "                 EdgeEngine can adapt to new temperatures, without prior sys-
+                                                                                                                                           tem knowledge (𝑂 1 ). When EdgeEngine encounters a new tem-
+                                                                                                                                           perature for the first time, it initiates an exploration phase (de-
+make a sequence of decisions that maximize a reward metric for                                                                             tailed in Section 4.2). In this phase, it explores the effect of var-
+the task without being programmed to optimize it.                                                                                          ious frequency configurations by adjusting all CGM frequencies
+   Q-learning [32] is a widely used lightweight RL algorithm. It                                                                           to obtain near-optimal configuration (𝑂 2 ). To effectively address
+determines the best action based on the current state (𝑠𝑡 ) of the                                                                         the exploration-exploitation trade-off (Section 3.4), EdgeEngine
+system. It uses a Q-table where it stores the expected reward val-                                                                         employs the epsilon-greedy policy [30]. It gradually reduces the
+ues for each action in any state. At each time step 𝑡, the agent                                                                           frequency of exploration actions and enters the exploitation phase
+randomly selects an action (𝑎𝑡 ) for which it does not have any infor-                                                                     by selecting the previously determined near-optimal configuration.
+mation (i.e., it performs exploration) or selects the action with the                                                                          The exploration phase, however, can result in numerous con-
+highest reward from the Q-table (i.e., it performs exploitation). The                                                                      straint violations, given the large configuration space (Section 3.1),
+exploration/exploitation tradeoff is controlled by the parameter 𝜖.                                                                        which is an intolerable outcome for several edge applications. To
+Epsilon ’decay’ can be applied, gradually reducing the exploration                                                                         address this issue, we propose two domain-specific heuristics (de-
+rate over time to prioritize exploitation as the agent gains more                                                                          tailed in Section 4.2) based on our temperature characterization:
+experience.                                                                                                                                (i) action pruning and (ii) escape action. These enhancements give
+   The Q-table is updated using the Bellman equation (Equation 1),                                                                         EdgeEngine real-time adaptation capabilities (𝑂 3 ) by expediting
+with 𝛼 as the learning rate and 𝛾 as the discount factor balancing                                                                         the exploration process, and minimizing the number of violations
+immediate and future rewards. The reward value 𝑟𝑡 reflects the                                                                             incurred during exploration.
+outcome after performing an action in a given state, that is it reflects                                                                       Even during the exploitation phase after EdgeEngine has selected
+how good action 𝑎𝑡 was for the state 𝑠𝑡 .                                                                                                  what appeared as a near-optimal configuration, variability in power
+                                                                                                                                           and runtime can lead to constraint violations. To mitigate this issue
+                                                                                                                                           (𝑂 4 ), EdgeEngine continuously monitors the inference metrics: if a
+    𝑄 𝑛𝑒𝑤 (𝑠𝑡 , 𝑎𝑡 ) = (1 − 𝛼)𝑄 (𝑠𝑡 , 𝑎𝑡 ) + 𝛼 (𝑟𝑡 + 𝛾𝑚′ 𝑎𝑥𝑄 (𝑠𝑡 +1, 𝑎 ′ )) (1)                                                            constraint violation is detected, EdgeEngine promptly adjusts the
+                                                                                            𝑎
+                                                                                                                                           frequency configuration to increase the guardband which protects
+   While Q-learning has been previously applied in the context                                                                             it against variability in runtime or power.
+of frequency optimization frameworks for edge platforms [17],
+                                                                                                                                           2. Lightweight Design (𝑂 5 ). EdgeEngine should impose minimal
+our innovation lies in making its application thermal aware. We
+                                                                                                                                           latency overhead to avoid increasing the ML inference time. It
+achieve this by incorporating the platform temperature as an addi-
+                                                                                                                                           should also have minimal computation and memory overheads to
+tional component in the state space, and introducing algorithmic
+                                                                                                                                           be compatible with resource-constrained edge platforms. To mini-
+heuristics to effectively address all objectives of the thermal-aware
+                                                                                                                                           mize latency overhead, we employ Q-Learning instead of alternative
+framework.
+                                                                                                                                           RL techniques such as Deep RL (DRL) [21] or Temporal Difference
+                                                                                                                                           Learning (TD Learning) [27]. Q-Learning’s utilization of a lookup
+4        APPROACH: EDGEENGINE                                                                                                              table called the Q-Table allows for efficient action selection with
+We propose EdgeEngine (Figure 6), a thermal-aware optimization                                                                             minimal latency. This lightweight algorithm also requires limited
+framework for edge inference. EdgeEngine uses a lightweight RL                                                                             computational resources [17], making it well-suited for our objec-
+technique (Q-Learning [27]) (§3.4) to meet the application’s objec-                                                                        tive. Furthermore, we ensure EdgeEngine has minimal memory
+tives and adapt to temperature changes. Based on the application’s                                                                         overhead, by storing the Q-Table in compact format.
+constraints and the platform’s temperature, EdgeEngine optimizes
+the frequency configuration of the CGM components.                                                                                         3. Generalizability (𝑂 6 ). EdgeEngine aims to be versatile and com-
+   EdgeEngine can adapt to two dimensions of application con-                                                                              patible with diverse environments, applications, and constraints.
+straints: deadline and energy constraints. Users set the application’s                                                                     The model-free nature of Q-Learning [26], enables EdgeEngine
+constraint dimension with the maximum permissible value. For                                                                               to adapt seamlessly to different environments and applications.
+an energy-constrained application, they set the maximum energy                                                                             Unlike methods that rely on pre-existing knowledge about system
+budget per inference, and for a deadline-constrained application,                                                                          dynamics [7, 8, 10, 11], Q-Learning learns directly from interactions
+users set the target deadline for each inference. The RL agent selects                                                                     with the environment, enabling EdgeEngine to dynamically adjust
+a configuration that satisfies the constraint and optimizes on the                                                                         its behavior and configuration based on its specific operational
+unconstrained dimension.                                                                                                                   context.
+                                                                                                                                       6
+EdgeEngine: A Thermal-Aware Optimization Framework for Edge Inference                                                      SEC ’23, December 6–9, 2023, Wilmington, DE, USA
+
+
+
+                                                                                                                                                                   Car
+                           Software                 Reinforcement           (1) Observe                                  Hardware
+                                  DNN Model         Learning Agent            State S
+                                                                                               Tdevice,fcpu,fgpu,fmem
+                                                                                                                                        Tcpu,Tgpu,Tmem
+                                                                                                                         Temperature
+                                                                                                                           Sensor
+                                                                                                                                                                CPU
+  Input: Real-time Frame                                                                       Ltask,Pcpu,Pgpu,Pmem,Psoc
+                                                     (5) Update
+                                                                                                    (4)
+                                                      Q-Table                                                                                                  Memory
+                                                                                                 Calculate
+                                                                                                   Reward
+                                Constraints                                                                                                                     GPU
+                              Energy Budget                                                                              DVFS Module
+                                                                                                                                        fcpu,fgpu,fmem
+ (α,energy-budget,target      Target Deadline
+        deadline)                                                                                                                                          Dynamic
+                                                                                                        fcpu,fgpu,fmem
+                                                                                          (3) Execute                                                    Environment
+                                                                     (2) Choose
+                                                                                           Action and
+                                                                      Action A
+                                                                                           Inference
+
+
+
+
+Figure 6: EdgeEngine overview. EdgeEngine flow can be summarized into five steps: (i) Determines the current state (𝑠𝑡 ) by obtaining device
+temperature and frequency configuration, (ii) In exploitation mode it selects the action with the highest expected reward for 𝑠𝑡 from Q-table,
+while in exploration mode it picks a random action; (iii) Executes the action by adjusting the CGM frequency levels, and performs inference,
+(iv) Estimates power and runtime for the inference, and calculates the reward value, and (v) Updates Q-table with reward value
+
+
+4.1       EdgeEngine Design                                                           per inference. Suppose the agent observes a constraint violation.
+This section presents the main components of EdgeEngine’s RL                          In that case, it sets the reward value as a negative pre-configured
+agent: the State, Action, and Reward introduced in §3.4.                              value 𝜙, Otherwise, the reward is positive and indicates how good
+                                                                                      the action is for the dimension without a critical constraint, e.g.,
+State. EdgeEngine state 𝑠𝑡 at time t is captured by the following                     the reward is higher if the action is more energy-efficient for a
+tuple: {𝑓𝐶𝑡 , 𝑓𝐺𝑡 , 𝑓𝑀𝑡 ,𝑇 𝑡 }. 𝑓𝐶𝑡 , 𝑓𝐺𝑡 , and 𝑓𝑀𝑡 are the CPU, GPU, and mem-        deadline-constrained application.
+ory controller frequency levels. Capturing the current frequency
+configuration helps the agent choose the best action by deciding
+                                                                                      Algorithm 1 EdgeEngine Algorithm
+on the next frequency configuration.
+   𝑇 𝑡 is the current board’s temperature (in our experiments, the                        1: 𝑄 ← initializeQTable()
+average temperature of the CPU (𝑇𝐶𝑡 ) and GPU (𝑇𝐺𝑡 ) components,                          2: 𝛼, 𝛾, 𝜖 ← 𝑖𝑛𝑖𝑡𝑖𝑎𝑙𝑖𝑧𝑒𝑉 𝑎𝑟𝑖𝑎𝑏𝑙𝑒𝑠 ()
+obtained from the onboard thermal sensor). To make the tempera-                           3: repeat
+ture, a continuous metric, compatible with the Q-learning process                         4:      Observe state 𝑠𝑡
+based on the Q-table, we quantize it to discrete ranges (detailed in                      5:      𝐴𝑡 ← getAvailableActions(𝑠𝑡 )
+§5).                                                                                      6:      if generateRandNumber() < 𝜖 then
+                                                                                          7:          𝑎𝑡 ← getRandomAction(𝐴𝑡 )
+Action. EdgeEngine’s possible actions at each state 𝑠𝑡 are a sin-                         8:      else
+gle frequency level increase or decrease in one of the CPU, GPU,                          9:          𝑎𝑡 ← 𝑎𝑟𝑔𝑚𝑎𝑥𝑎∈𝐴𝑡 𝑄 (𝑠𝑡 , 𝑎)
+or memory controller components, or to do nothing (DN), which
+                                                                                      10:         runInferenceByAction(𝑎𝑡 )
+indicates no change in the frequency levels.
+                                                                                      11:         𝐸𝑡 , 𝐿𝑡 ← measureLatencyEnergy()
+            {𝐼 𝑁𝐶𝐶 , 𝐼 𝑁𝐶𝐺 , 𝐼 𝑁𝐶𝑀 , 𝐷𝐸𝐶𝐶 , 𝐷𝐸𝐶𝐺 , 𝐷𝐸𝐶𝑀 , 𝐷𝑁 }                        12:         𝑅𝑡 ← calculateReward(𝐸𝑡 , 𝐿𝑡 )
+   To thoroughly explore the frequency state space and find near-                     13:         Observe state 𝑠𝑡 +1
+optimal configuration, EdgeEngine (i) only adjusts the frequency                      14:         𝑎 ′ ← 𝑎𝑟𝑔𝑚𝑎𝑥𝑎∈𝑣𝑎𝑙𝑖𝑑𝐴𝑐𝑡𝑖𝑜𝑛𝑠 𝑄 (𝑠𝑡 +1, 𝑎)
+level of only one component as a single action, and (ii) employs the                  15:         𝑄 (𝑠𝑡 , 𝑎𝑡 ) ← (1 − 𝛼)𝑄 (𝑠𝑡 , 𝑎𝑡 ) + 𝛼 (𝑅𝑡 + 𝛾𝑄 (𝑠𝑡 +1, 𝑎 ′ ))
+𝜖-greedy approach to choose the between exploration and exploita-                     16:         𝑒𝑠𝑐𝑎𝑝𝑒𝐴𝑐𝑡𝑖𝑜𝑛(𝑆𝑡 , 𝑎𝑡 , 𝑅𝑡 )
+tion.                                                                                 17:         𝜖𝑇 ← updateEpsilon(𝜖𝑇 )
+                                                                                      18:         𝑠𝑡 ← 𝑠𝑡 +1
+Reward. Equation 3 presents the reward function that the RL agent
+employs.
+                                                                                     Algorithm 1 shows the RL algorithm used by EdgeEngine.
+                      𝜙                   𝑖𝑛 𝑐𝑎𝑠𝑒 𝑜 𝑓 𝑐𝑜𝑛𝑠𝑡𝑟𝑎𝑖𝑛𝑡 𝑣𝑖𝑜𝑙𝑎𝑡𝑖𝑜𝑛
+             1
+      Ω.( 𝑟𝑢𝑛𝑡𝑖𝑚𝑒                  1 )
+                  ) + (1 − Ω).( 𝑒𝑛𝑒𝑟𝑔𝑦
+                                                                           (2)
+                                                      𝑜𝑡ℎ𝑒𝑟𝑤𝑖𝑠𝑒
+                                                                                      4.2       EdgeEngine Algorithm
+    In Equation 3, Ω ∈ {0, 1} indicates whether the application is en-                Exploration-Exploitation Trade-off. To adapt to different plat-
+ergy critical or deadline critical. Users set this value in EdgeEngine’s              form temperatures and control the exploration-exploitation trade-
+configuration based on the application requirement. Ω = 0 repre-                      off, EdgeEngine employs the epsilon-decay approach. It maintains
+sents the application is deadline-constrained, while Ω = 1 means                      a variable 𝜖𝑇 , for each platform temperature state (𝑇 ), the higher
+it is energy-constrained. The first goal of the reward function is                    this value is the greater the likelihood that the chosen action is an
+to avoid violating the application’s constraint. Regarding the con-                   exploration one. At the end of each iteration (line 17), the value
+straint’s dimension, users set the target deadline or energy budget                   of 𝜖𝑇 is decreased. To determine the action selection, EdgeEngine
+                                                                                  7
+SEC ’23, December 6–9, 2023, Wilmington, DE, USA                                                                                               Ahmadi et al.
+
+
+generates a random number and compares it with the current value                        Table 3: Jetson TX2’s hardware specifications.
+of 𝜖𝑇 . If the random number is greater, the algorithm ’explores’: that
+                                                                                                               Jetson TX2
+is, it chooses a new random action. Otherwise, it exploits: it uses
+                                                                                                          Dual-Core NVIDIA Denver 2 64-Bit CPU
+the best valid action from the Q table (line 6-9).                                    CPU
+                                                                                                          Quad-Core ARM® Cortex®-A57 MPCore
+                                                                                                          256-core NVIDIA Pascal™ GPU architecture
+Domain-specific Heuristic Enhancements. To address the chal-                          GPU
+                                                                                                          with 256 NVIDIA CUDA cores
+lenges posed by the large exploration space and the occurrence of                     Memory Controller
+                                                                                                          8GB 128-bit LPDDR4 Memory
+violations during the exploration phase, we have developed two                                            1866 MHx - 59.7 GB/s
+                                                                                      Storage             32GB eMMC 5.1
+novel domain-specific techniques to accelerate the adaptation pro-
+cess and minimize violations: (i) action pruning and (ii) escape
+action.
+                                                                              This combination of GPU and CPU cores enables energy-efficient
+   Action Pruning: At each state, EdgeEngine prunes the actions
+                                                                              execution of low-power ML tasks, making it an ideal platform for
+that lead to violations (i.e., prohibited actions), and selects actions
+                                                                              our purposes. (Table 3).
+from a set of available actions (line 5). EdgeEngine keeps a list
+                                                                              Software Stack. We use NVIDIA Jetpack v5.0.2, which has the latest
+of prohibited actions for each CGM frequency configuration, and
+                                                                              Jetson Linux (v34.1.1) and CUDA v11.4. We use PyTorch v1.6 as our
+marks an action as prohibited if:
+                                                                              deep learning framework.
+
+    𝑎𝑇𝐶𝐺𝑀 𝑖𝑠 𝑝𝑟𝑜ℎ𝑖𝑏𝑖𝑡𝑒𝑑 | ∃𝜅 ≤ 𝑇 ⇒ 𝑎𝐶𝐺𝑀
+                                    𝜅   𝑣𝑖𝑜𝑙𝑎𝑡𝑒𝑠 𝑄𝑜𝑆 (3)                      5.2    RL Parameters Specific to EdgeEngine
+   An action is prohibited in a specific CGM if it previously caused          Hyperparameters. To determine the optimal values for the hyper-
+violations at the current temperature or at lower temperatures.               parameters learning rate (𝛼) and discount factor (𝛾), we conduct a
+This prohibition mechanism is based on the characterization study             sensitivity analysis. We consider three classes of values for each
+(§2) that shows that increasing the temperature leads to higher               parameter: low (0.2), medium (0.5), and high (0.8). EdgeEngine is
+runtime and energy consumption. This action pruning leads to                  being trained on Mobilenetv2 using all nine combinations of these
+decreasing the search space size, as EdgeEngine observes more                 values, resulting in a total of nine experiments. Through our anal-
+temperatures, which leads to faster adaptation, and fewer violations          ysis, we observe that the agent always performs most effectively
+during exploration (we evaluate these improvements in Section 6.2).           when the learning rate is set to a high value and the discount factor
+   Escape Action: In the event of a constraint violation, EdgeEngine          to a low value.
+promptly adjusts the frequency configuration to bring it closer to               Exploration Rate. We set the maximum 𝜖 value as 0.995, and
+the optimal configuration (line 16), reducing the likelihood of future        the minimum value as 0.01. We also use the epsilon decay technique
+violations. For applications with deadline constraints, EdgeEngine            by multiplying by the maximum 𝜖 value at the end of each round.
+increases the frequency configuration by two levels rather than               This approach allows for a gradual reduction of exploration and an
+one, if a deadline is missed. This approach is based on our observa-          increased focus on exploitation as the experiment progresses.
+tion that increasing the frequency generally leads to performance                State Quantization. EdgeEngine state is determined by the
+improvement.                                                                  current CGM Frequency level and temperature. We use the Nvidia
+   However, our characterization study reveals that the impact on             Jetson TX2 frequency levels: 12, 11, and 13 frequency levels for
+energy consumption is not as straightforward. In some cases, in-              CPU, GPU, and memory controller respectively [28]. We discreteize
+creasing the frequency leads to higher energy consumption, while              the operating temperature range of Jetson TX2 [29] (-25ºC to 80ºC)
+in others, it has the opposite effect. This is because energy con-            into 21 levels, each corresponding to a 5ºC temperature range.
+sumption depends on the product of power and runtime, and the
+influence of frequency changes on these factors is in opposite direc-         5.3    Workloads
+tions. Therefore, we do not perform this optimization for energy-             We focus on Convolutional Neural Network (CNN) inference. CNNs
+constrained applications.                                                     are chosen as the benchmark since: (i) they are widely utilized in
+                                                                              computer vision tasks, including object detection and object clas-
+5     EXPERIMENTAL METHODOLOGY AND                                            sification, which are commonly encountered in edge ML vision
+      SETUP                                                                   applications [22], and (ii) many popular ML benchmarks, such as
+This section presents our experimental methodology (§5.4), the                MLPerf [25] and EdgeBench [9], prominently feature CNN inference
+rationale behind the evaluation scenarios we explore (§5.5), as well          as their primary building blocks. To provide a comprehensive analy-
+as the experimental platform (§5.1), Edge engine reinforcement-               sis, we select seven pre-trained CNN models: Mobilenetv2, Alexnet,
+learning specifies parametrization (§5.2) and workloads (§5.3).               Resnet, Inception3, Shufflenetv2, Googlenet, and Squeezenet, which
+                                                                              are representative of a wide range of CNN architectures commonly
+5.1     Experimental Platform                                                 used in ML applications.
+Hardware Platform. We employ the NVIDIA Jetson TX2, a hetero-
+geneous embedded edge platform specifically designed to enhance
+                                                                              5.4    Methodology: Emulating Temp.-Controlled
+the performance of machine learning applications at the edge. The                    Experiments
+Jetson TX2 integrates the power of the NVIDIA Pascal GPU with                 Our evaluation of EdgeEngine and other frameworks must consider
+low-power ARM CPU cores, using a shared-memory architecture.                  various applications, constraints, and ambient temperature change
+                                                                          8
+EdgeEngine: A Thermal-Aware Optimization Framework for Edge Inference                                              SEC ’23, December 6–9, 2023, Wilmington, DE, USA
+
+
+Table 4: The loose and tight energy budgets and the target                               6     EVALUATION
+deadlines for different ML inference applications for evalu-
+                                                                                         This section presents the experimental evaluation of EdgeEngine
+ating EdgeEngine.
+                                                                                         in the context of different constraint scenarios (§5.5) and applica-
+                                                                                         tions (§5.3). First, we focus on EdgeEngine’s ability to satisfy the
+                       Loose Constraint                 Tight Constraint
+ Application                                                                             applications’ constraints and meet the optimization objective as
+                Energy Budget Target Deadline    Energy Budget Target Deadline
+                    (mJ)             (ms)            (mJ)             (ms)               temperature changes (§6.1). We evaluate EdgeEngine’s efficiency by
+ Alexnet             110              18              100              13
+ Googlenet           200              35              160              18                comparing it to an idealized oracle. We highlight the importance of
+ Inception3          590              76              505              60                thermal-awareness by comparing EdgeEngine with state-of-the-art
+ Mobilenetv2         110              19              100              14
+ Resnet              170              20              150              15
+                                                                                         frequency optimization frameworks, all thermal-oblivious as well
+ Squeezenet          140              21              120              13                as with thermal-oblivious versions of EdgeEngine. Finally, we as-
+ Shufflenetv2        100              24              80               16
+                                                                                         sess EdgeEngine’s practicality (§6.2) by examining how it satisfies
+                                                                                         thermal-aware framework objectives (𝑂 1−6 ).
+
+scenarios (see Section 6). However, conducting experiments in a                          6.1    Adaptability and Efficiency
+temperature chamber is time-consuming, as we need to wait, ap-                           We assess EdgeEngine’s adaptability to different temperatures by
+proximately 5 to 10 minutes, for the chamber to reach the desired                        evaluating two metrics: the constraint violation rate, and the quality
+temperature before each test (and, additionally, we cannot remotely                      of the solution in the unconstrained dimension.
+control the chamber). To mitigate this issue, we have developed a                           To conduct the experiment, we use the following temperature
+software emulator to simulate the effect of temperature changes                          variation scenario: Initially, we set the ambient temperature to 25°C
+on application runtime and power consumption.                                            and incrementally increase it to 65°C, subsequently decreasing it
+    The emulator is seeded with the runtime and power consump-                           back to 25°C. At each interval of 10°C, we allow for a stable tem-
+tion distributions for each CGM frequency configuration at 5ºC                           perature period of 500 inferences before changing the temperature
+intervals between 25ºC and 70ºC. This data is obtained by con-                           again. During the experiment, we record the number of violations,
+ducting experiments in the temperature-controlled chamber (and                           and, at the end of the experiment, we estimate the runtime and
+required approximately two days of continuous runtime for each                           energy consumption of the final configuration for each temperature
+model). Although this initialization process incurs an upfront cost,                     level.
+it eliminates the need for repeated experiments in a temperature-                           Our chosen methodology aims to thoroughly test the adaptabil-
+controlled chamber.                                                                      ity of EdgeEngine across different temperature ranges, both when
+    To enhance the realism of the emulator, we model the runtime                         encountering them for the first time (on temperature increase)
+variability we observed empirically. We characterize this variability                    and when already observed them (on temperature decrease). This
+using 252 empirically collected distributions, and observe that the                      methodology also evaluates EdgeEngine in a challenging environ-
+majority follow a General Extreme Distribution (GEV), so we incor-                       ment where temperatures fluctuate rapidly, with each 10ºC temper-
+porate GEV runtime noise into the emulator to reflect the intrinsic                      ature increase or decrease in 5 seconds. However, we also conducted
+runtime variability.                                                                     tests in more relaxed environments where temperature changes
+    If the emulator lacks data for a specific temperature, it approxi-                   occur gradually. In these scenarios, we observed that EdgeEngine
+mates the missing values using linear interpolation based on avail-                      exhibited improved performance as the temperature evolved more
+able adjacent data points.                                                               slowly. This favorable outcome can be attributed to EdgeEngine’s
+                                                                                         thermal awareness and embedded heuristics, which enable it to
+5.5     Methodology: Evaluation Scenarios                                                adapt and optimize its operations accordingly.
+We evaluate EdgeEngine and compare it to related work (in Section                           We run EdgeEngine on both deadline and energy-constrained
+6) in the context of two evaluation scenarios: loose and tight con-                      evaluation scenarios (§5.5), and compare to both an idealized ORA-
+straints (for deadlines or energy). To determine the actual values of                    CLE and to related work :
+the constraints (listed in Table 4), we consider the energy/runtime                      ■ ORACLE: We implement a perfect knowledge ORACLE that finds
+behavior of an application when running on the Jetson TX2 at                               the optimal CGM configuration based on runtime and energy
+65ºC4 .                                                                                    measurements pre-recorded at the bootstrap time for each tem-
+■ The tight constraint is defined as 10% higher than the lowest                            perature level. Note that the ORACLE is not affected by power
+  achievable energy/runtime, ensuring a stringent constraint that                          and runtime variability (it is an idealized solution): it has full
+  leads to a deep space exploration for satisfiability.                                    knowledge of the future power and runtime before choosing a
+■ The loose constraint, on the other hand, is set as 10% lower than                        configuration. We compare EdgeEngine with the ORACLE to
+  the median energy/runtime of running the application and, since                          assess how efficiently EdgeEngine optimizes runtime and energy,
+  a large set of frequency configurations satisfies this constraint,                       as well as how closely its configurations align with the optimal
+  this scenario verifies the ability of an optimization framework                          solution.
+  to optimize in the unconstrained direction.                                            ■ NeuOS: an adaptive model-based framework designed for
+
+                                                                                           deadline-constrained scenarios only. NeuOS is based on an
+4 By choosing 65ºC, we guarantee the constraints satisfaction achievability in all         extensive characterization at deployment time, yet it is thermal-
+scenarios, as we raise the ambient temperature up to 65ºC in our experiments.              oblivious: this characterization is done at fixed temperature.
+                                                                                     9
+SEC ’23, December 6–9, 2023, Wilmington, DE, USA                                                                                                                                                                                                      Ahmadi et al.
+
+
+                                                                                                                                                                                                                            100
+                                2.0    Oracle
+                                       EdgeEngine                                                                                                                                                                           80
+                Normalized Energy
+
+
+
+
+                                                                                                                                                                                                                                 Violation Rate (%)
+                                       TOF
+                                1.5    Autoscale
+                                       NeuOS                                                                                                                                                                                60
+                                1.0
+                                                                                                                                                                                                                            40
+                                0.5                                                                                                                                                                                         20
+                                0.0   Alexnet-l   Alexnet-t   Resnet-l   Resnet-t   Mobilenetv2-l Mobilenetv2-t Googlenet-l Googlenet-t Inception3-l Inception3-t Squeezenet-l Squeezenet-t Shufflenetv2-l Shufflenetv2-t   0
+Figure 7: Runtime-constrained Scenario Comparison. The plot shows the energy consumption for various optimization frameworks and
+seven different workloads with both loose and tight deadline constraints. Energy is normalized to that of the Oracle (left y-axis, lower is better,
+1 is ideal). The plot also presents the quality of each framework: that is, the rate of the runtime constraint violations (right y-axis, lower is
+better). The reported results are the average of ten separate runs for each experiment. Lower values are better.
+
+
+  We implement the NeuOS framework based on the description                                                                           compared to TOF is primarily due to its inability to adjust mem-
+  by Bateni et al [7] and seed it with data at 25C. By comparing                                                                      ory frequency. Autoscale and TOF energy inefficiency shows that
+  to NeuOS, we can find how good online-adaptive solutions,                                                                           RL-based thermal-oblivious frameworks cannot adapt well to
+  specifically EdgeEngine, are in terms of constraint (i.e., deadline)                                                                environments with varying temperatures.
+  satisfaction.                                                                                                                     ■ NeuOS exhibits the poorest energy efficiency and highest viola-
+
+■ Autoscale: an adaptive model-free optimization framework based                                                                      tion rate due to its utilization of bootstrap data at a fixed temper-
+  on RL designed for deadline-constrained scenarios. NeuOS has                                                                        ature within a model-based framework, which is inadequate in
+  two shortcomings: (i) is thermal-oblivious (it does not consider                                                                    varying temperature environments.
+  the platform temperature) and, additionally, (ii) it does not aim
+  to adjust the memory controller frequency (it only controls the                                                                  Evaluation results for the energy-constrained scenario. Fig-
+  CPU and GPU frequencies). We implement the Autoscale agent                                                                       ure 8 shows the runtime efficiency and violation rates of energy-
+  following the description by Kim et al [17]. As a validation, we                                                                 constrained applications. Experiments reveal that:
+  ensure that it can find the best configuration (as per its design)                                                               ■ EdgeEngine has a maximum violation rate of 1% throughout the
+
+  when the temperature remains constant. By comparing to Au-                                                                          experiments, with a runtime only 2% higher than that of the
+  toscale, we (i) highlight that an adaptive model-free optimization                                                                  ORACLE. This shows that EdgeEngine can adapt well to varying
+  framework must be thermal-aware to be effective; and (ii) study                                                                     temperatures and finds near-optimal solutions.
+  the significance of adjusting all CGM configurations.                                                                            ■ TOF, conversely, exhibits an average violation rate of 41%. This
+
+■ TOF: a thermal-oblivious version of EdgeEngine. We modify                                                                           notable contrast arises from the substantial energy variations as-
+  EdgeEngine’s RL agent to remove temperature as an input, ren-                                                                       sociated with temperature and the vast frequency space, making
+  dering it thermal-oblivious. By comparing EdgeEngine to TOF,                                                                        it challenging for an adaptive framework to escape violations if
+  we: (i) can pinpoint the specific limitations of thermal-oblivious                                                                  it lacks thermal awareness.
+  frameworks (e.g., AutoScale) and why they cannot effectively                                                                     Summary. Figure 9 summarizes our experimental results so far,
+  operate, even when adjusting all CGM configurations; and (ii) we                                                                 and highlights EdgeEngine’s adaptability to fluctuating ambient
+  have a thermal-oblivious comparison base for energy-constrained                                                                  temperatures with a minimal number of violations, effectively se-
+  scenarios as none of the previous work was designed with this                                                                    lecting configurations that closely align with optimal solutions. No-
+  scenario in mind.                                                                                                                tably, EdgeEngine exhibits remarkable proximity to the ORACLE
+                                                                                                                                   in both deadline and energy-constrained applications. In contrast,
+Evaluation results for the deadline-constrained scenario. Fig-
+                                                                                                                                   other thermal-oblivious frameworks are (1) inefficient (TOF and
+ure 7 presents the energy consumption and violation rates of differ-
+                                                                                                                                   Autoscale in deadline-constrained applications) or (2) show a high
+ent frameworks in deadline-constrained scenarios with tight and
+                                                                                                                                   violation rate (TOF in energy-constrained applications), or (3) suffer
+loose deadlines. Experiments reveal that:
+                                                                                                                                   from both inefficiency and a high violation rate (NeuOS).
+■ EdgeEngine works well in terms of constraint satisfaction and en-
+  ergy efficiency. It exhibits a mere 3% higher energy consumption                                                                 6.2           Practicality
+  on average (with a maximum of 5%) compared to the ORACLE.
+                                                                                                                                   This section dives deeper in the previous experiment to analyze
+  It also has a maximum violation rate of only 1% across all experi-
+                                                                                                                                   EdgeEngine’s practicality in real environments by studying how it
+  ments.
+                                                                                                                                   satisfies the objectives (𝑂 1−6 ) thermal-aware frameworks. To this
+■ Autoscale and TOF exhibit relatively low violation rates (2% and
+                                                                                                                                   end, we analyze the previous experiment ’s two phases separately
+  5% respectively) as they are adaptive model-free frameworks
+                                                                                                                                   and we discuss EdgeEngine overheads:
+  designed to mitigate deadline violations. However, their energy
+  consumption efficiency is compromised, with TOF averaging 10%                                                                    Temperature-increase phase. Temperature-increase: In this phase,
+  higher energy consumption (up to 38% in some cases) and Au-                                                                      we gradually increase the temperature from 25 to 65°C. EdgeEngine
+  toscale averaging 32% higher consumption (up to 47%) compared                                                                    encounters each temperature for the first time and adopts a
+  to EdgeEngine. The higher energy consumption of Autoscale                                                                        high exploration rate to search for near-optimal configurations.
+                                                                                                                          10
+EdgeEngine: A Thermal-Aware Optimization Framework for Edge Inference                                                                                                                                                                                SEC ’23, December 6–9, 2023, Wilmington, DE, USA
+
+
+                                                                                                                                                                                                                                                                                         100
+                                                                                                                                                                                                                                                                        Oracle
+                                                           1.00
+                                          Normalized Runtime                                                                                                                                                                                                            EdgeEngine 80
+                                                                                                                                                                                                                                                                        TOF
+
+
+
+
+                                                                                                                                                                                                                                                                                              Violations (%)
+                                                           0.75                                                                                                                                                                                                                          60
+                                                           0.50                                                                                                                                                                                                                          40
+                                                           0.25                                                                                                                                                                                                                          20
+                                                           0.00       Alexnet-l    Alexnet-t                              Resnet-l     Resnet-t   Mobilenetv2-l Mobilenetv2-t Googlenet-l Googlenet-t Inception3-l Inception3-t Squeezenet-l Squeezenet-t Shufflenetv2-lShufflenetv2-t   0
+Figure 8: Energy-constrained Scenario Comparison. The plot shows the normalized runtime (left x-axis) of various optimization frameworks
+compared to the Oracle for seven different workloads (inference models), while adhering to both loose and tight energy constraints. Lower
+normalized runtime is better (1 is the optimal). The plot also displays the rate of violations of the energy constraint for each framework (lower
+is better, note that some frameworks that appear to perform well on the optimization criteria have unacceptably high rates of constraint
+violations). The reported results are the average of ten separate runs for each experiment. Lower values are better.
+                                                                                       Runtime Diff by Optimal (%)
+
+
+
+
+                                      Constraint: Deadline                                                                           Constraint: Energy
+Energy Diff by Optimal (%)
+
+
+
+
+                                                                                                                                                                                                applications, during the initial experiment at 25ºC without any
+                             40                                                                                      40                                     ORACLE                              prior knowledge, EE-Optimized observed an average of 22 viola-
+                                                                   ORACLE                                                                                   EdgeEngine
+                                                                   EdgeEngine                                                                               TOF                                 tions during the adaptation process, which is a significant reduction
+                             20                                    TOF                                               20                                                                         of 74% compared to EE-Vanilla. As the temperature increased, EE-
+                                                                   NeuOS
+                             0                                     Autoscale                                         0                                                                          Optimized consistently exhibited significantly fewer violations at
+                                  0      20      40      60                       80                                       0           20      40      60                  80                   each temperature level than EE-Vanilla. This is due to two factors:
+                                        Violation Rate (%)                                                                              Violation Rate                                          (i) EE-Optimized effectively transfers knowledge to higher temper-
+                                                                                                                                                                                                atures through action pruning, and (ii) the insignificant runtime
+Figure 9: Comparison summary. The figures present the average                                                                                                                                   variations with temperatures (lower than 5%) make optimal CGM
+violation rate (x-axis) and the quality of the optimization choice                                                                                                                              configurations close to each other. For energy-constrained appli-
+(y-axis) for runtime-constrained (left plot) and energy-constrained                                                                                                                             cations, the optimizations in EE-Optimized resulted in a halving
+scenarios (right plot). Values are averages over all experiments pre-
+                                                                                                                                                                                                of the number of violations. However, the number of violations
+sented in Figures 7 and 8. Values closer to the point (0,0) are better.
+                                                                                                                                                                                                is higher than the deadline-constrained scenario. This is due to
+                                                                                                                                                                                                the substantial variation in energy consumption across different
+Table 5: The average number of violations during training for the
+                                                                                                                                                                                                temperatures, which requires more exploration by EdgeEngine to
+optimized and vanilla versions of EdgeEngine across all seven models
+at various temperatures when board temperature increase from 25                                                                                                                                 find near-optimal solutions.
+to 65ºC.                                                                                                                                                                                        Temperature-decrease phase. In this phase, EdgeEngine has
+                                                                                                                                                                                                already explored the current temperature and acquired knowl-
+          EdgeEngine                                                              Constraint: Deadline                                                                                          edge of the near-optimal configuration. Thus, during this phase,
+            Version                                               25ºC            35ºC 45ºC 55ºC                                                                 65ºC                           EdgeEngine primarily exploits the acquired knowledge. As the
+         EE-Vanilla                                               83.14           91.43 75.14 74.14                                                              87.86                          platform temperature varies, EdgeEngine needs to promptly adjust
+         EE-Optimized                                             21.86            4.86  4.14    2.71                                                            2.14                           its configuration (𝑂 1 ). Additionally, the presence of runtime noise
+         Change (%)                                                74%             95%   94%     96%                                                              98%                           can potentially lead to violations (𝑂 4 ). We analyze how EdgeEngine
+          EdgeEngine                                                               Constraint: Energy                                                                                           adapts to temperature variations and handles the challenge posed
+                                                                                                                                                                                                by runtime variability.
+            Version                                               25ºC            35ºC 45ºC 55ºC                                                                65ºC
+                                                                                                                                                                                                    In this phase, EdgeEngine generates only a few constraint vio-
+         EE-Vanilla                                               51.14           64.00 78.14 111.00                                                            145.29                          lations, averaging 2 (with a maximum of 9) violations, across all
+         EE-Optimized                                             15.43           21.71 37.29 54.71                                                              48.43                          experiments. We attribute these violations to intrinsic runtime noise.
+         Change (%)                                                70%             66%   52%     51%                                                              67%                           Figure 10 illustrates EdgeEngine’s dynamic adaptation in an energy-
+                                                                                                                                                                                                constrained scenario. We showcase three representative applica-
+                                                                                                                                                                                                tions: a lightweight (Mobilenetv2), a medium-weight (Googlenet),
+EdgeEngine must demonstrate real-time adaptation capabilities                                                                                                                                   and a heavyweight model (Inception3). Figure 10 demonstrates
+(𝑂 3 ) to avoid inadequate adaptation (i.e., far from optimal, multiple                                                                                                                         that EdgeEngine swiftly adjusts the CGM frequencies to efficiently
+violations) when triggered by constraint violations as the platform                                                                                                                             restore constraint satisfaction in the presence of runtime noise. For
+first observes a temperature level. We focus on evaluating the                                                                                                                                  instance, when considering Mobilenetv2 at 65°C, around the 250th
+effectiveness of the heuristics we have incorporated into the                                                                                                                                   frame, EdgeEngine begins to experience runtime variability, leading
+EdgeEngine RL agent (§4.2), namely action pruning and escape                                                                                                                                    to increased energy consumption, and also a violation. However,
+action. To this end, we measure the number of violations at each                                                                                                                                EdgeEngine promptly adapts its configuration, and no further vi-
+temperature and compare it with a version of EdgeEngine without                                                                                                                                 olations occur at this temperature. Additionally, as temperature
+these heuristics, EE-Vanilla.                                                                                                                                                                   decreases, EdgeEngine adjusts the configuration and selects near-
+   The number of violations for both EdgeEngine versions (Vanilla                                                                                                                               optimal settings. This adaptation leads to a reduction in runtime,
+and Optimized) is presented in Table 5. For deadline-constrained
+                                                                                                                                                                                        11
+SEC ’23, December 6–9, 2023, Wilmington, DE, USA                                                                                                                                                        Ahmadi et al.
+
+
+              100                                            150                                          500                                  CNNs). We believe that thermal-awareness continues to be a salient
+Energy (mJ)
+
+
+
+
+                                               Energy (mJ)
+
+
+
+
+                                                                                            Energy (mJ)
+                 75                                          125                                          400                                  issue even in a multidimensional constraint space with multiple
+                            energy budget                    100       energy budget                      300
+                 50         violation                         75       violation                                                               controls, and that RL will continue to be an effective solution.
+                                                                                                          200       energy budget
+                 25                                           50
+                      25ºC35ºC45ºC55ºC65ºC                    25 25ºC35ºC45ºC55ºC65ºC                               violation
+                                                                                                          100 25ºC35ºC45ºC55ºC65ºC
+                                                                                                                                               Are the energy savings obtained meaningful? One might ask
+                      0 500 1000150020002500                      0 500 1000150020002500                       0 500 1000150020002500
+                 20                                             25                                                                             how important it is to optimize energy for edge platforms compared
+                                                                                                             75
+  Runtime (ms)
+
+
+
+
+                                                 Runtime (ms)
+
+
+
+
+                                                                                              Runtime (ms)
+                 15                                             20                                           60                                to the total energy consumption of the devices they are deployed on.
+                                                                15                                           45                                For one perspective, we can compare edge platform power consump-
+                 10
+                                                                10                                           30
+                  5                                                                                                                            tion to the power consumption of small-sized drones [1]. These
+                    25ºC35ºC45ºC55ºC65ºC                         5 25ºC35ºC45ºC55ºC65ºC                      15 25ºC35ºC45ºC55ºC65ºC
+                  0 0 500 1000150020002500                       0 0 500 1000150020002500                     0 0 500 1000150020002500         operate within a comparable power range (i.e., around 20 watts) as
+                 (Mobilenetv2) Frame Number                      (Googlenet) Frame Number                     (Inception3) Frame Number        current edge platforms when running at maximum frequency [28].
+                                                                                                                                               Thus, optimizing the energy consumption of the edge platform
+Figure 10: The figures illustrate adaptation to previously observed                                                                            becomes an important element to ensure sustainable operation.
+platform temperatures ranging from 65 to 25ºC and runtime variabil-
+ity, while operating under tight energy budget constraints for three                                                                           Controlling the onboard fan speed. A notable aspect of cur-
+CNN applications. The upper plots depict the energy consumption                                                                                rent edge platforms is the presence of the onboard fan, which is
+(including any violations as crosses), while the lower plots showcase                                                                          controlled by the platform’s operating system. Based on our obser-
+the corresponding runtime for each inference. Lower values are bet-                                                                            vations, on the Jetson TX2, the fan operates at the maximum speed
+ter.                                                                                                                                           above 50ºC. To eliminate this source of variability, our character-
+                                                                                                                                               ization and experiments control the fan to be on at all times. An
+                                                                                                                                               important avenue for future work is the extension of EdgeEngine
+as lower temperatures correspond to lower energy consumption,                                                                                  capabilities to include control over the onboard fan speed. This
+thereby enhancing performance.                                                                                                                 would require the framework to learn and understand the impact
+                                                                                                                                               of different fan speeds at various states (such as workload, temper-
+Overheads. We estimate EdgeEngine runtime and memory over-
+                                                                                                                                               ature, and configuration) on power consumption and runtime.
+head to show it is practical for deployment in resource-constrained
+environments (𝑂 5 ). Note that our Python-based implementation                                                                                 Why not using deep reinforcement learning instead of Q-
+of EdgeEngine is not optimized - thus our estimates are an upper                                                                               Learning? The key challenge with employing modern deep rein-
+bound of overheads in a realistic deployment. The runtime overhead                                                                             forcement learning models [18] for adapting to constraints is their
+of EdgeEngine on Jetson TX2, on average across all the models,                                                                                 substantial computational demands, rendering them impractical
+is 340𝜇s. This overhead is the total execution time of selecting                                                                               for resource-constrained edge platforms. For instance, both Herti
+an action, calculating the reward, and updating the Q-table. Com-                                                                              [14] and zTT [16] rely on deep reinforcement learning but follow a
+pared to the Squeezenet execution time (13ms), the fastest model                                                                               training approach that occurs on a separate server, with the trained
+in our experiment, this overhead constitutes 2.61% of the total in-                                                                            model subsequently transferred to the edge platform. This method
+ference latency. Regarding memory overheard, the memory usage                                                                                  lacks real-time adaptability, as it can take 30-183 milliseconds to
+of EdgeEngine is 16MB, on average, over the applications. This is                                                                              determine the optimal action for zTT (significantly more compared
+significantly lower than the memory footprint of the applications,                                                                             to EdgeEngine). Furthermore, the adaptation process, involving the
+which often use GBs of data.                                                                                                                   training of the deep Q-Network, is relatively slow, surpassing 300s
+   To conclude, EdgeEngine can swiftly adapt to temperature                                                                                    for zTT, while EdgeEngine completes this process in just 15s.
+changes (𝑂 1 ) and runtime noise (𝑂 3 ) by adjusting all components
+(𝑂 2 ). It also exhibits real-time adaptation capabilities by having a
+low number of violations when it observes a temperature for the
+first time (𝑂 4 ). EdgeEngine has the above ability across tempera-                                                                            8   SUMMARY
+tures, applications, and constraints (𝑂 5 ) and maintains low runtime                                                                          We demonstrate the effects of temperature variation on current
+and memory overheads (𝑂 6 ).                                                                                                                   thermal-oblivious frequency optimization frameworks showing
+                                                                                                                                               that they either violate the application’s constraints or select
+7                DISCUSSION                                                                                                                    performance/energy-inefficient configurations. To address this
+Extending the problem space. This study focuses on highlighting                                                                                challenge, we present EdgeEngine, a lightweight optimization
+the benefits of thermal-awareness and proposes RL as a possible tech-                                                                          framework that adapts to the environment’s temperature and the
+nique to support it. To this end, we focus on the problem frequency                                                                            application’s constraints using RL. Compared to thermal-oblivious
+optimization frameworks face: choosing an optimal frequency for                                                                                frameworks, EdgeEngine (i) selects frequency configurations that
+each processing element such that one constraint in the 2D space                                                                               satisfy the applications’ constraints, (ii) reduces violations by an
+(time energy) is satisfied while the other one is optimized. Edge                                                                              average of 41% with an 8% lower runtime for energy-constrained
+applications, however, may operate in a space that has additional                                                                              applications, and (iii) reduces violations by 26%, with 29% lower
+dimensions (e.g., accuracy for inference applications [15]) and may                                                                            energy consumption for deadline-constrained applications.
+have additional controls (e.g., the number of cores used to control                                                                               Acknowledgements: This work was supported in part by
+the time/energy trade-off, or application-specific configurations                                                                              grants from Huawei, and the Natural Sciences and Engineering
+such as weight quantization/pruning [24] to control accuracy in                                                                                Research Council of Canada (NSERC) Discovery Grants Program.
+                                                                                                                                          12
+EdgeEngine: A Thermal-Aware Optimization Framework for Edge Inference                                                              SEC ’23, December 6–9, 2023, Wilmington, DE, USA
+
+
+REFERENCES                                                                                        [21] Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Alex Graves, Ioannis
+ [1] 2023. Mavic Mini Drone - Specs. https://www.dji.com/ca/mavic-mini/downloads                       Antonoglou, Daan Wierstra, and Martin Riedmiller. 2013. Playing atari with deep
+ [2] 2023. Temperature chamber - HP-100V-T. https://www.mrclab.com/Media/Doc/                          reinforcement learning. arXiv preprint arXiv:1312.5602 (2013).
+     HP-FP-LP-TP-V-Tseries_SPEC2022.pdf                                                           [22] M. G. Sarwar Murshed, Christopher Murphy, Daqing Hou, Nazar Khan, Ganesh
+ [3] Hazem A. Abdelhafez, Hassan Halawa, Mohamed Osama Ahmed, Karthik Pattabi-                         Ananthanarayanan, and Faraz Hussain. 2021. Machine Learning at the Network
+     raman, and Matei Ripeanu. 2021. MIRAGE: Machine Learning-based Modeling of                        Edge: A Survey. ACM Comput. Surv. 54, 8, Article 170 (oct 2021), 37 pages.
+     Identical Replicas of the Jetson AGX Embedded Platform. In 2021 IEEE/ACM Sym-                     https://doi.org/10.1145/3469029
+     posium on Edge Computing (SEC). 26–40. https://doi.org/10.1145/3453142.3491284               [23] Todd Mytkowicz, Amer Diwan, Matthias Hauswirth, and Peter F Sweeney. 2009.
+ [4] Hazem A. Abdelhafez, Hassan Halawa, Amr Almoallim, Amirhossein Ahmadi,                            Producing wrong data without doing anything obviously wrong! ACM Sigplan
+     Karthik Pattabiraman, and Matei Ripeanu. 2022. Characterizing Variability in                      Notices 44, 3 (2009), 265–276.
+     Heterogeneous Edge Systems: A Methodology Case Study. In 2022 IEEE/ACM                       [24] Wei Niu, Xiaolong Ma, Sheng Lin, Shihao Wang, Xuehai Qian, Xue Lin, Yanzhi
+     7th Symposium on Edge Computing (SEC). 107–121. https://doi.org/10.1109/                          Wang, and Bin Ren. 2020. PatDNN: Achieving Real-Time DNN Execution on
+     SEC54971.2022.00016                                                                               Mobile Devices with Pattern-Based Weight Pruning. In Proceedings of the Twenty-
+ [5] Hazem A. Abdelhafez, Hassan Halawa, Karthik Pattabiraman, and Matei Ripeanu.                      Fifth International Conference on Architectural Support for Programming Languages
+     2021. Snowflakes at the Edge: A Study of Variability among NVIDIA Jetson AGX                      and Operating Systems (Lausanne, Switzerland) (ASPLOS ’20). Association for
+     Xavier Boards. In Proceedings of the 4th International Workshop on Edge Systems,                  Computing Machinery, New York, NY, USA, 907–922. https://doi.org/10.1145/
+     Analytics and Networking (Online, United Kingdom) (EdgeSys ’21). Association                      3373376.3378534
+     for Computing Machinery, New York, NY, USA, 1–6. https://doi.org/10.1145/                    [25] Vijay Janapa Reddi, Christine Cheng, David Kanter, Peter Mattson, Guenther
+     3434770.3459729                                                                                   Schmuelling, Carole-Jean Wu, Brian Anderson, Maximilien Breughe, Mark
+ [6] Amirhossein Ahmadi, Hazem Abdelhafez, Shashwat Jaiswal, Karthik Pattabira-                        Charlebois, William Chou, Ramesh Chukka, Cody Coleman, Sam Davis, Pan
+     man, and Matei Ripeanu. 2023. Hot Under the Hood: An Analysis of Ambient                          Deng, Greg Diamos, Jared Duke, Dave Fick, J. Scott Gardner, Itay Hubara, Sachin
+     Temperature Impact on Heterogeneous Edge Platforms. In Proceedings of the 6th                     Idgunji, Thomas B. Jablin, Jeff Jiao, Tom St. John, Pankaj Kanwar, David Lee, Jef-
+     International Workshop on Edge Systems, Analytics and Networking (Rome, Italy)                    fery Liao, Anton Lokhmotov, Francisco Massa, Peng Meng, Paulius Micikevicius,
+     (EdgeSys ’23). Association for Computing Machinery, New York, NY, USA, 25–30.                     Colin Osborne, Gennady Pekhimenko, Arun Tejusve Raghunath Rajan, Dilip
+     https://doi.org/10.1145/3578354.3592868                                                           Sequeira, Ashish Sirasao, Fei Sun, Hanlin Tang, Michael Thomson, Frank Wei,
+ [7] Soroush Bateni and Cong Liu. 2020. NeuOS: A Latency-Predictable Multi-                            Ephrem Wu, Lingjie Xu, Koichi Yamada, Bing Yu, George Yuan, Aaron Zhong,
+     Dimensional Optimization Framework for DNN-driven Autonomous Systems. In                          Peizhao Zhang, and Yuchen Zhou. 2020. MLPerf Inference Benchmark. In 2020
+     2020 USENIX Annual Technical Conference (USENIX ATC 20). USENIX Association,                      ACM/IEEE 47th Annual International Symposium on Computer Architecture (ISCA).
+     371–385. https://www.usenix.org/conference/atc20/presentation/bateni                              446–459. https://doi.org/10.1109/ISCA45697.2020.00045
+ [8] Soroush Bateni, Husheng Zhou, Yuankun Zhu, and Cong Liu. 2018. PredJoule: A                  [26] Hao Shen, Ying Tan, Jun Lu, Qing Wu, and Qinru Qiu. 2013. Achieving Au-
+     Timing-Predictable Energy Optimization Framework for Deep Neural Networks.                        tonomous Power Management Using Reinforcement Learning. ACM Trans. Des.
+     In 2018 IEEE Real-Time Systems Symposium (RTSS). 107–118. https://doi.org/10.                     Autom. Electron. Syst. 18, 2, Article 24 (apr 2013), 32 pages. https://doi.org/10.
+     1109/RTSS.2018.00020                                                                              1145/2442087.2442095
+ [9] Anirban Das, Stacy Patterson, and Mike Wittie. 2018. EdgeBench: Benchmarking                 [27] Richard S Sutton. 1988. Learning to predict by the methods of temporal differences.
+     Edge Computing Platforms. In 2018 IEEE/ACM International Conference on Utility                    Machine learning 3, 1 (1988), 9–44.
+     and Cloud Computing Companion (UCC Companion). 175–180. https://doi.org/10.                  [28] The Jetson Platform Team. 2022. NVIDIA Jetson TX2 Specifications. NVIDIA. Re-
+     1109/UCC-Companion.2018.00053                                                                     trieved March, 2022 from https://www.nvidia.com/en-us/autonomous-machines/
+[10] C. Imes et al. 2015. POET: a portable approach to minimizing energy under soft                    embedded-systems/jetson-tx2/
+     real-time constraints. In IEEE RTAS. 75–86.                                                  [29] The Jetson Platform Team. 2022. NVIDIA Jetson TX2 Thermal Design Guide.
+[11] M. Han et al. 2019. MOSAIC: Heterogeneity-, Communication-, and Constraint-                       NVIDIA. Retrieved March, 2022 from https://developer.nvidia.com/embedded/
+     Aware Model Slicing and Execution for Accurate and Efficient Inference. In IEEE                   dlc/jetson-tx2-thermal-design-guide
+     PACT. 165–177.                                                                               [30] Michel Tokic and Günther Palm. 2011. Value-difference based exploration: adap-
+[12] N. Razali et al. 2011. Power comparisons of shapiro-wilk, kolmogorov-smirnov,                     tive control between epsilon-greedy and softmax. In Annual conference on artifi-
+     lilliefors and anderson-darling tests. Journal of statistical modeling and analytics,             cial intelligence. Springer, 335–346.
+     21–33.                                                                                       [31] Chengcheng Wan, Muhammad Santriaji, Eri Rogers, Henry Hoffmann, Michael
+[13] P. Chestovich et al. 2022. Temperature Profiles Of Sunlight-Exposed Surfaces In A                 Maire, and Shan Lu. 2020. ALERT: Accurate learning for energy and timeliness. In
+     Desert Climate: Determining The Risk For Pavement Burns. Journal of Burn Care                     Proceedings of the 2020 USENIX Conference on Usenix Annual Technical Conference.
+     & Research: Official Publication of the American Burn Association, irac136–irac136.               353–369.
+[14] Myeonggyun Han and Woongki Baek. 2021. HERTI: A Reinforcement Learning-                      [32] Christopher JCH Watkins and Peter Dayan. 1992. Q-learning. Machine learning
+     Augmented System for Efficient Real-Time Inference on Heterogeneous Embed-                        8, 3 (1992), 279–292.
+     ded Systems. In 2021 30th International Conference on Parallel Architectures and             [33] Carole-Jean Wu, David Brooks, Kevin Chen, Douglas Chen, Sy Choudhury, Marat
+     Compilation Techniques (PACT). 90–102. https://doi.org/10.1109/PACT52795.2021.                    Dukhan, Kim Hazelwood, Eldad Isaac, Yangqing Jia, Bill Jia, Tommer Leyvand,
+     00014                                                                                             Hao Lu, Yang Lu, Lin Qiao, Brandon Reagen, Joe Spisak, Fei Sun, Andrew Tulloch,
+[15] Hyuk-Jin Jeong, Hyeon-Jae Lee, Chang Hyun Shin, and Soo-Mook Moon. 2018.                          Peter Vajda, Xiaodong Wang, Yanghan Wang, Bram Wasti, Yiming Wu, Ran
+     IONN: Incremental Offloading of Neural Network Computations from Mobile                           Xian, Sungjoo Yoo, and Peizhao Zhang. 2019. Machine Learning at Facebook:
+     Devices to Edge Servers. In Proceedings of the ACM Symposium on Cloud Com-                        Understanding Inference at the Edge. In 2019 IEEE International Symposium on
+     puting (Carlsbad, CA, USA) (SoCC ’18). Association for Computing Machinery,                       High Performance Computer Architecture (HPCA). 331–344. https://doi.org/10.
+     New York, NY, USA, 401–411. https://doi.org/10.1145/3267809.3267828                               1109/HPCA.2019.00048
+[16] Seyeon Kim, Kyungmin Bin, Sangtae Ha, Kyunghan Lee, and Song Chong. 2022.
+     ZTT: Learning-Based DVFS with Zero Thermal Throttling for Mobile Devices.
+     GetMobile: Mobile Comp. and Comm. 25, 4 (mar 2022), 30–34. https://doi.org/10.
+     1145/3529706.3529714
+[17] Young Geun Kim and Carole-Jean Wu. 2020. AutoScale: Energy Efficiency Opti-
+     mization for Stochastic Edge Inference Using Reinforcement Learning. In 2020
+     53rd Annual IEEE/ACM International Symposium on Microarchitecture (MICRO).
+     1082–1096. https://doi.org/10.1109/MICRO50266.2020.00090
+[18] Yuxi Li. 2017. Deep reinforcement learning: An overview. arXiv preprint
+     arXiv:1701.07274 (2017).
+[19] Bingqian Lu, Jianyi Yang, Lydia Y. Chen, and Shaolei Ren. 2019. Automating
+     Deep Neural Network Model Selection for Edge Inference. In 2019 IEEE First
+     International Conference on Cognitive Machine Intelligence (CogMI). 184–193.
+     https://doi.org/10.1109/CogMI48466.2019.00035
+[20] Aleksander Maricq, Dmitry Duplyakin, Ivo Jimenez, Carlos Maltzahn, Ryan
+     Stutsman, and Robert Ricci. 2018. Taming Performance Variability. In 13th USENIX
+     Symposium on Operating Systems Design and Implementation (OSDI 18). USENIX
+     Association, Carlsbad, CA, 409–425. https://www.usenix.org/conference/osdi18/
+     presentation/maricq
+
+                                                                                             13
+

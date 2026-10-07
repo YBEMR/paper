@@ -1,0 +1,755 @@
+Modeling Processor Idle Times in MPSoC Platforms to Enable
+Integrated DPM, DVFS, and Task Scheduling Subject to
+a Hard Deadline∗
+Amirhossein Esmaili
+Department of Electrical Engineering
+University of Southern California
+Los Angeles, California
+esmailid@usc.edu
+Mahdi Nazemi
+Department of Electrical Engineering
+University of Southern California
+Los Angeles, California
+mnazemi@usc.edu
+Massoud Pedram
+Department of Electrical Engineering
+University of Southern California
+Los Angeles, California
+pedram@usc.edu
+ABSTRACT
+Energy efficiency is one of the most critical design criteria for mod-
+ern embedded systems such as multiprocessor system-on-chips
+(MPSoCs). Dynamic voltage and frequency scaling (DVFS) and dy-
+namic power management (DPM) are two major techniques for
+reducing energy consumption in such embedded systems. Further-
+more, MPSoCs are becoming more popular for many real-time
+applications. One of the challenges of integrating DPM with DVFS
+and task scheduling of real-time applications on MPSoCs is the
+modeling of idle intervals on these platforms. In this paper, we
+present a novel approach for modeling idle intervals in MPSoC plat-
+forms which leads to a mixed integer linear programming (MILP)
+formulation integrating DPM, DVFS, and task scheduling of pe-
+riodic task graphs subject to a hard deadline. We also present a
+heuristic approach for solving the MILP and compare its results
+with those obtained from solving the MILP.
+CCS CONCEPTS
+• Computer systems organization → Embedded and cyber-
+physical systems; Real-time systems; • Theory of computa-
+tion → Scheduling algorithms; Integer programming; • Gen-
+eral and reference → Design; Performance;
+KEYWORDS
+Task Scheduling, Energy Optimization, DVFS, DPM, Real-time MP-
+SoCs
+1 INTRODUCTION
+Energy consumption is one of the most important design criteria
+of computing devices, ranging from portable embedded systems to
+servers in data centers. Furthermore, with growing demand for high
+performance in embedded systems, architectures such as multipro-
+cessor system-on-chip (MPSoC) are becoming more popular for
+many real-time applications. In order to reduce energy consump-
+tion in such embedded systems, two main techniques are used,
+namely, dynamic voltage and frequency scaling (DVFS) and dy-
+namic power management (DPM). In DVFS, operating voltage and
+clock frequency of processors are adjusted based on workload char-
+acteristics. With DPM, processors are switched to a low power state
+(sleep mode) when they are not used for execution of any tasks (idle
+time/interval). This leads to the reduction of static power consump-
+tion. However, switching to a sleep mode has non-negligible time
+∗Codes and scripts for this work are available from https://github.com/
+Amirhossein-Esmaili/Energy_Aware_Task_Scheduling_in_MPSoCs
+and energy overhead, and it only causes energy savings when the
+idle time of a processor is longer than a threshold called break-even
+time [1].
+There have been many research studies regarding reducing the
+energy consumption using DVFS and/or DPM. A major portion
+of these studies only considers DVFS for the energy optimization
+on single and multiprocessor platforms [2–4]. Ref [5] has focused
+on DPM and has proposed an energy-efficient scheduling relying
+on minimizing the number of processor switching and maximiz-
+ing the usage of energy-efficient cores in heterogeneous platforms.
+Some other papers have integrated scheduling of tasks with DVFS
+and then, at the final phase, have applied DPM wherever it was
+possible [6]. However, with the increase in static power portion of
+the total power consumption of systems [7], both DPM and DVFS
+should be integrated with scheduling of tasks for the sake of en-
+ergy optimization. Reference [8] has combined DPM and DVFS
+for minimizing energy consumption of a uniprocessor platform
+performing periodic hard real-time tasks with precedence con-
+straints. A major challenge of integrating DPM with the scheduling
+of tasks in a multiprocessor platform is formulating idle intervals
+and their associated energy consumption in the total energy con-
+sumption of the these platforms. The authors in [9] have developed
+an energy-minimization formulation for a multiprocessor system
+considering both DVFS and DPM and solves it via mixed integer
+linear programming (MILP). However, one major assumption in
+their formulation is that the processor assignment for the tasks to
+be scheduled is known in advance. Furthermore, they only consider
+inter-task DVFS, i.e., the frequency of the processor stays constant
+for the entire duration of the execution of a task. However, when
+there is a set of discrete frequencies available for task execution (as
+that is the case in [9] and also our work as we will see in Section
+2.4), allowing intra-task DVFS and the usage of a combination of
+discrete frequencies for execution of tasks can result in more energy
+savings [1].
+In this paper, by proposing a method for modeling idle intervals
+in a multiprocessor system, we present an energy optimization
+MILP formulation integrating both DVFS and DPM with schedul-
+ing of real-time tasks with precedence and time constraints. By
+solving the MILP, for each task, we obtain the optimum processor
+assignment, execution start time, and the distribution of its work-
+load among available frequencies of the processor. To the best of
+our knowledge, this is the first work that integrates both DVFS
+and DPM with scheduling of real-time periodic dependent tasks
+arXiv:1812.07723v1
+[cs.OS]
+19
+Dec
+2018
+in a formulation that provides optimum values for all the afore-
+mentioned results simultaneously in a multiprocessor platform.
+We also present a heuristic approach for solving the model and
+compare its results with those obtained from solving the MILP. The
+rest of the paper is organized as follows: Section 2 explains the
+models used for the problem formulation and presents the formal
+problem statement. Section 3 presents the proposed method and
+MILP formulation. Section 4 provides the results. Finally, Section 5
+concludes the paper and discusses future work.
+2 MODELS AND PROBLEM DEFINITION
+2.1 Voltage and Frequency Change Overhead
+The frequency change for modern processors takes around tens of
+microseconds depending on the amount and (up or down) direction
+of the frequency change. According to [10], the frequency down-
+scaling for Intel Core2 Duo E6850 processor takes approximately
+between 10 to 60 microseconds depending on the amount of the
+frequency change. In contrast, the transition to and from sleep
+modes of modern processors usually takes in the order of a few
+milliseconds. Therefore, for our modeling, we ignore the latency
+overhead of switching frequencies compared to that of transition
+to and from sleep modes of a processor. The energy overhead as-
+sociated with frequency change is also small and neglected in our
+modeling.
+2.2 Task Model
+Tasks to be scheduled are modeled as a task graph which itself is a
+directed acyclic graph (DAG) represented by G(V, E,Td ), in which
+V denotes the set of tasks (we have a total of n tasks), E denotes
+data dependencies among tasks, and Td denotes the period of the
+task graph (i.e., tasks in the task graph are repeated after Td ). Each
+task graph should be scheduled before the arrival of the next one
+(i.e.,Td acts as a hard deadline for scheduling of tasks). In this paper,
+the workload of each task is represented by the total number of
+processor cycles required to perform that task completely. For task
+u (u = 1, 2, ...,n), this workload is represented by Wu .
+2.3 Energy Model
+For modeling the processor power consumption during executing
+a task with frequency f , similar to [4], the following model would
+be exploited:
+P = af α
++ bf + c, (1)
+in which af α represents dynamic power portion, and bf + c repre-
+sents static power portion of total processor power consumption.
+α indicates the technology-dependent dynamic power exponent;
+usually ≈ 3. a is a constant that depends on the average switched
+capacitance and the average activity factor. Therefore, energy con-
+sumption in one clock cycle, when executing a task with frequency
+f , is obtained via the following formulation:
+Ecycle = af α−1
++ b +
+c
+f
+. (2)
+For modeling the processor energy consumption during an idle
+time, Eidle function is used according to the formulation presented
+in (3). Here, for the illustration purposes, we only use one sleep
+mode for switching to and waking up from, and power consumption
+during this sleep mode is considered to be zero (It is straightforward
+to extend the work to support multiple sleep modes each associated
+with a different non-zero power consumption):
+Eidle (I) =
+
+
+
+
+
+
+
+c × I 0 ≤ I < Tbe
+Esw Tbe ≤ I < Td ,
+0 I = Td
+(3)
+where I represents the idle time, c is the frequency-independent
+component of power consumption (by setting f to zero in (1)), and
+Esw is the switching energy overhead for both switching to the
+sleep mode and waking up from it. Tbe represents break-even time
+and is obtained as follows:
+Tbe = max (Tsw ,
+Esw
+c
+), (4)
+where Esw
+c represents the minimum amount the idle time should
+be so that switching to the sleep mode and waking up from it
+causes energy savings, and Tsw is the physical time needed for
+both switching to the sleep mode and waking up from it. Tbe is
+the maximum of these two values. Furthermore, the third term in
+(3) conveys the fact that if no task is assigned to a processor or
+equivalently I = Td , that processor is not used for scheduling of
+tasks and thus does not contribute to the total energy consumption
+at all. Therefore, our model explores the possibility of scheduling
+the task graph on a subset of K available processors if it results in
+energy savings.
+2.4 Problem Statement
+Using the combination of DVFS and DPM, where each of these
+techniques can be done for each processor independently, we are
+looking for energy-optimized scheduling of the task graph repre-
+sented by G(V, E,Td ) on a platform comprising of K homogeneous
+processors subject to a hard deadline. Each processor supports a
+set of m distinct frequencies: {f1, f2, ..., fm }. We are considering a
+non-preemptive scheduling method. Therefore, when the execution
+of a task starts on each of the processors, it continues until the task
+completion without any interruption. Consequently, for each task,
+we are looking for optimum values for: processor assignment for
+the task, task execution start time, and distribution of the total
+number of required processor cycles for the complete execution of
+the task among m available frequencies.
+3 PROPOSED METHOD
+3.1 Constraints of the Proposed Scheduling
+Model
+In this section, we formulate constraints of the proposed scheduling
+model. Duration of task u (u = 1, 2, ...,n) is formulated as follows:
+Duru =
+m
+Õ
+i=1
+Nu,i
+fi
+, (5)
+where Nu,i indicates number of processor cycles performed at fi
+(i = 1, 2, ...,m) for the execution of task u. Therefore:
+m
+Õ
+i=1
+Nu,i = Wu, Nu,i ≥ 0. (6)
+According to (2) and (5), energy consumption during the execu-
+tion of task u can be formulated as follows:
+Etask (u) =
+m
+Õ
+i=1
+(Nu,i .(af α−1
+i + b +
+c
+fi
+)). (7)
+To ensure each task finishes its execution before Td , for u =
+1, 2, ...,n, we have:
+Su + Duru ≤ Td , Su ≥ 0, (8)
+where Su represents start time of the execution of task u. Further-
+more, the precedence constraint is formulated as follows:
+Su + Duru ≤ Sv , ∀e(u,v) ∈ E. (9)
+Here, we do not consider any inter-task communication cost asso-
+ciated with e(u,v) for sending output data of task u to input data of
+task v (The model can be easily extended to incorporate this cost).
+For processor assignment for tasku to processork,k = 1, 2, ...,K,
+we introduce the decision variable of Pk,u which is defined as
+follows:
+Pk,u =
+
+1 if task u is assigned to processor k
+0 otherwise
+. (10)
+Therefore, we have the following constraint:
+K
+Õ
+k=1
+Pk,u = 1, for u = 1, 2, ...,n. (11)
+One other important constraint that needs to be satisfied is that the
+execution of tasks assigned to the same processor shall not overlap
+each other (non-preemptive scheduling). For this, we define an
+auxiliary decision variable called Ok,u,v representing ordering of
+tasks. For k = 1, 2, ...,K; u = 1, 2, ...,n; v = 1, 2, ...,n,v , u; we
+define:
+Ok,u,v =
+
+
+
+
+
+
+
+
+
+
+
+1 if task u is scheduled immediately
+before task v on processor k
+0 otherwise
+. (12)
+In addition, if task v is the first task assigned to processor k, we
+define Ok,0,v to be 1 (and is 0 otherwise). On the other hand, if task
+u is the last task assigned to processor k, we define Ok,u,n+1 to
+be 1 (and is 0 otherwise). Furthermore, if there is no task assigned
+to processor k, we define Ok,0,n+1 to be 1 (and is 0 otherwise).
+Accordingly, using (12) and the definitions provided for Ok,0,v ,
+Ok,u,n+1 and Ok,0,n+1, we have the following constraints for k =
+1, 2, ...,K:
+n+1
+Õ
+v=1
+v,u
+Ok,u,v = Pk,u, for u = 0, 1, ...,n (13)
+n
+Õ
+u=0
+u,v
+Ok,u,v = Pk,v , for v = 1, 2, ...,n + 1. (14)
+According to (13), if task u is assigned to processor k (Pk,u = 1),
+either there is one and only one task scheduled immediately after
+task u on processor k or task u is the last task assigned to processor
+k. Similarly, according to (14), if task v is assigned to processor k
+(Pk,v = 1), either there is one and only one task scheduled immedi-
+ately before task v on processor k or task v is the first task assigned
+to processor k. In both (13) and (14), Pk,0 and Pk,n+1 are defined as
+1 for all k = 1, 2, ...,K.
+For non-preemptive scheduling we should have:
+K
+Õ
+k=1
+n
+Õ
+u=1
+(Su + Duru ) .Ok,u,v
+
+≤ Sv ,
+for v = 1, 2, ...,n,v , u,
+(15)
+which can be formulated as the following linear constraint:
+Su + Duru − (1 − Ok,u,v ) ×Td ≤ Sv ,
+for u = 1, 2, ...,n,
+for v = 1, 2, ...,n,v , u,
+for k = 1, 2, ...,K.
+(16)
+3.2 Modeling Idle Intervals
+Using Ok,u,v variables introduced in Section 3.1, we can conve-
+niently model idle intervals in an MPSoC platform. Specifically,
+for each task v (v = 1, 2, ...,n), we formulate the amount of the
+idle time before servicing task v on the processor to which task
+v is assigned. When task v is not the first task scheduled on the
+processor to which it is assigned, the idle time before servicing task
+v can be written as follows:
+Iv = (1 −
+K
+Õ
+k=1
+Ok,0,v )
+× (Sv −
+K
+Õ
+k=1
+n
+Õ
+u=1
+u,v
+((Su + Duru ).Ok,u,v )). (17)
+If task v is the first task scheduled on any of K processors, the first
+term in multiplication in (17) causes Iv to be zero. In that case, idle
+time before servicing task v on the processor k to which the task is
+assigned is obtained using the following:
+I′
+k = (Td −
+n
+Õ
+u=1
+((Su + Duru ).Ok,u,n+1))
++
+n
+Õ
+v=1
+(Ok,0,v × Sv ). (18)
+In (18), the second term in summation represents the idle time on
+processor k before servicing its first assigned task in the current
+period. On the other hand, The first term in the summation in (18)
+represents the idle time on that processor after servicing its last
+assigned task in the previous period. This interval should also be
+taken into account when calculating the amount of idle time before
+servicing first task scheduled on processor k. If there is no task
+assigned to processor k at all, (18) would give the value of Td for I′
+k
+.
+3.3 Objective Function
+Subject to constraints formulated so far, we are trying to minimize
+the following objective function which represents the total energy
+consumption:
+n
+Õ
+u=1
+Etask (u) +
+n
+Õ
+v=1
+Eidle (Iv ) +
+K
+Õ
+k=1
+Eidle (I′
+k ). (19)
+The objective function of (19), alongside the formulated constraints,
+forms a mixed integer programming over the positive real variables
+of Su and Nu,i ; and the Boolean decision variables of Pk,u and
+Ok,u,v . The number of these variables in our problem are n, nm,
+nk, and (n + 1)2k − nk, respectively.
+However, due to formulations presented for idle time intervals in
+(17) and (18), and the concave piece-wise behavior of Eidle function
+in (3) in a minimization problem, it is a non-linear non-convex
+programming (Etask(u) in (19) is linear with respect to positive
+real variables of Nu,i and this term does not contribute to the
+nonlinearity of the problem).
+For linearizing (17) and (18), we use the lemma mentioned in
+[9], where this lemma is stated as follows: Given constants s1 and
+s2, if P1 and P2 are two constraint spaces where P1 is {[t,b,x] | t =
+bx, −s1 ≤ x ≤ s2, b ∈ {0, 1}}, and P2 is {[t,b,x] | − bs1 ≤ t ≤
+bs2, t+bs1−x−s1 ≤ 0, t−bs2−x+s2 ≥ 0, b ∈ {0, 1}}, then, P1 and P2
+are equivalent. Proof of this lemma is given in [9]. With this lemma,
+we can substitute multiplication of a Boolean decision variable and
+a bounded real variable, with a newly introduced bounded real
+variable and three added linear constraints indicated in P2). Using
+this lemma multiple times, we can reach linear representations for
+idle time interval formulations in (17) and (18) at the end.
+Furthermore, Eidle (Iv ) in (19) can be written as follows:
+Eidle (Iv ) = Sv .(Esw ) + (1 − Sv ).(c × Iv ), (20)
+where Sv is a Boolean decision variable which is 1 whenTbe ≤ Iv <
+Td and is 0 otherwise (I < Tbe ). Therefore, this decision variable
+represents switching and whether we put the processor during Iv
+in the sleep mode or not. Since Iv represents the amount of idle
+time before servicing task v on the processor to which task v is
+assigned when task v is not the first task on that processor, Iv can
+never be Td . Therefore, we do not need to formulate the third term
+of (3) in (20). Corresponding constraint for Sv (v = 1, 2, ...,n), is
+written as follows:
+Iv −Tbe
+Td
+≤ Sv ≤
+Iv
+Tbe
+, Sv ∈ {0, 1}. (21)
+For Eidle (I′
+k
+), a similar formulation like (20) can be used except
+that we need another Boolean decision variable called Uk which
+represents whether we assign any task to processor k or not. When
+Uk is 0, it means processor k is not used at all for scheduling the
+task graph and thus does not contribute to the energy consumption
+in (19). Therefore, Uk is 1 when we assign one or more tasks to
+processor k (I′
+k
+< Td ) and is 0 otherwise (I′
+k
+= Td , or equivalently:
+Td ≤ I′
+k
+≤ Td ). Accordingly, Eidle (I′
+k
+) in (19) can be written as
+follows:
+Eidle (I′
+k ) = Uk .[S′
+k .(Esw ) + (1 − S′
+k ).(c × I′
+k )], (22)
+where S′
+k
+represents whether we switch the processor during I′
+k
+to
+the sleep mode or not (similar to Sv ). The usage of Uk in (22) allows
+formulating the third term of (3). Corresponding constraints for S′
+k
+and Uk (k = 1, 2, ...,K) are written as follows:
+I′
+k
+−Tbe
+Td
+≤ S′
+k ≤
+I′
+k
+Tbe
+, S′
+k ∈ {0, 1}, (23)
+I′
+k
+−Td
+Td
+≤ Uk ≤
+I′
+k
+Td
+, Uk ∈ {0, 1}. (24)
+In order to linearize (20) and (22), we again use the aforemen-
+tioned lemma. However, for (22), where we have a multiplication of
+two Boolean decision variables, we also need the following lemma:
+If P1 and P2 are two constraint spaces where P1 is {[z,x,y] | z =
+xy, x ∈ {0, 1}, y ∈ {0, 1}}, and P2 is {[z,x,y] | z ≤ x, z ≤ y, x +y −
+z ≤ 1, x ∈ {0, 1}, y ∈ {0, 1}}, then, P1 and P2 are equivalent. Using
+these lemmas and methods for linearizing the objective function of
+(19), the energy-optimized scheduling problem expressed in Section
+2.4 is modeled as an MILP formulation.
+4 RESULTS
+4.1 Experiment Setup
+In order to solve the formulated MILP, we use IBM ILOG CPLEX
+Optimization Studio [11]. The platform on which simulations are
+performed is a computer with a 3.2 GHz Intel Core i7-8700 Processor
+and 16 GB RAM. Using [9] for obtaining energy model parameters,
+the frequency-independent component of processor power con-
+sumption, which is represented by c in (1), is obtained as 276mW .
+Each processor can operate independently of other processors at ei-
+ther f1 = 1.01GHz, f2 = 1.26GHz, f3 = 1.53GHz, f4 = 1.81GHz,
+f5 = 2.1GHz. For these frequencies, frequency-dependent com-
+ponent of processor power consumption, which is represented by
+af α + bf in (1), is 430.9mW , 556.8mW , 710.7mW , 896.5mW , and
+1118.2mW , respectively. Using curve fitting, we obtain a = 23.8729,
+b = 401.6654, and α = 3.2941 in (1). Esw and Tsw are set as 385 µJ
+and 5ms. Here, We consider a architecture with 4 processors. Sim-
+ulations are performed on 8 task graphs randomly generated using
+TGFF [12], which is a randomized task graph generator widely
+used in the literature to evaluate the performance of scheduling
+algorithms. Detailed information for each task graph is presented
+in Table 1. For studied task graphs, the average workload of each
+task is set to 2 × 106 cycles (around 1ms execution time under
+maximum frequency). The maximum in-degree and out-degree for
+each node is set to 2 and 3, respectively. The number of tasks in
+studied random task graphs ranges from 7 to 28.
+To evaluate the advantage of our modeling of idle intervals in
+multiprocessor systems, we consider two cases: 1) A baseline case
+which uses only the first term of (19) as the objective function
+alongside with constraints of (5) to (14), and (16). In other words,
+in this baseline case, we do not use any idle time-related terms in
+the objective function or constraints. 2) Using (19) as the objec-
+tive function alongside all constraints and linearization techniques
+mentioned in Section 3 (this case is our proposed method). In the
+baseline case, switching to the sleep mode during an idle time is
+done, if possible, after the scheduling is finished (i.e., DPM is not in-
+tegrated with DVFS and scheduling in the baseline case). Therefore,
+the baseline case is an integrated Scheduling and Clock-and-voltage
+scaling followed by mode Transition algorithm (iSC+T). The second
+case, which is our proposed method, is referred to as an integrated
+Scheduling, Clock-and-voltage scaling, and mode Transition algo-
+rithm (iSCT).
+4.2 Effect of Modeling Idle Intervals
+According to Table 1, including the energy consumption of modeled
+idle intervals in the objective function causes an average energy
+saving of 15.34% (up to 25.21%) for iSCT versus iSC+T. To better
+Table 1: Task Graphs Characteristics and Corresponding Energy
+Consumption Values Obtained from iSCT versus iSC+T
+Task No. of Total Workload of Td Total Energy iSCT versus iSC+T
+Graph Tasks Tasks in Processor (ms) Consumption (mJ) Energy Saving
+Cycles (×106) iSC+T iSCT (%)
+TGFF1 7 15.89 8 12.67 10.45 17.52
+TGFF2 11 18.69 12 13.60 12.06 11.32
+TGFF3 14 34.39 10 25.99 22.70 12.66
+TGFF4 15 31.89 12 28.08 21.00 25.21
+TGFF5 16 34.88 12 27.35 23.02 15.83
+TGFF6 18 33.46 14 25.38 21.98 13.40
+TGFF7 22 44.94 22 33.74 29.39 12.89
+TGFF8 28 56.81 18 42.95 37.00 13.85
+observe the contribution of modeling idle intervals in an MPSoC
+platform, for each scheduled task graph, the total number of idle
+intervals on all processors, and total time of these idle intervals
+are shown in Table 2 for both iSCT and iSC+T. Furthermore, for
+each scheduled task graph, the number of used processors for the
+scheduling of that task graph, out of maximum 4 processors, is also
+presented in Table 2 for both iSCT and iSC+T.
+According to Table 2, while for all scheduled task graphs, the
+total time of idle intervals are higher or the same for iSCT compared
+to iSC+T, the number of idle intervals for iSCT are notably fewer
+than the number of idle intervals for iSC+T (on average fewer than
+half). Therefore, by including the energy consumption of modeled
+idle intervals in the objective function of (19), instead of having
+a number of distributed short idle intervals, we will have fewer
+merged longer idle intervals. This results in more opportunities for
+switching the processors to the sleep mode during idle intervals
+and thus more energy savings (as indicated in Table 1). In fact, for
+task graphs studied in this paper, the percentage of idle intervals
+that are longer than Tbe , and thus we can switch the processor
+to the sleep mode, are 91.67 % and 32.31 % for iSCT and iSC+T,
+respectively.
+On the other hand, as indicated in Table 2, iSCT explores the
+possibility of the usage of a subset of 4 processors if it results
+in energy savings. For discussed task graphs in this paper, iSCT
+always uses fewer than 4 processors for the scheduling. The unused
+processors do not contribute to the energy consumption at all (we
+do not need to switch them to the sleep mode and wake them up in
+every time period). This can be helpful in terms of energy efficiency,
+particularly when the energy overhead of switching processors is
+relatively high. Reference [9] cannot take advantage of this since
+the processor assignment for tasks to be scheduled is assumed to be
+known in advance and it is not integrated in their MILP formulation.
+On the platform we performed simulations, iSCT and iSC+T
+approaches on average generated results for studied task graphs in
+less than 69 and 1 minutes, respectively. Since we are considering
+scheduling of a periodic task graph, these simulations are done
+offline only once for one period of the task graph. The obtained
+scheduling can be programmed to a MPSoC for real-time scheduling
+of each arriving period of the task graph.
+4.3 A Heuristic Approach to Solve the Model
+Here, we propose a two-stage heuristic algorithm to solve the formu-
+lated model: 1) We first determine and fix the values of Ok,u,v and
+Pk,u variables using a polynomial-time list scheduling algorithm.
+Table 2: Idle Intervals Characteristics and No. of Used Processors for iSCT
+versus iSC+T
+Task No. of Idle Intervals Total Idle time (ms) No. of Used Processors
+Graph iSC+T iSCT iSC+T iSCT iSC+T iSCT
+TGFF1 5 3 21.62 24.00 3 1
+TGFF2 4 3 35.79 36.00 4 1
+TGFF3 6 3 17.53 21.22 4 2
+TGFF4 10 3 27.16 29.00 4 2
+TGFF5 7 3 25.21 29.00 4 2
+TGFF6 8 3 34.13 34.13 4 2
+TGFF7 10 3 58.63 58.64 4 2
+TGFF8 10 3 34.87 36.96 4 2
+2) Using fixed Ok,u,v and Pk,u values, the number of variables
+in the original MILP problem reduces significantly. Also, (17) and
+(18) will become linear formulations in the first place, and we do
+not anymore need to use the first lemma presented in Section 3.3
+multiple times to linearize them. This further reduces the number
+of variables of the MILP problem considerably (since each time
+using of this lemma adds one set of real variables, plus three sets of
+constraints). Then, the new formulated problem with considerably
+fewer number of variables, which is still an MILP due to the usage
+of (20) and (22) in the objective function of (19), will be solved to
+obtain values of Su and Nu,i .
+For the first stage, we use a variant of heterogeneous earliest
+finish time (HEFT) algorithm [13]. While this algorithm aims for
+heterogeneous platforms, it can be applied to a homogeneous plat-
+form similar to our paper as well. Basically, in this algorithm, tasks
+are ordered according to their upward rank, which is defined recur-
+sively for each task as follows:
+rankup(u) = Dur∗
+u + max
+v ∈succ(u)
+(rankup(v)), (25)
+where here, Dur∗
+u is the duration of the task u when all of its work-
+load is executed using maximum available frequency, and succ(u)
+is the set of immediate successors of task u. Ranks of the tasks are
+computed recursively starting from exit tasks of the task graph (exit
+tasks are the ones with out-degree of zero). The upward rank of
+exit tasks are equal to their corresponding Dur∗ values. Basically,
+rankup(u) indicates the length of critical path from task u to exit
+tasks, including Dur∗
+u itself.
+After the calculation of ranks for all the tasks, a task list is
+generated by sorting the tasks in the decreasing order of their
+ranks. Tie-breaking is done randomly. Then, tasks are scheduled
+on processors based on the order of the task list. Each task can
+only be scheduled after a time called ready_time of that task, which
+indicates the time that the execution of all immediate predecessors
+of that task has completed. For each task, we look for the first
+idle interval on each processor after the task ready_time, with the
+amount of at least Dur∗ of that task, and assign the task to the
+processor which gives us the earliest finish time. Since the task
+list sorted by the decreasing order of ranks gives a topological
+sorting of the DAG [13], when we choose a task for scheduling, its
+predecessors have already been scheduled. The time complexity
+of HEFT algorithm is O(|E| × K) where |E| denotes the number of
+edges of the DAG and K denotes the number of processors [13].
+Using HEFT in the first stage of our heuristic approach, we deter-
+mine the processor assignment for each task (Pk,u ), and ordering
+of tasks on each processor (Ok,u,v ). Note that obtained start times
+TGFF1 TGFF2 TGFF3 TGFF4 TGFF5 TGFF6 TGFF7 TGFF8
+0
+10
+20
+30
+40
+50
+Energy
+Consumption
+(
+mJ
+)
+Proposed Heuristic
+iSCT
+Figure 1: Energy Consumption obtained from the proposed heuristic
+approach and iSCT for different task graphs
+for tasks after the first stage just show relative ordering of tasks
+on each processor. Also, we only used maximum frequency in the
+first stage. Next, in the second stage, we solve the newly derived
+MILP, which has been obtained after fixing Ok,u,v and Pk,u values
+in the first stage, and has considerably fewer number of variables
+compared to the original MILP. This gives us the values for Su and
+Nu,i variables. On average, on the platform we performed simula-
+tions, solving the newly derived MILP provided results for studied
+task graphs in less than 2 seconds, which is considerably less than
+the simulation time of solving the original MILP.
+Fig. 1 shows a comparison between the energy consumption
+obtained from iSCT, and the energy consumption obtained from
+solving the problem using the proposed heuristic approach. Ac-
+cording to Fig. 1, the heuristic method provides close estimates
+compared to the optimum solution. The values of energy consump-
+tion obtained from the heuristic approach are on average 5.66%
+higher than the optimum solution.
+5 CONCLUSIONS AND FUTURE WORK
+In this paper, by proposing a method for modeling idle intervals in
+multiprocessor systems, we presented an energy optimization MILP
+formulation integrating both DVFS and DPM with scheduling of
+real-time tasks with precedence and time constraints. By solving the
+MILP, for each task, we obtain the optimum processor assignment,
+execution start time, and the distribution of its workload among
+available frequencies of the processor. Results show the effective-
+ness of our modeling of idle intervals in MPSoCs in terms of energy
+efficiency. We also presented a heuristic approach for solving the
+MILP which provided close results compared to optimum results.
+It is worth mentioning that although our proposed model focuses
+on MPSoCs, it can also be applicable to servers in data centers by
+using proper energy model parameters of those platforms.
+For future work, workload of tasks can be investigated to rep-
+resent more than just the processor cycle count; e.g., the memory
+requirement, or the possibility of executing the entire or part of a
+task on GPUs can be modeled and investigated. Also, obtaining a
+variant of the proposed model for heterogeneous processors could
+be another potential future direction.
+REFERENCES
+[1] M. E. Gerards and J. Kuper. Optimal dpm and dvfs for frame-based real-time
+systems. ACM Transactions on Architecture and Code Optimization (TACO), 9(4):41,
+2013.
+[2] H. Aydin, R. Melhem, D. Mossé, and P. Mejía-Alvarez. Determining optimal
+processor speeds for periodic real-time tasks with different power characteristics.
+In Real-Time Systems, 13th Euromicro Conference on, 2001., pages 225–232. IEEE,
+2001.
+[3] X. Huang, K. Li, and R. Li. A energy efficient scheduling base on dynamic voltage
+and frequency scaling for multi-core embedded real-time system. In International
+Conference on Algorithms and Architectures for Parallel Processing, pages 137–145.
+Springer, 2009.
+[4] M. E. Gerards, J. L. Hurink, and J. Kuper. On the interplay between global dvfs and
+scheduling tasks with precedence constraints. IEEE Transactions on Computers,
+64(6):1742–1754, 2015.
+[5] T. Nakada, H. Yanagihashi, H. Nakamura, K. Imai, H. Ueki, T. Tsuchiya, and
+M. Hayashikoshi. Energy-aware task scheduling for near real-time periodic
+tasks on heterogeneous multicore processors. In Very Large Scale Integration
+(VLSI-SoC), 2017 IFIP/IEEE International Conference on, pages 1–6. IEEE, 2017.
+[6] K. Srinivasan and K. S. Chatha. Integer linear programming and heuristic tech-
+niques for system-level low power scheduling on multiprocessor architectures
+under throughput constraints. INTEGRATION, the VLSI journal, 40(3):326–354,
+2007.
+[7] K. Huang, L. Santinelli, J.-J. Chen, L. Thiele, and G. C. Buttazzo. Applying real-
+time interface and calculus for dynamic power management in hard real-time
+systems. Real-Time Systems, 47(2):163–193, 2011.
+[8] P. Rong and M. Pedram. Power-aware scheduling and dynamic voltage setting
+for tasks running on a hard real-time system. In Design Automation, 2006. Asia
+and South Pacific Conference on, pages 6–pp. IEEE, 2006.
+[9] G. Chen, K. Huang, and A. Knoll. Energy optimization for real-time multiproces-
+sor system-on-chip with optimal dvfs and dpm combination. ACM Transactions
+on Embedded Computing Systems (TECS), 13(3s):111, 2014.
+[10] S. Park, J. Park, D. Shin, Y. Wang, Q. Xie, M. Pedram, and N. Chang. Accurate
+modeling of the delay and energy overhead of dynamic voltage and frequency
+scaling in modern microprocessors. IEEE Transactions on Computer-Aided Design
+of Integrated Circuits and Systems, 32(5):695–708, 2013.
+[11] Ibm ilog cplex optimization studio, version 12.8. Available from: https://www.
+ibm.com/products/ilog-cplex-optimization-studio.
+[12] R. P. Dick, D. L. Rhodes, and W. Wolf. Tgff: task graphs for free. In Proceedings
+of the 6th international workshop on Hardware/software codesign, pages 97–101.
+IEEE Computer Society, 1998.
+[13] H. Topcuoglu, S. Hariri, and M.-y. Wu. Performance-effective and low-complexity
+task scheduling for heterogeneous computing. IEEE transactions on parallel and
+distributed systems, 13(3):260–274, 2002.
+

@@ -1,0 +1,1564 @@
+Power-aware Deep Learning Model Serving
+| with μ-Serve
+| Haoran Qiu, Weichao Mao, Archit Patke, and Shengkun Cui,
+| University of Illinois Urbana-Champaign; Saurabh Jha, Chen Wang,
+and Hubertus Franke, IBM Research; Zbigniew Kalbarczyk, Tamer Başar,
+| and Ravishankar K. Iyer, University of Illinois Urbana-Champaign
+| https://www.usenix.org/conference/atc24/presentation/qiu
+
+
+
+
+| This paper is included in the Proceedings of the
+| 2024 USENIX Annual Technical Conference.
+| July 10–12, 2024 • Santa Clara, CA, USA
+| 978-1-939133-41-0
+
+
+
+
+| Open access to the Proceedings of the
+| 2024 USENIX Annual Technical Conference
+| is sponsored by
+
+| Power-aware Deep Learning Model Serving with µ-Serve
+
+| Haoran Qiu1 Weichao Mao1 Archit Patke1 Shengkun Cui1 Saurabh Jha2 Chen Wang2
+| Hubertus Franke2 Zbigniew T. Kalbarczyk1 Tamer Başar1 Ravishankar K. Iyer1
+| 1 University of Illinois at Urbana-Champaign | 2 IBM Research
+
+
+
+| Abstract | Challenges. We could potentially leverage GPU Dynamic
+With the increasing popularity of large deep learning model- | Voltage and Frequency Scaling (DVFS) techniques that have
+serving workloads, there is a pressing need to reduce the | been widely used during GPU training [5, 6, 42, 50] to save
+energy consumption of a model-serving cluster while main- | energy. However, dynamic GPU frequency scaling on modern
+taining satisfied throughput or model-serving latency require- | deep learning model-serving workloads poses three main
+ments. Model multiplexing approaches such as model par- | challenges due to their unique characteristics.
+allelism, model placement, replication, and batching aim to | [C1] First, it is challenging to determine the optimal GPU
+optimize the model-serving performance. However, they fall | frequency that meets performance requirements while max-
+short of leveraging the GPU frequency scaling opportunity for | imizing power efficiency. Since low latency in inference is
+power saving. In this paper, we demonstrate (1) the benefits | critical, model-serving workloads are typically associated
+of GPU frequency scaling in power saving for model serving; | with service-level objectives (SLOs) [22, 52, 53] on end-to-
+and (2) the necessity for co-design and optimization of fine- | end latency. To meet stringent SLOs, contemporary serving
+grained model multiplexing and GPU frequency scaling. We | systems either fix the GPU frequency at the default setting or
+explore the co-design space and present a novel power-aware | rely on DVFS to scale down frequency based on utilization
+model-serving system, µ-Serve. µ-Serve is a model-serving | metrics [27]. However, DVFS is sub-optimal, imprecise, and
+framework that optimizes the power consumption and model- | has non-intuitive implementations in production [27] while
+serving latency/throughput of serving multiple ML models | overprovisioning GPU frequency leads to high power con-
+efficiently in a homogeneous GPU cluster. Evaluation results | sumption. The optimal frequency is non-trivial to set for a
+on production workloads show that µ-Serve achieves 1.2–2.6× | GPU device that can serve different models or a mix of model
+power saving by dynamic GPU frequency scaling (up to 61% | partitions from different models [22] when considering strin-
+reduction) without SLO attainment violations. | gent latency SLOs, throughput, and costs.
+| [C2] Second, serving non-deterministic generative models
+| makes it hard to differentiate the negative impact of GPU
+1 | Introduction
+| frequency down-scaling from the inherent non-determinism
+Over the past few years, increasingly capable large models | in execution time. The non-determinism comes from the au-
+have been developed for everything from recommendations | toregressive nature of generative models. To process each
+to text or image generation. Pre-trained deep learning (DL) | request, one has to run multiple iterations; the output of each
+models make it easy for developers to develop and deploy | iteration is used as input in the following iteration. Worse, a
+new models with lightweight fine-tuning, few-shot learning, or | first-come-first-serve (FCFS) request scheduling policy suf-
+even prompting [3]. As a result, model serving (i.e., inference) | fers from head-of-line blocking issues [30], leading to less
+has become an essential workload in modern cloud systems. | power-saving headroom without SLO attainment violations.
+| However, serving deep learning models at scale puts a press- | [C3] Finally, unlike CPUs, GPUs do not support fine-
+ing need to improve power efficiency, i.e., to reduce energy | grained (e.g., per-core) frequency scaling. Therefore, if the
+consumption while maintaining model-serving performance | model or multiple model partitions (from different models)
+requirements. A recent study from Google attributed 60% of | are placed onto a device, the frequency can only be reduced to
+its ML energy use to inference [29]. AWS estimates inference | the maximum frequency demand among all partitions. Power-
+to make up 90% of total ML cloud computing demand [24]. | unaware model partitioning and placement strategies [22] fail
+Unfortunately, existing model-serving systems focus on either | to unlock further power saving, even if the optimal frequency
+performance (i.e., latency and throughput) [7,14,22,26,52,53], | mentioned in [C1] can be figured out for each partition.
+model prediction accuracy [8, 15, 35], or LLM optimiza- | Our Work. This paper addresses the above challenges by pre-
+tion [12, 20, 47, 51], but are not power-aware. In this paper, | senting µ-Serve, the first power-aware deep learning model
+we target power efficiency in DL model serving. | serving framework with fine-grained model provisioning and
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 75
+
+GPU frequency scaling. The goal of µ-Serve is to maximize | Results. We evaluate µ-Serve with a diverse set of deep learn-
+power efficiency while preserving the model-serving perfor- | ing models (including traditional non-Transformer models
+mance (i.e., SLO attainment). To achieve the goal, µ-Serve | like CNNs, Transformers, and Transformer-based generative
+consists of the following main components: | models) and production workloads on an 8-node 16-GPU
+• Power-aware fine-grained model provisioning. µ-Serve | cluster (§4). Evaluation results show that, compared to ex-
+| generates a model parallelism plan (i.e., model partitioning) | isting state-of-the-art serving systems, µ-Serve achieves a
+| for each model and then places model partitions onto de- | power reduction factor of 1.9–2.6× at varying rates, 1.5–2.3×
+| vices in a power-aware manner. A model comprises a series | at varying stringent SLOs, and 1.2–2× when scaling to higher
+| of operators (e.g., multiply) over multidimensional tensors. | numbers of devices, without SLO attainment violations.
+| Our key insight is that some operators are more sensitive 1 to | Contributions. In summary, our main contributions are:
+| frequency changes while others are not; those operators that | • A novel power-aware ML model serving framework that
+| are insensitive to frequency changes often contribute less to | unlocks power-saving opportunities through fine-grained
+| the end-to-end latency of serving a request. Based on this | operator management and dynamic GPU frequency scaling.
+| insight, we design a novel model provisioning algorithm | • A speculative request scheduler with light proxy models
+| (§3.1 and §3.2) by considering operator sensitivities to gen- | that addresses non-determinism in generative models.
+| erate model partitions and ensure that each device contains | • An open-source implementation of µ-Serve and evaluation
+| partitions with comparable sensitivities. This algorithm ad- | on real-world model datasets and production traces.
+| dresses [C3] and maximizes power-saving opportunities.
+• Speculative request serving. To address non-deterministic
+| 2 | Background and Motivation
+| execution when serving generative models (i.e., [C2]), we
+| introduce a lightweight proxy model that is fine-tuned to | We begin with an overview of model-serving systems (§2.1),
+| predict the execution times of each input query. This is | opportunities for power saving (§2.2), and non-deterministic
+| based on our insight that a much smaller model can be | execution of generative model workloads (§2.3).
+| quite good at understanding the output length of a large
+| model. Based on the proxy model, we design a speculative
+| shortest-job-first (SSJF) scheduler (§3.3) that improves the | 2.1 | Model Serving System Model
+| performance predictability of serving requests of autore- | Model training is the process of building or learning a model
+| gressive models. SSJF helps achieve higher SLO attainment | from datasets, starting from scratch or pre-trained models [3].
+| and, consequently, more power-saving opportunities. | The training process requires iterative forward and backward
+• SLO-preserving GPU frequency scaling. At runtime, | passes. After training, those ready-to-serve models are saved
+| µ-Serve uses a multiplicative-increase-additive-decrease | to a model registry (Fig. 1 left).
+| (MIAD) algorithm (§3.4) to exploit the power-saving op- | Model serving, or model inference, is to use the model
+| portunities and dynamically scale GPU frequency while | to extract useful features from the inputs through a forward
+| preserving performance SLOs, which addresses [C1]. | pass (Fig. 1 right). The structure of model-serving workloads
+Offline Profiling and Online Orchestration. µ-Serve re- | follows a simple request-response paradigm where clients
+quires an offline phase before running online for power-aware | (either users or AI applications) submit requests for that model
+model serving. In the offline phase, µ-Serve first profiles each | to a serving system, which schedules the requests, dispatches
+primitive operator [40] to get its sensitivity score, indicating | them to hardware devices (e.g., GPUs), and returns the results.
+how operator execution latency changes with the change in | Compared to model training, model serving does not involve
+GPU frequency. After obtaining a sensitivity score database, | complex backward computation and model weight updates but
+µ-Serve then generates power-aware model partitioning plans | has more demanding performance requirements in inference
+by utilizing model parallelism (§3.1) and deploys model parti- | latency (i.e., request completion time) and throughput. With
+tions based on placement plans (§3.2) that create maximized | the rise of pre-trained foundation models (e.g., in NLP and
+power-saving opportunities. Such power-saving opportunities | vision), it is expected that a model can be trained once and
+are then exploited at runtime by dynamic GPU frequency scal- | serve an extensive sequence of millions of inferences.
+ing based on workloads and SLO performance. In the online | In this paper, we focus on the Deep Neural Network
+phase, µ-Serve serves model inference requests with a novel | (DNN) model (including CNNs [16], Transformers [10], and
+speculative shortest-job-first scheduler (§3.3) that addresses | Transformer-based generative models [46]) serving on homo-
+non-deterministic execution patterns of autoregressive mod- | geneous GPU clusters (Fig. 1).
+els. To reduce power consumption while preserving model- | Model Parallelism and Partitioning. To satisfy user demand,
+serving performance SLOs, µ-Serve dynamically scales GPU | model serving often must adhere to stringent SLOs on latency
+frequency at each device with an MIAD algorithm (§3.4). | (e.g., 99% of the requests for a model must be finished within
+| 1We define sensitivity as the change in operator execution latency (∆L > | 500 ms). However, there can be significant and unpredictable
+0) given the change in GPU frequency (∆F < 0), i.e., −∆L/∆F. | burstiness in the arrival process of user requests [22, 44, 49].
+
+
+
+76 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+| Pretrained | GPU Cluster | 12500
+Datasets
+| Models | Worker 1 | 200
+
+
+
+
+| Power (Watts)
+| 10000
+
+
+
+
+| Latency (ms)
+| Applications | Users | M1 | M2 | M3 …
+| 7500 | 150
+| Requests
+Training | Finetuning | 5000
+| Model Serving System | Exec Runtime | 100
+
+| Model Partition Placement | 2500
+| M1 M3 M5 | Worker 2
+| M2 M4 | 50
+| 0
+| Request Scheduling | M1 | M3 | M4 …
+| 250 | 500 | 750 | 1000 | 1250 | 250 | 500 | 750 | 1000 | 1250
+| Model Registry
+| Frequency (MHz) | Frequency (MHz)
+(ready-to-serve models)
+| bert-base | bloom-3b | gpt2-xl | opt-1.3b
+
+
+
+
+| …
+| bert-large | codegen-350m | switch-base-16 | roberta-base
+| bloom-1b1 | gpt2-large | switch-base-32 | roberta-large
+| Figure 1: Model training and model serving.
+| Figure 2: Model-serving latency and power consumption
+| characterization at varying GPU core frequency levels.
+Parallel model execution is necessary when attempting to sat-
+isfy the serving latency requirements or support large models
+that do not fit in the memory of a single device [22]. | 2.2 | Opportunities for Power Saving
+| DNN models are composed of a series of operators (e.g.,
+matrix multiplication and activation functions) over multidi- | To understand if model serving also exhibits power-saving
+mensional tensors. There are two categories of model par- | opportunities like model training, we start with an illustra-
+allelism: intra-operator and inter-operator parallelism [57]. | tive experiment to show how GPU frequency affects model
+Intra-operator parallelism is to partition a single operator | serving latency. We use two NVIDIA Tesla V100 (16 GB)
+across multiple devices for parallel execution. It reduces the | GPUs to serve each DNN model from Table 1. During the
+computation latency for serving a request but introduces the | experiments, we reduce the GPU frequency from 1300 MHz
+communication overhead of splitting the input and merging | to 200 MHz with a step size of 100 MHz. Fig. 2 (left) shows
+the output. Inter-operator parallelism is to partition a model’s | the end-to-end latency of serving a single request while Fig. 2
+operator execution graph into multiple stages that can execute | (right) shows the corresponding power efficiency.
+on multiple devices in a pipeline fashion. It allows the model | The model-serving latency-frequency curves of all models
+to exceed the memory limitation of a single GPU device but | exhibit a steep decline at low frequencies, but the decrease
+it does not reduce the computation latency of a single request. | rate eventually approaches a horizontal asymptote at high fre-
+| quencies. In contrast, the power curves for serving all models
+Power Efficiency. To the best of our knowledge, µ-Serve is
+| show a nearly linear relationship between the GPU frequency
+the first power-aware DNN model-serving framework that
+| and the power consumption. This contrasting observation
+aims to minimize power consumption while preserving the
+| leads to a power-saving opportunity by reducing the GPU
+model-serving performance. State-of-the-art model-serving
+| frequency when the SLO attainment is high. For example,
+frameworks and commercial model-serving products use de-
+| serving gpt2-large can meet the SLO (1000 ms) even when
+fault GPU core frequency settings [27] for two main reasons.
+| the GPU frequency is reduced from 1300 MHz to 800 MHz.
+First, it is nontrivial to determine the optimal GPU frequency
+| By doing so, the power consumption is reduced by a factor of
+when serving diverse models or a mix of model partitions
+| 1.8× from 214 Watts to 120 Watts.
+from different models when considering both stringent SLOs
+and costs. Second, GPU DVFS (dynamic frequency scaling | However, such power-saving opportunity varies as the SLO
+based on utilization) is shown to be sub-optimal, imprecise, | attainment depends on factors such as request arrival rate,
+and has non-intuitive implementations in production [27]. | burstiness, and SLO scales (as defined in [22]). In addition,
+| coarse-grained GPU frequency scaling for an entire model
+| Power optimization in ML model training [5, 6, 42, 50] has
+| cannot fully unlock the power-saving opportunity. We show
+been active in the past few years. The central idea is to find the
+| in §3 how fine-grained model multiplexing and dynamic GPU
+optimal GPU core frequency based on the valley trends when
+| frequency scaling can help based on the performance-power
+scaling frequencies (i.e., energy saving is maximized on the
+| sensitivity and activation frequency of different operators.
+middle-level frequency). Building on top of that, EnvPipe [5]
+reduces frequencies at stages that are not on the critical path of
+the training pipeline with interleaving forward and backward | 2.3 | Autoregressive Patterns
+passes. Perseus [6] identifies straggler stages (e.g., due to
+I/O bottleneck or hardware failures) and reduces frequencies | Traditional DNN models (e.g., ResNet and BERT) have de-
+to synchronize the speed of all other stages. However, these | terministic execution patterns while Transformer-based gen-
+optimization tricks cannot be applied to model inference with | erative models (e.g., GPT) are trained to generate the next
+a single forward pass. It gets challenging in model serving | token in an autoregressive manner. Therefore, to process a
+due to a mixture of model partition placement and dynamic | request to generative models, multiple iterations of the model
+request arrival patterns (unlike static and iterative training). | have to be run; each iteration generates a single output token,
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 77
+
+| Profiling
+| 1000
+Output Token Length
+
+
+
+
+| 800 | Sensitivity
+| [ Offline Phase ] | Score | Primitive Ops
+| 600 | DL Model
+| 400 | Specifications | Power-aware
+| Power-aware
+| Model Partitioning
+| 200 | Model Placement
+| GPU Cluster | with Parallelism
+| 0 | Specifications
+| Model Partition
+
+
+
+
+| guanaco-33b
+| koala-13b
+
+
+
+| alpaca-13b
+
+
+
+
+| RWKV-4-Raven-14B
+| vicuna-13b
+| palm-2
+| llama-2-13b-chat
+
+
+| claude-instant-1
+| oasst-pythia-12b
+
+
+| mpt-7b-chat
+| vicuna-7b
+
+
+| mpt-30b-chat
+| fastchat-t5-3b
+| chatglm-6b
+| claude-1
+| gpt-4
+| vicuna-33b
+
+
+
+| stablelm-alpha-7b
+| llama-13b
+| gpt-3.5-turbo
+| llama-2-7b-chat
+| claude-2
+| gpt4all-13b-snoozy
+| wizardlm-13b
+
+
+
+
+| dolly-v2-12b
+| Placement Plan
+| [ Online Phase ] | Deploy
+| GPU Cluster
+| Req
+| Request
+| Scheduler | Monitoring | GPU Frequency Scaler
+| Users | Latency
+| Semantic Cache Update
+
+Figure 3: Output token length distributions of various large
+| Figure 4: µ-Serve architecture overview and workflow.
+language models collected in the LMSYS-Chat-1M dataset.
+
+| of-line blocking (i.e., [C2]).
+which is then appended to the original input in the following
+| • Maximize the power-saving opportunity while GPUs do
+iteration (except for the termination token <EOS>).
+| not support fine-grained frequency scaling (i.e., [C3]).
+| To illustrate this non-deterministic nature of serving model
+| We propose µ-Serve to specifically tackle these challenges.
+inference workloads due to autoregressive patterns, we an-
+| The overall architecture of µ-Serve is shown in Fig. 4, which
+alyze the output token length distribution in the LMSYS-
+| consists of an offline phase and an online phase. In the offline
+Chat-1M dataset [56] which contains one million real-world
+| phase, µ-Serve first profiles each primitive operator [40] to
+conversations with 25 state-of-the-art LLMs. The output to-
+| get its sensitivity score, indicating how operator execution
+ken length (N) dominates the execution time (T ) of a request
+| latency changes with the GPU frequency reduction. Based on
+because T = C + K ∗ N, where K is the latency to generate one
+| the operator-level sensitivities, µ-Serve then generates power-
+token and C is the model-serving system’s overhead including
+| aware model partitioning plans by utilizing model parallelism
+DNS lookups, proxies, queueing, and input tokenization. K
+| (§3.1) and deploys model partitions based on placement plans
+depends on model optimization techniques (e.g., quantiza-
+| (§3.2) that maximize power-saving opportunities.
+tion) and execution environment (e.g., hardware), which are
+| In the online phase, µ-Serve serves model inference re-
+the same for all inputs. As shown in Fig. 3, the output token
+| quests while dynamically managing device frequency scaling.
+length of the model output varies significantly for the same
+| For each autoregressive model, µ-Serve uses a novel specula-
+model. The p95/p50 of the output token length for each model
+| tive shortest-job-first scheduler (§3.3) that improves SLO at-
+varies from 1.7 (claude-1) to 20.5 (llama-13b).
+| tainment by avoiding head-of-line blocking and thus increases
+| Since model executions are non-deterministic, it is chal-
+| power-saving opportunities. For the remaining models, µ-
+lenging to differentiate the negative impact of GPU frequency
+| Serve uses the default FCFS scheduling policy. To minimize
+down-scaling from the inherent non-determinism. Worse, it
+| power consumption while preserving model-serving perfor-
+suffers from head-of-line blocking issues when scheduling
+| mance SLOs, µ-Serve dynamically scales GPU frequency at
+requests for model-serving as most state-of-the-art LLM infer-
+| each device with a multiplicative-increase-additive-decrease
+ence systems use a first-come-first-serve (FCFS) scheduling
+| (MIAD) algorithm (§3.4).
+policy. FastServe [47] uses a multi-level feedback queue to im-
+prove the average job completion time but it does not address
+the non-determinism nature. | 3.1 | Power-aware Model Parallelism
+| Model parallelism is necessary to enable running larger mod-
+3 | µ-Serve Design and Implementation | els, or larger batches of inputs, and to serve bursty workloads
+| with better latency and throughput [22, 57]. µ-Serve paral-
+µ-Serve is a power-aware multi-model model-serving frame- | lelism module ( 1 in Fig. 4) partitions each ML model (by
+work designed for a homogeneous GPU cluster that serves | using model parallelism) to generate model partitions that
+Deep Neural Network (DNN) models (including Transform- | can maximize power efficiency while considering the latency
+ers and Transformer-based generative models [46]) serving | and throughput trade-offs so that the placement module ( 2
+systems. From §2, we can see that there are several key chal- | in Fig. 4) can choose the best combination for all models in
+lenges to improving power efficiency in DNN model serving: | the whole cluster. To achieve this, µ-Serve relies on profiled
+• Determine the optimal SLO-preserving GPU frequency that | operator sensitivity scores and AlpaServe [22], an auto ML
+minimizes power consumption (i.e., [C1]). | model parallelization system for inference.
+• Address non-deterministic execution patterns in generative | As described in §2.1, when compiling and deploying DNN
+models for performance predictability and avoiding head- | models for request-serving, each model is commonly defined
+
+
+
+78 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+Algorithm 1 Operator Clustering | Algorithm 2 Model Partition Placement
+Require: Model specification M, Operator sensitivity score | Require: Device group DP (list of GPUs), Model partition
+| database D (a map of <operator, score> pairs) | plan MP (multi-model), D (same in Alg. 1), CT (maxi-
+1: procedure O PERATOR C LUSTERING (M, D) | mum number of devices to place to))
+2: | clusters ← ∅ | 1: procedure M ODEL P LACEMENT (DP, MP, D)
+3: | currCluster ← ∅ | 2: | bins ← ∅ | ▷ a map of device to a list of partitions
+4: | currCluster.add(M.head) | 3: | modelBinsCount ← ∅
+5: | clusterScore ← avg(currCluster) | 4: | for each model in MP do
+6: | for each op in M.operators do | 5: | // Sort partitions by sensitivity scores
+7: | if abs(D.get(op) - clusterScore < T HRES) then | 6: | for each p in model.getSortedPartitions() do
+8: | currCluster.append(op) | 7: | bestDevice = None
+9: | clusterScore ← avg(currCluster) | 8: | bestScore = INFINITY
+10: | else | 9: | selectedBins = getAvailableBins(bins, p)
+11: | clusters.append(currCluster) | 10: | for each d, partitions in selectedBins do
+12: | currCluster ← newList([op]) | 11: | if modelbinsCount[model] < CT then
+13: | end if | 12: | // Get similarity in sensitivity scores
+14: | end for | 13: | score ← getSimilarity(p, partitions)
+15: | Return clusters | 14: | if bestScore < score then
+16: end procedure | 15: | bestScore = score
+| 16: | bestDevice = d
+| 17: | end if
+as a computational (dataflow) graph where nodes are opera- | 18: | end if
+tors and edges are tensors (or data) [48]. Example operators | 19: | end for
+include matrix multiplication and relu or tanh activation | 20: | bins[bestDevice].append(p)
+functions). Serving a request means the completion of the | 21: | modelBinsCount[model] += 1
+dataflow in the execution graph. Our key insight is that (1) | 22: | end for
+some operators are more sensitive to GPU frequency changes | 23: | end for
+(i.e., sensitive operators) while others are not (i.e., insensitive | 24: | Return bins
+operators); and (2) insensitive ones often contribute less to the | 25: end procedure
+end-to-end latency of serving a request. Since the minimum
+GPU frequency that a model partition can tolerate is deter-
+mined by the most sensitive operators, µ-Serve avoids mixing
+sensitive and insensitive operators into the same partition. | allelization configurations (intra-/inter-operator parallelism)
+Operator Sensitivity Score Profiling. Since the model | have different latency and throughput trade-offs, µ-Serve ex-
+graphs are represented in XLA’s HLO format [40], a backend- | tends AlpaServe [22] to run an auto-parallelization compiler
+agnostic intermediate representation (IR), we choose to profile | to generate a list of possible configurations for every single
+only the primitive operators 2 defined in HLO that are shared | model and let the placement module (§3.2) choose the best
+by all models. We define the sensitive score of each operator | combination for all models in the whole cluster.
+as ∆Latency/∆Frequency where ∆Latency is the increase in | At the core of AlpaServe runs an optimization algorithm
+execution time (normalized) of the operator when decreasing | with one inter-operator pass (based on dynamic program-
+the GPU core frequency from the default setting to half of the | ming) and one intra-operator pass (based on integer linear
+default frequency and ∆Frequency is the frequency decrease3 . | programming) to generate efficient model parallel partitions.
+We adopt the tensor dimensions from AI-Matrix [54], a pro- | AlpaServe treats each operator as the smallest unit for parti-
+duction dataset released by Alibaba. When profiling primitive | tioning. To prevent operators with similar sensitivities from
+operators, we run each operator independently with each ten- | being split we do not change the AlpaServe auto-parallelism
+sor dimension repeated 5000 times and take the average of | algorithm but extend AlpaServe with a new abstraction, i.e.,
+all runs. Profiling of primitive operators happens offline and | operator cluster, which is a cluster of operators that share
+the obtained sensitivity score database is then used in model | similar sensitivity scores. µ-Serve treats each operator cluster
+parallelism and placement plan generation. | instead of each operator as the partitioning unit. As shown in
+Model Parallelism Plan Generation. Since different par- | Alg. 1, generating operator clusters can be achieved by taking
+| 2 As a unifying abstraction for multiple frameworks (e.g., Pytorch and
+| the model specifications and profiled sensitivity scores and
+TensorFlow) and hardware platforms (CPUs, GPUs, and TPUs), XLA sum-
+| grouping neighbor operators with similar sensitivity scores
+marizes common DL operators into around 100 primitive operators. | (below a threshold) together. The output is the model paral-
+| 3We draw inspiration from delay sensitivity [28]. | lelism plan (i.e., partitions and their memory demands for a
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 79
+
+given model) that optimizes the per-request execution latency. | Job | Speculative
+| Output
+| Pool | Shortest-Job-First | GPU
+We leave the decision of model placement (offline) to §3.2. | J1 | (SSJF) Scheduler | Cluster | Update | Semantic
+| Cache | Cache
+| J2
+
+
+
+
+| Models
+| <Model, | Check if
+| Input> | Output Token
+3.2 | Power-aware Model Placement | J3
+| Length Predictor
+| Prediction
+| Cached
+| Predicted
+
+
+
+
+| …
+
+
+
+
+| …
+| Length
+Given a list of model partitions (generated by §3.1) and a
+fixed GPU cluster, model placement is to map each model | Figure 5: Workflow of the speculative scheduling in µ-Serve.
+partition to a GPU device within the memory constraint. The
+goal of model placement is to maximize SLO attainment (i.e.,
+the percentage of requests served within SLO). Power-aware | and assign the partition to a bin that has the best fitting score.
+model placement module ( 2 in Fig. 4) takes model partitions | The fitting score for ⟨partition p, bin b⟩ is defined as the sim-
+and the GPU cluster specification as inputs and generates a | ilarity between the sensitivity score of p and the weighted
+model partition placement plan that preserves SLOs while | average of the sensitivity scores of all existing partitions in
+maximizing power-saving opportunities. | b. To avoid spreading partitions from the same model to too
+| However, model placement is typically modeled as a bin- | many devices (and thus inducing high communication over-
+packing problem and is a computationally NP-hard prob- | head), we enforce an upper limit CT on how many bins a
+lem [18]. For scalability and serving potentially a larger de- | model can be packed into. CT is set based on the empirical
+vice cluster, we partition the cluster into several groups of | results of the maximum number of devices to partition onto
+devices (same as in AlpaServe). Each group of devices selects | without SLO violations. The outcome is the model placement
+a subset of models to serve. Finding the optimal ⟨model par- | plan with a list of bins and corresponding model partition
+tition, device group, device⟩ is a combinatorial optimization | assignment. µ-Serve takes the model placement plan for de-
+problem with a configuration space growing exponentially | ployment, which completes the offline stage.
+with the number of devices and the number of models. µ-Serve
+first selects the ⟨model partition, device group⟩ configurations | 3.3 | Scheduling
+that maximize SLO attainment based on AlpaServe [22] and
+then generates ⟨model partition, device⟩ configurations that | User requests are dispatched to corresponding models at
+maximize the power-saving opportunities. After deploying | runtime. For each model instance, a request queue is main-
+the placement plan, the offline stage is completed. | tained, and µ-Serve uses a speculative shortest-job-first (SJF)
+Mapping Models to Device Groups. µ-Serve runs the | scheduler( 3 in Fig. 4) to decide the request execution or-
+model placement algorithm in AlpaServe [22] that (1) uses a | der of autoregressive models and a default FCFS scheduler
+simulator-guided greedy algorithm to decide which models to | for traditional deep learning models. SJF alleviates the non-
+select for each group, and (2) enumerates group partitions and | determinism of generative models and the head-of-line block-
+model-parallel configurations to pick the best ⟨model, device | ing issue in FCFS scheduling. We must have knowledge or a
+group⟩ placement that maximizes SLO attainment. | good estimate to deploy SJF. As shown in Fig. 5, µ-Serve’s
+Mapping Model Partitions to Devices. For each device | speculative SJF scheduler relies on the prediction from an out-
+group, given a list of devices and model partitions that are | put token length predictor. The prediction is used to estimate
+assigned to the device group from the last step, µ-Serve gener- | the job execution time in SJF as the output token length domi-
+ates ⟨model partition, device⟩ placement plans that maximize | nates the execution time (linear relation) as described in §2.3.
+the power-saving opportunities. Based on our insight that (1) | The predictor relies on a lightweight proxy model based on
+operators have diverse sensitivity to GPU frequency scaling | our insight that a small model is already quite good at predict-
+and (2) insensitive operators contribute less to the end-to-end | ing the lengthiness of a significantly larger (>20×) model’s
+latency, the intuition behind µ-Serve’s model placement algo- | output. In addition, we use a semantic cache to improve the
+rithm is to group operators with similar sensitivities together. | prediction accuracy of hot input queries.
+Since how much the GPU frequency can be reduced is deter- | Output Token Length Predictor. Given the user input to
+mined by the most sensitive model partition on that device, | a certain generative model, our predictor tries to predict the
+µ-Serve avoids co-locating a mix of sensitive and insensitive | length of the model’s response in terms of the number of
+partitions onto the same GPU devices. | tokens because the model inference time is linearly related
+| The overall procedure is shown in Alg. 2. µ-Serve first | to the output token length (§2.3). We use BERT as a proxy
+estimates the sensitivity scores of a model partition based on | model and build a multi-class classifier based on BERT as
+the weighted sum of operator sensitivity scores (using the op- | the output token length predictor. Specifically, we take the
+erator count and tensor dimensions as the weights). All model | last layer hidden state of the first token (i.e., CLS) from the
+partitions are then sorted based on the estimated sensitivity | BERT output, and pass it through an additional two-layer feed-
+scores. For each model partition in the sorted list, we get the | forward neural network to generate the prediction (Fig. 6). As
+feasible “bins” or devices (by checking memory availability) | suggested by the original BERT paper [10], the final hidden
+
+
+
+80 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+| Token Length %ile | grained output lengths), but scheduling performance first rises
+Input | BERT | Multi-class Classifier
+[CLS] | CLS
+| [0, p25) | and then falls, peaking when there are 5 classes. We attribute
+
+
+
+
+| Prediction Classes
+| [p25, p50) | this observation to the fact that the scheduler benefits from
+Tok 1 | T1
+
+
+
+
+| Softmax
+| more fine-grained prediction but receives negative impacts
+| [p50, p75)
+Tok 2 | T2 | when prediction is worse, i.e., when predicting >5 classes.
+| … | …
+| …
+| …
+
+
+
+
+| …
+
+
+| …
+| [p75, p99) | Use of Semantic Cache. The µ-Serve scheduler includes a
+Tok N | TN
+| [p99, +) | simple semantic cache based on GPTCache [2] to store the
+| ground truth output token sequence length of hot inputs. In-
+| Figure 6: Output token length predictor in µ-Serve. | stead of going through the predictor to get an estimated output
+| length prediction, µ-Serve retrieves the cached length for the
+| input that triggers a cache hit. Caching has been commonly
+state corresponding to this token is used as the aggregate se- | used to reduce frequent and computationally expensive data
+quence representation for classification tasks. We could get | accesses. In µ-Serve, a semantic cache is a ⟨key, value⟩ mem-
+better classification performance by averaging or pooling the | ory buffer where keys are embeddings and values are output
+sequence of hidden states for the whole input sequence. How- | lengths. Embeddings are generated by embedding models
+ever, taking the whole sequence is more compute-intensive | that map text inputs into a low-dimensional continuous vector
+and, therefore, not worth the marginal gains. | space and are stored in a vector database [2]. For each input,
+Predictor Training. Our predictor adopts the pre-trained | the most similar cached input is retrieved using a similarity
+BERT model weights as provided by [10] and we further | evaluation function to determine if the cached input matches
+fine-tune the weights (together with the additional two-layer | the input query semantically. The cached ground truth length
+classifier network) on the LMSYS-Chat-1M training data [56]. | is then used by the scheduler. If there is a cache miss, the
+Pre-training on a large corpus of unlabeled text gives BERT | scheduler still uses the predicted output length. See §3.5 for
+some basic understanding of human languages, while the fine- | implementation details.
+tuning step allows BERT to learn the task-specific knowledge
+(in our case, the output token length of a generative model | 3.4 | GPU Frequency Scaling
+given the input query). Our fine-tuning has two phases: In the
+first phase, the parameters of both BERT and the classifier are | µ-Serve’s GPU frequency scaler ( 4 in Fig. 4) consists of
+tuned, while in the second phase, we fix the weights of BERT | a monitoring and a frequency scaling component. The for-
+and only update the classifier’s parameters. Such a two-phase | mer monitors per-model request-serving latency while the
+regime turns out to achieve a good balance between prediction | latter determines appropriate GPU frequency scaling actions
+accuracy and training efficiency. | for each GPU device. We adopt a multiplicative-increase-
+| Since predicting the exact length of the output can be diffi- | additive-decrease (MIAD) algorithm [58] for GPU scaling
+cult, we treat the token length prediction problem as a coarse- | based on the feedback signal of the slack between the target
+grained (multi-class) ordinal classification task [45]. Specifi- | SLO latency and the actual latency, inspired by the AIMD al-
+cally, we characterize the output token length percentiles of | gorithm in congestion control. The intuition behind adopting
+each generative model based on its training samples and cate- | MIAD is that we want to be conservative when scaling down
+gorize the length labels of each model into 5 classes, namely | GPU frequencies to avoid interruptions to SLO attainment
+[0, p25), [p25, p50), [p50, p75), [p75, p99), and [p99, +). We | (addictive decrease) while being aggressive when scaling up
+convert the classes into 5 integers {0, 1, 2, 3, 4} and let our pre- | GPU frequencies to respond fast to workload spikes.
+dictor output a real value as the prediction. We apply a mean | As shown in Alg. 3, the scaler starts from the default fre-
+squared error (MSE) training loss to minimize the distance be- | quency (usually the maximum frequency). After initializa-
+tween the real-valued predictions and the integer-valued class | tion, model latencies are sampled every 500 ms, and the fre-
+labels. During inference, we round the prediction value to the | quency scaling step is determined at every iteration by scan-
+nearest integer in {0, . . . , 4}. As shown in Sec. 4.3, such an | ning through all model partitions’ latency slack (as defined
+ordinal classification approach outperforms pure regression- | in L10 in Alg. 3). For each model partition, any negative or
+or classification-based solutions. | small slack leads to an up-scaling action (we set the threshold
+Choices of Classification. The granularity of classification | = 0.05). Otherwise, we estimate the degradation of down-
+(i.e., how many classes to predict) is determined by the end- | scaling the frequency based on the linear relationship between
+to-end scheduling results (in latency and throughput) instead | frequency and execution latency. A larger-than-degradation
+of the prediction accuracy. It is because of our observation | slack results in a down-scaling action. Ultimately, after scan-
+that better prediction accuracy does not necessarily lead to | ning through all model partitions, an up-scaling action doubles
+better scheduling performance. Empirical evaluations on our | the current frequency while a down-scaling action decreases
+datasets suggest that as the number of classes rises, prediction | the current frequency by ST EP.
+accuracy drops (because it gets harder to predict more fine- | When it needs to scale up, there is no difference across
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 81
+
+Algorithm 3 GPU Frequency Scaling | Table 1: Details of the models used in experiments. The
+| latency is measured for a single query with a sequence length
+Require: GPU Device GD, Model Partitions MP (a map of
+| of 512 on a single GPU. AR stands for autoregressive.
+| ⟨model, partition⟩ pairs placed on GD)
+1: procedure GPUF REQUENCY S CALING (GD, MP) | Model | # of Params | Size | Latency | AR?
+2: | // Start from the default high frequency
+| ResNet-50 | 25M | 0.2 GB | 51 ms | No
+3: | f req = DEFAULT | BERT-base | 110 M | 0.5 GB | 123 ms | No
+4: | GD.setFrequency( f req) | BERT-large | 340 M | 1.4 GB | 365 ms | No
+5: | while True do | RoBERTa-base | 125 M | 0.5 GB | 135 ms | No
+6: | action = SAME ▷ one of {UP, DOW N, SAME} | RoBERTa-large | 355 M | 1.4 GB | 382 ms | No
+7: | for each p in MP do | OPT-1.3b | 1.3 B | 5.0 GB | 1243 ms | Yes
+8: | target = p.getModelSLO() | OPT-2.7b | 2.7 B | 10.4 GB | 2351 ms | Yes
+9: | actual = p.getModelLatency() | GPT2-large | 774 M | 3.3 GB | 832 ms | Yes
+10: | slack = (target − actual)/target | GPT2-xl | 1.5 B | 6.4 GB | 1602 ms | Yes
+11: | if slack < 0.05 then | CodeGen-350m | 350 M | 1.3 GB | 357 ms | Yes
+12: | action = UP | ▷ requires up-scaling | CodeGen-2b | 2.0 B | 8.0 GB | 2507 ms | Yes
+13: | break | Bloom-1b1 | 1.1 B | 4.0 GB | 523 ms | Yes
+| Bloom-3b | 3.0 B | 11.0 GB | 1293 ms | Yes
+14: | end if
+| Switch-base-16 | 920 M | 2.4 GB | 348 ms | Yes
+15: | latency = p.getWeight() * actual | Switch-base-32 | 1.8 B | 4.8 GB | 402 ms | Yes
+16: | degradation = latency ∗ ST EP/ f req
+17: | if degradation/target < slack − 0.05 then
+18: | action = DOW N | ▷ down-scaling | database. To avoid starvation in scheduling, µ-Serve adopts
+19: | end if | aging [36] to promote jobs with long waiting times. Pre-
+20: | end for | emption could help correct previous suboptimal decisions
+21: | if action==UP then | with a least-slack-time-first policy. However, µ-Serve does
+22: | f req = min(MAX, f req ∗ 2) | not adopt preemption due to its added complexity in context
+23: | else if action==DOW N then | switch [1], memory management [20], and cache replacement
+24: | f req = max(MIN, f req − ST EP) | policies [47] (for key-value cache in serving LLMs).
+25: | end if
+26: | GD.setFrequency( f req)
+27: | end while | 4 | Evaluation
+28: end procedure
+| Our experiments addressed the following research questions:
+| §4.2 Does µ-Serve achieve power-saving (and how much)
+model partitions because we typically need to aggressively | while preserving SLO attainment?
+scale up to mitigate SLO violations (by doubling the current | §4.3 How much does the proxy-model-based scheduler in
+frequency). L15 in Alg. 3 refers to the difference in scal- | µ-Serve improve latency and throughput?
+ing down, i.e., a partition with lower sensitivity scores has | §4.4 How robust is µ-Serve’s power-aware model partitioning
+lower weights, and thus can tolerate more down-scaling. Note | and placement under model variations?
+that when the current frequency reaches the maximum but
+scaling-up is repeatedly called, it can be treated as a signal | 4.1 | Experiment Setup
+to replicate the model instance (i.e., autoscaling to scale out).
+Each iteration is performed every second. | Models. Since µ-Serve is a general ML model-serving frame-
+| work, we consider traditional non-Transformer models, Trans-
+| formers, and Transformer-based generative models for evalua-
+3.5 | Implementation
+| tion. For each model family, we select several most commonly
+µ-Serve is implemented with 6.1K lines of code in Python | used model sizes and variants (to mimic different fine-tuned
+on top of an existing model-parallel inference system, Al- | versions) for experimentation. Table 1 provides details about
+paServe [22]. We extend its auto-parallelization algorithms | model sizes and inference latency on testbed GPUs.
+to get the power-aware model-parallel strategies and place- | Workloads. We use the Microsoft Azure function traces [55]
+ment plans. In µ-Serve’s scheduler, the semantic cache is | and production traces from a private datacenter dedicated to
+implemented with GPTCache [2]. We use the HuggingFace | ML workloads in SenseTime [17] to drive the inference work-
+embedding function, the NumpyNormEvaluation similarity | loads. Since the SenseTime dataset contains both ML training
+evaluation function (with a default similarity threshold of | and inference workloads (without distinction), we select the
+0.8), the SQLiteCache cache manager, and the FAISS vector | traces with job completion time < 5 seconds and the number
+
+
+
+82 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+| AlpaServe | AlpaServe-Scaling | μ-Serve
+
+
+
+
+| Per-Device Power
+| 200
+Power (Watts)
+
+
+
+
+| Power (Watts)
+| 800 | 800
+| no saving
+| 150
+| 600 | 600
+| no saving | no saving
+| 100
+| 400 | 400
+| 50
+| 0.8 | 1.0 | 1.2 | 1.4 | 1.6 | 1.8 | 2.0 | 2 | 4 | 6 | 8 | 10 | 12 | 4 | 6 | 8 | 10 | 12 | 14
+| SLO Scale | Rate Scale | # of Devices
+
+| Figure 7: Power saving evaluation.
+
+| AlpaServe | AlpaServe-Sched | AlpaServe-Scaling | μ-Serve
+| 1.2 | 1.2 | 1.2
+| SLO | SLO | SLO
+| p99 Latency
+
+
+
+
+| p99 Latency
+
+
+
+
+| p99 Latency
+| 1.0 | 1.0 | 1.0
+
+| 0.8 | 0.8 | 0.8
+
+| 0.6 | 0.6 | 0.6
+
+| 0.4 | 0.4 | 0.4
+
+| 0.8 | 1.0 | 1.2 | 1.4 | 1.6 | 1.8 | 2.0 | 2 | 4 | 6 | 8 | 10 | 12 | 4 | 6 | 8 | 10 | 12 | 14
+| SLO Scale | Rate Scale | # of Devices
+
+| Figure 8: SLO preservation evaluation.
+
+of used GPUs ≥ 1 to ignore training jobs and admin query | to maximize SLO attainment under varying workload condi-
+workloads (CPU workloads, e.g., training progress check). | tions. AlpaServe-Sched is AlpaServe with the FCFS scheduler
+For each model in Table 1, we round-robin serverless func- | replaced with µ-Serve’s scheduler (§3.3) but without GPU fre-
+tions and ML inference jobs to generate traffic. For vision | quency scaling. AlpaServe-Scaling deploys model partitions
+model inputs, we use the ImageNet dataset [9]. For language | according to parallelism and placement plans from AlpaServe
+model inputs, we use the LMSYS-Chat-1M dataset [56] which | and runs µ-Serve’s GPU frequency scaling algorithm (§3.4)
+contains one million real-world conversations. | and scheduler at runtime. We are interested in the power-
+Metrics. We use SLO attainment (i.e., the percentage of re- | saving comparison and knowing whether µ-Serve achieves
+quests served within the latency SLO) and power consumption | power-saving while preserving the SLO attainment.
+(in Watts) as the major evaluation metrics since the goal of | We deploy all models (in Table 1) in the experiments. Each
+µ-Serve is to minimize power consumption while preserving | model instance is driven by an independent request generator
+SLO performance. We adopt the definition of SLO Scales | using a randomly selected trace set as described in §4.1. The
+from AlpaServe [22] which refers to different multiplies of | memory consumption of all models (including activation and
+the SLO latency of the model request. The SLO latency of | runtime contexts) is 62.5 GB which can be fit onto 4 devices.
+the model request is measured as the single-request latency | Power Saving. Fig. 7 shows the power consumption of serv-
+with the parallelism plan generated by AlpaServe. We are | ing all models with varying SLO scales, (combined) arrival
+also interested in model-serving throughput and how these | rates, and the number of devices. Note that when SLO at-
+measures change with varying numbers of devices, request | tainment is violated, there is no power saving (as shown in
+arrival rates, and traffic burstiness. | the red-shaded area, e.g., an SLO scale of 0.8) because the
+Testbed. We deploy µ-Serve on a cluster with 8 nodes and | device frequency is the same for all approaches. When SLO
+16 GPUs. Each node is an IBM Cloud gx2-16x128x2v100 | attainment is met, µ-Serve reduces the power consumption in
+instance with 2 NVIDIA Tesla V100 (16GB) GPUs. Each | AlpaServe by 1.51–2.29× at different SLO scales. At different
+GPU supports a maximum Streaming Multiprocessor (SM) | arrival rates, the reductions in power consumption are 1.85–
+frequency of 1380 MHz and a minimum of 200 MHz. | 2.61×, compared to AlpaServe. The larger the SLO scale (less
+| stringent SLO) and the smaller the arrival rate, the more the
+4.2 | End-to-end Results | power saving. We find that adding dynamic GPU frequency
+| scaling on top of AlpaServe has already been able to reduce
+In this section, we compare µ-Serve against three baselines | power consumption by a factor of 1.1–1.5× and 1.4–1.7× at
+(AlpaServe [22], AlpaServe-Sched, and AlpaServe-Scaling) | varying SLO scales and rates. µ-Serve further improves the
+when serving widely used open-source large deep learning | power saving by an average of 1.4× compared to AlpaServe-
+models on publicly available workload traces (as described | Scaling. We find that the improvement does not vary with SLO
+in §4.1). AlpaServe is a state-of-the-art model-serving sys- | scales or arrival rates because it is the statically set model par-
+tem that generates model parallelism and placement plans | tition placement strategies that cause different power savings
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 83
+
+from the same GPU frequency scaling approach. | Table 2: Output token length predictor evaluation results.
+| In the experiments with varying numbers of devices, we | Columns are five predictor types: ordinal classification with
+replicate each model instance (so now the total model memory | MSE/L1 loss, classification, and regression with MSE/L1 loss.
+demand is up to 8 devices) and increase the number of devices | Ord. CLS | Ord. CLS | REG | REG
+from 4 to 14. Fig. 7 (right) shows the per-device average | Metrics | CLS
+| (MSE) | (L1) | (MSE) | (L1)
+power consumption. When there are no idle devices (i.e., at 6
+| Accuracy ↑ | 0.4290 | 0.4272 | 0.4599 | 0.4014 | 0.4383
+and 8 devices), the power saving from µ-Serve compared with
+| F1 Score ↑ | 0.3563 | 0.3332 | 0.4021 | 0.3318 | 0.3477
+AlpaServe is 1.23–1.39×. When there are more idle devices, | L1 Error ↓ | 0.7587 | 0.7480 | N/A | 0.6077 | 0.5557
+all per-device power consumption curves start to decrease. | MSE ↓ | 0.9859 | 1.0857 | N/A | 0.8077 | 0.8996
+Since µ-Serve and AlpaServe-Scaling actively down-scale the
+GPU frequency, the power saving increases to 1.75–2× and
+1.44–1.64× compared to AlpaServe. AlpaServe-Sched is not | scheduler can be found in appendices A.2 and A.3.
+shown in Fig. 7 since we observe that it has the same power | Token Length Predictor Evaluation. We evaluate our out-
+consumption as AlpaServe. This is because only the execution | put token length predictor on the LMSYS-Chat-1M dataset.
+ordering of the requests is different between the two baselines | Overall, our predictor achieves an average accuracy of 0.42
+and there is no idle time. Therefore, the scheduler does not | across 25 models (compared to the accuracy of 0.2 for a ran-
+have an effect on power saving. | dom guess). As shown in Fig. 11, despite using a shared pre-
+Model Serving Performance. We evaluate the SLO attain- | dictor, our predictor achieves rather balanced performances
+ment to understand what the cost of µ-Serve is while achieving | across different models, with the prediction accuracy ranging
+power savings. We measure the 99th-percentile (p99) latency | from 0.33 for llama-13b to 0.50 for wizardlm-13b. Train-
+of serving a request for each model and normalized it to the | ing a customized predictor for each individual model leads to
+SLO latency. When the normalized p99 latency is less than | slightly better accuracy. For instance, a customized predictor
+1, it means the SLO attainment is greater than 99%. On the | for vicuna-13b achieves an accuracy of 0.429 (>0.42 for a
+other hand, the model serving system does not meet the SLO | general predictor). However, training customized predictors
+attainment of 99%. Fig. 8 shows the normalized p99 latency | can incur more training and model management overhead.
+of serving all models with varying SLO scales, (combined) | Therefore, we do not proceed with customized predictors.
+arrival rates, and the number of devices. | We also conduct ablation studies to investigate the effective-
+| Same as in the power-saving evaluation, the red-shaded | ness of our ordinal-classification-based token length predictor.
+area indicates that the 99% SLO attainment of AlpaServe- | In Table 2, we compare our predictor with multiple alterna-
+Sched is not met. Therefore, the three approaches AlpaServe- | tive approaches, including ordinal classification with L1 loss,
+Sched, AlpaServe-Scaling, and µ-Serve converge to nearly the | (standard) classification with cross-entropy loss and resam-
+same p99 latency because the device frequencies are fixed at | pling, and regression with MSE & L1 loss. Interestingly, we
+the maximum. When there is no SLO violation in AlpaServe- | find that higher prediction accuracy does not necessarily lead
+Sched, µ-Serve and AlpaServe-Scaling both meet the 99% | to better scheduling performance (e.g., lower latency or higher
+SLO attainment. µ-Serve has 2–9% higher p99 latency than | throughput). Instead, it matters more to the scheduler that the
+AlpaServe-Scaling. By replacing FCFS with µ-Serve’s sched- | predictor can rank any two inputs correctly. A predictor with
+uler, AlpaServe-Sched achieves 26–31% lower p99 latency. In | higher mean accuracy may mispredict several long outputs to
+the experiments with varying numbers of devices (as shown | be very short, leading to HoL and much worse latency (rele-
+in Fig. 8 (right)), since serving all models requires at least 8 | vant to the findings in [11]). Table 2 shows that our ordinal
+devices, there are SLO attainment violations at 4 and 6 de- | classifier with MSE loss fails to outperform the alternative
+vices. At 6 devices, only AlpaServe fails to meet the SLO | predictors in any metrics. However, as we will show in the
+attainment. At 8 devices, all approaches meet the SLO at- | scheduler evaluation next, µ-Serve’s scheduler benefits more
+tainment, and µ-Serve has 5% higher p99 latency compared | from our chosen predictor despite a slightly lower accuracy
+to AlpaServe-Scaling, which also holds when there are idle | of 0.4290 (< 0.4599 compared to CLS).
+devices (i.e., at 10–14 devices). | Scheduler Evaluation. We evaluate the scheduling perfor-
+| mance regarding the job completion time (JCT) and the serv-
+Without SLO violations, µ-Serve achieves 1.5–2.3×, 1.9–2.6×,
+| ing throughput to understand if prediction accuracy is suffi-
+and 1.8–2× power saving compared to AlpaServe under vary-
+| cient. Our comparison baselines include (1) first-come-first-
+ing SLO scales, request arrival rates, and number of devices.
+| serve (FCFS), which is the default scheduler in state-of-the-
+| art model-serving frameworks such as AlpaServe [22] and
+4.3 | Scheduling | Orca [51], and (2) shortest-job-first (SJF) with oracle output
+| token prediction. Fig. 9 and Fig. 10 show the scheduling per-
+In this section, we evaluate the output length predictor and | formances with varying request arrival rates and burstiness.
+scheduler performance. Additional ablation studies on the | We also compare with three alternative designs, i.e., SJF with
+
+
+
+84 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+| SJF (Oracle) | FCFS | Regression | CLS | Multi-CLS | μ-Serve
+| 250
+| 2.0
+
+
+
+
+| Throughput
+| 200
+JCT (s)
+
+
+
+
+| 150 | 1.5
+
+| 100 | 1.0
+
+| 50 | 0.5
+
+| 0 | 0.0
+| 1.0 | 3.0 | 5.0 | 7.0 | 9.0 | 1.0 | 3.0 | 5.0 | 7.0 | 9.0
+| Arrival Rate | Arrival Rate
+
+| Figure 9: Scheduler evaluation across varying request arrival rates.
+
+| SJF (Oracle) | FCFS | Regression | CLS | Multi-CLS | μ-Serve
+| 2.0
+| 200
+
+
+
+
+| Throughput
+| 1.5
+JCT (s)
+
+
+
+
+| 150
+| 1.0
+| 100
+
+| 50 | 0.5
+
+| 0 | 0.0
+| 1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 1.0 | 2.0 | 3.0 | 4.0 | 5.0
+| Coefficient of Variance | Coefficient of Variance
+
+| Figure 10: Scheduler evaluation across varying request burstiness.
+
+
+regression predictor, binary-class predictor, and multi-class | 4.4 | Model Partitioning and Placement
+predictor (with no semantic cache). With varying request rates,
+µ-Serve reduces JCT by 41.3% compared to FCFS and in- | In this section, we aim to understand the power-saving oppor-
+creases the throughput by 2.5×. In comparison, the oracle SJF | tunity concerning the percentage of insensitive operators in a
+reduces the JCT by 49.8% and increases the throughput by | model, output non-determinism, and workload variation.
+3.6×. Under different burstinesses, µ-Serve reduces JCT by | Power Saving Opportunity vs. Insensitivity Ratio. Power
+38.6% compared to FCFS and increases the throughput by | saving stems from the key insight that operators have diverse
+2.2×. In comparison, the oracle SJF reduces the JCT by 43.8% | sensitivity to GPU frequency scaling, and thus, insensitive
+and increases the throughput by 3.6×. With semantic cache, | operators are leveraged to down-scale GPU frequency while
+µ-Serve improves JCT by 23% and increases throughput by | preserving the SLO attainment. We define insensitive op-
+1.2× (i.e., the comparison with Multi-CLS). | erators to be those model operators with sensitivity scores
+Predictor Overhead. We evaluate the latency overhead of the | less than 1. Fig. 14 (a) illustrates how power-saving oppor-
+predictor for autoregressive models (as indicated in Table 1) | tunities vary with the percentage of insensitive operators in
+because the output token prediction is only on the critical | different open-source models (up to 60%). Compared with
+path of serving autoregressive models. The latency overhead | AlpaServe-Scaling, the power reduction increases by 2.2×
+includes both semantic cache lookup and proxy model pre- | when the percentage increases from 10% to 60%.
+diction. Fig. 12 compares the predictor latency overhead and | Robustness to Model Execution Non-determinism. Fig. 14
+model request execution time. Note that the Y -axis is in the | (b) shows the relationship between power saving and the
+log scale. The average model execution time is 9.8 s, and the | model output length. We find that as the average model output
+p5th execution time is 360 ms. The average predictor latency | length increases (i.e., more iterations per model request), the
+is 37.6 ms (0.4% of the total latency), and the maximum is | power reduction of µ-Serve compared to AlpaServe decreases
+56.3 ms, which is less than the minimum model execution | from 59% to 10% because of more intensive model executions
+time of 120 ms. Therefore, we conclude that the predictor in- | (and thus fewer power-saving opportunities).
+troduces negligible overhead to the end-to-end model-serving | Robustness to Workload Variations. As shown in §4.2,
+latency of autoregressive models, which supports the design | µ-Serve achieves power saving while preserving SLO at-
+and benefits of using a lightweight proxy model in µ-Serve. | tainment by dynamic GPU frequency scaling. In reaction to
+| workload variations, Fig. 13 illustrates the scaling actions of
+Better prediction accuracy does not necessarily translate to
+| the MIAD algorithm in µ-Serve with the changes in request
+better scheduling performance. With negligible overhead, µ-
+| arrival rates. µ-Serve adopts an aggressive (multiplicative)
+Serve reduces the average JCT by up to 41.3% and increases
+| frequency increase policy and conservatively decreases the
+the throughput by up to 2.5× at varying workloads.
+| frequency at each step (e.g., during the time 10–20 seconds).
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 85
+
+| 0.8 | 1400
+| Rate | Frequency
+| 22.5
+| 1200
+| 0.6 | 104
+
+
+
+
+| Latency (ms, log-scale)
+| 20.0
+
+
+
+
+| Frequency (MHz)
+| 1000
+| 0.4 | 17.5
+
+
+
+
+| Rate (req/s)
+| Exec Time | 15.0
+| Multi Acc | Multi Acc (All) | 103 | 800
+| 0.2 | Overhead
+| Binary Acc | Binary Acc (All)
+| 12.5
+| Binary F1 | Binary F1 (All)
+| 600
+| 0.0 | 10.0
+| dolly-v2-12b
+
+
+
+
+| RWKV-4-Raven-14B
+
+
+
+
+| wizardlm-13b
+| llama-2-13b-chat
+
+| mpt-7b-chat
+| vicuna-13b
+| vicuna-33b
+| fastchat-t5-3b
+| chatglm-6b
+| claude-1
+| alpaca-13b
+| llama-13b
+
+| stablelm-alpha-7b
+| gpt-4
+| llama-2-7b-chat
+| vicuna-7b
+
+| claude-instant-1
+| gpt-3.5-turbo
+| gpt4all-13b-snoozy
+| oasst-pythia-12b
+| mpt-30b-chat
+
+| claude-2
+
+| palm-2
+| koala-13b
+
+
+
+
+| guanaco-33b
+| 102
+| 7.5 | 400
+
+| 5.0
+| 200
+| 0 0.025 0.05 0.075 0.1 | 0 | 10 | 20 | 30 | 40
+| Density | Time (s)
+
+| Figure 11: Predictor accuracy. | Figure 12: Overhead. | Figure 13: Frequency scaling.
+
+
+| the model selection and autoscaling to meet SLOs. However,
+| 500 | 800 | these general systems are not power-aware and fail to con-
+Power (Watts)
+
+
+
+
+| Power (Watts)
+
+
+
+
+| 475
+| 600 | sider the autoregressive property of LLMs. Instead, dynamic
+| 450 | batching and autoscaling are complementary to µ-Serve.
+| AS-Scaling | 400 | AS-Scaling
+| 425
+| μ-Serve | μ-Serve | LLM Inference Optimization. Recently, several model-
+| 200
+| serving systems [20, 47, 51] have been proposed to opti-
+| 0.2 | 0.4 | 0.6 | 200 | 400 | 600
+| Insensitivity (%) | Avg Output Token Length
+| mize LLMs. Orca [51] considers the autoregressive token
+| (a) Insensitivity (%). | (b) Output variation. | generation pattern of LLMs and introduces iteration-level
+| scheduling. However, it uses a first-come-first-serve (FCFS)
+| Figure 14: Robustness analysis. | scheduling policy that suffers from head-of-line blocking
+| which we address in this paper. FastServe [47] proposes
+| preemptive scheduling with a Multi-Level Feedback Queue.
+Note that if the frequency stays at the maximum frequency but | However, it introduces extra memory overhead to maintain
+there are continuous SLO attainment violations, a scale-out | intermediate states for unfinished jobs. vLLM [20] is a high-
+signal can be sent to the model autoscaler (which µ-Serve | throughput LLM serving engine based on PagedAttention
+does not implement), left to the discussion in §6. | for token storage that achieves near-zero waste in KV cache
+| memory. vLLM also adopts an FCFS scheduling policy for
+Power saving varies with insensitivity ratio and model output
+| all requests. TurboTransformers [12] proposes a memory al-
+intensities. Power-aware partitioning/placement in µ-Serve
+| location algorithm to balance the memory footprint and (de-
+gives us maximized saving opportunities that only pay off
+| )allocation efficiency and a batching scheduler using dynamic
+when the frequency-scaler dynamically down-scales device
+| programming to achieve optimal throughput. µ-Serve can
+frequencies within the SLO attainment requirement.
+| benefit from the memory management optimization of these
+| systems and improve the power efficiency of serving LLMs.
+5 | Related Work | Operator Placement Optimization. AlpaServe [22] parti-
+| tions collections of models using inter- and intra-operator
+General Model-Serving Systems. The emergence of ML | parallelism and generates operator placement strategies to
+applications motivates the prevalence of ML model-serving | reduce serving latency in the presence of bursty workloads.
+systems that provide services such as scheduling, place- | µ-Serve relies on AlpaServe to generate feasible operator
+ment, batching, and autoscaling. Clipper [8], TensorFlow- | parallelism partitioning plans. Another line of work is GPU-
+Serving [26], MArk [52], InferLine [7], Shepherd [53], and | centric offloading which utilizes CPU memory or disk to
+Clockwork [14] are some earlier general ML model serving | store portions of the model parameters. For instance, Power-
+systems for serving models like ResNet that are relatively | Infer [39] loads frequently-activated neurons onto the GPU
+small. They support latency-aware provision to maximize the | for fast access while offloading infrequently-activated neu-
+overall goodput. More recently, AlpaServe [22] utilizes model | rons to the CPU, thus significantly reducing GPU memory
+parallelism for statistical multiplexing. INFaaS [35] and Cock- | demands and CPU-GPU data transfers. FlexGen [37] pro-
+tail [15] propose a model-less serving framework to automate | poses a novel scheduling approach to prioritize throughput
+
+
+
+86 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+over latency, processing batches sequentially for each layer. | 7 | Conclusion
+DejaVu [23] accelerates LLM inference by using activation
+sparsity to selectively process only those neurons that are | We have presented µ-Serve, a system for serving multiple
+predicted to be activated. These systems are orthogonal to | large deep learning models that maximizes power saving
+µ-Serve as their objective is to reduce GPU memory demand | while preserving request-serving SLO attainment. The key
+with offloading while µ-Serve aims to improve the power | innovation of µ-Serve lies in the fine-grained modeling of
+efficiency of model serving. | operator sensitivity and power-aware model provisioning that
+Speculative LLM Inference. Speculative decoding or look- | creates power-saving opportunities. Such opportunities can
+ahead decoding accelerates LLM token generation with | be exploited by dynamic GPU frequency scaling online to
+smaller approximation models [21, 25], multiple decoding | achieve power reduction without SLO violations at varying
+heads [4], or n-gram generation [13]. We do not consider | conditions. We quantify and discuss when and to what extent
+speculative LLM inference because of its extra computational | such saving opportunities exist through extensive evaluations.
+overhead of token generation and verification.
+| Acknowledgments
+6 | Discussion and Future Challenges | We thank the anonymous reviewers for providing their valu-
+| able feedback. This work is supported by the National Science
+Batching and Autoscaling. Request batching and autoscaling | Foundation (NSF) under grant No. CCF 20-29049 and by
+(adding/removing model instances) are two essential orches- | the IBM-ILLINOIS Discovery Accelerator Institute (IIDAI).
+tration tasks. Adaptive batching [8, 52] has been used to maxi- | Any opinions, findings, conclusions, or recommendations ex-
+mize throughput while meeting latency objectives [8]. Model | pressed in this material are those of the authors and do not
+replica autoscaling is another widely used model-serving | necessarily reflect the views of the NSF or IBM.
+technique [8, 15, 35, 52] to adapt to workload spikes. SLO-
+oriented cloud workload autoscaling and frequency scaling
+techniques [31, 33, 34, 43] can also potentially benefit model | References
+serving. These techniques are complementary to µ-Serve. We
+present how µ-Serve scheduler works with various batching | [1] Zhihao Bai, Zhen Zhang, Yibo Zhu, and Xin Jin.
+techniques in [32], and we leave it to future work on integrat- | PipeSwitch: Fast pipelined context switching for deep
+ing µ-Serve with dynamic model replication. | learning applications. In Proceedings of the 14th
+Heterogeneous Accelerators. In µ-Serve’s system model, we | USENIX Symposium on Operating Systems Design and
+consider only a homogeneous GPU cluster. However, GPU | Implementation (OSDI 2020), pages 499–514, 2020.
+devices in a cluster can be heterogeneous in terms of hard-
+| [2] Fu Bang and Feng Di. GPTCache: An open-source
+ware (e.g., A100, V100, and T4), resource configurations (e.g.,
+| semantic cache for LLM applications enabling faster an-
+memory size), frequency range, and power features [19,38,44].
+| swers and cost savings. In Proceedings of the 3rd Work-
+Device heterogeneity raises challenges in both model provi-
+| shop for Natural Language Processing Open Source
+sioning (e.g., which type of device to assign to a specific
+| Software (NLP-OSS 2023), pages 212–218, 2023.
+model partition) and dynamic frequency scaling (the power
+saving, idle power, and power efficiency differ across different
+| [3] Rishi Bommasani, Drew A Hudson, Ehsan Adeli, Russ
+types of devices). We leave the study of such complicated
+| Altman, Simran Arora, Sydney von Arx, Michael S Bern-
+optimization space to future work.
+| stein, Jeannette Bohg, Antoine Bosselut, Emma Brun-
+Other Power Management Features. In µ-Serve’s GPU man- | skill, et al. On the opportunities and risks of foundation
+agement model, we consider only SM frequency scaling be- | models. arXiv preprint arXiv:2108.07258, 2021.
+cause of fast actuation and fine-grained increments. Instead,
+there are other power management features on more advanced | [4] Tianle Cai, Yuhong Li, Zhengyang Geng, Hongwu Peng,
+GPUs such as power capping, various GPU operation modes, | and Tri Dao. Medusa: Simple framework for accelerat-
+memory frequency scaling, and MIG sharing [27]. It is worth- | ing LLM generation with multiple decoding heads, 2023.
+while to study the interplay between these power features and | https://github.com/FasterDecoding/Medusa.
+explore co-optimization policies for power saving.
+Scalability. Fig. 7 shows that µ-Serve consistently facilitates | [5] Sangjin Choi, Inhoe Koo, Jeongseob Ahn, Myeongjae
+per-device power savings as the cluster undergoes scaling | Jeon, and Youngjin Kwon. EnvPipe: Performance-
+out at no idle devices. Based on these results, we assert that | preserving DNN training framework for saving energy.
+similar power-saving opportunities are likely to be present in | In Proceedings of the 2023 USENIX Annual Technical
+cloud-scale deployment while ensuring SLO attainment. | Conference (ATC 2023), pages 851–864, 2023.
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 87
+
+[6] Jae-Won Chung, Yile Gu, Insu Jang, Luoxi Meng, Nikhil | [15] Jashwant Raj Gunasekaran, Cyan Subhra Mishra,
+| Bansal, and Mosharaf Chowdhury. Perseus: Removing | Prashanth Thinakaran, Bikash Sharma, Mahmut Taylan
+| energy bloat from large model training. arXiv preprint | Kandemir, and Chita R Das. Cocktail: A multidimen-
+| arXiv:2312.06902, 2023. | sional optimization for model serving in cloud. In Pro-
+| ceedings of the 19th USENIX Symposium on Networked
+[7] Daniel Crankshaw, Gur-Eyal Sela, Xiangxi Mo, Corey | Systems Design and Implementation (NSDI 2022), pages
+| Zumar, Ion Stoica, Joseph Gonzalez, and Alexey Tu- | 1041–1057, 2022.
+| manov. InferLine: Latency-aware provisioning and scal-
+| ing for prediction serving pipelines. In Proceedings of | [16] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian
+| the 11th ACM Symposium on Cloud Computing, page | Sun. Deep residual learning for image recognition. In
+| 477–491, New York, NY, USA, 2020. Association for | Proceedings of the IEEE Conference on Computer Vi-
+| Computing Machinery. | sion and Pattern Recognition (CVPR 2016), June 2016.
+
+| [17] Qinghao Hu, Peng Sun, Shengen Yan, Yonggang Wen,
+[8] Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael J
+| and Tianwei Zhang. Characterization and prediction of
+| Franklin, Joseph E Gonzalez, and Ion Stoica. Clipper:
+| deep learning workloads in large-scale GPU datacenters.
+| A low-latency online prediction serving system. In Pro-
+| In Proceedings of the International Conference for High
+| ceedings of the 14th USENIX Symposium on Networked
+| Performance Computing, Networking, Storage and Anal-
+| Systems Design and Implementation (NSDI 2017), pages
+| ysis (SC 2021), New York, NY, USA, 2021. Association
+| 613–627, 2017.
+| for Computing Machinery.
+[9] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li, | [18] Klaus Jansen, Stefan Kratsch, Dániel Marx, and Ildikó
+| and Li Fei-Fei. ImageNet: A large-scale hierarchical | Schlotter. Bin packing with fixed number of bins re-
+| image database. In Proceedings of the 2009 IEEE Con- | visited. Journal of Computer and System Sciences,
+| ference on Computer Vision and Pattern Recognition | 79(1):39–49, 2013.
+| (CVPR 2009), pages 248–255. IEEE, 2009.
+| [19] Yimin Jiang, Yibo Zhu, Chang Lan, Bairen Yi, Yong
+[10] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and | Cui, and Chuanxiong Guo. A unified architecture for
+| Kristina Toutanova. BERT: Pre-training of deep bidi- | accelerating distributed DNN training in heterogeneous
+| rectional Transformers for language understanding. In | GPU/CPU clusters. In Proceedings of the 14th USENIX
+| Proceedings of the 2019 North American Chapter of the | Symposium on Operating Systems Design and Imple-
+| Association for Computational Linguistics, 2019. | mentation (OSDI 2020), pages 463–479, 2020.
+
+[11] Yi Ding, Nikita Mishra, and Henry Hoffmann. Genera- | [20] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying
+| tive and multi-phase learning for computer systems opti- | Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez,
+| mization. In Proceedings of the 46th International Sym- | Hao Zhang, and Ion Stoica. Efficient memory man-
+| posium on Computer Architecture (ISCA 2019), page | agement for large language model serving with Page-
+| 39–52, New York, NY, USA, 2019. Association for Com- | dAttention. In Proceedings of the 29th Symposium on
+| puting Machinery. | Operating Systems Principles (SOSP 2023), pages 611–
+| 626, 2023.
+[12] Jiarui Fang, Yang Yu, Chengduo Zhao, and Jie Zhou.
+| [21] Yaniv Leviathan, Matan Kalman, and Yossi Matias. Fast
+| TurboTransformers: An efficient GPU serving system
+| inference from transformers via speculative decoding.
+| for transformer models. In Proceedings of the 26th
+| In Proceedings of the 40th International Conference on
+| ACM SIGPLAN Symposium on Principles and Practice
+| Machine Learning (ICML 2023), pages 19274–19286.
+| of Parallel Programming, pages 389–402, 2021.
+| PMLR, 2023.
+[13] Yichao Fu, Peter Bailis, Ion Stoica, and Hao Zhang. | [22] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent
+| Break the sequential dependency of LLM inference us- | Liu, Ying Sheng, Xin Jin, Yanping Huang, Zhifeng Chen,
+| ing lookahead decoding, 2023. https://lmsys.org/ | Hao Zhang, Joseph E Gonzalez, et al. AlpaServe: Sta-
+| blog/2023-11-21-lookahead-decoding/. | tistical multiplexing with model parallelism for deep
+| learning serving. In Proceedings of the 17th USENIX
+[14] Arpan Gujarati, Reza Karimi, et al. Serving DNNs like | Symposium on Operating Systems Design and Imple-
+| clockwork: Performance predictability from the bottom | mentation (OSDI 2023), pages 663–679, 2023.
+| up. In Proceedings of the 14th USENIX Symposium on
+| Operating Systems Design and Implementation (OSDI | [23] Zichang Liu, Jue Wang, Tri Dao, Tianyi Zhou, Binhang
+| 2020), pages 443–462, 2020. | Yuan, Zhao Song, Anshumali Shrivastava, Ce Zhang,
+
+
+
+88 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+| Yuandong Tian, Christopher Re, et al. DejaVu: Contex- | [32] Haoran Qiu, Weichao Mao, Archit Patke, Shengkun Cui,
+| tual sparsity for efficient LLMs at inference time. In | Saurabh Jha, Chen Wang, Hubertus Franke, Zbigniew T.
+| Proceedings of the 40th International Conference on | Kalbarczyk, Tamer Başar, and Ravishankar K. Iyer. Ef-
+| Machine Learning (ICML 2023), pages 22137–22176. | ficient interactive LLM serving with proxy model-based
+| PMLR, 2023. | sequence length prediction. In The 5th International
+| Workshop on Cloud Intelligence / AIOps at ASPLOS
+[24] Alexandra Sasha Luccioni, Yacine Jernite, and Emma
+| 2024, volume 5, pages 1–7, San Diego, CA, USA, 2024.
+| Strubell. | Power hungry processing: Watts driv-
+| Association for Computing Machinery.
+| ing the cost of AI deployment? | arXiv preprint
+| arXiv:2311.16863, 2023.
+| [33] Haoran Qiu, Weichao Mao, Archit Patke, Shengkun Cui,
+[25] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao | Chen Wang, Hubertus Franke, Zbigniew T Kalbarczyk,
+| Cheng, Zeyu Wang, Rae Ying Yee Wong, Zhuoming | Tamer Başar, and Ravishankar K Iyer. FLASH: Fast
+| Chen, Daiyaan Arfeen, Reyna Abhyankar, and Zhihao | model adaptation in ML-centric cloud platforms. In
+| Jia. SpecInfer: Accelerating generative LLM serv- | Proceedings of the 7th Annual Conference on Machine
+| ing with speculative inference and token tree verifica- | Learning and Systems (MLSys 2024), 2024.
+| tion. arXiv preprint arXiv:2305.09781, 2023. https:
+| //arxiv.org/abs/2305.09781. | [34] Haoran Qiu, Weichao Mao, Chen Wang, Hubertus
+| Franke, Alaa Youssef, Zbigniew T Kalbarczyk, Tamer
+[26] Christopher Olston, Fangwei Li, Jeremiah Harmsen, Jor-
+| Başar, and Ravishankar K Iyer. AWARE: Automate
+| dan Soyke, Kiril Gorovoy, Li Lao, Noah Fiedel, Sukriti
+| workload autoscaling with reinforcement learning in
+| Ramesh, and Vinu Rajashekhar. TensorFlow-Serving:
+| production cloud systems. In Proceedings of the 2023
+| Flexible, high-performance ML serving. In Workshop
+| USENIX Annual Technical Conference (USENIX ATC
+| on ML Systems at NIPS 2017, 2017.
+| 2023), pages 387–402, 2023.
+[27] Pratyush Patel, Zibo Gong, Syeda Rizvi, Esha Choukse,
+| Pulkit Misra, Thomas Anderson, and Akshitha Sriraman. | [35] Francisco Romero, Qian Li, Neeraja J Yadwadkar, and
+| Towards improved power management in cloud GPUs. | Christos Kozyrakis. INFaaS: Automated model-less
+| IEEE Computer Architecture Letters, 22(2):141–144, | inference serving. In Proceedings of 2021 USENIX
+| 2023. | Annual Technical Conference (ATC 2021), pages 397–
+| 411, 2021.
+[28] Archit Patke, Saurabh Jha, Haoran Qiu, Jim Brandt, Ann
+| Gentile, Joe Greenseid, Zbigniew Kalbarczyk, and Rav-
+| [36] Yonatan Shadmi. Fluid limits for shortest job first with
+| ishankar K. Iyer. Delay sensitivity-driven congestion
+| aging. Queueing Systems, 101(1-2):93–112, 2022.
+| mitigation for HPC systems. In Proceedings of the
+| ACM International Conference on Supercomputing (ICS
+| [37] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan
+| 2021), page 342–353, New York, NY, USA, 2021. As-
+| Li, Max Ryabinin, Beidi Chen, Percy Liang, Christo-
+| sociation for Computing Machinery.
+| pher Ré, Ion Stoica, and Ce Zhang. FlexGen: High-
+[29] David Patterson, Joseph Gonzalez, Urs Hölzle, Quoc Le, | throughput generative inference of large language mod-
+| Chen Liang, Lluis-Miquel Munguia, Daniel Rothchild, | els with a single GPU. In Proceedings of the 40th In-
+| David R. So, Maud Texier, and Jeff Dean. The carbon | ternational Conference on Machine Learning (ICML
+| footprint of machine learning training will plateau, then | 2023), pages 31094–31116. PMLR, 2023.
+| shrink. Computer, 55(7):18–28, 2022.
+| [38] Fengguang Song and Jack Dongarra. A scalable frame-
+[30] George Prekas, Marios Kogias, and Edouard Bugnion.
+| work for heterogeneous GPU-based clusters. In Proceed-
+| ZygOS: Achieving low tail latency for microsecond-
+| ings of the 24th Annual ACM Symposium on Parallelism
+| scale networked tasks. In Proceedings of the 26th Sym-
+| in Algorithms and Architectures (SPAA 2012), pages
+| posium on Operating Systems Principles (SOSP 2017),
+| 91–100, 2012.
+| pages 325–341, 2017.
+[31] Haoran Qiu, Subho S. Banerjee, Saurabh Jha, Zbig- | [39] Yixin Song, Zeyu Mi, Haotong Xie, and Haibo Chen.
+| niew T. Kalbarczyk, and Ravishankar K. Iyer. FIRM: | PowerInfer: Fast large language model serving with a
+| An intelligent fine-grained resource management frame- | consumer-grade GPU. arXiv preprint arXiv:2312.12456,
+| work for SLO-oriented microservices. In Proceedings of | 2023. https://arxiv.org/abs/2312.12456.
+| the 14th USENIX Symposium on Operating Systems De-
+| sign and Implementation (OSDI 2020), pages 805–825, | [40] Google XLA Team. XLA: Optimizing compiler for
+| November 2020. | machine learning, 2017.
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 89
+
+[41] Iulia Turc, Ming-Wei Chang, Kenton Lee, and Kristina | [50] Jie You, Jae-Won Chung, and Mosharaf Chowdhury.
+| Toutanova. Well-read students learn better: On the im- | Zeus: Understanding and optimizing GPU energy con-
+| portance of pre-training compact models. arXiv preprint | sumption of DNN training. In Proceedings of the 20th
+| arXiv:1908.08962, 2019. | USENIX Symposium on Networked Systems Design and
+| Implementation (NSDI 2023), pages 119–139, 2023.
+[42] Farui Wang, Weizhe Zhang, Shichao Lai, Meng Hao,
+| and Zheng Wang. Dynamic GPU energy optimization | [51] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soo-
+| for machine learning training workloads. IEEE Transac- | jeong Kim, and Byung-Gon Chun. Orca: A distributed
+| tions on Parallel and Distributed Systems, 33(11):2943– | serving system for Transformer-based generative mod-
+| 2954, 2021. | els. In Proceedings of the 16th USENIX Symposium on
+| Operating Systems Design and Implementation (OSDI
+[43] Yawen Wang, Daniel Crankshaw, Neeraja J. Yadwadkar, | 2022), pages 521–538, 2022.
+| Daniel Berger, Christos Kozyrakis, and Ricardo Bian-
+| chini. SOL: Safe on-node learning in cloud platforms. In | [52] Chengliang Zhang, Minchen Yu, Wei Wang, and Feng
+| Proceedings of the 27th ACM International Conference | Yan. MArk: Exploiting cloud services for cost-effective,
+| on Architectural Support for Programming Languages | SLO-aware machine learning inference serving. In Pro-
+| and Operating Systems (ASPLOS 2022), pages 622–634, | ceedings of 2019 USENIX Annual Technical Conference
+| New York, NY, USA, 2022. | (ATC 2019), pages 1049–1062, 2019.
+
+[44] Qizhen Weng, Wencong Xiao, Yinghao Yu, Wei Wang, | [53] Hong Zhang, Yupeng Tang, Anurag Khandelwal, and
+| Cheng Wang, Jian He, Yong Li, Liping Zhang, Wei Lin, | Ion Stoica. Shepherd: Serving DNNs in the wild. In Pro-
+| and Yu Ding. MLaaS in the wild: Workload analysis | ceedings of the 20th USENIX Symposium on Networked
+| and scheduling in Large-Scale heterogeneous GPU clus- | Systems Design and Implementation (NSDI 2023), pages
+| ters. In Proceedings of the 19th USENIX Symposium on | 787–808, 2023.
+| Networked Systems Design and Implementation (NSDI
+| 2022), pages 945–960, 2022. | [54] Wei Zhang, Wei Wei, Lingjie Xu, Lingling Jin, and
+| Cheng Li. AI-Matrix: A deep learning benchmark for
+[45] Christopher Winship and Robert D Mare. Regression | Alibaba data centers. arXiv preprint arXiv:1909.10562,
+| models with ordinal variables. American Sociological | 2019.
+| Review, pages 512–525, 1984.
+| [55] Yanqi Zhang, Íñigo Goiri, Gohar Irfan Chaudhry, Ro-
+[46] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien | drigo Fonseca, Sameh Elnikety, Christina Delimitrou,
+| Chaumond, Clement Delangue, Anthony Moi, Pierric | and Ricardo Bianchini. Faster and cheaper serverless
+| Cistac, Tim Rault, Rémi Louf, Morgan Funtowicz, et al. | computing on harvested resources. In Proceedings of the
+| Transformers: State-of-the-art natural language process- | ACM SIGOPS 28th Symposium on Operating Systems
+| ing. In Proceedings of the 2020 Conference on Empiri- | Principles (SOSP 2021), pages 724–739, 2021.
+| cal Methods in Natural Language Processing (EMNLP
+| 2020), pages 38–45, 2020. | [56] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Tianle
+| Li, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang,
+[47] Bingyang Wu, Yinmin Zhong, Zili Zhang, Gang Huang, | Zhuohan Li, Zi Lin, Eric Xing, et al. LMSYS-Chat-
+| Xuanzhe Liu, and Xin Jin. Fast distributed inference | 1M: A large-scale real-world LLM conversation dataset.
+| serving for large language models. arXiv preprint | arXiv preprint arXiv:2309.11998, 2023.
+| arXiv:2305.05920, 2023.
+| [57] Lianmin Zheng, Zhuohan Li, Hao Zhang, Yonghao
+[48] Yuanzhong Xu, HyoukJoong Lee, Dehao Chen, Blake | Zhuang, Zhifeng Chen, Yanping Huang, Yida Wang,
+| Hechtman, Yanping Huang, Rahul Joshi, Maxim Krikun, | Yuanzhong Xu, Danyang Zhuo, Eric P Xing, et al. Alpa:
+| Dmitry Lepikhin, Andy Ly, et al. GSPMD: General | Automating inter-and intra-operator parallelism for dis-
+| and scalable parallelization for ML computation graphs. | tributed deep learning. In Proceedings of the 16th
+| arXiv preprint arXiv:2105.04663, 2021. | USENIX Symposium on Operating Systems Design and
+| Implementation (OSDI 2022), pages 559–578, 2022.
+[49] Yanan Yang, Laiping Zhao, Yiming Li, Huanyu Zhang,
+| Jie Li, Mingyang Zhao, Xingzhen Chen, and Keqiu Li. | [58] B. Zurita Ares, P. G. Park, C. Fischione, A. Speranzon,
+| INFless: A native serverless system for low-latency, | and K. H. Johansson. On power control for wireless
+| high-throughput inference. In Proceedings of the 27th | sensor networks: System model, middleware component
+| ACM International Conference on Architectural Support | and experimental evaluation. In 2007 European Control
+| for Programming Languages and Operating Systems | Conference (ECC 2007), pages 4293–4300, 2007.
+| (ASPLOS 2022), pages 768–781, 2022.
+
+
+
+90 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+| Accuracy | F1 Score | Precision | Recall
+| 0.5
+
+| 0.4
+| Performance
+
+
+
+
+| 0.3
+
+| 0.2
+
+| 0.1
+
+| 0.0
+| 3b | b | -2 | t | b | -1 | b | b | t | b | t | bo | y | t
+| -7b | b | b | -1 | t-4 | 3b | 3b | b | b | b | 2
+| -13 alm | ha 13 | nt | 12 | 13 | ha | -12 | ha | 5-3 lm-6 ude | -14 | d-7 -13 | ur | oz | ha e-
+| a-1 | lm | b-c ala- | sta | ia- ca- | b-c cuna | -v2 | b-c | t-t | gp | a-3 | o-3 | en | ne ma | 5-t | no 7b-c laud
+| un | rd
+| p
+| -13 ko | -in | yth alpa | t-7 | vi | lly | -30 | ha | at
+| g cla | un | ac | av | -tu lla | -3. | b-s | 2-  c
+| vic | za | -2 | de | t-p | mp | do | pt | stc | ch | vic | an | -R | lm | pt | -13 ma-
+| wi | ma | a u | s s | m | f a | gu | - 4 | l e | g | a l l
+| lla | cl | oa | KV | b | t4 | lla
+| RW | sta | gp
+
+| Model Name
+| Figure 15: Output token length predictor evaluation results for each individual model.
+
+| BERT-Tiny | BERT-Base
+
+
+| 180
+| 1.6
+| Throughput
+| JCT (s)
+
+
+
+
+| 160 | 1.4
+
+| 140 | 1.2
+
+
+| 120 | 1.0
+| CLS | CLS-l1 | CLS-mse | REG-l1 | REG-mse | CLS | CLS-l1 | CLS-mse | REG-l1 | REG-mse
+
+| Figure 16: Scheduling performance comparison with BERT-Base and BERT-Tiny as the proxy models.
+
+
+A | Appendix | standard classification, and regression. Compared with the
+| BERT-Base results in Table 2, we can see that the smaller
+A.1 | Artifact | BERT-Tiny model has lower prediction performance in almost
+| every metric that we consider. In fact, the BERT-Tiny-based
+An open-source implementation of µ-Serve and results | regressors (trained using MSE or L1 loss) seem to signifi-
+are available at: https://gitlab.engr.illinois.edu/ | cantly underfit the training data and do not perform much
+DEPEND/power-aware-model-serving. | better than random guesses. This is expected because the
+| smaller BERT-Tiny architecture is less expressive and can
+A.2 Ablation Study on Proxy Models in the | hardly capture the subtle features from the input queries in
+| Output Length Predictor | natural languages.
+
+Model-Specific Results. In Fig. 15, we plot the detailed eval- | Table 3: BERT-tiny-based output token length predictor eval-
+uation results of our output token length predictor on each | uation results.
+individual model from the LMSYS-Chat-1M dataset. We
+consider standard evaluation metrics including accuracy, pre- | Ord. CLS | Ord. CLS | REG | REG
+| Metrics | CLS
+cision, recall, and F1 score. Our predictor achieves rather | (MSE) | (L1) | (MSE) | (L1)
+balanced performances across different models, with the pre- | Accuracy ↑ | 0.3947 | 0.4097 | 0.4193 | 0.2425 | 0.2425
+diction accuracy ranging from 0.33 for llama-13b to 0.50 | F1 Score ↑ | 0.3121 | 0.3193 | 0.3687 | 0.0781 | 0.0781
+for wizardlm-13b. | L1 Error ↓ | 0.7752 | 0.7558 | N/A | 0.9528 | 0.9530
+| MSE ↓ | 0.9656 | 1.0398 | N/A | 1.8639 | 1.8643
+Evaluation Results for Smaller Predictor Models. In the
+main text of the paper, we primarily build our predictor on top
+of the “BERT-Base” model [41] with 12 Transformer layers | Scheduling Performance Comparison In terms of the pre-
+and 768 hidden dimensions. In this appendix, we consider a | diction latency overhead, the average, p99.9, and maximum
+smaller predictor based on the “BERT-Tiny” model with 2 | inference latencies of the predictor built on top of BERT-Tiny
+layers and 128 dimensions. Table 3 summarizes the evalua- | are 1.8 ms, 3.7 ms, and 10.2 ms, respectively, less than that
+tion results of multiple predictors built upon BERT-Tiny using | of the predictor built with BERT-Base. We then use predic-
+different training schemes, including ordinal classification, | tors based on BERT-Base and BERT-Tiny proxy models in
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 91
+
+| AlpaServe | AlpaServe-Scaling (No Sched) | μ-Serve (No Sched)
+
+
+
+
+| Per-Device Power
+| 200
+| Power (Watts)
+
+
+
+
+| Power (Watts)
+| 800 | 800
+| no saving
+| 150
+| 600 | 600
+| no saving | no saving
+| 100
+| 400 | 400
+| 50
+| 0.8 | 1.0 | 1.2 | 1.4 | 1.6 | 1.8 | 2.0 | 2 | 4 | 6 | 8 | 10 | 12 | 4 | 6 | 8 | 10 | 12 | 14
+| SLO Scale | Rate Scale | # of Devices
+
+| Figure 17: Power saving evaluation (without µ-Serve scheduler).
+
+| AlpaServe | AlpaServe-Scaling (No Sched) | μ-Serve (No Sched)
+| 1.50 | 1.50 | 1.50
+p99 Latency
+
+
+
+
+| p99 Latency
+
+
+
+
+| p99 Latency
+| 1.25 | 1.25 | 1.25
+| SLO | SLO | SLO
+| 1.00 | 1.00 | 1.00
+
+| 0.75 | 0.75 | 0.75
+
+| 0.50 | 0.50 | 0.50
+
+| 0.8 | 1.0 | 1.2 | 1.4 | 1.6 | 1.8 | 2.0 | 2 | 4 | 6 | 8 | 10 | 12 | 4 | 6 | 8 | 10 | 12 | 14
+| SLO Scale | Rate Scale | # of Devices
+
+| Figure 18: SLO preservation evaluation (without µ-Serve scheduler).
+
+
+the µ-Serve scheduler and compare the scheduling perfor- | p99 latency as shown in Fig. 8). Therefore, the power-saving
+mance regarding the job completion time (JCT) and through- | opportunities are reduced.
+put. Fig. 16 shows the comparison of the two proxy models | Fig. 17 shows the power consumption when running the
+when we use different training schemes: multi-class classifica- | three approaches. At SLO attainment violations (i.e., in the
+tion, ordinal classification with L1 loss and MSE, and regres- | red-shaded area), there is no power saving. When there are
+sion with L1 loss and MSE. The scheduler with BERT-Base | no SLO attainment violations, the power saving achieved by
+as the proxy model achieves 1–3.6% less JCT and 4.7–8.5% | µ-Serve (No Sched) compared to AlpaServe is up to 1.8×,
+higher throughput. As expected, the smaller model incurs | 1.92×, and 1.49× at varying SLO scales, rates, and numbers
+even less latency overhead but suffers worse prediction accu- | of devices (less than the improvement of 2.3×, 2.61×, and 2×
+racy and scheduling performance in return. Therefore, we use | when µ-Serve runs on its scheduler as shown in Fig. 7). This
+BERT-Base as the proxy model in µ-Serve’s scheduler. | 21–27% reduction in power saving attributed to the missing
+| of µ-Serve’s scheduler justifies the role of the scheduler in
+A.3 | Ablation Study on µ-Serve Scheduler | µ-Serve empirically. AlpaServe-Scaling (No Sched) has up to
+| 1.42×, 1.42×, and 1.28× power saving compared to AlpaServe
+In this section, we conduct experiments to understand the role | at varying SLO scales, rates, and numbers of devices, respec-
+of the speculative shortest-job-first (SJF) scheduler (§3.3) in | tively. Compared to the improvement of AlpaServe-Scaling
+power saving. The results in §4.3 show an improvement of | on top of AlpaServe (as shown in Fig. 7), AlpaServe-Scaling
+38.6–41.3% in JCT and 2.2–2.5× in throughput. Using the | (No Sched) also has less improvement (e.g., 1.42× < 1.7×
+same setup as in §4.2, we compare three methods: AlpaServe, | improvement at varying rates).
+AlpaServe-Scale (No Sched), and µ-Serve (No Sched). All
+three methods are implemented without µ-Serve scheduler, | Without the speculative SJF scheduler in µ-Serve, the power
+i.e., they are based on the default FCFS scheduler in Al- | saving from µ-Serve and AlpaServe-Scaling becomes 21–27%
+paServe. Fig. 17 and Fig. 18 show the comparison of power | less. The main reason is that replacing µ-Serve’s scheduler
+saving and SLO attainment of the three methods. | with FCFS leads to worse SLO attainment and more SLO vi-
+| In terms of SLO attainment, without µ-Serve scheduler, | olations, and consequently less GPU frequency down-scaling
+there are more situations that the p99 latency is above the | (i.e., power saving) opportunities.
+SLO latency as suggested by the wider red-shaded area com-
+pared to Fig. 8 (indicating worse SLO attainment). When | Potential Uses of µ-Serve Scheduler for Other Tasks. In
+there is an SLO attainment violation, online GPU device fre- | this paper, we study the benefit of µ-Serve’s scheduler in
+quency scaling does not actuate any down-scaling. Even with- | model-serving latency and throughput, and consequently the
+out SLO attainment violation, AlpaServe has a worse SLO | SLO attainment. Because of higher SLO attainment, there is
+attainment compared with AlpaServe-Sched (up to 31% lower | more headroom for dynamically down-scaling GPU device
+
+
+
+92 | 2024 USENIX Annual Technical Conference | USENIX Association
+
+frequencies to save power without introducing SLO attain-
+ment violations. However, we anticipate that there can be
+more potential use cases and extensions of µ-Serve’s proxy-
+model-based scheduler.
+• Optimization in model-serving latency or throughput. A
+proxy-model-based model output length predictor can be
+used with existing model-serving systems (e.g., Clipper [8],
+TensorFlow-Serving [26], MArk [52], InferLine [7], Shep-
+herd [53], and Clockwork [14]) to maximize the systems
+throughput/goodput or to support better latency-aware pro-
+vision by avoiding head-of-line blocking and optimizing
+the waiting time of queued requests.
+• Optimized batching and GPU utilization. Output token
+length prediction can be used to batch requests with sim-
+ilar execution lengths together to improve GPU utiliza-
+tion and prevent shorter requests from waiting for longer
+ones [51]. We present how µ-Serve scheduler works with
+various batching techniques in [32].
+• Optimization in load balancing. Requests with longer pre-
+dicted output lengths could be routed to more powerful or
+dedicated servers or clusters, while shorter requests can be
+handled by less resource-intensive instances.
+• Optimization in model-serving memory and key-value cache
+management. The memory management system needs to
+accommodate a wide range of output lengths [20]. In addi-
+tion, as the output length of a request grows at decoding, the
+memory required for its key-value cache also expands and
+may exhaust available memory for incoming requests or
+ongoing generation for existing requests. µ-Serve’s predic-
+tion can potentially help make scheduling decisions, such
+as deleting or swapping out the key-value cache of some
+requests from GPU memory.
+
+
+
+
+USENIX Association | 2024 USENIX Annual Technical Conference | 93

@@ -1,0 +1,1061 @@
+                              Band: Coordinated Multi-DNN Inference on
+                                  Heterogeneous Mobile Processors
+         Joo Seong Jeong*                                    Jingyu Lee*                                Donghyun Kim                       Changmin Jeon
+      Seoul National University                     Seoul National University                       Seoul National University          Seoul National University
+        joosjeong@snu.ac.kr                         jingyu.lee@hcs.snu.ac.kr                           dh.kim@snu.ac.kr                 wisechang1@snu.ac.kr
+
+                                  Changjin Jeong                                  Youngki Lee†                         Byung-Gon Chun†
+                             Seoul National University                     Seoul National University                 Seoul National University,
+                              create.jeong@snu.ac.kr                        youngkilee@snu.ac.kr                            FriendliAI
+                                                                                                                    bgchun@{snu.ac.kr,friendli.ai}
+ABSTRACT                                                                                            KEYWORDS
+The rapid development of deep learning algorithms, as well as inno-                                 Mobile Deep Learning, Heterogeneous Processors, DNN Accelera-
+vative hardware advancements, encourages multi-DNN workloads                                        tors, Multi-DNN Inference
+such as augmented reality applications. However, existing mobile in-
+ference frameworks like TensorFlow Lite and MNN fail to efficiently                                 ACM Reference Format:
+                                                                                                    Joo Seong Jeong, Jingyu Lee, Donghyun Kim, Changmin Jeon, Changjin
+utilize heterogeneous processors available on mobile platforms, be-
+                                                                                                    Jeong, Youngki Lee, and Byung-Gon Chun. 2022. Band: Coordinated Multi-
+cause they focus on running a single DNN on a specific processor.                                   DNN Inference on Heterogeneous Mobile Processors. In The 20th Annual
+As mobile processors are too resource-limited to deliver reasonable                                 International Conference on Mobile Systems, Applications and Services
+performance for such workloads by their own, it is challenging to                                   (MobiSys ’22), June 25–July 1, 2022, Portland, OR, USA. ACM, New York,
+serve multi-DNN workloads with existing frameworks.                                                 NY, USA, 13 pages. https://doi.org/10.1145/3498361.3538948
+   This paper introduces BAND, a new mobile inference system
+that coordinates multi-DNN workloads on heterogeneous processors.
+BAND examines a DNN beforehand and partitions it into a set of sub-                                 1   INTRODUCTION
+graphs, while taking operator dependency into account. At runtime,                                  Thanks to the rapid development on deep learning algorithms, recent
+BAND dynamically selects a schedule of subgraphs from multiple                                      mobile applications leverage a wide variety of deep neural networks
+possible schedules, following the scheduling goal of a pluggable                                    (DNNs) to solve various tasks such as person identification [57] on
+scheduling policy. Fallback operators, which are not supported by                                   camera frames and live video analytics [60]. Augmented Reality
+certain mobile processors, are also considered when generating sub-                                 (AR) applications process many DNNs in a single frame [57, 60] or
+graphs. Evaluation results on mobile platforms show that our system                                 require concurrent support of tasks, each with its own service-level
+outperforms TensorFlow Lite, a state-of-the-art mobile inference                                    objectives (SLOs) for real-time tasks like hand pose estimation and
+framework, by up to 5.04× for single-app workloads involving mul-                                   object tracking [9, 31].
+tiple DNNs. For a multi-app scenario consisting of latency-critical                                    Unfortunately, current state-of-the-art mobile deep learning frame-
+DNN requests, BAND reaches up to 3.76× higher SLO satisfaction                                      works, including TensorFlow Lite [8], MNN [29], Mace [7], and
+rate.                                                                                               NCNN [4], are not quite fit to serve mobile applications, because
+                                                                                                    they are developed and optimized toward executing a single DNN as
+CCS CONCEPTS                                                                                        fast as possible. diffAlthough modern mobile devices come equipped
+• Human-centered computing → Ubiquitous and mobile com-                                             with multiple processors for DNN computations such as the Edge
+puting systems and tools; • Computer systems organization →                                         TPU [5], the Hexagon DSP [11], and the Adreno GPU on Google
+Real-time system architecture.                                                                      Pixel 4, frameworks designate a fast processor and use only that
+                                                                                                    processor to run a DNN. They lose out on opportunities to utilize all
+                                                                                                    processors when serving multiple inference requests. It is technically
+* Both authors contributed equally to the paper                                                     possible to run multiple DNNs on one processor, but mobile proces-
+†
+ Corresponding authors                                                                              sors are far too resource-limited to deliver reasonable performance
+                                                                                                    (10+ frames per second) for multi-DNN workloads on their own.
+                                                                                                       In this paper, we present a mobile inference system, BAND, that
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed               coordinates multi-DNN workloads on heterogeneous processors.
+for profit or commercial advantage and that copies bear this notice and the full citation           BAND is able to dynamically devise DNN execution plans and sched-
+on the first page. Copyrights for components of this work owned by others than ACM                  ule DNNs on processors, according to given scheduling goals such
+must be honored. Abstracting with credit is permitted. To copy otherwise, or republish,
+to post on servers or to redistribute to lists, requires prior specific permission and/or a         as least slack time or makespan minimization. BAND differs from
+fee. Request permissions from permissions@acm.org.                                                  existing frameworks in that it can prioritize certain DNNs over others
+MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA                                                to reach the scheduling goal, and even schedule DNNs in a smaller
+© 2022 Association for Computing Machinery.
+ACM ISBN 978-1-4503-9185-6/22/06. . . $15.00                                                        granularity of subgraphs – processing up to 16.8 frames per second
+https://doi.org/10.1145/3498361.3538948                                                             for complicated multi-DNN workflows.
+
+
+
+
+                                                                                              235
+      MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA                                                                                      Jeong and Lee, et al.
+
+
+                               Google Pixel 4                    GPU    DSP   NPU           scheduling tasks on non-preemptible mobile processors with unpre-
+                    100
+Supported Operators (%)
+
+
+
+
+                          50                                                                dictable runtime fluctuations.
+                          0                                                                    We evaluated BAND on recent mobile devices and compared its
+                               Samsung Galaxy S20                                           performance with TensorFlow Lite. For single-app workloads that
+                    100
+                                                                                            involve multiple DNNs, BAND outperforms TensorFlow Lite by up
+                          50
+                                                                                            to 5.04×. BAND also achieves superior SLO satisfaction rates of
+                          0
+                               Xiaomi Redmi K40 Gaming                                      up to 3.76× for a multi-app workload consisting of latency-critical
+                    100
+                                                                                            DNNs, where each app independently issues requests periodically.
+                          50
+                                                                                               Our contributions are summarized as follows:
+                          0
+                                Dense     Conv Depthwise Max Softmax ReLU Transpose             • We propose BAND, a mobile DNN runtime for multi-DNN re-
+                                                 Conv    Pool                Conv
+                                                                                                  quests utilizing heterogeneous processors on a mobile device.
+                                                                                                  To our knowledge, BAND is the first mobile platform which
+      Figure 1: Percentage of supported operators across various
+                                                                                                  can support general multi-DNN workloads from multiple
+      DNNs and devices. Even within the same category, operators
+                                                                                                  mobile applications.
+      may have varying support (e.g., 1x1 convs are supported, but
+                                                                                                • We design a novel DNN partitioning and scheduling mecha-
+      strided or dilated convs are not).
+                                                                                                  nism based on the operator support for heterogeneous proces-
+                                                                                                  sors. Together with this mechanism and pluggable scheduling
+                                                                                                  policies, our system can satisfy different requirements from
+          BAND faces several challenges when coordinating multiple DNNs
+                                                                                                  various applications.
+      on heterogeneous processors. First, BAND must take care to avoid
+                                                                                                • We implement BAND on TensorFlow Lite [8], and evaluate
+      processor contention from scheduling DNNs on the same processor.
+                                                                                                  our system with different application requirements. Various
+      Especially, the system must take the varying performance character-
+                                                                                                  DNN models and mobile devices are evaluated to show the
+      istics of heterogeneous processors into account.
+                                                                                                  effectiveness of our system.
+          Second, due to the heterogeneity of processors in mobile environ-
+      ments, BAND must deal with fallback operators that are unsupported
+      on certain processors. As shown in Figure 1, many DNN operators                       2   WORKLOAD CHARACTERISTICS
+      are not fully supported on recent mobile processors. While executing                  This paper targets multi-DNN tasks from mobile applications. Such
+      a DNN with such operators on a processor (e.g., NPU), the system                      tasks utilize DNNs to interpret various sensory inputs, capturing
+      must fall back to the CPU in order to run those operators. During this                user contexts as well as the surroundings. Multi-DNN tasks can
+      fallback, BAND can run another model’s operators on that processor                    be imposed to (i) analyze a single sensing input in various forms
+      to take full advantage of the processor’s resources. This opens up                    (e.g., face detection, recognition, and pose estimation over video
+      the possibility of creative schedules with high processor utilization.                streams) [57], (ii) analyze multiple sensing modalities (e.g., audio-
+          Third, BAND must consider the performance fluctuations of mo-                     visual AR) [36, 59], and (iii) handle concurrent sensing applica-
+      bile processors when determining DNN schedules. The dynamic                           tions [35, 41]. In this section, we describe the unique workload
+      voltage and frequency scaling (DVFS) mechanisms on mobile SoCs                        characteristics of such multi-DNN tasks.
+      obstruct accurate latency prediction, which is crucial in scheduling                     Service requirements. Multi-DNN tasks from mobile apps have
+      DNNs on processors.                                                                   two dominant service requirements, with varying expectations of re-
+          A handful of research efforts [21, 24–26, 42, 48] have attempted                  sponsiveness. The most common type is a minimization of makespan,
+      to run multiple DNNs on one or more processors. However, they                         which specifies the completion time of a set of tasks that must all
+      assume certain task requirements and provide task-specific solutions.                 be finished to correctly analyze a single unit of sensory input. As
+      Moreover, none of them consider the coordination of fallback op-                      an example, mobile apps utilize complex pipelines of task-specific
+      erators, which is commonly present in mobile environments. Some                       DNNs for detailed analysis of a camera frame. The EagleEye [57]
+      works also propose offloading to edge infrastructures, but we do not                  scenario introduces a sequence of DNN tasks (face detection, super-
+      consider offloading as the network latency is usually too large to                    resolution, and face recognition) to identify the faces of people on a
+      satisfy the service-level requirements of modern mobile workloads.                    video frame. In such a case, the app expects the system to minimize
+          To address the challenges, we build BAND with a central model                     the makespan as users receive feedback for every processed frame.
+      analyzer and scheduler component for coordinating multiple DNNs                          Another aspect is that mobile applications require timely re-
+      on heterogeneous processors. BAND partitions and schedules DNNs                       sponses to their latency-critical tasks. A DNN task involved in
+      in granularity of subgraphs. In fact, BAND prepares a diverse set of                  a rendering pipeline of a foreground app requires consistent latency
+      subgraphs per DNN, such that a DNN can be executed in multiple                        guarantees. For instance, a recent AR application requires at most
+      ways. At runtime, BAND’s scheduler dynamically decides which                          20 ms of motion-to-photon latency to avoid simulation sickness [31].
+      subgraphs to use to run the DNN. This grants BAND flexibility                         Any delay in a DNN-based hand tracking task for AR glasses such as
+      in scheduling multiple DNNs, reinforcing the system’s coordina-                       the Oculus Quest [9] would cause a discontinuity in user experience.
+      tion capabilities. Fallback operators are considered when generating                  Also, any trigger-based sensing app that a user initiates, such as
+      subgraphs to avoid processor contention from silent fallbacks at                      drowsiness detection in navigation apps, requires consistent laten-
+      runtime. Furthermore, BAND adopts global queueing, scheduling                         cies of under ∼1 second (considering the reaction time under the
+      one subgraph (per processor) at a time to mitigate the limitations of                 two-second rule [45]) to give enough time for users to react [47].
+
+
+
+
+                                                                                      236
+Band: Coordinated Multi-DNN Inference on
+Heterogeneous Mobile Processors                                                                                       MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA
+
+
+                100                                                                                     15         CPU
+                      75                                                                                           CPU+GPU
+                                                                                                                   CPU+GPU+DSP
+ Inference Requests
+
+
+
+                      50                                                                                10         CPU+GPU+DSP+NPU
+
+
+
+
+                                                                                                   FPS
+                      25
+                      0    0   500   1000    1500    2000       2500          3000                        5
+                100
+                                                            Face Detection
+                      75                                    Face Recognition (Heavy)
+                                                            Face Recognition (Light)
+                                                            Super Resolution
+                                                                                                          0
+                      50
+                      25                                                                     Figure 4: BAND’s performance of using heterogeneous proces-
+                      0                                                                      sors. The processed frames per second (FPS) rise as more pro-
+                           0   500   1000    1500    2000       2500          3000
+                                            Frames                                           cessors are used. Results are from the EagleEye [57] workload,
+                                                                                             on Google Pixel 4.
+
+Figure 2: Workload requirements related to scene complexity.
+The number of required inference requests for the EagleEye
+                                                                                             3 MOTIVATION
+Person Finder [57] scenario is shown, based on two different                                 3.1 Utilizing Heterogeneous Processors
+traces from the YouTube Faces dataset [53].                                                  Today’s mobile deep learning frameworks [4, 7, 8, 29] cannot fully
+                                                                                             address the requirements of multi-DNN workloads. As frameworks
+                                                                                             mostly focus on running a single DNN as fast as possible, they only
+                                                                                             utilize a specific processor such as the GPU or NPU. However, unlike
+                                                                                             server/cloud environments where GPUs are dominant in terms of
+                                                                                             floating-point operations per second (FLOPS), there is no de-facto
+                                                                                             processor for mobile platforms. Therefore, it is preferable to utilize
+                                                                                             the various processors available on mobile platforms, rather than
+                                                                                             relying on a single outstanding processor.
+                                                                                                Another line of works propose offloading to edge infrastructures
+                                                                                             as an alternative solution to serve modern workloads [19, 30, 37].
+Figure 3: Assembly assistant multi-app scenario. The smart-                                  As data centers provide substantially stronger computing power than
+phone simultaneously runs an assembly AR app [13] with heart-                                mobile processors, it may be favorable to offload computation to
+rate variability sensing [27] for factory workers.                                           servers. However, this paper targets workloads with tight service
+                                                                                             requirements (10+ FPS), and recent studies show that the latency of
+   Dynamic workloads. As DNNs interpret user contexts and sur-                               offloading heavy computation to edge or cloud infrastructures is gen-
+roundings, the overall workload complexity reflects the changes                              erally too large (more than 100 ms) to meet such requirements [55].
+around the user’s environment. For example, recent AR apps either                            Moreover, data privacy is a constantly raised issue regarding offload-
+have a context-aware pipeline that adaptively selects execution paths,                       ing. Thus, we do not consider offloading in this paper, and instead,
+or requires varying computations depending on the scene complex-                             only work with the resources available on mobile devices.
+ity. Figure 2 shows the dynamic computational requirements of the                               Figure 4 depicts a preview of the performance of our system,
+EagleEye scenario [57]; as the number of faces in a video drasti-                            BAND. BAND is able to utilize heterogeneous processors to serve
+cally changes per frame, the number of required inferences also                              EagleEye [57], a multi-DNN workload. Using only the CPU and
+changes. The Distream [60] workflow also involves high workload                              GPU yields a frame rate of 5.3 frames per second (FPS), but adding
+fluctuations depending on the count and type of objects in live video                        the DSP and NPU boosts this number to 11.8 FPS – a 2.23× increase.
+analytics apps.                                                                              This point highlights the need of handling multiple processors to
+   Multiple applications. DNNs bring new opportunities for var-                              serve workloads consisting of multiple DNNs.
+ious sensing modalities in smartphones [35] such as audio-based
+emotion recognition for life-logging [36, 46] and IMU-based driving                          3.2    Challenges in Coordination
+condition tracking [59]. Similar to conventional apps, future mo-                            3.2.1 Processor Contention. It is well known that processor con-
+bile platforms can continuously execute different combinations of                            tention occurs when multiple DNNs try to utilize the same processor.
+foreground and background sensing apps.                                                      This is especially a problem for mobile processors, due to the limited
+   Figure 3 shows an assembly assistant AR scenario for factory                              number of processor cores and memory bandwidth. Table 1 shows
+workers. The smartphone processes video frames to detect the type                            the latency of a single InceptionV4 model, when multiple model in-
+and orientation of assembly components, based on object detection                            stances are running on the same processor. For most processors, the
+and pose estimation DNNs. It overlays the proper assembly instruc-                           latency rapidly rises as the number of models is increased. Moreover,
+tions on the screen. An additional background sensing app [27]                               SDKs for mobile processors like NNAPI [3] do not provide inter-
+can assess the worker’s heart-rate variability (HRV) based on front-                         faces for concurrent execution, unlike software libraries provided for
+camera frames, which can detect any sign of long-term exposure to                            acceleration on server GPUs such as NVIDIA CUDA [2] (CUDA
+air pollution without regular health checks [44].                                            streams). The MediaTek APU 3.0 processor in Table 1 manages to
+
+
+
+
+                                                                                       237
+MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA                                                                                                                          Jeong and Lee, et al.
+
+
+
+                                                                                   GPU         DSP                      NPU
+                          Classification       Face Recognition                   Object Detector                     Super Resolution           Image Enhancement Segmentation
+Operators (%)
+
+
+                100
+Supported
+
+
+
+
+                50
+                 0
+                                     1
+                                 etV tionV
+                                           4
+                                                       Mb
+                                                          v       Res                     e
+                                                                                       Fac YoloV
+                                                                                                 3
+                                                                                                             ntD
+                                                                                                                 et           gan         Net          ta       tyle DRNe
+                                                                                                                                                                          t
+                                                                                                                                                                                         lab
+                                                                                                                                                                                             V3
+                              len        p       Arc          Arc                ina                       ie           Esr         FSR          a genationArbS     H                p
+                      M   obi      Inc
+                                       e                                     Ret                     Effic                                      M yliz                           Dee
+                                                                                                                                                St
+          Figure 5: Fallbacks commonly occur across various tasks. Percentage of supported operators on Google Pixel 4 is shown.
+
+              Processor                         The Number of Concurrent Models                                    Unfortunately, the limited operator support is not simply an engi-
+            (Mobile Device)                     1             2             4
+                                                                                                                neering issue that can totally be resolved by implementing processor-
+           Google Edge TPU
+          (G OOGLE P IXEL 4)
+                                           25.29 ± 0.79       35.86 ± 10.23     56.94 ± 22.55                   specific kernels. The core components of recent accelerators are hard-
+                                                                                                                wired circuits designed for a limited set of compute-intensive opera-
+             Hexagon DSP
+                                           25.43 ± 0.55       37.34 ± 11.41     61.32 ± 25.08                   tions. For instance, the systolic array of the Google Edge TPU [5, 56]
+          (G OOGLE P IXEL 4)
+          Qualcomm HTA                                                                                          and the 3D Cube of the Huawei DaVinci architecture [10] exclusively
+                                           23.98 ± 1.95       24.08 ± 2.68      33.66 ± 10.47
+     (S AMSUNG G ALAXY S20)                                                                                     target compute-intensive operators with specific parameters.
+          Adreno 650 GPU                                                                                           Existing frameworks [7, 8, 29] that are only capable of utilizing a
+                                           115.52 ± 0.97      228.33 ± 3.16     448.34 ± 7.47
+     (S AMSUNG G ALAXY S20)                                                                                     single processor at a time silently fall back to the CPU when running
+       MediaTek APU 3.0
+                                           20.34 ± 0.19       21.35 ± 0.24       31.61 ± 9.78                   unsupported operators; also called fallback operators. Even if these
+ (X IAOMI R EDMI K40 G AMING)
+                                                                                                                frameworks were extended to employ multiple processors, the silent
+         Mali-G77 GPU                                                                                           fallback scheme would severely limit the framework’s schedulability
+                                           133.36 ± 2.22      255.49 ± 5.52     477.91 ± 37.08
+ (X IAOMI R EDMI K40 G AMING)
+                                                                                                                in utilizing the various processors.
+           Huawei NPU
+      (H UAWEI M ATE 40 P RO)
+                                           10.15 ± 0.14       14.92 ± 4.26       23.53 ± 9.57                      First, an uncoordinated fallback blocks other operators from ac-
+                                                                                                                cessing a processor that is otherwise idle. For example, in the execu-
+Table 1: Inference latency variation from concurrent inferences.
+                                                                                                                tion timeline of MobileNetV1 and EfficientDet shown in Figure 6,
+The mean latency and standard deviation (ms, per model) of
+                                                                                                                EfficientDet is occupying the NPU. Around t = 7ms, EfficientDet’s
+running InceptionV4 on various processors are shown, for a
+                                                                                                                fallback operators start to run on the CPU, and the NPU becomes idle
+varying number of concurrent inferences.
+                                                                                                                (the hatched NPU area). However, this information is not exploited
+                                                                                                                in scheduling MobileNetV1. MobileNetV1 simply runs on the un-
+                                                                                                                favored CPU (a). An alternative, the better schedule would be to
+run up to 2 models in parallel with little overhead, but this is not
+                                                                                                                schedule MobileNetV1 on the NPU immediately after EfficientDet’s
+nearly enough to support realistic multi-DNN workloads.
+                                                                                                                NPU operators (b), reducing up to 58% of inference latency.
+    A coordinated runtime that utilizes heterogeneous mobile                                                       Second, other non-CPU accelerators were not considered as an
+    processors must avoid processor contention between multi-                                                   option to process the fallback operators. Existing frameworks al-
+    ple DNNs.                                                                                                   ways run fallback operators on the CPU, even though they could
+                                                                                                                be supported by other accelerators. If the fallback operators from
+                                                                                                                the hatched area of EfficientDet in Figure 6 can be run on the GPU
+3.2.2 Contention from Fallbacks. For mobile devices, a handful of                                               faster than the CPU, a more preferable schedule would be running
+vendors provide their own processors, and each mobile platform                                                  the fallback operators on the GPU to achieve shorter latency.
+is equipped with a unique combination of such processors. This
+adds a unique heterogeneity aspect to mobile AI accelerators – not
+all processors are backed with a wide variety of supported ops. A                                                 Fallback operators must be carefully scheduled to boost
+certain operator may or may not run on a certain processor.                                                       schedulability and processor utilization.
+   This heterogeneity commonly occurs across various task types.
+Figure 5 shows the percentage of supported operators on Google
+Pixel 4, across various DNNs from mobile workloads. Operators                                                   3.2.3 Uncertainties in Performance. When coordinating multi-DNN
+from classification models that have been prominent in the commu-                                               workloads on multiple processors, another aspect that complicates
+nity for a long time, are generally supported by recent processors.                                             the coordination is the unpredictableness in performance. Mobile
+They are widely used as a backbone for other tasks such as face                                                 processors are prone to significant performance fluctuation. Unlike
+recognition. On the other hand, a considerably high amount of op-                                               server GPUs that provide relatively deterministic performance [23],
+erators from specialized models such as super resolution models                                                 mobile processors have innate uncertainties in performance due to
+and image enhancement models are not supported. For example,                                                    the design principles of the system on a chip (SoC) architecture.
+FSRNet [15] includes the transposed convolution operator, which                                                    SoCs are equipped with DVFS mechanisms for balancing the
+cannot be run on the DSP because of its wide stride value of 4.                                                 power consumption and performance, by adjusting voltage-frequency
+
+
+
+
+                                                                                                     238
+      Band: Coordinated Multi-DNN Inference on
+      Heterogeneous Mobile Processors                                                                                                           MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA
+
+
+                                            (a) Uncoordinated Silent Fallback                                          throughput for convolutional neural networks [16, 34]. Also, context-
+                   CPU1
+                   CPU2
+                                                                                                                       switching requires additional stateful logic blocks that could burden
+                    NPU                                                                                                the hardware design of mobile SoCs with small form-factors [34, 51],
+                          0        5             10          15          20          25           30                   and there is no open interface or control mechanisms exposed to
+                                                 (b) Coordinated Fallback                                              software developers.
+                   CPU1
+                   CPU2                                                                 MobileNetV1
+                    NPU                                                                 EfficientDet                       Uncertainties in mobile platforms must be carefully han-
+                          0        5             10          15          20          25        30                          dled with non-preemptible processors, when coordinating
+                                                           Time (ms)                                                       multi-DNN workloads.
+
+      Figure 6: Schedulability limitations of uncoordinated fallbacks.
+      Execution timeline of MobileNetV1 and EfficientDet on the CPU
+                                                                                                                       4     BAND: SUBGRAPH-CENTRIC
+      and NPU (Google Pixel 4’s Edge TPU). The fallback NPU region                                                           COORDINATION
+      of EfficientDet (hatched area) can be used by MobileNetV1 to                                                     We now describe our approach to solving the challenges from Sec-
+      run faster than on the CPU.                                                                                      tion 3. Rather than blindly delegating inferences to processors and
+                                                                                                                       expecting them to operate in an efficient manner, we place a central
+                              CPU (3 Threads)                                            GPU                           component that devises a fine-grained schedule plan of coordinat-
+                  100                                          100
+                                                                                                                       ing multiple DNNs on multiple processors. This way, we can make
+                   75                                           75
+                                                                              Consecutive                              informed decisions with a global view of the system state.
+Probability (%)
+
+
+
+
+                   50                                           50
+                                                                              Fixed Interval                              Moreover, we propose to partition models into subgraphs, and
+                   25                                           25            Random Interval
+                    00    5   10   15       20   25   30     35 00            10      20     30        40              run models based on dynamically determined subgraph schedules.
+              99.9
+                                    DSP                           99.9
+                                                                                         NPU                           Existing mobile deep learning frameworks treat DNN models as
+                   99                                              99
+                                                                                                                       unsplittable entities in terms of scheduling. This aspect makes it
+                                                                                                                       difficult to react to the dynamics in mobile workloads, such as re-
+                   90                                              90
+                                                                                                                       ceiving new inference requests, experiencing latency fluctuations,
+                    0 7       8         9        10     11          0    6      7    8    9    10      11   12         or encountering fallback operators. Instead, we separate fallback
+                                                      Latency (ms)
+                                                                                                                       operators from non-fallback operators by partitioning them into dif-
+      Figure 7: Performance variation of mobile processors. The infer-                                                 ferent subgraphs. This allows us to coordinate multiple requests in a
+      ence latency of the ArcFace-ResNet50 model on a Google Pixel 4                                                   fine-grained manner and concoct fallback-aware schedules such as
+      device is shown as a CDF, with various intervals between infer-                                                  the one shown in Figure 6. Moreover, we consider multiple possible
+      ences.                                                                                                           schedules of subgraphs at runtime rather than simply following a
+                                                                                                                       predetermined static schedule. This way, we proactively react to un-
+                                                                                                                       predicted fluctuations by dynamically deciding subgraph schedules.
+      levels. Although DVFS has its merits, the automatic frequency ad-
+      justment makes it difficult for an inference system to estimate the                                              4.1    System Overview
+      latency of a model.                                                                                              We describe BAND, a mobile inference system that utilizes hetero-
+         Figure 7 demonstrates a case where the inference latency of a                                                 geneous processors to serve multi-DNN workloads. BAND offers
+      model fluctuates greatly, up to 2.61×. The latency distribution of the                                           a coordinated runtime consisting of a model analyzer, a central
+      ArcFace-ResNet50 model on a Google Pixel 4 device is shown. In                                                   scheduler, and per-processor workers. The model analyzer partitions
+      case of the CPU and GPU, when the model is constantly run over                                                   models into subgraphs, while the scheduler decides which subgraphs
+      and over again (“Consecutive”), DVFS maintains a high processor                                                  to run on which workers. The workers execute the subgraphs on their
+      frequency and the inference latency is small. On the other hand, if                                              respective processors.
+      we leave the processor idle for long intervals between each inference                                               Figure 8 illustrates the system architecture of BAND. Client ap-
+      (“Random” and “Fixed”), the processor frequency keeps fluctuating                                                plications first notify BAND of the DNN model that they will use,
+      and the inference latency is relatively large.                                                                   via ①RegisterModel. Upon receiving a model, the model analyzer
+         Meanwhile, the DSP and NPU are mobile accelerators [11, 28]                                                   examines the model and generates subgraphs of the model (Sec-
+      of separate hardware that are loosely coupled with the main chipset.                                             tion 4.2). As operators have heterogeneous processor compatibilities,
+      Thus any computation on the DSP or NPU requires communication                                                    the analyzer carefully groups operators so that the scheduler can
+      through multiple layers of interfaces that causes performance fluc-                                              have fine-grained control over fallback handling. A subgraph is not
+      tuation, despite being single-frequency processors [14]. It can be                                               mapped to a specific processor at this point; it is up to the scheduler
+      observed in Figure 7 that the tail latencies on the DSP and NPU are                                              to determine where to run a subgraph, at runtime.
+      much higher than the medians, up to 1.53×.                                                                          Next, clients issue inference requests via ②RunModel. Requests
+         One approach to handle the unpredictableness in mobile proces-                                                are enqueued into a queue managed by the scheduler in the form of
+      sors is preemption. However, mainstream mobile processors do not                                                 jobs. A job is an internal data structure that includes the requested
+      support context-switching during computation [5, 11]. There exist                                                model and input data, as well as request metadata such as SLO
+      some academic efforts that experiment with preemption on NPUs,                                                   value and request app id. Based on the subgraph information from
+      but they incur large performance costs of up to 35% of system                                                    the analyzer, the scheduler (Section 4.3) dequeues a job from its
+
+
+
+
+                                                                                                                 239
+MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA                                                                                                         Jeong and Lee, et al.
+
+
+
+                                                                                                                              Operator        Unit        Subgraph
+                                                  Clients
+                                               (Applications)                                                                Unit A             Unit B       Unit C
+
+                                                                                                                         1            2            3            4
+          ② !,-()*"+ ① !"#$%&"'()*"+                                                                   Supported
+                                                                                                                       CPU, GPU, NPU          CPU, NPU        CPU
+                                                                                                       processors:
+
+                                                                                                                                  (a) Units
+                       Model
+                                                  Scheduler
+                      Analyzer                                                                   A         (CPU, GPU, NPU)                                     C       (CPU)
+
+                                                                                                           B      (CPU, NPU)                         B         C       (CPU)
+                   CPU            GPU           DSP               NPU
+                  Worker         Worker        Worker            Worker                          A         B      (CPU, NPU)              A          B         C       (CPU)
+
+                                                                                                                              (b) Subgraphs
+                                  OpenCL                NNAPI
+
+             Processors                                                                          Figure 10: Grouping operators into units and subgraphs.
+             (Accelerators)        GPU           DSP              NPU
+                                                                                             model, in terms of operator-processor placement. Existing frame-
+                 Figure 8: BAND system architecture.                                         works [7, 8, 29] do not consider these various schedules, and only
+                                                                                             utilize one specific schedule1 . Namely, TensorFlow Lite [8] groups
+                                                                                             adjacent operators based on whether an operator is supported on a
+                                                                       CPU
+                                                       GPU           (Fallback)              processor or not. Operators that are supported on that processor are
+                 Operators
+                                                   1         2       3         4             always run on that processor, while fallback operators are always
+      1         2            3        4                                                      run on the CPU, as shown in Figure 9b and 9c.
+           Supported processors
+                                                (b) TFLite schedule (GPU)                       However, this does not necessarily imply that BAND should take
+    CPU       CPU        CPU         CPU                                    CPU              all possible schedules into account. For instance, the schedule 1
+                                                         NPU              (Fallback)
+    GPU       GPU                                                                            (NPU) - 2 (GPU) - 3 (NPU) - 4 (CPU) is technically valid, but
+    NPU       NPU        NPU                       1         2      3        4               this involves a large number of transitions across processors, po-
+                                                                                             tentially resulting in excessive communication overheads. Rather
+   (a) Example model with four ops              (c) TFLite schedule (NPU)
+                                                                                             than deriving schedules from the operator level to enumerate all
+                                                                                             possible schedules, BAND generates schedules from subgraphs. This
+Figure 9: An example model with varying operator support.
+                                                                                             inherently prevents schedules with frequent transitions from being
+For a given processor, TensorFlow Lite only creates a single
+                                                                                             selected. In a sense, BAND’s partitioning method can be deemed as
+execution schedule.
+                                                                                             the middle ground between model-level scheduling (most coarse-
+                                                                                             grained) and operator-level scheduling (most fine-grained).
+queue and picks an appropriate subgraph for the job, according to                               Units and subgraphs. Instead of directly creating subgraphs
+a pluggable scheduling policy, and schedules the subgraph on an                              from operators, the model analyzer goes through two steps to create
+appropriate processor. After the subgraph has finished running, if                           subgraphs. First, the model analyzer generates a list of units from the
+the subgraph covered the whole model, then the inference results are                         operators (Figure 10a). A unit is a group of adjacent operators that
+returned to the client. Otherwise, the job is enqueued back into the                         are all supported by the exact same set of processors. Each operator
+queue, with its execution progress marked correspondingly.                                   belongs to only one unit, i.e, no two units have a common operator.
+    BAND spawns dedicated worker threads for each available pro-                             Also, units are created as big as possible. For instance, operators
+cessor. A worker thread runs at most one subgraph at a time on                               1 and 2 form a unit that is supported by the CPU, GPU, and NPU.
+its processor. The number of worker threads for each processor is                            Operator 3 is made into a single-operator unit, as both neighboring
+adjusted by a configurable system parameter.                                                 operators (2 and 4) are supported by a different set of processors.
+                                                                                                Next, the model analyzer generates subgraphs from these units
+4.2       Subgraph Partitioning                                                              (Figure 10b). Similar to how units were created, a subgraph is gener-
+The model analyzer examines a registered model and creates specific                          ated by grouping adjacent units but with different grouping condi-
+subgraphs to be used by the scheduler. The analyzer aims to prepare                          tions. The subgraph generation process starts by making a single-unit
+a diverse set of subgraphs so that many possible schedules can be                            subgraph for each unit. Afterward, adjacent subgraphs can be merged
+considered at runtime.                                                                       into larger ones if they have at least one commonly supported pro-
+   Take the model in Figure 9a as an example. The GPU only sup-                              cessor. For example, the subgraph {1,2,3} is generated from {1,2}
+ports operators 1 and 2, while the NPU only supports operators 1,                            1
+                                                                                              In the case of MNN [29] and Mace [7], operator adjacency is checked based on
+2, and 3. Generally, all operators are always supported by the CPU.                          client-given operator indices (usually in the model file) rather than actual operator
+There are 3 × 3 × 2 × 1 = 18 possible methods of executing this                              dependencies, resulting in overly fine-grained subgraphs.
+
+
+
+
+                                                                                       240
+Band: Coordinated Multi-DNN Inference on
+Heterogeneous Mobile Processors                                                                                 MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA
+
+
+       Incomplete Units                      (c) Remaining Job & Units                      Incomplete Units
+                                             Job 1: A       B     C
+       Finished Units                                                                       Finished Units
+                                                                                                                                             SLO
+                                                                                                       Job 1:     A          B           C   80
+        Model Requests                        NPU Worker
+                                                                                                       Job 2:     D          E           F   100
+
+       Model Analyzer                       (b) Selected Job & Subgraph                                               Expected                       Expected
+                                                                                              Job 1                                      Job 2
+                                             Job 1:   A       B    C                                                   Latency                        Latency
+                                                                                        A         B         C                        E           F
+        (a) Units                                         (NPU)
+                                                                                      GPU      NPU       CPU            20       GPU         NPU       30
+   Job 1:    A       B       C                GETNEXTJOB()                            CPU      NPU       CPU            50       CPU         NPU       50
+   Job 2:    D       E       F             ENQUEUEREMAINING()                                                                    NPU         CPU       40
+                                                                                        A         B         C                    GPU         CPU       65
+      Pending Jobs Queue             Pluggable Scheduling Policy
+                                                                                            NPU          CPU            10
+                             Scheduler                                                                                               E           F
+
+                                                                                        A         B         C                            NPU           10
+Figure 11: Detailed workflow of BAND’s scheduler. (a) The sched-
+                                                                                      GPU             CPU               40               CPU           80
+uler spawns a job for each inference request, with units provided
+by the model analyzer. (b) The jobs are enqueued into the job                         NPU             CPU               30
+queue, and the scheduling policy checks the queue to select the
+next job to process. The policy also chooses the subgraph and the                       A         B         C
+processor to run. (c) Afterwards, the job’s unit execution status                              CPU                      60
+is updated, and the job is put back into the job queue if there
+                                                                                              Job 1’s slack time                  Job 2’s slack time
+are any remaining units. The enqueue position of the updated                                                                 <
+                                                                                              80 (SLO) - 10 = 70                 100 (SLO) - 10 = 90
+job is determined by the policy.
+                                                                                                      LST selects Job 1 &        A           B
+and {3}. The set of supported processors for the {1,2,3} is the inter-                                                               NPU
+section of the processor sets of {1,2} and {3}. Note that the original
+small subgraphs are not discarded on merge.                                     Figure 12: The Least Slack Time (LST) policy. The policy selects
+   Subgraph usage and memory. One interesting fact to note is that              the job with the least slack, which is calculated by subtracting
+not all subgraphs are equally used, in terms of usage rates. Some sub-          the expected latency from the SLO. The latency of the shortest
+graphs are severely underused, due to their execution times being too           subgraph sequence is regarded as that job’s latency, and the first
+long. For instance, in Figure 10b, the subgraph {A,B,C} = {1,2,3,4}             subgraph of that sequence is returned.
+will most likely never be used, because running all units (i.e., all
+operators) on the CPU is generally too slow to satisfy tight SLO                of a given workload (desired by that specific policy). Clients can
+requirements. Such subgraphs needlessly occupy memory without                   configure which policy to use when the system starts up. Basic poli-
+benefiting the system. Therefore, it may be wise to not generate                cies are implemented in BAND such as least slack time (LST), and
+these subgraphs at all. Although BAND currently does not incorpo-               clients can also implement their own custom policy.
+rate this optimization at the moment, this method provides a means                  Figure 11 depicts the overall scheduling flow of BAND. For each
+of deleting scheduling candidates to save memory, which may be                  inference request, the scheduler spawns a job and tags it with the
+helpful for edge devices with severely limited memory.                          units of the requested model, looked up by consulting the model
+                                                                                analyzer (Figure 11a). The spawned jobs are put in a separate queue.
+4.3    Subgraph Scheduling                                                          Whenever a job is enqueued into the job queue, or a worker fin-
+                                                                                ishes executing a subgraph, the scheduling policy is notified. Specif-
+BAND’s scheduler receives inference requests from client applica-
+                                                                                ically, the G ET N EXT J OB () function is invoked, in which the policy
+tions and schedules the requests to the worker threads according to
+                                                                                selects the next job to be scheduled (Figure 11b). The job queue
+an internal scheduling policy. Each inference request is translated
+                                                                                is not necessarily a FIFO queue; the scheduling policy is free to
+into subgraph units, based on the analysis from the model analyzer.
+                                                                                consider as many jobs as it wants, and is allowed to select a job that
+The policy examines the executable subgraphs from the units, and se-
+                                                                                is not at the head of the job queue. For the chosen job, the policy
+lects which subgraph to run. The scheduler also selects the processor
+                                                                                must also pick a subgraph from the model analyzer (Section 4.2),
+to run that subgraph on.
+                                                                                and the processor to run the subgraph on. The scheduler then runs
+4.3.1 Scheduling. In contrast to a fixed-processor policy as in Ten-            the subgraph on the chosen processor.
+sorFlow Lite [8], MNN [29], and Mace [7], BAND’s policies can                       Selecting a job from the job queue. Each scheduling policy has
+utilize multiple processors at once to serve inference requests from            its own unique logic for selecting a job and its subgraph. Figure 12 il-
+multiple applications. The scheduling policy is a pluggable compo-              lustrates how BAND’s default LST policy selects a job and subgraph,
+nent that grants BAND flexibility in choosing the desired schedule              for a given set of jobs. The policy checks the slack time of each job
+
+
+
+
+                                                                          241
+MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA                                                                                             Jeong and Lee, et al.
+
+
+by comparing the job’s SLO with its expected latency. Since the                           4.3.2 Execution Time Profiles. In order for the scheduling policy to
+expected latency of a job differs based on which subgraphs are run                        devise an appropriate schedule for a given set of jobs, the system
+for the job, the policy considers all valid subgraph sequences and                        must maintain an execution time profile for models. In Section 3, we
+picks the sequence with the shortest latency. A valid sequence is a                       discussed the difficulty of accurately predicting the execution time of
+permutation of subgraphs that covers each unit exactly once.                              a DNN on mobile platforms. Even if we were to establish an accurate
+   For example, for Job 1 in Figure 12, the subgraph sequence {A, B}-                     profile for a DNN model within a certain workload, the profile may
+{C} is valid, but the sequence {A, B}-{B,C} is not because unit B                         not be accurate for other workloads due to the inconsistent processor
+would be run twice. Also, a single subgraph sequence may have                             frequencies managed by DVFS. As such, BAND does not perform
+multiple expected latencies because at least one of the subgraphs can                     any offline intensive profiling for newly registered models. Rather,
+be run on more than one processor, such as the sequence {A}-{B,C}.                        when a model is first registered to BAND, the system runs the model
+In that case, only the processors that lead to the least expected latency                 a few times to retrieve baseline execution time values, and estimates
+are considered ({A} (NPU) -{B,C} (CPU)). In the end, the job with                         the execution times of the model’s subgraphs based on the baseline
+the least slack (= SLO − latency), and the first subgraph of the                          execution time. Afterward, online adjustments are constantly made
+subgraph sequence of that job is selected. Job 1 has a slack time                         to reflect the current workload pattern.
+of 70 (=80−10) because its SLO is 80 and the subgraph sequence                                When a new model is registered, BAND sequentially runs the
+{A, B} (NPU) -{C} (CPU) has an expected latency of 10. Job 2 has a                        largest subgraph of the model for each available processor and
+slack time of 90 (=100−10) because its SLO is 100 and the subgraph                        records the latencies. In order to avoid severely disrupting running
+sequence {E, F} (NPU) has an expected latency of 10. Thus, Job 1                          jobs, BAND waits until the current job on a processor finishes, then
+and the subgraph {A, B} (NPU) is selected.                                                pauses the corresponding worker so that the scheduler does not
+   Note that the expected latency of a subgraph sequence is not sim-                      schedule subsequent jobs on that processor. After measuring the ex-
+ply equal to the sum of each individual subgraph’s profiled execution                     ecution time of the subgraph on the processor during this pause, the
+time. Generally, subgraphs from other jobs are already being exe-                         scheduler is immediately notified that the worker is available again,
+cuted on processors at the time of scheduling, and thus the expected                      and the scheduler proceeds as normal. This way, an unfortunate case
+latency is usually larger than the sum of execution times. Thus, the                      where a job silently runs on a processor at the same time as profiling
+scheduler must dynamically compute the expected latency every                             does not occur. Moreover, processors are paused one at a time, so
+time G ET N EXT J OB () is invoked. We found that a naive exhaus-                         jobs can still be scheduled to other processors; there is no need to
+tive search for all possible subgraph sequences incurs significant                        halt the whole system for the sake of profiling.
+scheduling overhead at runtime – for n subgraphs with p compatible                            After retrieving execution time values for the largest subgraphs
+processors   each, an exhaustive search would have a complexity of                        per available processor, BAND measures the number of floating-
+O pn (for a single job). Instead, the LST policy runs an algorithm
+      
+                                                                                          point operations (FLOPs) of each subgraph, as well as the input and
+based on dynamic programming to reduce the complexity to O pn2 .
+                                                                        
+                                                                                          output tensors sizes. Assuming the execution time of a subgraph
+We observed that our scheduler takes no more than 0.1 ms to decide                        is roughly proportional to FLOPs + β × tensor_size, the execution
+which subgraph to enqueue (Figure 11b), for our workloads.2                               time is estimated from the execution time of the largest subgraph in
+   Scheduling the remaining units of a job. Note that the sched-                          each processor. β is a constant that reflects the ratio between memory
+uling policy is not required to designate processors for all units of                     copy and computation; we used a value of 1,000 bytes for accelerators and
+a job at once. The remaining units of a job that were not selected                         10
+                                                                                          bytes for CPUs in our experiments, as accelerators are generally
+by the scheduling policy are enqueued back into the job queue (Fig-                       faster than CPUs.
+ure 11c), after the selected subgraph finishes running. Later, they are                      Lastly, we adjust the latency profile of a subgraph at runtime with
+given back to the policy for subsequent scheduling, together with                         a simple linear smoothing function: time pro f iled ← α timenew + (1 -
+other jobs in the job queue. Here, the policy has liberty in where                        α) time pro f iled . α is a configurable system parameter between 0 and
+to enqueue the remaining units, via the E NQUEUE R EMAINING ()                            1. We found that a value of 0.1 for α yields good performance, as
+function. For example, the LST policy always puts remaining units                         we can prevent sudden runtime fluctuations from severely affecting
+at the head of the job queue, in order to quickly check if the SLO                        latency profiles. Our method of predicting subgraph latencies, to-
+of the original request can still be satisfied. On the other hand, a                      gether with online latency profile adjustments, is sufficient for most
+round-robin policy may want to enqueue such units at the tail of the                      of the models in our target workloads.
+queue.
+   Handling processors with the thermal shutdown. In case a                               5     IMPLEMENTATION
+processor becomes unavailable due to thermal throttling, we disable
+its worker and exclude it from scheduling. The subgraph that the                          We implemented BAND on top of TensorFlow Lite 2.3.0 [8], adding
+worker was processing is enqueued back into the scheduler so that                         around 9.5K lines of C++ (core system) and Java (JNI for Android
+another worker can take over. BAND monitors system events (e.g.,                          applications) code.
+ThermalStatusListener in Android) and polls the disabled worker
+to notify the scheduler when the processor becomes online again.                          5.1    Android Service & Multi-App Support
+                                                                                          BAND runs as an Android Service in the background. BAND defines
+2
+                                                                                          APIs in AIDL [1] for client applications and implements the inter-
+ For the EagleEye scenario on Google Pixel 4, the average scheduling overhead was
+0.049 ± 0.06 ms. The scheduler was mapped to the primary core (2.84 GHz Kryo 485)         faces so as to instantiate Android Binder objects, which can be used
+of the Pixel device.                                                                      by clients. Clients can fetch the Binder objects via OnBind() after
+
+
+
+
+                                                                                    242
+Band: Coordinated Multi-DNN Inference on
+Heterogeneous Mobile Processors                                                                               MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA
+
+
+                                    Small                                      6.2     Single-App: Back-to-Back Inference
+                                    Faces                   ArcFace-
+                                              FSRNet                           We evaluate how well BAND performs on back-to-back inference
+                                                            ResNet50
+                                                                               workloads that have clearly defined “frames”. A dynamically set
+         Image                          Proﬁle                                 number of inferences must occur for each frame before the next
+                                        Faces
+                                                 ArcFace-                      frame can be processed. We test the following workloads:
+                      RetinaFace
+                                                 ResNet50
+           Patch
+                                                                                    • EagleEye [57]: a person identification workflow (Figure 13)
+                                                                                       that runs face detection and identification models, depending
+                                             ArcFace-                                  on the number of faces in an image. The exact number of
+                                             MobileNet
+                                   Frontal
+                                   Faces
+                                                                                       inferences per frame follows the YouTube Faces [53] dataset3
+                                                                                       (Figure 2). We randomly sampled 20% of faces to match the
+Figure 13: The EagleEye [57] workflow. After running the Reti-                         reported workload of EagleEye (∼ 20 faces per frame).
+naFace [18] face detection model on a patch of the input image, a                   • Distream [60]: a live video analytics workload that detects
+different DNN is run on the faces of that same patch depending                         objects in an image and applies attribute classification models,
+on the detected face types. The exact number of patches and                            depending on the number of objects and type. The number of
+faces are different for each frame.                                                    objects is determined from the ETH pedestrian [20] dataset4 .
+                                                                                  We configure the baselines to create a TensorFlow Lite runtime
+binding with BAND, and call APIs through the binder to communi-                instance for each model. Since the processor of a TensorFlow Lite
+cate with the system. Multiple clients can access BAND concurrently.           runtime is fixed on instantiation, the model-processor mapping is
+   A client (an Android Activity or Service) can register DNN mod-             also fixed. When an inference request for a model occurs, the base-
+els to BAND via modelId = registerModel(model). The client                     lines invoke the respective TensorFlow Lite runtime instance for
+can then issue inference requests to the system, either in a synchro-          execution. We set the model-processor mapping to minimize the
+nous manner by calling output = runSync(modelId, input), or                    makespan of inferences within a frame – the slowest model takes
+in an asynchronous manner by calling reqId = runAsync(modelId,                 the fastest processor, etc. For instance, the models in the EagleEye
+input). In the latter case, results can be retrieved via output =              workflow are distributed as: RetinaFace (CPU), ArcFace-MobileNet
+wait(reqId).                                                                   (GPU), ArcFace-ResNet50 (DSP), and FSRNet (NPU) for Google
+   When more than one application registers the same model to                  Pixel 4. We evaluate two types of baselines.
+BAND, the system manages them as a single model to avoid resource                   • TensorFlow Lite (TFLite): Unmodified TensorFlow Lite
+duplication. Note that although the IPC overhead increases propor-                     2.3.0. All operators (including non-fallback ones) after the
+tionally to the number of concurrent applications and parameter sizes                  first fallback operator of a model are run on the CPU, to
+of Binder function calls, the overheads (< 1ms) are relatively small                   minimize device transitions.
+compared to the typical model inference latency (> 10ms). Thus, the                 • TFLite+MaxPartition (TFLite+MP): A slightly optimized
+overheads did not significantly affect our experiments.                                version of TensorFlow Lite that continuously goes back and
+                                                                                       forth between the CPU and another processor, to run fallback
+6     EVALUATION                                                                       operators and non-fallback ones, respectively.
+In this section, we evaluate BAND’s performance and examine the                   We also show BAND’s performance in two steps: BAND, our
+effects of its various techniques. BAND outperforms TensorFlow                 complete system, and BAND (No Subgraph), which is based on our
+Lite by up to 5.04× for single-app workflows, where frames consist             system but does not create subgraphs.
+of dynamically set numbers of model inferences. Ablations studies                 Figure 14a shows the results for the EagleEye workflow. BAND
+demonstrate that BAND’s subgraph mechanisms, profiling method,                 outperforms TFLite by up to 4.53×, and TFLite+MP by up to
+and thermal shutdown mechanism are effective. We also evaluate                 2.42×. TFLite+MP is consistently faster than base TFLite, because
+an environment where multiple apps execute each DNN task con-                  TFLite+MP runs more operators on non-CPU accelerators. Our sys-
+currently, to show how effectively BAND satisfies each app’s SLO               tem is able to achieve even higher performance, by dynamically
+compared to the baselines.                                                     placing models on processors such that the makespan of a frame is
+                                                                               minimized. Subgraph partitioning and scheduling also help, but the
+                                                                               degree varies between devices because of the difference in operator
+6.1    Evaluation Setup                                                        coverage. We present more in-depth examinations on this matter in
+We execute various workloads on representative modern mobile de-               Section 7.3. Additionally, the Xiaomi Redmi K40 Gaming device
+vices with processors for DNN computation: Google Pixel 4 (Qual-               has the highest overall performance of processors, hence the high
+comm Snapdragon 855 + Google Edge TPU), Xiaomi Redmi K40                       FPS of K40 compared to the Pixel or S20.
+Gaming (MediaTek Dimensity 1200), and Samsung Galaxy S20                          Figure 14b shows the results from the same EagleEye workflow,
+(Qualcomm Snapdragon 865). We use TensorFlow Lite 2.3.0 as our                 but for the top 10% crowded frames (i.e., frames with the most
+baseline. Each experiment has its own specific baseline settings; they         patches and faces). BAND outperforms TFLite by up to 5.04×, and
+will be described in each section separately.
+                                                                               3
+   For all experiments, we create a single processor worker per accel-           The average number of model requests per frame is as follows; RetinaFace×6.0,
+                                                                               FSRNet×1.5, ArcFace-MobileNet×5.2 and ArcFace-ResNet50×2.3.
+erator to avoid contention. We add two single-threaded CPU workers             4
+                                                                                 The average number of model requests per frame is as follows; EfficientDet-Lite2×5.0,
+mapped to BIG cores to parallelize CPU-only fallback operators.                EfficientNet-Lite1×5.6 and EfficientNet-Lite2×0.7.
+
+
+
+
+                                                                         243
+MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA                                                                                                                             Jeong and Lee, et al.
+
+
+                                                                 TFLite            TFLite+MP                       Band (No Subgraph)          Band
+    18                                                                     12
+                                                                                                                                           6
+
+    12                                                                     8                                                               4
+FPS
+
+
+
+
+      6                                                                    4                                                               2
+
+      0                                                                    0                                                               0
+             Google            Xiaomi    Samsung                                  Google              Xiaomi    Samsung                          Google     Xiaomi    Samsung
+             Pixel 4          Redmi K40 Galaxy S20                                Pixel 4            Redmi K40 Galaxy S20                        Pixel 4   Redmi K40 Galaxy S20
+                                D   ( D J O H ( \ H                                      E   ( D J O H ( \ H   & U R Z G H G                        F   ' L V W U H D P
+
+
+                                                  Figure 14: Processed FPS for varying workloads on various mobile devices.
+                 1.0                                                                                                 Figure 15a shows how accurate the execution time profiles are, for
+       Probability
+
+
+
+
+                                                                                                                 various profiling methods on the EagleEye workflow. The Static+Off-
+                                                                                                                 line method measures the execution time of all subgraphs of a model
+                 0.5                                     Static + Offline                                        before deploying the model, and does not further adjust the measured
+                                                         Dynamic + Offline                                       times at runtime. Compared to Band, the execution times measured
+                                                         (Band) Dynamic +                                        offline are significantly shorter than the actual execution times, hence
+                                                         Latency Estimation
+                 0.00       1        2      3
+                                                                                                                 the warped CDF line. Meanwhile, the Dynamic+Offline method goes
+                                                                                                                 through the same offline step as Static+Offline, but also applies the
+                 Expected Latency / Measured Latency                                                             runtime adjustments that BAND does. Both the Dynamic+Offline
+            (a) CDF of the ratio of expected to measured latency                                                 method and BAND demonstrate similar execution time profiles, but
+                                                                                                                 BAND has a much shortest initial profiling time (Figure 15b), making
+                                                                                                                 it less burdening to dynamically register a new model at runtime.
+                       Static +            Dynamic +          BAND +
+                       Offline              Offline          Noise ± 30%
+                                                                                  BAND                           Also, we observe that a ±30% noise to BAND’s latency estimation
+                                                                                                                 does not significantly affect BAND’s overall performance.
+      FPS            9.12 ± 0.11           9.46 ± 0.09      9.31 ± 0.13         9.46 ± 0.08
+   Profiling                                                                                                     6.3          In-depth Analysis of Subgraphs
+                         76                        76           4.8                 4.8
+   time (s)
+                                                                                                                 Scheduling with subgraphs gives us improved schedulability with
+    (b) Processed FPS and profiling time-varying profiling methods                                               more flexible, fine-grained schedules. We present a more detailed
+                                                                                                                 analysis of the benefits of scheduling models with subgraphs. To
+Figure 15: Effect of different profiling methods. FPS and laten-                                                 better understand how each model benefits from subgraphs, we
+cies are measured by running the EagleEye workload 5 times                                                       conducted two case studies. First, we show latencies for frames con-
+with Samsung Galaxy S20.                                                                                         sisting of the same model. Second, we report scheduling timelines,
+                                                                                                                 which reveal the scheduling decisions made by BAND.
+TFLite+MP by up to 2.54× – the greater performance improvements
+                                                                                                                 6.3.1 Single Model Scalability. Figure 16 reports the frame latencies
+come from the larger number of model inferences. BAND performs
+                                                                                                                 for four different models on Google Pixel 4, while changing the
+well when there is a sufficient number of inferences to coordinate.
+                                                                                                                 number of requests within a frame. Each frame is executed multiple
+   Figure 14c reports experimental results for the Distream workflow.
+                                                                                                                 times, and the average latency is reported on the graph.
+BAND outperforms TFLite by up to 3.18×, and TFLite+MP by up to
+                                                                                                                    In general, the subgraph-level execution of BAND outperforms the
+3.22×. Interestingly, TFLite+MP is not actually better than TFLite
+                                                                                                                 model-level execution BAND (No Subgraph). Compared to BAND
+for the Distream workflow; the frequent device transitions outweigh
+                                                                                                                 (No Subgraph), BAND shows a latency speedup up to 1.40× (FSR-
+the performance gains earned by utilizing non-CPU accelerators,
+                                                                                                                 Net). The latency improvement is from utilizing the preferred pro-
+resulting in worse FPS. This is a similar effect to having overly
+                                                                                                                 cessors more efficiently, with the help of subgraph partitioning and
+fine-grained subgraphs, as mentioned in Section 4.2. Regardless,
+                                                                                                                 scheduling. For instance, when fallback operators (e.g., TransConv)
+BAND exhibits good performance on all devices. Furthermore, the
+                                                                                                                 appear while executing FSRNet [15] on the NPU, the scheduler can
+gap between BAND and BAND (No Subgraph) is larger than that
+                                                                                                                 yield the accelerator to the following requests so that the processor
+of the EagleEye workflow – especially for the S20. BAND enjoys
+                                                                                                                 does not stay idle.
+performance gains from devising subgraph schedules derived from
+                                                                                                                    The RetinaFace [18] model in Figure 16d shows the least amount
+the fallback-abundant EfficientDet model present in Distream.
+                                                                                                                 of speedup (1.11×) among the four models, when comparing BAND
+6.2.1 Analysis on Profiling. As stated in Section 4.3.2, BAND man-                                               with BAND (No Subgraph). Even though the model can be executed
+ages execution time profiles via initial latency estimations and dy-                                             with multiple subgraphs, the model latency on each processor does
+namic online adjustments. This allows new models to be registered                                                not vary by much, so there is little room for improvement with
+on the fly with a relatively quick initialization phase.                                                         subgraph-level execution. In addition, since the positions of fallback
+
+
+
+
+                                                                                                        244
+Band: Coordinated Multi-DNN Inference on
+Heterogeneous Mobile Processors                                                                                                                                                                    MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA
+
+
+                                                                                                                          Band (No Subgraph)                                            Band
+           150
+Latency (ms)
+
+
+
+                                                                           200                                                                   150
+           100                                                             150                                                                                                                                  200
+                                                                                                                                                 100
+               50                                                          100                                                                                                                                  100
+                                                                            50                                                                    50
+                01                      2               4                8   01                               2                 4              8   01                               2          4         8        01           2          4         8
+                                 (a) EfficientDet                                                           (b) FSRNet                                                         (c) DeepLabV3                                (d) RetinaFace
+Figure 16: Frame latencies of running multiple instances of a model. For models with largely varying subgraph execution times such as
+EfficientDet and FSRNet, the gap between BAND and BAND (No Subgraph) is significant.
+                                                          RetinaFace                 FSRNet                 ArcRes               ArcMbv                       Band EffNet2                     Band IncepV3           Band IncepV4        Band EffNet3
+               Model-Level Scheduling                                              Model-Level Scheduling                                                     TFLite EffNet2                   TFLite IncepV3         TFLite IncepV4      TFLite EffNet3
+   CPU                          CPU
+   CPU                          CPU
+
+
+
+
+                                                                                                                                                        SLO Satisfaction (%)
+   GPU                          GPU
+   DSP
+   NPU
+                                DSP
+                                NPU
+                                                                                                                                                                          100
+      0 10 20 30 40 50 60 70 80    0                                      20        40        60       80       100       120       140
+                Subgraph Scheduling                                                  Subgraph Scheduling
+   CPU                          CPU
+   CPU                          CPU                                                                                                                                            50
+   GPU                          GPU
+   DSP                          DSP
+   NPU                          NPU
+      0 10 20 30 40 50 60 70 80    0                                      20        40        60       80       100       120       140
+                          Time (ms)                                                            Time (ms)                                                                        0 1                2             3             4              5
+                                               ×
+    D   6 L Q J O H  I U D P H  Z L W K      ) 6 5 1 H W     E   6 L Q J O H  I U D P H  R I  ( D J O H ( \ H  Z R U N O R D G                                                           SLO Multiplier
+Figure 17: Subgraph scheduling timelines. Timelines where sub-
+graph scheduling finds better schedules than model-level sched-                                                                                       Figure 18: SLO satisfaction ratio of running apps on Pixel 4.
+uling are shown. Both timelines are measured on Google Pixel 4.
+                                                                                                                                                                                                       TFLite+MP                   BAND
+                                                                                                                                                               Power (W)        7.60           7.99
+operators are critical in deciding the model partition points, models                                                                                             FPS           4.11           8.71
+with fewer fallback operators benefit less from subgraph scheduling.
+                                                                                                                                                     Table 2: Average power consumption in Google Pixel 4 while
+6.3.2 Timeline Analysis. Figure 17a displays a case of running two                                                                                   processing the EagleEye (Crowded) workflow. Power consump-
+FSRNet on Google Pixel 4. For model-level scheduling, DSP and                                                                                        tion was measured using a Monsoon Power Monitor.
+NPU are allocated to the two requests since the two processors are
+faster than the other processors. However, it turns out that FSRNet                                                                                  is backed by distinct classification backbones such as EfficientNet-
+was constantly going to the CPU to run fallback operators. Subgraph-                                                                                 Lite2, EfficientNet-Lite3, InceptionV3[50], and InceptionV4[49],
+level scheduling comes up with an alternate schedule that explicitly                                                                                 respectively. For each model, we use SLO requirements of the 99th
+schedules these CPU fallback operators, successfully exploiting the                                                                                  percentile of isolated execution time on the fastest processor times
+idle times and reducing the makespan of the two models by 32%.                                                                                       multiplier. We use the Least Slack Time policy and compare BAND
+   Figure 17b reports one of the scheduling decisions made by BAND                                                                                   with a baseline having static model-processor mappings where each
+while running the workload in Figure 14a. BAND considers fallback                                                                                    app sends model requests to the fastest processor.
+operators from RetinaFace and FSRNet to avoid any silent occupa-                                                                                        Figure 18 shows the average SLO violation rates of 5 experi-
+tion on fast accelerators that leads to the under-utilization of the sys-                                                                            ments for varying SLO requirements on Google Pixel 4. BAND
+tem. Compared to the model-level scheduling, ArcFace-MobileNet                                                                                       outperforms TFLite by up to 3.76× on average in a tight deadline of
+and ArcFace-ResNet extensively utilize fast accelerators such as                                                                                     99th percentile×2. With TFLite, latency-critical requests easily miss
+DSP to leverage the benefit of subgraph-level scheduling. In this                                                                                    the required SLO due to having no coordination on the processor
+particular case, the frame latency is reduced by 23%.                                                                                                contention of NPU. In contrast, BAND coordinates heterogeneous
+                                                                                                                                                     processors to achieve a higher satisfaction rate. In case of tight dead-
+6.4             Multi-App: Dynamic Input Workloads                                                                                                   lines (Multiplier = 1, 2), BAND leverages the relatively high slack
+As noted in Section 2, mobile devices can receive requests from                                                                                      time of InceptionV4 to minimize the violation.
+various applications with their own requirements. Since each appli-
+cation is not aware of what processors the other applications are                                                                                    6.5                Power Consumption
+utilizing, multiple applications can happen to send requests to the                                                                                  Finally, we report the power consumption of BAND in Table 2. We
+same processor, leading to performance degradation.                                                                                                  obtained power measurements from a Monsoon Power Monitor [12]
+   In this section, we evaluate BAND with a scenario adapted from                                                                                    attached to a Google Pixel 4 device. For the EagleEye (Crowded)
+DeepEye [42]; a workload that runs four life-logging apps (scene [42],                                                                               workload, BAND consumes 7.99W on average (measured during no
+memory [32], age [39], and emotion [40]) that periodically request                                                                                   throttling). Considering the base power consumption of TFLite+MP,
+a single model inference with a sampling rate of 30 FPS. Each app                                                                                    BAND uses 5.1% more power to process 2.1× frames.
+
+
+
+
+                                                                                                                                               245
+MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA                                                                               Jeong and Lee, et al.
+
+
+                                                                             on heterogeneous processors aligns with BAND’s goal, but specific
+                                                                             hardware assumptions such as task preemption and shared CUDA
+                                                                             contexts (NVIDIA GPUs) make the scheduler designs vastly dif-
+                                                                             ferent. Especially, there is no need to partition a DNN into smaller
+                                                                             scheduling units (i.e., subgraphs) for DART, as a DNN can always
+                                                                             be preempted or run concurrently with another DNN.
+                                                                                Single DNN on multiple processors. Several works propose
+Figure 19: EagleEye scheduling timeline on Google Pixel 4 before             methods for accelerating a single DNN on multiple mobile proces-
+and after the NPU becomes unavailable due to throttling.                     sors [33, 52]. µLayer [33] partitions a DNN layer into channels (for
+                                                                             conv and FC) and distributes the computation of channels across the
+   Both BAND and TFLite+MP consume more power than the 5W                    CPU and GPU. Similarly, AsyMo [52] divides a matrix multiplica-
+TDP [6] of the Pixel 4, and thus thermal throttling may occur when           tion operation into subtasks in order to utilize heterogeneous CPU
+the workload is run for an extended period of time. Figure 19 shows          cores. In order to incorporate these techniques, BAND’s subgraph-
+an actual case of throttling that occurred during our experiments,           centric coordination model can be extended to run a subgraph on
+after running the EagleEye workload for more than 10 minutes.                multiple workers, rather than only a single worker at a time.
+   The NPU is disabled for about 7 seconds, and BAND excludes the               Multiple DNNs on multiple processors. Application-based ap-
+NPU from its candidates of processors when scheduling requests at            proaches [21, 22, 38, 41, 42, 57] suggest coordinating asymmetric
+this time (the thermal shutdown mechanism described in Section 4.3).         computing resources to process computation pipelines for tasks,
+During this period, the performance drops to 5.9 FPS, which is               without considering interference. LEO [22] and Starfish [41] pro-
+lower than BAND’s ordinary performance but is still higher than              posed a centralized framework for computation and memory sharing
+TFLite+MP using all processors, including the NPU. After the NPU             between similar tasks of sensing and continuous vision applications.
+recovers, BAND detects that the NPU is usable again and starts to            MobiSR [38] and EagleEye [57] adopt content-aware optimizations
+utilize it.                                                                  for efficient processing of tasks. BAND is complementary to these
+   In contrast to BAND’s post-throttling mechanism of excluding              approaches, as it is agnostic to such content-based optimizations.
+certain processors, a pre-throttling mechanism that detects such                Recent works have recognized that fine-grained execution of
+excessive power consumption beforehand may be more effective for             DNN models can increase the schedulability of non-preemptive het-
+maintaining a long-running service. We leave this as future work.            erogeneous processors [25, 48, 58]. MOSAIC [25] automatically
+                                                                             generates an optimal partitioning plan for accurate and efficient infer-
+7    RELATED WORK                                                            ence, but is limited to a single DNN and manipulates processor fre-
+We describe related work relevant to BAND, categorized by their              quencies for runtime predictability. Seo et al.[48] and Heimdall [58]
+approach in serving multi-DNN workloads on multiple processors.              evenly distribute the total inference time across multiple partitions
+   Multiple DNNs on a single processor. A handful of research                to achieve specific scheduling goals such as SLO-awareness or mit-
+efforts, including DeepEye [42], MCDNN ,[26] and NestDNN [21],               igating GPU contention between rendering and DNN inference.
+run multiple DNNs on a single processor by applying model com-               All efforts to date utilize profiling results collected offline, but the
+pression to change DNN structures, or assuming that computation              varying runtime performance of processors would significantly af-
+can be shared among DNNs. In contrast, BAND focuses on coor-                 fect their scheduling objectives due to incorrect latency predictions.
+dinating a set of models given from apps without time-consuming              BAND is robust to such mobile processor performance dynamics,
+model-based optimizations.                                                   and further considers merging subgraphs to mitigate the overhead of
+   Layerweaver [43] concurrently runs compute-intensive operations           fine-grained execution.
+(convolutions) of one DNN with memory-intensive operations (load
+weights) of another. Layerweaver exploits the fact that computations         8   CONCLUSION
+on NPU processing element (PE) arrays and memory accesses on                 In this paper, we presented BAND, a mobile inference system that
+the DRAM can occur at the same time, to achieve high resource                coordinates multi-DNN workloads on heterogeneous processors.
+utilization. Our work, on the other hand, does not impose any spe-           BAND builds scheduling units based on operator supportability on
+cific resource usage requirements on the DNNs. For instance, all             each processor, and schedules multiple requests with pluggable poli-
+DNNs used in the Distream workflow fall into the compute-intensive           cies according to the application requirements. For single application
+category of Layerweaver, so Layerweaver is unable to efficiently             scenarios, BAND provides up to 5.04× improved FPS compared to
+overlap DNN operations in Distream.                                          TensorFlow Lite. For a multi-application scenario, BAND demon-
+   Masa [17] is similar to Layerweaver in that it tries to overlap           strates up to 3.76× better SLO satisfaction rates.
+compute operations with memory loads, but focuses more on the
+memory aspect, devising a memory-aware scheduler for devices                 ACKNOWLEDGEMENT
+with limited memory, up to 1 GB. BAND targets devices with much              We sincerely thank our shepherd Matt Welsh and the anonymous
+more memory (6-12 GB), so the performance boost gained from                  reviewers for their valuable comments. This work was supported
+such a scheduler would be marginal – also shown in the Masa paper.           by Samsung Research Funding & Incubation Center of Samsung
+   DART [54] is a scheduling framework that provides scheduling              Electronics under project number SRFC-IT2001-03.
+of real-time tasks and best-effort tasks, on heterogeneous platforms
+of CPUs and GPUs. DART’s goal of coordinating multiple DNNs
+
+
+
+
+                                                                       246
+Band: Coordinated Multi-DNN Inference on
+Heterogeneous Mobile Processors                                                                                                 MobiSys ’22, June 25–July 1, 2022, Portland, OR, USA
+
+
+REFERENCES                                                                                       [33] Youngsok Kim, Joonsung Kim, Dongju Chae, Daehyun Kim, and Jangwoo Kim.
+ [1] 2008. Android Interface Definition Language (AIDL). https://developer.android.                   2019. μLayer: Low Latency On-Device Inference Using Cooperative Single-Layer
+     com/guide/components/aidl.                                                                       Acceleration and Processor-Friendly Quantization. In EuroSys.
+ [2] 2008. NVIDIA CUDA. https://developer.nvidia.com/cuda-toolkit.                               [34] Dario Korolija, Timothy Roscoe, and Gustavo Alonso. 2020. Do OS abstractions
+ [3] 2017. Google NNAPI. https://developer.android.com/ndk/guides/neuralnetworks.                     make sense on FPGAs?. In OSDI. 991–1010.
+ [4] 2017. Tencent NCNN. https://github.com/Tencent/ncnn.                                        [35] Nicholas D. Lane and Petko Georgiev. 2015. Can Deep Learning Revolutionize
+ [5] 2018. Google EdgeTPU. https://cloud.google.com/edge-tpu.                                         Mobile Sensing?. In HotMobile.
+ [6] 2018. Qualcomm Snapdragon 855 Specs. https://www.notebookcheck.net/                         [36] Nicholas D. Lane, Petko Georgiev, and Lorena Qendro. 2015. DeepEar: Robust
+     Qualcomm-Snapdragon-855-SoC-Benchmarks-and-Specs.375436.0.html.                                  Smartphone Audio Sensing in Unconstrained Acoustic Environments Using Deep
+ [7] 2018. Xiaomi MACE. https://github.com/XiaoMi/mace.                                               Learning. In UbiComp.
+ [8] 2019. TensorFlow Lite. https://www.tensorflow.org/lite.                                     [37] Stefanos Laskaridis, Stylianos I. Venieris, Mario Almeida, Ilias Leontiadis, and
+ [9] 2019. Using deep neural networks for accurate hand-tracking on Oculus Quest.                     Nicholas D. Lane. 2020. SPINN: Synergistic Progressive Inference of Neural
+     https://ai.facebook.com/blog/hand-tracking-deep-neural-networks/.                                Networks over Device and Cloud. In MobiCom.
+[10] 2020. Huawei HiAi DDK. https://developer.huawei.com/consumer/en/hiai.                       [38] Royson Lee, Stylianos I. Venieris, Lukasz Dudziak, Sourav Bhattacharya, and
+[11] 2020. Qualcomm Hexagon. https://developer.qualcomm.com/software/hexagon-                         Nicholas D. Lane. 2019. MobiSR: Efficient On-Device Super-Resolution through
+     dsp-sdk/dsp-processor.                                                                           Heterogeneous Mobile Processors. In MobiCom.
+[12] 2021. Monsoon High Voltage Power Monitor. https://www.msoon.com/high-                       [39] Gil Levi and Tal Hassner. 2015. Age and gender classification using convolutional
+     voltage-power-monitor.                                                                           neural networks. In CVPRW. 34–42.
+[13] Jonas Blattgerste, Benjamin Strenge, Patrick Renner, Thies Pfeiffer, and Kai Essig.         [40] Gil Levi and Tal Hassner. 2015. Emotion recognition in the wild via convolutional
+     2017. Comparing Conventional and Augmented Reality Instructions for Manual                       neural networks and mapped binary patterns. In ICMI. 503–510.
+     Assembly Tasks. In PETRA.                                                                   [41] Robert LiKamWa and Lin Zhong. 2015. Starfish: Efficient Concurrency Support
+[14] Michael Buch, Zahra Azad, Ajay Joshi, and Vijay Janapa Reddi. 2021. AI                           for Computer Vision Applications. In MobiSys.
+     Tax in Mobile SoCs: End-to-end Performance Analysis of Machine Learning in                  [42] Akhil Mathur, Nicholas D. Lane, Sourav Bhattacharya, Aidan Boran, Claudio
+     Smartphones. In ISPASS.                                                                          Forlivesi, and Fahim Kawsar. 2017. DeepEye: Resource Efficient Local Execu-
+[15] Yu Chen, Ying Tai, Xiaoming Liu, Chunhua Shen, and Jian Yang. 2018. Fsrnet:                      tion of Multiple Deep Vision Models Using Wearable Commodity Hardware. In
+     End-to-end learning face super-resolution with facial priors. In CVPR.                           MobiSys.
+[16] Yujeong Choi and Minsoo Rhu. 2020. PREMA: A Predictive Multi-task Schedul-                  [43] Young H Oh, Seonghak Kim, Yunho Jin, Sam Son, Jonghyun Bae, Jongsung Lee,
+     ing Algorithm For Preemptible Neural Processing Units. In HPCA. IEEE, 220–                       Yeonhong Park, Dong Uk Kim, Tae Jun Ham, and Jae W Lee. 2021. Layerweaver:
+     233.                                                                                             Maximizing Resource Utilization of Neural Processing Units via Layer-Wise
+[17] Bart Cox, Jeroen Galjaard, Amirmasoud Ghiassi, Robert Birke, and Lydia Y Chen.                   Scheduling. In HPCA. 584–597.
+     2021. Masa: Responsive Multi-Dnn Inference on the Edge. In PerCom.                          [44] S. K. Park, M. S. O’Neill, P. S. Vokonas, D. Sparrow, and J. Schwartz. 2005.
+[18] Jiankang Deng, Jia Guo, Evangelos Ververas, Irene Kotsia, and Stefanos Zafeiriou.                Effects of air pollution on heart rate variability: the VA normative aging study.
+     2020. RetinaFace: Single-Shot Multi-Level Face Localisation in the Wild. In                      Environ Health Perspect (2005).
+     CVPR.                                                                                       [45] Hang Qiu, Fawad Ahmad, Fan Bai, Marco Gruteser, and Ramesh Govindan. 2018.
+[19] Kuntai Du, Ahsan Pervaiz, Xin Yuan, Aakanksha Chowdhery, Qizheng Zhang,                          AVR: Augmented vehicular reality. In MobiSys. 81–95.
+     Henry Hoffmann, and Junchen Jiang. 2020. Server-Driven Video Streaming for                  [46] Kiran K. Rachuri, Mirco Musolesi, Cecilia Mascolo, Peter J. Rentfrow, Chris
+     Deep Learning Inference. In SIGCOMM.                                                             Longworth, and Andrius Aucinas. 2010. EmotionSense: A Mobile Phones Based
+[20] A. Ess, B. Leibe, K. Schindler, and L. van Gool. 2008. A Mobile Vision System                    Adaptive Platform for Experimental Social Psychology Research. In UbiComp.
+     for Robust Multi-Person Tracking. In CVPR.                                                  [47] Bhargava Reddy, Ye-Hoon Kim, Sojung Yun, Chanwon Seo, and Junik Jang. 2017.
+[21] Biyi Fang, Xiao Zeng, and Mi Zhang. 2018. NestDNN: Resource-Aware Multi-                         Real-Time Driver Drowsiness Detection for Embedded System Using Model
+     Tenant On-Device Deep Learning for Continuous Mobile Vision. In MobiCom.                         Compression of Deep Neural Networks. In CVPRW.
+[22] Petko Georgiev, Nicholas D. Lane, Kiran K. Rachuri, and Cecilia Mascolo. 2016.              [48] Wonik Seo, Sanghoon Cha, Yeonjae Kim, Jaehyuk Huh, and Jongse Park. 2021.
+     LEO: Scheduling Sensor Inference Algorithms across Heterogeneous Mobile                          SLO-Aware Inference Scheduler for Heterogeneous Processors in Edge Platforms.
+     Processors and Network Resources. In MobiCom.                                                    ACM Trans. Archit. Code Optim. (2021).
+[23] Arpan Gujarati, Reza Karimi, Safya Alzayat, Wei Hao, Antoine Kaufmann, Ymir                 [49] Christian Szegedy, Sergey Ioffe, Vincent Vanhoucke, and Alexander A Alemi.
+     Vigfusson, and Jonathan Mace. 2020. Serving DNNs like Clockwork: Performance                     2017. Inception-v4, inception-resnet and the impact of residual connections on
+     Predictability from the Bottom Up. In OSDI. 443–462.                                             learning. In AAAI.
+[24] Myeonggyun Han and Woongki Baek. 2021. HERTI: A Reinforcement Learning-                     [50] Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jon Shlens, and Zbigniew
+     Augmented System for Efficient Real-Time Inference on Heterogeneous Embed-                       Wojna. 2016. Rethinking the inception architecture for computer vision. In CVPR.
+     ded Systems. In PACT.                                                                            2818–2826.
+[25] Myeonggyun Han, Jihoon Hyun, Seongbeom Park, Jinsu Park, and Woongki Baek.                  [51] Anuj Vaishnav, Khoa Dang Pham, and Dirk Koch. 2018. A survey on FPGA
+     2019. MOSAIC: Heterogeneity-, Communication-, and Constraint-Aware Model                         virtualization. In FPL. 131–1317.
+     Slicing and Execution for Accurate and Efficient Inference. In PACT.                        [52] Manni Wang, Shaohua Ding, Ting Cao, Yunxin Liu, and Fengyuan Xu. 2021.
+[26] Seungyeop Han, Haichen Shen, Matthai Philipose, Sharad Agarwal, Alec Wolman,                     AsyMo: Scalable and Efficient Deep-Learning Inference on Asymmetric Mobile
+     and Arvind Krishnamurthy. 2016. MCDNN: An Approximation-Based Execution                          CPUs. In MobiCom.
+     Framework for Deep Stream Processing Under Resource Constraints. In MobiSys.                [53] Lior Wolf, Tal Hassner, and Itay Maoz. 2011. Face recognition in unconstrained
+[27] Sinh Huynh, Rajesh Krishna Balan, JeongGil Ko, and Youngki Lee. 2019. Vi-                        videos with matched background similarity. In CVPR. 529–534.
+     taMon: Measuring Heart Rate Variability Using Smartphone Front Camera. In                   [54] Yecheng Xiang and Hyoseung Kim. 2019. Pipelined data-parallel CPU/GPU
+     SenSys.                                                                                          scheduling for multi-DNN real-time inference. In 2019 IEEE Real-Time Systems
+[28] Jun-Woo Jang, Sehwan Lee, Dongyoung Kim, Hyunsun Park, Ali Shafiee                               Symposium (RTSS). IEEE, 392–405.
+     Ardestani, Yeongjae Choi, Channoh Kim, Yoojin Kim, Hyeongseok Yu, Hamzah                    [55] Mengwei Xu, Zhe Fu, Xiao Ma, Li Zhang, Yanan Li, Feng Qian, Shangguang
+     Abdel-Aziz, Jun-Seok Park, Heonsoo Lee, Dongwoo Lee, Myeong Woo Kim,                             Wang, Ke Li, Jingyu Yang, and Xuanzhe Liu. 2021. From Cloud to Edge: A First
+     Hanwoong Jung, Heewoo Nam, Dongguen Lim, Seungwon Lee, Joon-Ho Song,                             Look at Public Edge Platforms. In ACM IMC.
+     Suknam Kwon, Joseph Hassoun, SukHwan Lim, and Changkyu Choi. 2021.                          [56] Amir Yazdanbakhsh, Kiran Seshadri, Berkin Akin, James Laudon, and Ravi
+     Sparsity-Aware and Re-configurable NPU Architecture for Samsung Flagship                         Narayanaswami. 2021. An evaluation of edge tpu accelerators for convolutional
+     Mobile SoC. In ISCA. 15–28.                                                                      neural networks. arXiv preprint arXiv:2102.10423 (2021).
+[29] Xiaotang Jiang, Huan Wang, Yiliu Chen, Ziqi Wu, Lichuan Wang, Bin Zou, Yafeng               [57] Juheon Yi, Sunghyun Choi, and Youngki Lee. 2020. EagleEye: Wearable Camera-
+     Yang, Zongyang Cui, Yu Cai, Tianhang Yu, Chengfei Lv, and Zhihua Wu. 2020.                       Based Person Identification in Crowded Urban Spaces. In MobiCom.
+     MNN: A Universal and Efficient Inference Engine. In MLSys.                                  [58] Juheon Yi and Youngki Lee. 2020. Heimdall: Mobile GPU Coordination Platform
+[30] Yiping Kang, Johann Hauswald, Cao Gao, Austin Rovinski, Trevor Mudge, Jason                      for Augmented Reality Applications. In MobiCom.
+     Mars, and Lingjia Tang. 2017. Neurosurgeon: Collaborative Intelligence Between              [59] Jiadi Yu, Hongzi Zhu, Haofu Han, Yingying Jennifer Chen, Jie Yang, Yanmin
+     the Cloud and Mobile Edge. In ASPLOS.                                                            Zhu, Zhongyang Chen, Guangtao Xue, and Minglu Li. 2016. SenSpeed: Sensing
+[31] David Kanter. 2015. Graphics processing requirements for enabling immersive vr.                  Driving Conditions to Estimate Vehicle Speed in Urban Environments. IEEE
+     AMD White Paper (2015).                                                                          Transactions on Mobile Computing (2016).
+[32] Aditya Khosla, Akhil S Raju, Antonio Torralba, and Aude Oliva. 2015. Under-                 [60] Xiao Zeng, Biyi Fang, Haichen Shen, and Mi Zhang. 2020. Distream: scaling live
+     standing and predicting image memorability at a large scale. In ICCV. 2390–2398.                 video analytics with workload-adaptive distributed edge intelligence. In SenSys.
+                                                                                                      409–421.
+
+
+
+
+                                                                                           247
+

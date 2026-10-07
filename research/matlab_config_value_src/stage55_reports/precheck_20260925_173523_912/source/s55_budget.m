@@ -1,0 +1,6 @@
+function s55_budget(b,phase)
+if isfield(b,'inject_phase') && strcmp(b.inject_phase,phase)
+    error('s55:timeout','Test-injected timeout at %s',phase);
+end
+if toc(b.timer)>b.limit, error('s55:timeout','Budget exceeded at %s',phase); end
+end

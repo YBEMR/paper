@@ -1,0 +1,955 @@
+7766                                                                                   IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+
+ Optimizing Multi-DNN Inference on Mobile Devices
+  Through Heterogeneous Processor Co-Execution
+                      Yunquan Gao , Zhiguo Zhang , Praveen Kumar Donta , Senior Member, IEEE,
+                   Chinmaya Kumar Dehury, Member, IEEE, Xiujun Wang , Dusit Niyato , Fellow, IEEE,
+                                         and Qiyang Zhang , Member, IEEE
+
+
+   Abstract—Deep Neural Networks (DNNs) are increasingly                                                       I. INTRODUCTION
+adopted across various industries, driving the demand for de-
+                                                                                       N RECENT years, Deep Neural Networks (DNNs) have
+ploying their capabilities on mobile devices. However, current
+mobile inference frameworks often rely on a single processor to
+execute each model inference, limiting hardware utilization and
+                                                                                   I   been widely deployed in various mobile applications such
+                                                                                   as object detection [1], [2], facial recognition [3], and speech
+leading to suboptimal performance and energy efficiency. Expand-                   recognition [4]. To reduce interaction latency and lower server-
+ing DNN accessibility on mobile platforms requires more adaptive
+and resource-efficient solutions to meet increasing computational                  side computing costs, an increasing number of applications are
+demands without compromising device functionality. Nevertheless,                   shifting inference tasks to mobile devices. In many real-world
+performing parallel inference of multiple DNNs on heterogeneous                    scenarios, multiple independent or related DNN models run
+processors remains a significant challenge. Existing studies have                  concurrently on mobile devices. For instance, in the smart agri-
+explored partitioning DNN operations into subgraphs to enable                      culture scenario, farmers capture video frames using smartphone
+parallel execution across heterogeneous processors. However, these
+approaches typically generate excessive subgraphs based solely                     camera and perform real-time parallel inference with multiple
+on hardware compatibility, increasing scheduling complexity and                    DNN models. These models include crop identification [5], pest
+memory management overhead. To address these limitations, we                       and disease detection [6], plant health assessment [7], and soil
+propose the Advanced Multi-DNN Model Scheduling (ADMS)                             quality analysis [8]. Consequently, studying real-time multi-
+strategy that optimizes multi-DNN inference across heterogeneous                   DNN collaborative inference on mobile devices is essential
+processors on mobile devices. ADMS constructs an offline subgraph
+partitioning strategy that considers both hardware support for                     for enabling such applications. However, deploying them on
+operations and scheduling granularity. It also employs a processor-                resource-limited mobile devices remains highly challenging due
+state-aware scheduling algorithm to dynamically balance work-                      to their complex architectures and the large number of layers and
+loads based on real-time system conditions. This ensures efficient                 parameters. To address this challenge, extensive research and
+workload distribution and maximizes the utilization of available                   development efforts have been undertaken by both academia and
+processors. Experimental results demonstrate that, compared to
+vanilla inference frameworks, ADMS achieves a 4.04× reduction                      industry. Numerous deep learning (DL) inference frameworks
+in multi-DNN inference latency.                                                    now support mobile platforms [9], including TensorFlow Lite
+                                                                                   (TFLite) [10], PyTorch Mobile [11], Apple’s Core ML [12].
+  Index Terms—Deep Neural Networks, mobile devices,
+                                                                                   These frameworks offer mobile-compatible operations required
+heterogeneous processors, co-execution, multi-DNN inference.
+                                                                                   by DNNs to accelerate DNN inference on mobile devices.
+                                                                                   Nevertheless, the majority of DL inference tasks are performed
+  Received 26 March 2025; revised 20 October 2025; accepted 12 Decem-
+ber 2025. Date of publication 23 December 2025; date of current version 7          on CPUs [13]. Despite the development of various System on
+May 2026. This work was supported in part by the Natural Science Research          Chips (SoCs) on mobile devices [9], such as Graphics Processing
+Project of the Anhui Educational Committee under Grant KJ2020A0250 and             Unit (GPU), Digital Signal Processing (DSP), and Neural Pro-
+in part by Postdoctoral Funding Program under Grant 2025M771581 and
+Grant GZC20251097. Recommended for acceptance by Y. Shu. (Corresponding            cessing Unit (NPU), which exhibit impressive computational
+authors: Zhiguo Zhang; Qiyang Zhang.)                                              performance, the broad support for inference operators (ops)
+  Yunquan Gao and Xiujun Wang are with the School of Computer Science,             on mobile CPUs and their gradually improving computational
+Technology, Anhui Engineering Research Center for Intelligent Applications,
+Security of Industrial Internet, Anhui University of Technology, Ma’anshan         power make them the primary choice for inference tasks. Due to
+243032, China (e-mail: qgao83301@gmail.com; wxj@mail.ustc.edu.cn).                 the limitations of these accelerators in supporting DNN model
+  Zhiguo Zhang is with the China Telecom Corporation Ltd., Suzhou 234000,          operations, the performance of current DL frameworks still has
+China (e-mail: zgzhang@ahut.edu.cn).
+  Praveen Kumar Donta is with the Department of Computer, Systems Sciences,        significant room for improvement when performing multi-DNN
+Stockholm University, 106 91 Stockholm, Sweden (e-mail: praveen@dsv.su.se).        collaborative execution on mobile devices.
+  Chinmaya Kumar Dehury was with the Institute of Computer Science Uni-               Currently, the literature on DNN inference optimization has
+versity of Tartu, 50090 Tartu, Estonia. He is now with the IISER Berhampur,
+Berhampur 760010, India (e-mail: dehury@iiserbpr.ac.in).                           limitations in effectively addressing multi-DNN workloads.
+  Dusit Niyato is with the College of Computing, Data Science, Nanyang             While some works focus on cloud offloading, others like
+Technological University, Singapore 639798 (e-mail: dniyato@ntu.edu.sg).           Wang et al. [14] and Gomatheeshwari et al. [15] optimize
+  Qiyang Zhang is with Computer Science School, Peking University, Beijing
+100876, China (e-mail: qiyangzhang@pku.edu.cn).                                    inference for single DNN models only. Although recent
+  Digital Object Identifier 10.1109/TMC.2025.3647031                               approaches like Band [16] support multi-DNN inference on
+
+      1536-1233 © 2025 IEEE. All rights reserved, including rights for text and data mining, and training of artificial intelligence and similar technologies.
+Personal use is permitted, but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.
+
+
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                             7767
+
+
+
+heterogeneous processors, they generate excessive subgraphs                       1) We conduct a comprehensive analysis of multi-DNN infer-
+based solely on hardware support, leading to high memory usage                       ence characteristics on mobile heterogeneous processors,
+and scheduling complexity. A comprehensive approach that                             identifying critical performance bottlenecks and quantify-
+efficiently handles multiple concurrent models while adapting                        ing their impact through extensive measurements across
+to heterogeneous processor characteristics is still lacking.                         various devices and models.
+   To better understand these limitations, we conducted prelim-                   2) We propose an adaptive subgraph partitioning method
+inary measurement across 6 different DNN models (ranging                             with hardware granularity control that dynamically deter-
+from lightweight to complex architectures) on 3 mobile plat-                         mines optimal window sizes for each model-device pair,
+forms (Redmi K50 Pro, Huawei P20, and Xiaomi 6). Through                             significantly reducing memory overhead and scheduling
+these experiments, we make the following interesting and useful                      complexity while preserving processing efficiency.
+insights:                                                                         3) We develop a comprehensive multi-factor scheduling al-
+   1) Subgraph partitioning granularity dramatically impacts                         gorithm that incorporates real-time processor operational
+       system resource efficiency and inference performance:                         states while balancing deadline urgency, fairness, and
+       Our measurements revealed the excessive subgraphs di-                         resource efficiency. This approach effectively mitigates
+       rectly increased inference latency by up to 28% compared                      throttling and ensures consistent performance during ex-
+       to optimized partitioning, as substantial time was spent on                   tended inference sessions.
+       subgraph scheduling and management rather than compu-                      4) We design, implement, and evaluate ADMS through ex-
+       tation.                                                                       tensive evaluations on multiple mobile platforms, demon-
+   2) Processor operational status significantly affects sus-                        strating up to a 4.04× reduction in inference latency
+       tained inference performance and system stability: Our                        compared to TFLite and a 24.2% improvement in energy
+       thermal stress tests demonstrated that existing frameworks                    efficiency over Band.
+       trigger processor throttling after just 2.5 minutes of contin-             The remainder of the paper is organized as follows: Section II
+       uous operation, with CPU frequency dropping from 3 GHz                  introduces background concepts and motivation by analyzing
+       to as low as 1 GHz and GPU utilization becoming highly                  challenges in multi-processor inference. Section III details our
+       unstable. This throttling resulted in up to 4.3× perfor-                system design approach including core components of ADMS.
+       mance degradation in continuous workloads, emphasizing                  Explains the implementation details with specific algorithms.
+       the importance of processor-state-aware scheduling for                  Section IV evaluates the performance through comprehensive
+       maintaining consistent performance in extended inference                experiments on multiple mobile devices. Section V reviews
+       sessions.                                                               related works in DNN optimization and processor coordination.
+   These insights highlight two critical challenges in multi-DNN               Finally, Section VI concludes the paper and discusses future
+inference on mobile devices: excessive subgraph fragmentation                  research directions.
+and performance degradation due to processor state unaware-
+ness. To address the first challenge, we introduce an adaptive                                 II. BACKGROUND AND MOTIVATION
+subgraph partitioning approach that dynamically determines
+the optimal window size parameter based on both model char-                    A. Background
+acteristics and hardware capabilities. This self-tuning mecha-                    In DNN model representation, the model is typically struc-
+nism sets hardware-specific minimum operation requirements                     tured as a directed acyclic graph (DAG), where each node rep-
+for subgraph formation. It automatically finds the optimal bal-                resents a computational operation, and directed edges indicate
+ance between reducing fragmentation and maximizing proces-                     dependencies—showing that the output tensor of one operation
+sor compatibility for each device-model pair. For the second                   serves as the input tensor for another. This structure not only
+challenge, we develop a comprehensive scheduling strategy that                 defines the execution sequence of operations but also ensures
+continuously monitors processor operational states, including                  correct data transfer between them. DNN inference primarily
+load, temperature, and frequency. The scheduler integrates this                consists of two stages: forward propagation and backpropaga-
+real-time information into a multi-factor priority model that bal-             tion, with forward propagation being the core of inference. It
+ances deadline urgency, waiting fairness, and resource efficiency              processes operations in the order dictated by the DAG, trans-
+in task allocation decisions. By being processor-state-aware,                  forming input tensors into output tensors.
+the scheduler ensures balanced workload distribution across                       As shown in Fig. 1, DNN models on mobile devices are often
+heterogeneous processors. It prevents throttling and maintains                 partitioned into multiple subgraphs to optimize computational
+consistent performance during extended inference sessions.                     efficiency and resource utilization. Each subgraph comprises a
+   In this paper, we present a novel Advanced Multi-DNN Model                  set of related ops that can be executed efficiently on a specific
+Scheduling (ADMS) framework that constructs and schedules                      processor. The left panel shows the original model structure
+optimal execution plans for collaborative inference on multiple                with individual ops, while the middle panel illustrates how ops
+heterogeneous processors by comprehensively considering both                   are grouped into processor-specific subgraphs (red for GPU-
+DNN model structures and real-time processor status. Extensive                 compatible ops, blue for CPU-optimized ops). The right panel
+experiments demonstrate that ADMS’s superior performance in                    demonstrates the fully merged subgraphs that will be scheduled
+inference latency, energy efficiency, and thermal stability. We                on different processors. This approach helps reduce inference
+summarize our contributions as follows:                                        latency and energy consumption by matching ops to their most
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+7768                                                                                  IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+
+                                                                                  Fig. 2. Support level for different variants of key operation types on the Redmi
+Fig. 1. Subgraph partitioning process for processor-specific execution: origi-    K50 Pro’s heterogeneous processors.
+nal network (left), grouped ops by processor compatibility (middle), and merged
+processor-specific subgraphs (right).
+
+                                                                                  optimized for a limited set of computationally intensive ops. For
+                              TABLE I                                             instance, Google’s Edge TPU [19] uses a systolic array, while
+    PROPORTIONAL DISTRIBUTION OF OPERATION TYPES IN DNN MODELS                    Huawei’s Da Vinci architecture uses 3D cube technology, both
+                                                                                  optimized for specific ops with defined parameters.
+
+                                                                                  B. Preliminary Measurement and Insights
+                                                                                     After reviewing related work, we now examine the specific
+                                                                                  characteristics of DNN inference on mobile devices. To derive
+                                                                                  execution strategies and scheduling characteristics for DNN
+                                                                                  model inference, we conducted measurements using TFLite on
+                                                                                  Huawei P20 (Kirin 970) and Redmi K50 Pro (Dimensity 9000).
+                                                                                     We deployed two popular DNN models on these devices,
+                                                                                  namely MobileNet [20] and EfficientDet [21]. MobileNet sig-
+suitable processor. Current mobile DNN frameworks [10], [11],                     nificantly reduces model parameters and computation by using
+[12], [17], [18] typically employ static graph partitioning meth-                 depthwise separable convolutions, decomposing standard con-
+ods based on the DNN models structure, focusing on optimizing                     volutions into depthwise and pointwise convolutions, making
+the inference latency of a single model.                                          it highly suitable for real-time mobile applications. In contrast,
+   DNN models encompass a variety of op types, each with vary-                    EfficientDet has a much more complex op structure, combining
+ing levels of support across multi-processors on mobile devices.                  EfficientNet [22] and BiFPN [21] architectures for efficient
+Even within the same processor, the support level for different                   multi-scale feature fusion, providing excellent object detection
+ops can differ, highlighting the significant heterogeneity of AI                  performance while maintaining computational efficiency.
+accelerators. For instance, Table I shows the distribution of                        1) Inference Characteristics: Through the analysis of the
+major op types in eight classic DNN models, with DeepLabV3                        measurement results, we identified several key insights:
+featuring 12 different op types across 134 nodes, illustrating the                   Besides the CPU, other processors also exhibit impressive
+diversity of ops. This diversity reveals the model’s dependency                   performance in executing DNN inference: As shown in Fig. 3,
+on hardware accelerators, which directly impacts performance.                     when executing the lightweight MobileNet model on Dimensity
+   Hardware heterogeneity is prevalent across various mobile                      9000, the execution efficiency driven by NNAPI [23] on DSP
+SoCs. This is not a simple matter of whether an op is supported,                  and NPU is 3× faster than on the CPU alone, with the GPU also
+but rather which variants of an op are supported. For instance,                   showing stronger inference capabilities than the CPU. This per-
+an accelerator may support a standard 2x2 MaxPool operation                       formance improvement continually increases with the evolution
+but not one with a different stride or padding. Fig. 2 illustrates                of SoCs, with the speedup on Dimensity 9000 reaching up to
+this challenge on the Redmi K50 Pro. For example, the GPU                         23× when executing MobileNet tasks. Therefore, fully utilizing
+natively supports approximately 80% of the MaxPool variants                       different processor capabilities for collaborative inference is
+found in our test suite, while the remaining 20% would trigger                    crucial.
+a fallback to the CPU. This partial support is common across                         Heterogeneous execution in standard frameworks like
+many op types and processors, such as the DSP and NPU, where                      TensorFlow Lite can introduce significant overhead: This
+support levels can be even more limited. Unfortunately, these                     approach does not parallelize individual operations; instead, it
+hardware limitations cannot be fully mitigate by kernel-level                     employs a delegate mechanism that offloads model subgraphs
+programming on specific processors, mainly because recently                       to an accelerator (e.g., GPU or NPU) but falls back to the CPU
+developed accelerator core components are often of fixed design,                  for unsupported operations. Although potentially effective,
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                              7769
+
+
+
+                                                                                                            TABLE II
+                                                                                IMPACT OF PARALLEL INFERENCE ON LATENCY: AVERAGE LATENCY (MS) FOR
+                                                                                  MOBILENETV1 ON VARIOUS PROCESSORS WITH DIFFERENT LEVELS OF
+                                                                                                          CONCURRENCY
+
+
+
+
+                                                                                                            TABLE III
+                                                                                 SUBGRAPH AND OPERATION COUNTS FOR VARIOUS MODELS ON REDMI K50
+                                                                                PRO. ”UNIT” SUBGRAPHS REFER TO INITIAL GROUPS OF ADJACENT OPS WITH
+                                                                                      CONSISTENT PROCESSOR SUPPORT. ”MERGED” SUBGRAPHS ARE
+                                                                                    HIGHER-LEVEL GRAPHS FORMED BY COMBINING ADJACENT UNITS.
+
+
+
+
+Fig. 3. Average latency of DNN inference on single and multi-processors on
+the Android platform using Kirin 970 and Dimensity 9000 Chipsets.                  Concurrent model execution reveals scheduling inefficiencies
+                                                                                in heterogeneous environments: As shown in Table II, when
+                                                                                multiple models are processed simultaneously, the performance
+this delegate-and-fallback strategy can yield suboptimal                        degradation is non-uniform across different processors. While
+performance, as demonstrated by our results. For instance, when                 some processors like MediaTek NPU show modest latency
+executing the complex EfficientDet model on the Kirin 970 SoC,                  increases (27% when increasing from 1 to 4 concurrent mod-
+this heterogeneous mode is slower than GPU-only execution.                      els), others like the Hexagon 682 DSP experience dramatic
+This performance degradation is not due to a flawed paralleliza-                performance collapse (1202% increase when running 4 con-
+tion scheme but rather to the substantial overhead imposed by                   current models compared to a single model). This disparity
+frequent fallbacks. When a model contains numerous operators                    highlights significant differences in how current frameworks
+unsupported by the accelerator’s driver, the costs associated                   manage resource sharing across heterogeneous processors, re-
+with data transfers and context switching between the CPU and                   vealing opportunities for substantial performance gains through
+the accelerator can outweigh the computational gains, thereby                   more intelligent workload distribution.
+increasing total inference latency. This observation underscores                   Subgraph partitioning granularity dramatically impacts sys-
+the insufficiency of a simplistic delegate-and-fallback approach                tem resource efficiency and inference performance: Our ex-
+and motivates the development of an intelligent partitioning                    periments show that different models produce vastly different
+and scheduling framework like ADMS.                                             numbers of subgraphs under current partitioning strategies. As
+   Fallback ops significantly impact the efficiency of DNN model                documented in Table III, lightweight models like East generate
+inference: By tracking the scheduling process of models ex-                     only 4 total subgraphs on the Redmi K50 Pro, while complex
+ecuted on multi-processors, we found that when ops in the                       models like DeepLabV3 produce over 3,300 subgraphs. This
+model are assigned to processors that do not support their                      excessive fragmentation consumes disproportionate memory re-
+execution, these ops default to being rerouted to the CPU, even                 sources and complicates scheduling decisions, directly impact-
+if other processors could execute these ops more efficiently.                   ing inference efficiency. When measuring the relationship be-
+These unsupported ops vary among different SoCs and are                         tween subgraph count and inference performance, we observed
+more pronounced on older SoCs. On Kirin 970, for example,                       that reducing subgraph count through optimized partitioning can
+the presence of numerous fallback ops leads to massive tensor                   decrease inference latency by up to 28%.
+transfer costs, resulting in lower multi-processor performance                     Processor operational status significantly affects sustained
+than single CPU performance.                                                    inference performance and system stability: Our measurements
+   2) The Performance of Multi-Processor Inference: Through                     revealed that inference performance is not static but degrades
+further analysis of our measurement data, we identified several                 over time under sustained workloads. When monitoring proces-
+critical challenges that impact the performance of multi-DNN                    sor state during continuous operation, we observed that CPU
+inference on heterogeneous processors:                                          utilization patterns shift significantly after approximately 150
+
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+7770                                                                                IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+
+Fig. 4. The overview of ADMS. The workflow shows video frame extraction (left), the three core components - Model Analyzer (green), Scheduler (orange),
+and Processor Monitor (purple) - and heterogeneous processor allocation (right).
+
+
+
+
+seconds of operation, with frequency fluctuations increasing by                 inference based on the hardware support of the operations. This
+217% and temperature rising by 18◦ C on average. These state                    step aims to alleviate computational load on a single proces-
+changes directly correlate with inference speed reductions, as                  sor and improve processing efficiency. The dynamic scheduler
+the system attempts to manage thermal constraints by throttling                 determines the execution order and resource allocation of the
+performance. This dynamic behavior is not accounted for in                      subgraphs based on real-time data from the hardware monitor,
+current scheduling approaches, which maintain static allocation                 including processor load, temperature, and operational status.
+patterns regardless of changing processor conditions.                           Real-time monitoring by the hardware monitor ensures that the
+   These observations highlight the need for a fundamentally                    scheduler can formulate optimal scheduling plans, optimizing
+different approach to multi-DNN inference on mobile devices—                    the processing of subgraphs in the task queues for efficient
+one that adaptively manages subgraph granularity, intelligently                 execution. Once all subgraph tasks are completed, the entire
+distributes concurrent workloads through processor-state-aware                  model inference task is finished, and the system returns the re-
+scheduling, and responds to changing processor conditions dur-                  sults to the application.Through the collaborative efforts of these
+ing extended operation.                                                         components, the ADMS can efficiently handle dynamic mobile
+                                                                                workload changes while maximizing resource utilization [28],
+                         III. SYSTEM DESIGN                                     [29].
+   To address these challenges, we propose the ADMS, a novel
+framework that optimizes multi-DNN inference across hetero-                     B. Model Analyzer
+geneous processors through adaptive subgraph partitioning and
+                                                                                   The Model Analyzer addresses the challenges of subgraph
+processor-state-aware dynamic scheduling.
+                                                                                partitioning and fallback ops by intelligently decomposing DNN
+                                                                                models into hardware-appropriate subgraphs. It comprises two
+A. System Overview
+                                                                                main modules: the model loader for importing DNN models,
+   ADMS is specifically designed for mobile processors and                      and the subgraph generator for parsing these models into inde-
+DNN inference, adopting a multi-DNN collaborative inference                     pendently inferable subgraphs based on hardware support.
+architecture supported by heterogeneous processors. The system                     As shown in Fig. 5(a), each op in a DNN model is represented
+consists of three core components working in tandem to optimize                 as a node with directed edges indicating dependencies. Tradi-
+performance: 1) A Model Analyzer that addresses the subgraph                    tional op-level scheduling becomes exponentially complex as
+partitioning challenge by dividing DNN models into optimally-                   models grow (e.g., seven nodes can have 72 possible scheduling
+sized subgraphs with appropriate hardware support [16], [24],                   combinations). Current frameworks typically execute all ops on
+reducing memory usage and scheduling complexity; 2) A                           a single processor, with unsupported ops falling back to the CPU.
+Scheduler that tackles processor contention through fine-grained                Fig. 5(b) illustrates this limitation where only three of seven ops
+scheduling plans that coordinate DNN execution across multiple                  run on the GPU while the rest fall back to the CPU, resulting
+processors and efficiently manage fallback operations [25], [26];               in substantial tensor transfers and increased latency. ADMS
+and 3) A Hardware Monitor that mitigates thermal throttling                     employs a two-step approach to generate efficient subgraphs:
+issues by continuously tracking processor status [27], providing                   Unit Formation: The analyzer first groups adjacent ops with
+real-time data to support optimized scheduling decisions.                       consistent processor support. As shown in Fig. 5(c), ops with
+   During system operation, as illustrated in the object detection              common hardware support form a unit, while ops with different
+application case in Fig. 4, the application converts video content              support requirements form separate units.
+into image frames, which are then processed by the model                           Subgraph Construction: Adjacent units are then merged, but
+analyzer via the model loader. The analyzer decomposes the                      only when they share common processor support. This optimizes
+DNN model into multiple subgraphs to facilitate independent                     resource utilization while maintaining execution efficiency.
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                                7771
+
+
+
+
+                                                                                 Fig. 6. Relationship between window size, inference latency, and subgraph
+                                                                                 count for DeepLabV3 on Redmi K50 Pro, highlighting the optimal balance at
+                                                                                 window size 5.
+
+
+
+
+Fig. 5.   Sample diagram for subgraph generation.
+
+
+
+   While Band [16] uses a similar approach, we observed that
+partitioning subgraphs based solely on hardware support can
+lead to excessive fragmentation on resource-constrained de-
+vices. As shown in Table III, models like DeepLabV3 can gener-
+ate thousands of subgraphs, significantly straining the schedul-
+ing system. To address this, we introduce the window_size
+(ws) parameter, which defines the minimum number of ops
+required to form a subgraph for a target processor.
+   The selection of an appropriate ws is critical, as it governs
+the trade-off between maximizing parallel execution and mini-
+mizing scheduling overhead. To properly select this parameter                    Fig. 7. ADMS scheduler workflow illustrating the key operations: processor
+for normal op, ADMS employs a one-time, offline profiling                        task requests, idle processor detection, task queue management, and priority-
+                                                                                 based scheduling using model profiles and hardware status data.
+procedure for each unique model-device pair. This procedure
+systematically determines the optimal ws by iterating through a
+range of potential values (e.g., from 1 to 20). For each candidate
+ws value, we partition the model. We then execute benchmark in-                  partitioning, thereby achieving optimized granularity without
+ference runs on the target device and record the average latency.                incurring any runtime profiling overhead.
+This profiling process reveals the performance curve shown in                       The core of our subgraph generation is detailed in
+Fig. 6. Initially, increasing the ws reduces latency by mitigating               Algorithm 1. The algorithm’s main goal is to create an optimized
+subgraph fragmentation. However, beyond an optimal point, a                      and definitive execution plan. After identifying operations that
+larger ws limits parallelism and leads to performance degra-                     would cause fallbacks and filtering them based on the pre-
+dation. The ws value corresponding to the minimum observed                       profiled ws (Lines 12-18), the crucial step is ResolveSubgraphs
+latency is identified as the optimal configuration for that model-               (Line 20). This function implements a greedy algorithm that
+device pair. This value is then cached. During runtime, ADMS                     traverses the model’s operations in topological order. It forms
+retrieves this pre-computed optimal value to perform subgraph                    the largest valid subgraph from consecutive operators sharing
+
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+7772                                                                               IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+
+ Algorithm 1: Get Unit Subgraphs.                                              processor throttling or shutdown, while battery status tracking
+                                                                               helps balance performance needs against power constraints, es-
+                                                                               pecially during extended inference sessions. Since the Android
+                                                                               SDK cannot directly access these system metrics, we developed
+                                                                               a dedicated monitoring program that efficiently retrieves this
+                                                                               information from system files. This program employs optimized
+                                                                               sampling frequencies that balance monitoring accuracy with
+                                                                               minimal overhead, providing the scheduler with timely data to
+                                                                               make informed allocation decisions while maximizing resource
+                                                                               utilization between heterogeneous processors.
+                                                                                  This      program        obtains     the     device’s      tem-
+                                                                               perature     information      by    reading      files   in     the
+                                                                               ’/sys/devices/virtual/thermal/’ directory and
+                                                                               accessing the ’/sys/devices/system/cpu/’ directory
+                                                                               to gather processor availability status, including each CPU
+                                                                               core’s online status, frequency, and usage. It obtains GPU status
+                                                                               information via OpenGL interfaces, while it retrieves DSP and
+                                                                               NPU information from NNAPI interfaces. Additionally, we
+                                                                               used the Android SDK to gather battery status and memory
+                                                                               usage to aid in scheduling decisions.
+                                                                                  The program employs multithreading and a caching mecha-
+                                                                               nism to reduce the frequency of system file reads. This approach
+                                                                               minimizes the data retrieval latency to approximately 10 ms
+                                                                               per cycle, a significant improvement over the 40-50 ms latency
+                                                                               incurred by direct file system requests. To balance data freshness
+                                                                               with monitoring overhead, the hardware status cache is refreshed
+                                                                               at a fixed interval. We determined this interval through an
+                                                                               empirical trade-off analysis. Shorter intervals (e.g., < 100 ms)
+                                                                               provide a more current system state but introduce significant
+                                                                               CPU overhead, whereas longer intervals (e.g., > 1 s) minimize
+                                                                               overhead at the risk of providing stale data to the scheduler,
+                                                                               leading to suboptimal decisions. Based on this analysis, we
+                                                                               selected a refresh interval of 560 ms, which provides sufficient
+                                                                               data currency for thermal-aware scheduling while keeping the
+a common processor. The subgraph size is ensured to meet the
+                                                                               monitoring overhead negligible. This mechanism ensures that
+ws requirement. This approach is fundamentally different from
+                                                                               our scheduling system operates on timely and accurate data,
+the Band framework. While Band may use a single, fixed ws
+                                                                               effectively enhancing the performance and responsiveness of
+value, its ”one-size-fits-all” approach is suboptimal across di-
+                                                                               DNN applications.
+verse models and devices. In contrast, ADMS uses a per-model,
+per-device optimized ws. Furthermore, our greedy algorithm
+produces a single, non-overlapping execution plan, simplify-                   D. Scheduler
+ing runtime decisions. Band, on the other hand, generates a
+                                                                                  The design of the ADMS scheduler is guided by the need
+large pool of all possible candidate subgraphs, which increases
+                                                                               for a practical, high-performance solution to a computationally
+scheduling complexity and memory overhead during inference.
+                                                                               complex problem. Finding an optimal schedule for multiple
+Our strategy of combining an optimized ws with a decisive
+                                                                               DNNs across heterogeneous processors is an NP-hard problem.
+greedy algorithm creates a more efficient and robust solution
+                                                                               This is especially true under the dynamic constraints of a mobile
+for multi-DNN inference.
+                                                                               environment, such as thermal throttling and unpredictable work-
+                                                                               loads. Therefore, rather than pursuing an intractable optimal
+C. Hardware Monitor
+                                                                               solution, we developed a principled heuristic-based scheduler.
+   The Hardware Monitor component addresses processor                          Its design is not based on arbitrary rules, but on the synthesis
+thermal throttling by providing real-time insights into the                    of well-established principles from different areas of computer
+device’s operational state, enabling proactive task allocation to              science. Our multi-factor priority model incorporates theories
+prevent performance degradation. It monitors critical metrics                  from real-time systems, fair queuing algorithms, and proces-
+including temperature, processor availability, utilization rates,              sor affinity. It adapts these theories to the unique challenges
+power consumption, and workloads across all inference                          of mobile DNN inference, as detailed below. This approach
+accelerators (CPU, GPU, DSP, and NPU). Temperature                             ensures that our heuristic scheduling decisions are justifiable,
+monitoring is particularly crucial, as excessive heat can trigger              predictable, and robust. A key design principle of ADMS is this
+
+       Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                             7773
+
+
+
+hybrid offline/online approach: static, computationally intensive              of complex tasks:
+analysis (e.g., subgraph partitioning) is handled offline for max-                                              Tcurrent − Tenqueue
+imum efficiency, while all runtime decisions are made online                                    Swait = −α                                            (2)
+                                                                                                                       Tavg
+with full awareness of the device’s dynamic state (e.g., thermal
+status and load). This ensures ADMS is both efficient and highly               where Tenqueue is when the task entered the queue, Tcurrent is
+adaptive to real-world conditions.                                             the current time, and Tavg is the average execution time.
+   While classical schedulers like Earliest Deadline First (EDF)                  Resource efficiency forms the third component of our schedul-
+are effective in traditional real-time systems, they are ill-suited            ing model. Extending processor affinity concepts [34], we ac-
+for the mobile multi-DNN context as they do not account for                    count for processor load and task complexity:
+the extreme heterogeneity of processors or the dynamic thermal                                                            
+                                                                                                       2Bcurrent − Bmax
+state of the device. Similarly, while Reinforcement Learning                         Sresource = δ                           Cremaining (3)
+                                                                                                              Bmax
+(RL)-based schedulers offer high adaptability, they typically in-
+cur significant training overhead and runtime complexity, mak-                 where Bcurrent is the current processor load, Bmax is maximum
+ing them impractical for resource-constrained mobile devices.                  capacity, and Cremaining represents remaining task complexity.
+Our principled heuristic approach, in contrast, offers a robust,               This factor becomes positive when a processor is more than half
+low-overhead, and predictable solution specifically tailored for               loaded and negative when less than half loaded. This resource
+this problem domain.                                                           utilization model is intentionally lightweight to ensure minimal
+   The Scheduler resolves processor contention by dynamically                  scheduling overhead, a critical requirement for mobile devices.
+coordinating task execution across heterogeneous processors                    Its effectiveness in guiding robust scheduling decisions, despite
+based on real-time status information. When a mobile appli-                    its simplicity, is validated by our stress test evaluations in Sec-
+cation requests DNN model inference for the first time, the                    tion IV-H.
+scheduler sends the model to the analyzer for evaluation. The                     These three components combine to form our integrated pri-
+generated subgraphs are stored in a configuration file for future              ority scoring model:
+use. For previously analyzed models, inference requests go di-
+                                                                                           Spriority = Sdeadline + Swait + Sresource                  (4)
+rectly to the scheduler, which retrieves the subgraph information
+and adds tasks to the execution queue.                                            This integrated model is designed to prevent common
+   Our scheduling approach for heterogeneous multi-processor                   scheduling pitfalls: the Swait component explicitly mitigates
+environments addresses fundamental challenges identified in                    the risk of task starvation by ensuring waiting tasks gain priority
+classical scheduling theory [30], [31]. Traditional schedulers                 over time, while the holistic consideration of all three factors
+often fail in mobile DNN contexts due to varying hardware capa-                prevents the kind of inefficiency that arises from single-objective
+bilities, thermal constraints, and dynamic workloads. Building                 schedulers.
+upon established scheduling principles while adapting them for                    The weighting parameters α, γ, and δ provide flexible control
+mobile DNN inference, we derive a priority-based model that                    over the relative importance of each factor. Ops can adjust
+balances three critical scheduling factors.                                    these parameters according to specific application requirements,
+   Deadline urgency represents the first factor in our scheduling              prioritizing deadline adherence for time-sensitive applications or
+model. A Service Level Objective (SLO) defines acceptable                      fairness for multi-user systems. For the general-purpose evalu-
+response times for tasks, and our scheduler prioritizes tasks                  ation in this work, these parameters were set to a default value
+approaching their deadlines following principles established in                of 1.0, but their availability provides an explicit mechanism for
+real-time systems [32]. We quantify this urgency as:                           domain-specific tuning.
+                                                                                  The scheduler leverages data from the hardware monitor for
+                Sdeadline = γ(TSLO − Tlatency )                        (1)
+                                                                               intelligent decision-making. For processors experiencing sus-
+In Equation (1), the application-defined target TSLO (e.g., de-                tained high load, it allocates less computationally intensive tasks
+rived from a target FPS) is compared against Tlatency , which                  to prevent thermal throttling and crashes. As processor status
+is the estimated latency retrieved from a pre-computed lookup                  changes, the scheduler dynamically adjusts task execution order
+table generated by benchmarking each subgraph on all compat-                   based on real-time data.
+ible processors during a one-time offline profiling phase. where                  Once a task completes execution, any unfinished unit sub-
+TSLO represents the expected response time and Tlatency is the                 graphs are reinserted at the front of the task queue for the next
+estimated execution latency. This approach extends traditional                 scheduling round. The scheduler examines a configurable range
+deadline-based scheduling by using service-level agreements                    of tasks, defined by a Loop_call_size parameter, from the
+rather than hard deadlines. It is important to note that Tlatency              queue head when making allocation decisions. This parameter
+serves as a static, baseline estimate for deadline pressure. Po-               determines how many tasks from the front of the queue the
+tential deviations from this estimate due to real-world variability            scheduler considers for each scheduling decision. Setting an
+are actively compensated for by the dynamic, real-time factors                 appropriate value requires careful tuning—too small a value
+in our priority model, particularly Sresource .                                limits the scheduler’s ability to make optimal decisions across
+   Waiting fairness constitutes the second essential factor in                 multiple tasks, while too large a value increases scheduling over-
+our model. Drawing from fair queuing algorithms [33], we                       head and can delay critical tasks. Our implementation balances
+normalize waiting time by task complexity to prevent starvation                scheduling quality with computational efficiency, reducing the
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+7774                                                                               IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+number of decisions needed at each scheduling instance while                                                  TABLE IV
+                                                                                                     EXPERIMENTAL PLATFORM SPECS
+ensuring in-progress tasks are completed promptly to minimize
+overall inference time. This parameter is also a key mechanism
+for ensuring the scheduler’s overhead remains bounded. By
+considering only a subset of the queue, the cost of a single
+scheduling decision remains low and scales efficiently, even as
+the total number of concurrent tasks in the system grows.
+
+                          IV. EVALUATION
+A. Methodology
+   We implemented ADMS using the TFLite [10] framework,
+capitalizing on its extensive edge deployment capabilities and
+high compatibility. TFLite enables the conversion and optimiza-
+tion of DNN models to meet the computational demands of
+mobile devices, facilitating efficient inference through ADMS.
+To achieve this, we developed APIs for model loading, analyzer,
+inference, and task queue management and scheduling. These
+APIs seamlessly integrate with TFLite’s APIs, enabling ADMS
+to directly interact with the TFLite framework for streamlined
+model inference.
+   To ensure the accuracy and reproducibility of our experiments,
+we converted these models into TFLite format and conducted 50                                              TABLE V
+inference experiments for each model. This approach ensured                     SUBGRAPH PARTITIONING AND LATENCY FOR SINGLE MODEL INFERENCE ON
+the stability and reliability of the statistical results. We recorded                        REDMI K50 PRO USING BAND AND ADMS
+inference latency and subgraph number for each model within
+ADMS to evaluate its performance comprehensively. The col-
+lected data were utilized to assess the system’s capability and
+efficiency in handling diverse types of models.
+
+B. Evaluation Setup
+   Platforms: Two devices are utilized: Redmi K50 Pro and
+Huawei P20. Redmi K50 Pro is equipped with the Dimensity
+9000 SoC, while Huawei P20 uses the Kirin 970 SoC. The                         where the framework attempts to delegate operations to an ac-
+detailed specifications of these SoCs are presented in Table IV.               celerator (e.g., GPU) and falls back to the CPU for unsupported
+Both devices employ the Schedutil scheduler as the default. It                 ones. This common fallback mechanism often results in subopti-
+is important to note that differences in Android versions and                  mal performance, making it a crucial benchmark for quantifying
+vendor-specific customizations, such as background process                     the practical gains of ADMS over the standard approach.
+management, thermal policies, and power management, can                           Band [16]: We chose Band as our state-of-the-art academic
+significantly influence inference performance, independent of                  baseline because it addresses the identical research problem
+hardware disparities.                                                          of multi-DNN co-execution on heterogeneous processors. The
+   Models: To comprehensively evaluate the performance                         system also decomposes DNNs into subgraphs, but its reliance
+of ADMS, we selected several DNN models that are                               on hardware support alone leads to excessive subgraph frag-
+widely adopted in practical applications. These include                        mentation and high scheduling complexity. Since ADMS is
+MobileNetV1 [20], MobileNetV2 [35], DeepLabV3 [36],                            specifically designed to overcome these identified limitations,
+YOLOV3 [37], and East [38]. These models are commonly                          a head-to-head comparison is essential for validating our novel
+utilized in various tasks such as image classification and object              contributions.
+detection, and span a spectrum from relatively lightweight to
+more complex architectures, with operator counts ranging from
+31 to 232.                                                                     C. Inference Latency for Single Models
+   Baselines: We evaluate ADMS against two key baselines that                     To explore the differences in subgraph partitioning and infer-
+represent the industry standard and the academic state-of-the-art,             ence latency, we analyze the performance of ADMS and Band
+respectively.                                                                  when handling individual DNN models.
+   Vanilla [10]: We selected TFLite as our foundational baseline                  Our findings demonstrated that ADMS’s fine-grained sub-
+because it is the de facto industry standard for on-device infer-              graph partitioning method provides an effective optimization
+ence. We use TFLite v2.16.0 to represent the typical approach                  strategy for mobile devices, as detailed in Table V. Specifically,
+
+       Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                               7775
+
+
+
+
+Fig. 8.   Comparison of processing frame rates (FPS) across different workloads on various mobile devices.
+
+
+ADMS consistently achieves lower inference latency across var-                   to complex, making them well-suited for real-time dynamic
+ious models compared to Band, particularly in multi-processor                    environments.
+environments. For instance, for the MobileNetV1 and YOLOV3                          As shown in Fig. 8, we conducted an extensive evaluation of
+models, ADMS reduces latency by 31% and 28%, respectively.                       the Huawei P20 and Redmi K50 Pro in the two aforementioned
+This significant performance improvement stems from ADMS’s                       scenarios. Compared to TFLite and Band, ADMS demonstrates
+efficient subgraph partitioning strategy, which optimizes proces-                significant performance advantages in parallel inference, pri-
+sor utilization and minimizes data transfer and inter-processor                  marily attributed to its advanced subgraph partitioning and
+communication overhead. This is achieved by effectively re-                      dynamic scheduling algorithms.
+ducing the number of subgraphs through the window_size                              In the FRS Scenario, Fig. 8(a) illustrates ADMS’s superior
+parameter, which controls the minimum length of subgraphs,                       performance on the Redmi K50 Pro, achieving an inference
+thereby lowering memory usage.                                                   speed of up to 45.12 FPS. This represents an improvement
+                                                                                 of 404% and 121% compared to the TFLite and Band sys-
+                                                                                 tems, respectively. This significant enhancement stems from two
+D. FPS in Parallel Inference Scenarios                                           key factors: (1) ADMS’s adaptive subgraph partitioning that
+   To evaluate the performance of ADMS in handling multiple                      reduced the total subgraph count by 93% compared to Band
+parallel inference tasks, where multiple applications concur-                    while maintaining hardware compatibility, thereby minimizing
+rently send inference requests to the processor, we constructed                  scheduling overhead and memory management costs; and (2) the
+two widely-used scenarios:                                                       processor-state-aware scheduler that dynamically redistributes
+   Facial Recognition System (FRS): We deployed the Reti-                        tasks when detecting processor load imbalances, achieving 87%
+naFace [39], ArcFace-MobileNet [40], and ArcFace-ResNet50                        higher processor utilization during multi-model inference than
+to simulate face detection and multi-person identity verification                TFLite. These optimizations are particularly effective in com-
+in real-time video streams. These models work in tandem to                       plex multi-person face recognition scenarios where multiple
+provide a seamless transition between detection and verification,                models with varying computational demands must execute con-
+making them suitable for applications such as security monitor-                  currently. This significant enhancement reflects ADMS’s effi-
+ing and personal identification. RetinaFace model quickly and                    ciency in resource allocation and data processing acceleration,
+accurately detects faces. ArcFace-MobileNet performs initial                     particularly in complex multi-person face recognition scenarios.
+identity verification on detected faces, suitable for rapid pro-                 Additionally, Fig. 8(c) confirms ADMS’s superiority in the
+cessing. ArcFace-ResNet50 conducts deep feature analysis for                     Huawei P20 with a performance of 12.35 FPS, which clearly
+precise recognition.The collaboration of these models ensures                    demonstrates its robustness and adaptability across different
+a seamless transition from detection to verification, suitable for               mobile devices.
+security monitoring and personal identification systems.                            In the ROS scenario, ADMS again exhibited superior perfor-
+   Real-time Object Recognition System (ROS): This scenario                      mance on the Redmi K50 Pro, reaching 6.98 FPS and depicted in
+integrates the MobileNetV2, EfficientNet [22], and Incep-                        Fig. 8(b). This is approximately 19% and 184% higher than the
+tionV4 [41] models to perform real-time object detection and                     performance of Band and TFLite. This highlights the capability
+classification in video streams. MobileNet V2 quickly classifies                 of ADMS to handle real-time object recognition tasks, enabling
+primary objects, while EfficientNet analyzes in-depth image fea-                 rapid changes in complex environments to be handled. Inter-
+tures and classifies precisely in complex scenarios. For advanced                estingly, the version of ADMS without subgraph partitioning
+image processing needs, Inception V4 employs its multi-scale                     performed 34.02% worse than Band and 44.70% worse than the
+capabilities to efficiently and accurately recognize and classify                subgraph-enabled version of ADMS. This underscores the crit-
+subtle and overlapping objects in complex environments. These                    ical importance of subgraph partitioning strategies in managing
+models efficiently and effectively handle objects from simple                    complex model workflows.
+
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+7776                                                                                IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+
+Fig. 9. Comparison of SLO satisfaction between ADMS and TFLite on Redmi
+K50 Pro under different SLO multiplier settings. The shaded region (0.9-1.0)
+highlights higher multiplier values where ADMS significantly outperforms        Fig. 10.   Model-level scheduling and subgraph-level scheduling on Huawei
+TFLite.                                                                         P20.
+
+
+
+                                                                                significant processor idle time: the CPU and NPU remain com-
+E. Analysis of SLOs                                                             pletely unused, and the GPU becomes inactive after 17.7 ms
+   To evaluate the performance of ADMS under various SLO                        while waiting for the DSP to complete its task. Consequently,
+conditions, we designed experiments and compared it with                        the total execution time is thus bound by the slowest processor
+TFLite. SLOs are critical metrics used to define service                        (27.74 ms on DSP), and overall resource utilization remains low
+performance and reliability expectations, particularly for                      at approximately 50%.
+applications deploying DNN models [42]. The experiments                            In contrast, our subgraph scheduling strategy (bottom section)
+involved simultaneously sending multiple model inference                        demonstrates a more efficient distribution of computational
+requests to the processor and using the maximum latency                         resources. The timeline clearly shows how different parts of
+obtained from a single inference as a baseline. We applied                      each model are strategically allocated to the most suitable pro-
+different SLO multipliers to simulate various SLO conditions                    cessors: CPU tasks are carefully distributed with ArcfaceRes-
+and measured SLO satisfaction values. These results provide                     net_1 executing during specific time intervals (9.04-9.65 ms and
+insights into ADMS’s scheduling efficiency in handling multiple                 12.87-13.67 ms), while ArcfaceResnet_2 operations are inter-
+concurrent inference requests and demonstrate its ability to                    spersed as shorter, more frequent tasks. Similarly, the GPU
+meet SLO targets in high-load, multi-task environments.                         executes multiple smaller tasks rather than being dedicated to
+   As illustrated in Fig. 9, ADMS achieved significantly higher                 a single model, maintaining higher utilization throughout the
+SLO satisfaction rates at higher SLO settings (e.g., SLO Multi-                 inference process. The DSP workload is distributed more evenly,
+plier of 1.0). For models such as MobileNetV1, EfficientNet4,                   avoiding the bottleneck observed in the model-level approach,
+InceptionV4, and ArcfaceResnet, ADMS achieved SLO satis-                        while the NPU—completely unused in TFLite’s approach—
+faction rates of 95.24%, 99.85%, 100%, and 100%, respectively.                  handles specific operations it is optimized for.
+These values are substantially better than TFLite’s satisfaction                   This strategic allocation yields three significant benefits: (1)
+rates of 75%, 78%, 76.4%, and 80% under the same conditions.                    balanced processor load distribution that increases overall hard-
+Notably, when handling complex models including InceptionV4                     ware utilization from 50% to nearly 95%; (2) minimal processor
+and ArcfaceResnet, ADMS fully meets the SLO requirements,                       idle time through fine-grained task allocation that keeps all
+primarily due to its advanced dynamic scheduling algorithm,                     processors actively computing; and (3) optimal matching of
+whereas TFLite’s performance is significantly inferior.                         operations to processors based on their computational char-
+                                                                                acteristics, reducing execution time of individual operations
+                                                                                by an average of 18.7%. As a result, the total execution time
+F. Analysis of Subgraph Scheduling
+                                                                                is reduced to approximately 21.15 ms, a 23.8% improvement
+   We further investigated the performance of ADMS by inte-                     over TFLite’s model-level scheduling. Beyond outperforming
+grating its subgraph scheduling strategy. As shown in Fig. 10,                  model-level approaches, our method also shows significant ar-
+the model-level scheduling of TFLite (top section) demonstrates                 chitectural advantages when compared to other subgraph-based
+a straightforward but inefficient method. In this method, Ar-                   frameworks like Band. It is worth noting that while a Gantt chart
+cfaceResnet_1 was primarily processed on the GPU (from 0                        for the Band framework would also follow this subgraph-level
+to 17.7 ms), while ArcfaceResnet_2 was executed for a longer                    pattern, it would be substantially less efficient. As quantified in
+period on the DSP (from 0 to 27.74 ms). These results in                        Table V, Band’s partitioning strategy generates a significantly
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                             7777
+
+
+
+                          TABLE VI
+  AVERAGE POWER CONSUMPTION AND ENERGY EFFICIENCY DURING FRS
+             WORKLOAD EXECUTION ON REDMI K50 PRO
+
+
+
+
+higher number of subgraphs (e.g., 860 vs. 4 for MobileNetV2).
+This excessive fragmentation would manifest in its Gantt chart
+as a larger set of smaller tasks, leading to increased scheduling
+overhead and context-switching costs. This directly explains the               Fig. 11. Power consumption trend during 60-second continuous inference of
+                                                                               the FRS workload on Redmi K50 Pro.
+lower overall FPS and energy efficiency we report for Band
+in Fig. 8 and Table VI. Therefore, the streamlined workload                                              TABLE VII
+distribution shown for ADMS in Fig. 10 is a direct result of                      SYSTEM ROBUSTNESS UNDER STRESS CONDITIONS ON REDMI K50 PRO
+our optimized partitioning strategy, which is the core reason for
+its superior performance over other subgraph-based methods.
+For application scenarios demanding high efficiency and low
+latency, such as real-time video processing or augmented reality,
+ADMS’s subgraph-level scheduling provides a more effective
+solution by exploiting the full computational potential of het-
+erogeneous processors.
+                                                                               H. Analysis of System Robustness
+                                                                                  To evaluate the robustness of ADMS under stress challenging
+G. Analysis of Resource Efficiency                                             conditions, we conducted a series of stress tests by progressively
+   To evaluate the resource efficiency of ADMS, we measured                    increasing the inference workload and monitoring system
+power consumption measurements using a Monsoon Power                           behavior. Three distinct stress scenarios were designed to
+Monitor. Table VI presents the average power consumption and                   comprehensively assess different aspects of system stability:
+corresponding FPS during the FRS workload execution on the                        1) Long-duration test: Continuous inference for 30 minutes
+Redmi K50 Pro.                                                                 to evaluate sustained performance and reliability.
+   The experimental results demonstrated that ADMS achieves                       2) High-concurrency test: Progressively increasing concur-
+an optimal balance between performance and power consump-                      rent DNN models from 4 to 10 to assess scalability limits.
+tion. Specifically, ADMS consumes approximately 2.4% less                         3) Thermal stress test: Operating in a high-temperature envi-
+power than Band while delivering 21.4% higher FPS. Com-                        ronment (35◦ C) to evaluate thermal management capabilities.
+pared to TFLite, ADMS requires 9.5% more power but pro-                           Table VII summarizes the quantitative results of these tests.
+vides over 4× the frame rate. In terms of energy efficiency                    ADMS demonstrated superior robustness across all stress tests.
+(frames processed per joule of energy), ADMS achieves 5.74                        In the long-duration test, ADMS exhibited a failure rate of
+frames per joule, which is 24.2% more efficient than Band                      only 0.5% compared to 1.8% for Band and 3.2% for TFLite. This
+(4.62 frames/joule) and 3.68× more efficient than TFLite (1.56                 enhanced stability is attributed to ADMS’s dynamic scheduling
+frames/joule). The improvement is attributed to ADMS’s ad-                     mechanism, which effectively prevents processor overloading
+vanced scheduling strategy, which optimizes the utilization of                 and ensures better resource management during prolonged op-
+specialized hardware accelerators and minimizes processor idle                 erations.
+time.                                                                             In the high-concurrency test, ADMS successfully managed
+   Fig. 11 illustrates the power consumption trend during a                    more than 10 concurrent DNN models without significant per-
+60-second continuous inference period. The results indicate that               formance degradation, while Band and TFLite experienced fail-
+ADMS maintains more stable power consumption with fewer                        ures at 8 and 6 concurrent models, respectively. This result
+fluctuations compared to baseline frameworks, indicating more                  demonstrate ADMS’s exceptional scalability under heavy work-
+balanced processor utilization. Band exhibits the highest power                loads.
+consumption peaks (reaching nearly 8.8 W) with significant                        In the thermal stress test, ADMS significantly delayed the on-
+fluctuations. In contrast, TFLite demonstrates the lowest average              set of thermal throttling to 13.9 minutes compared to 9.7 minutes
+power but with substantial variations, dropping as low as 6.5 W.               for Band and only 2.5 minutes for TFLite. This corresponds
+ADMS, however, maintains a consistent power profile between                    to a 5.6× improvement over TFLite and a 43% improvement
+7.7 W and 8.1 W, demonstrating its ability to balance workloads                over Band, highlighting ADMS’s superior thermal management
+effictively and manage thermal constraints proactively.                        capabilities.
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+7778                                                                                   IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+
+Fig. 12.    Temperature and processor frequency dynamics during thermal stress testing on Redmi K50 Pro.
+
+
+
+   Fig. 12 illustrates the thermal management capability through                      r Scheduling Overhead: The multi-factor scheduler forms
+processor temperature and frequency dynamics during a                                    the core of our runtime logic. Our benchmarks show that a
+10-minute stress test. When running TFLite, both CPU and                                 single scheduling decision, which calculates priority scores
+GPU rapidly reach the throttling threshold (68◦ C) [27] within                           for queued tasks, takes less than 1 ms on average.
+2-3 minutes. Once throttling begins, significant and frequent                         r Memory Footprint: ADMS introduces a modest memory
+fluctuations in processor frequency are observed: the CPU fre-                           overhead for storing performance profiles, subgraph con-
+quency drops from around 3 GHz to as low as 1 GHz, while the                             figurations, and task queues. On our test platforms, this
+GPU experiences even more severe throttling with frequency                               amounted to an additional 1–2 MB of RAM over the vanilla
+periodically dropping to around 500 MHz and completely shut-                             TFLite framework.
+ting down at several points. However, ADMS demonstrates                               Crucially, the most computationally intensive task, subgraph
+superior thermal management during the initial phase. CPU                          partitioning, is performed entirely offline and thus incurs zero
+temperature rises more gradually and remains below the throt-                      runtime overhead. In conclusion, the overhead introduced by
+tling threshold throughout the 10-minute window, maintaining a                     the additional runtime mechanisms of ADMS is negligible. The
+stable frequency range around 2.8-3 GHz. For the GPU, ADMS                         low-latency scheduling and monitoring, combined with a small
+initially sustains high frequency (around 850-900 MHz), with a                     memory footprint, confirm that the substantial gains in inference
+controlled gradual reduction as temperature rises, avoiding the                    performance (up to 4.04×) and energy efficiency (up to 24.2%)
+extreme fluctuations observed with TFLite.                                         far outweigh the framework’s costs. This analysis confirms that
+   As shown in Table VII, Band reached thermal throttling                          our design choices, which favor a lightweight heuristic sched-
+at 9.7 minutes, while ADMS operates without throttling un-                         uler, are well-justified for resource-constrained mobile environ-
+til 13.9 minutes. This balanced thermal management enables                         ments. The negligible overhead demonstrates that ADMS does
+ADMS to sustain higher average processor frequencies even                          not become a bottleneck, but rather an efficient enabler of high
+under extended workloads, resulting in more stable performance                     performance, confirming its robustness in complex scenarios.
+and improved user experience. The superior thermal manage-
+ment is attributed to ADMS’s intelligent load distribution across                                            V. RELATED WORK
+heterogeneous processors and its ability to dynamically adjust
+scheduling based on real-time temperature monitoring. These                        A. DNN Optimization and Acceleration Techniques
+experimental results confirm that ADMS not only delivers                              Researchers have developed various techniques to optimize
+superior performance in terms of latency and throughput but                        DNN performance on resource-constrained mobile devices.
+also achieves improved energy efficiency and system robustness                     Han et al. [43] introduced deep compression techniques, in-
+under stress conditions, making it a comprehensive solution for                    cluding pruning, quantization, and Huffman coding, to reduce
+multi-DNN inference on mobile devices.                                             model size while maintaining accuracy. Wei et al. [44] proposed
+                                                                                   neural network branching for parallel inference, enabling better
+                                                                                   adaptation to hardware heterogeneity. Although these model
+I. Overhead Analysis of ADMS                                                       optimization approaches significantly improved inference effi-
+   Although ADMS delivers significant performance improve-                         ciency, they lacked dynamic coordination capabilities for multi-
+ments, a rigorous evaluation requires quantifying the overhead                     model scenarios.
+of its runtime mechanisms. We analyze three primary sources:                          Another major research direction focuses on single-processor
+processor state monitoring, scheduling logic, and memory foot-                     optimization. The Pipe-it framework [45] improved DNN infer-
+print.                                                                             ence throughput on ARM big.LITTLE processors through layer
+   r Monitoring Overhead: The hardware monitor periodically                        partitioning and pipelining. AsyMo [14] utilized asymmetric
+      collects system status. As detailed in Section III-C, each                   heterogeneous CPU cores with task allocation and block parti-
+      data retrieval cycle requires approximately 10 ms. With a                    tioning strategies. DeepMon [46] enhanced vision applications
+      refresh interval of 560 ms, this imposes a CPU duty cycle                    on mobile GPUs via device-specific optimizations. While these
+      of only about 1.8% (10 ms / 560 ms).                                         works demonstrated notable performance gains on individual
+           Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                                   7779
+
+
+
+processors, they did not address the challenges of holistic re-                                                   REFERENCES
+source management across heterogeneous computing units.                         [1] M. Liu, X. Ding, and W. Du, “Continuous, real-time object detection on
+                                                                                    mobile devices without offloading,” in Proc. IEEE 40th Int. Conf. Distrib.
+                                                                                    Comput. Syst., 2020, pp. 976–986.
+B. Multi-Processor and Multi-DNN Coordination                                   [2] Q. Zhang et al., “Intelligence inference on IoT devices,” in Proc. Learn.
+                                                                                    Techn. Internet Things, 2023, pp. 171–195.
+   Coordinated execution across multiple processors has                         [3] J. Yi, S. Choi, and Y. Lee, “Eagleeye: Wearable camera-based person
+emerged as a promising approach to enhance mobile DNN                               identification in crowded urban spaces,” in Proc. 26th Annu. Int. Conf.
+                                                                                    Mobile Comput. Netw., 2020, pp. 1–14.
+performance. Tan et al. [27] proposed thermal-aware schedul-                    [4] J. Park, Y. Boo, I. Choi, S. Shin, and W. Sung, “Fully neural network based
+ing that intelligently distributes workloads between GPUs and                       speech recognition on mobile and embedded devices,” Proc. Adv. Neural
+NPUs to prevent overheating. DART [26] optimized real-time                          Inf. Process. Syst., vol. 31, 2018, pp. 10642–10653.
+                                                                                [5] J. You, W. Liu, and J. Lee, “A DNN-based semantic segmentation for
+inference of multiple DNN models through pipelining and data                        detecting weed and crop,” Comput. Electron. Agriculture, vol. 178, 2020,
+parallelism. While these approaches laid important foundations                      Art. no. 105750.
+for thermal management and multi-model coordination, they                       [6] A. Albanese, M. Nardello, and D. Brunelli, “Automated pest detec-
+                                                                                    tion with DNN on the edge for precision agriculture,” IEEE Trans.
+were limited in processor coverage.                                                 Emerg. Sel. Topics Circuits Syst., vol. 11, no. 3, pp. 458–467,
+   Cross-processor collaboration has been further explored in                       Sep. 2021.
+several systems. LaLaRAND [25] utilized hierarchical schedul-                   [7] W. B. Demilie, “Plant disease detection and classification techniques: A
+                                                                                    comparative study of the performances,” J. Big Data, vol. 11, no. 1, 2024,
+ing to allocate DL tasks between CPUs and GPUs. Xu et al. [47]                      Art. no. 5.
+and Jia et al. [24] have attempted to run multi-DNN inference                   [8] S. A. Bhat, I. Hussain, and N.-F. Huang, “Soil suitability classification
+on heterogeneous processors but typically assume specific task                      for crop selection in precision agriculture using GBRT-based hybrid DNN
+                                                                                    surrogate models,” Ecological Inform., vol. 75, 2023, Art. no. 102109.
+requirements and provide solutions tailored to limited scenarios.               [9] Q. Zhang et al., “A comprehensive deep learning library benchmark and
+Wang et al. [29] optimized collaborative CPU-GPU computing                          optimal library selection,” IEEE Trans. Mobile Comput., vol. 23, no. 5,
+under thermal constraints, while Sparse-DySta [28] enhanced                         pp. 5069–5082, May 2024.
+                                                                               [10] Google, “Tensorflow lite: Deploy machine learning models on mobile and
+multi-DNN workload performance through sparse data process-                         IoT devices,” 2019. [Online]. Available: https://www.tensorflow.org/lite/
+ing and hybrid scheduling. Although these approaches achieved                  [11] P. mobile, “Official website of pytorch mobile,” 2019. [Online]. Available:
+notable gains in specific scenarios, most focused on limited                        https://pytorch.org/mobile/home/
+                                                                               [12] “CoreML: Integrate machine learning models into your app,” 2022. [On-
+processor combinations rather than fully leveraging all available                   line]. Available: https://developer.apple.com/documentation/coreml
+computing resources.                                                           [13] C.-J. Wu et al., “Machine learning at facebook: Understanding inference at
+   Despite these advancements, existing frameworks remain                           the edge,” in Proc. IEEE Int. Symp. High Perform. Comput. Architecture,
+                                                                                    2019, pp. 331–344.
+constrained by their reliance on specific hardware configurations              [14] M. Wang, S. Ding, T. Cao, Y. Liu, and F. Xu, “ASYMO: Scalable and
+or partial processor subsets. This work addresses these                             efficient deep-learning inference on asymmetric mobile cpus,” in Proc.
+limitations by providing a unified system that dynamically                          27th Annu. Int. Conf. Mobile Comput. Netw., 2021, pp. 215–228.
+                                                                               [15] B. Gomatheeshwari and J. Selvakumar, “Appropriate allocation of
+balances workloads across all heterogeneous processors.                             workloads on performance asymmetric multicore architectures via
+It utilizes optimized-granularity subgraph partitioning and                         deep learning algorithms,” Microprocessors Microsyst., vol. 73, 2020,
+real-time scheduling based on comprehensive processor status                        Art. no. 102996.
+                                                                               [16] J. S. Jeong et al., “Band: Coordinated multi-DNN inference on hetero-
+monitoring. This design enables efficient handling of multiple                      geneous mobile processors,” in Proc. 20th Annu. Int. Conf. Mobile Syst.,
+concurrent DNN inferences without requiring extensive model                         Appl. Serv., 2022, pp. 235–247.
+modifications.                                                                 [17] Q. Zhang et al., “A comprehensive benchmark of deep learning libraries
+                                                                                    on mobile devices,” in Proc. ACM Web Conf., 2022, pp. 3298–3307.
+                                                                               [18] S. S. Girija, “Tensorflow: Large-scale machine learning on heterogeneous
+                                                                                    distributed systems,” Softw. Available Tensorflow. Org, vol. 39, no. 9, 2016.
+            VI. CONCLUSIONS AND FUTURE WORK                                    [19] Google, “Edge TPU,” 2020. [Online]. Available: https://cloud.google.
+                                                                                    com/edge-tpu/
+   In this paper, we proposed ADMS, a framework that enables                   [20] A. G. Howard et al., “MobileNets: Efficient convolutional neural networks
+efficient concurrent inference of multiple DNNs on heteroge-                        for mobile vision applications,” 2017, arXiv:1704.04861.
+neous mobile processors through optimized subgraph partition-                  [21] M. Tan, R. Pang, and Q. V. Le, “Efficientdet: Scalable and efficient object
+                                                                                    detection,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit.,
+ing and dynamic scheduling. Experimental results on Huawei                          pp. 10781–10790, 2020.
+P20 and Redmi K50 Pro demonstrate that ADMS reduces infer-                     [22] M. Tan and Q. Le, “EfficientNet: Rethinking model scaling for con-
+ence latency by up to 4.04× compared to TFLite and improves                         volutional neural networks,” in Proc. Int. Conf. Mach. Learn., 2019,
+                                                                                    pp. 6105–6114.
+energy efficiency by 24.2% compared to Band. Although ADMS                     [23] Google, “Nnapi,” 2017. [Online]. Available: https://developer.android.
+is presented as a general framework, its current implementation                     com/ndk/guides/neuralnetworks,
+has a key limitation: the partitioning algorithm is specifically               [24] F. Jia et al., “CoDL: Efficient CPU-GPU co-execution for deep learning
+                                                                                    inference on mobile devices,” in Proc. 20th ACM Int. Conf. Mobile Syst.,
+designed for models with a DAG structure and does not yet                           Appl., Serv., 2022, pp. 209–221.
+support architectures with cyclic dependencies, such as Re-                    [25] W. Kang, K. Lee, J. Lee, I. Shin, and H. S. Chwa, “LaLaRAND: Flexible
+curring Neural Networks (RNNs). In the future, we aim to                            layer-by-layer CPU/GPU scheduling for real-time DNN tasks,” in Proc.
+                                                                                    IEEE Real-Time Syst. Symp., 2021, pp. 329–341.
+adapt the framework to accommodate recurrent models like                       [26] Y. Xiang and H. Kim, “Pipelined data-parallel CPU/GPU scheduling for
+RNNs, develop real-time adaptive window size optimization to                        multi-DNN real-time inference,” in Proc. IEEE Real-Time Syst. Symp.,
+adjust partitioning granularity, integrate predictive models for                    2019, pp. 392–405.
+                                                                               [27] T. Tan and G. Cao, “Thermal-aware scheduling for deep learning on
+proactive scheduling, and explore dynamic model quantization                        mobile devices with NPU,” IEEE Trans. Mobile Comput., vol. 23, no. 12,
+techniques tailored to specific hardware.                                           pp. 10706–10719, Dec. 2024.
+
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+7780                                                                                   IEEE TRANSACTIONS ON MOBILE COMPUTING, VOL. 25, NO. 6, JUNE 2026
+
+
+
+[28] H. Fan, S. I. Venieris, A. Kouris, and N. Lane, “Sparse-dysta: Sparsity-                                Zhiguo Zhang received the master’s degree from
+     aware dynamic and static scheduling for sparse multi-DNN workloads,”                                    the School of Computer Science and Technology, An-
+     in Proc. 56th Annu. IEEE/ACM Int. Symp. Microarchitecture, 2023,                                        hui University of Technology, Ma’anshan, China, in
+     pp. 353–366.                                                                                            2025. He is currently an engineer with China Telecom
+[29] S. Wang, G. Ananthanarayanan, and T. Mitra, “Optic: Optimizing collabo-                                 Corporation Ltd., Suzhou Branch, Suzhou, China.
+     rative CPU–GPU computing on mobile devices with thermal constraints,”                                   His research interests include deep learning edge
+     IEEE Trans. Comput.-Aided Des. Integr. Circuits Syst., vol. 38, no. 3,                                  inference, improving the efficiency of deep learning
+     pp. 393–406, Mar. 2019.                                                                                 models for edge device deployment, with an empha-
+[30] C. L. Liu and J. W. Layland, “Scheduling algorithms for multiprogram-                                   sis on real-time processing, and resource-constrained
+     ming in a hard-real-time environment,” J. ACM, vol. 20, no. 1, pp. 46–61,                               environments.
+     1973.
+[31] B. A. Shirazi, A. R. Hurson, and K. M. Kavi, Scheduling and Load
+     Balancing in Parallel and Distributed Systems. Hoboken, NJ, USA: Wiley,
+     1995.
+[32] J. A. Stankovic, M. Spuri, K. Ramamritham, and G. C. Buttazzo, Deadline
+     Scheduling for Real-Time Systems: EDF and Related Algorithms. New
+     York, NY, USA: Springer, 1998.                                                                         Praveen Kumar Donta (Senior Member, IEEE) re-
+[33] A. Demers, S. Keshav, and S. Shenker, “Analysis and simulation of a fair                               ceived the bachelor’s and master’s in technology (with
+     queueing algorithm,” ACM SIGCOMM Comput. Commun. Rev., vol. 19,                                        distinction) degrees from JNTUA, Ananthapur, in
+     no. 4, pp. 1–12, 1989.                                                                                 2014 and 2012, respectively, and the PhD degree
+[34] J. H. Anderson and A. Srinivasan, “Early-release fair scheduling,” in Proc.                            from IIT (ISM), Dhanbad, in 2021. He was a visiting
+     12th Euromicro Conf. Real-Time Syst., 2000, pp. 65–72.                                                 PhD fellow with Mobile&Cloud Lab, University of
+[35] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen, “Mo-                                      Tartu, Estonia, from 2019 to 2020. He was with Dis-
+     bileNetV2: Inverted residuals and linear bottlenecks,” in Proc. IEEE Conf.                             tributed Systems Group, TU Wien, as a postdoctoral
+     Comput. Vis. Pattern Recognit., 2018, pp. 4510–4520.                                                   researcher from 2021 to 2024. He is currently an
+[36] L.-C. Chen, G. Papandreou, F. Schroff, and H. Adam, “Rethinking atrous                                 associate professor (docent) with the Department of
+     convolution for semantic image segmentation,” 2017, arXiv:1706.05587.                                  Computer and Systems Sciences, Stockholm Univer-
+[37] A. Farhadi and J. Redmon, “YOLOv3: An incremental improvement,”               sity, Sweden. His research focuses on learning-driven distributed computing
+     Comput. Vis. Pattern Recognit., Springer, Berlin/Heidelberg, Germany,         continuum systems. He is also the Editorial board member of IEEE Internet
+     vol. 1804, pp. 1–6, 2018.                                                     of Things Journal, Computing Springer, ETT Wiley, and Scientific Reports
+[38] X. Zhou et al., “East: An efficient and accurate scene text detector,” in     Journals.
+     Proc. IEEE Conf. Comput. Vis. Pattern Recognit., 2017, pp. 5551–5560.
+[39] J. Deng, J. Guo, Y. Zhou, J. Yu, I. Kotsia, and S. Zafeiriou, “Retinaface:
+     Single-shot multi-level face localisation in the wild,” in Proc. IEEE/CVF
+     Conf. Comput. Vis. Pattern Recognit., 2020, pp. 5203–5212.
+[40] J. Deng, J. Guo, N. Xue, and S. Zafeiriou, “Arcface: Additive angular
+     margin loss for deep face recognition,” in Proc. IEEE/CVF Conf. Comput.
+     Vis. Pattern Recognit., 2019, pp. 4690–4699.                                                            Chinmaya Kumar Dehury (Member, IEEE) re-
+[41] C. Szegedy, S. Ioffe, V. Vanhoucke, and A. Alemi, “Inception-v4,                                        ceived the PhD degree with the Department of Com-
+     inception-resnet and the impact of residual connections on learning,” in                                puter Science and Information Engineering, Chang
+     Proc. 31st AAAI Conf. Artif. Intell., 2017, pp. 4278–4284.                                              Gung University, Taiwan. He was an assistant pro-
+[42] B. Sedlak, V. C. Pujol, P. K. Donta, and S. Dustdar, “Markov blanket                                    fessor with the Institute of Computer Science, Uni-
+     composition of SLOs,” in Proc. IEEE Int. Conf. Edge Comput. Commun.,                                    versity of Tartu, Estonia. He is currently an assis-
+     2024, pp. 128–138.                                                                                      tant professor with Computer Science Department,
+[43] S. Han, H. Mao, and W. J. Dally, “Deep compression: Compressing deep                                    IISER Berhampur, India. His research interests in-
+     neural networks with pruning, trained quantizat ion and huffman coding,”                                clude scheduling, resource management and fault
+     2015, arXiv:1510.00149.                                                                                 tolerance problems of cloud and fog computing, the
+[44] J. Wei et al., “NN-stretch: Automatic neural network branching for parallel                             application of artificial intelligence in cloud man-
+     inference on heterogeneous multi-processors,” in Proc. 21st Annu. Int.        agement, edge intelligence, Internet of Things, and data management frame-
+     Conf. Mobile Syst., Appl. Serv., 2023, pp. 70–83.                             works. His research results are authored or coauthored by top-tier journals and
+[45] S. Wang, G. Ananthanarayanan, Y. Zeng, N. Goel, A. Pathania, and T.           transactions such as IEEE Transactions on Cloud Computing, IEEE Journal
+     Mitra, “High-throughput CNN inference on embedded ARM big.LITTLE              on Selected Areas in Communications, IEEE Transactions on Parallel and
+     multicore processors,” IEEE Trans. Comput.-Aided Des. Integr. Circuits        Distributed Systems, and FGCS. He is a member of ACM India. He is also a PC
+     Syst., vol. 39, no. 10, pp. 2254–2267, Oct. 2020.                             member of several conferences and reviewer to several journals and conferences,
+[46] L. N. Huynh, Y. Lee, and R. K. Balan, “Deepmon: Mobile GPU-based              such as IEEE Transactions on Parallel and Distributed Systems, IEEE Journal
+     deep learning framework for continuous vision applications,” in Proc. 15th    on Selected Areas in Communications, IEEE Transactions on Cloud Computing,
+     Annu. Int. Conf. Mobile Syst., Appl., Serv., 2017, pp. 82–95.                 IEEE Transactions on Neural Networks and Learning Systems, and Wiley
+[47] D. Xu et al., “Niagara: Scheduling DNN inference services on hetero-          Software: Practice and Experience
+     geneous edge processors,” in Proc. Int. Conf. Service-Oriented Comput.,
+     2023, pp. 67–85.
+
+
+
+
+                          Yunquan Gao received the PhD degree from the                                       Xiujun Wang received the BS degree in computer
+                          Beijing University of Posts and Telecommunications.                                science and technology from Anhui Normal Univer-
+                          He is currently a lecturer with the School of Com-                                 sity, and the PhD degree in computer software and
+                          puter Science and Technology, Anhui Engineering                                    theory from the University of Science and Technology
+                          Research Center for Intelligent Applications and Se-                               of China. He is currently an associate professor with
+                          curity of Industrial Internet, Anhui University of                                 the School of Computer Science and Technology,
+                          Technology, Ma’anshan, China. He has authored or                                   Anhui University of Technology. His research in-
+                          coauthored papers in MSWiM and IoTJ. His research                                  terests include data stream processing, randomized
+                          interests include IoT networks, wireless communica-                                algorithms, and Internet of Things.
+                          tion, mobile edge computing, on-device AI inference.
+
+
+
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+GAO et al.: OPTIMIZING MULTI-DNN INFERENCE ON MOBILE DEVICES THROUGH HETEROGENEOUS PROCESSOR CO-EXECUTION                                              7781
+
+
+
+                       Dusit Niyato (Fellow, IEEE) received the BEng de-                                Qiyang Zhang (Member, IEEE) received the PhD
+                       gree from the King Mongkuts Institute of Technol-                                degree in computer science from the State Key Lab-
+                       ogy Ladkrabang (KMITL), Thailand, and the PhD                                    oratory of Networking and Switching Technology,
+                       degree in electrical and computer engineering from                               Beijing University of Posts and Telecommunications.
+                       the University of Manitoba, Canada. He is currently                              He was a visiting student with Distributed Systems
+                       a professor with the College of Computing and Data                               Group, TU Wien, from 2022 to 2023. He is currently
+                       Science, Nanyang Technological University, Singa-                                a postdoctoral researcher with Peking University. He
+                       pore. His research interests include mobile genera-                              has authored or coauthored papers in WWW, IN-
+                       tive AI, edge intelligence, quantum computing and                                FOCOM, IEEE Transactions on Mobile Computing,
+                       networking, and incentive mechanism design.                                      and IEEE Transactions on Services Computing. His
+                                                                                                        research interests include mobile edge computing and
+                                                                                                        edge intelligence.
+
+
+
+
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 14,2026 at 02:12:40 UTC from IEEE Xplore. Restrictions apply.
+

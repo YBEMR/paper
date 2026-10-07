@@ -1,0 +1,963 @@
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30
+DOI 10.1186/s13639-017-0078-6
+                                                                                                                               EURASIP Journal on
+                                                                                                                               Embedded Systems
+
+
+ R ES EA R CH                                                                                                                                Open Access
+
+Multi-criteria resource allocation in modal
+hard real-time systems
+Piotr Dziurzanski*         , Amit Kumar Singh and Leandro Soares Indrusiak
+
+
+  Abstract
+  In this paper, a novel resource allocation approach dedicated to hard real-time systems with distinctive operational
+  modes is proposed. The aim of this approach is to reduce the energy dissipation of the computing cores by either
+  powering them off or switching them into energy-saving states while still guaranteeing to meet all timing constraints.
+  The approach is illustrated with two industrial applications, an engine control management and an engine control
+  unit. Moreover, the amount of data to be migrated during the mode change is minimised. Since the number of
+  processing cores and their energy dissipation are often negatively correlated with the amount of data to be migrated
+  during the mode change, there is some trade-off between these values, which is also analysed in this paper.
+  Keywords: Hard real-time systems, Modal systems, Task allocation, Task migration, Low power design, Dynamic
+  voltage and frequency scaling
+
+
+1 Introduction                                                                      [5]. Typically, worst-case execution time (WCET) of a
+Electronic control units (ECUs) have become key com-                                runnable is much higher than the average execution time
+ponents of contemporary cars and compose powertrain,                                [6]. Hence, some techniques decreasing the gap between
+safety and comfort subsystems. The responsibility of these                          WCET and the average execution time are desired. In this
+ECUs concerns all the subsystems. As usually each func-                             paper, we exploit the modal nature of automotive applica-
+tionality is implemented in a separate ECU, their number                            tions, i.e. the fact that runnables’ execution time distribu-
+in a car sometimes reaches even 100 [1]. This approach                              tions vary depending on the overall system states, referred
+is not scalable, hence more effort has been put recently                            to as modes. Then the resource application process may be
+in the development of bus-based multi-core ECUs [2]                                 performed for each mode (almost) independently, provid-
+or even ECUs whose multiple cores are connected with                                ing different (lower) WCETs for runnables in the majority
+on-chip networks [3], capable of realising a number of                              of modes in comparison with their counterparts when the
+ever more sophisticated functionalities in one chip. These                          modal nature is not considered.
+functionalities are implemented in a form of so-called                                 To illustrate the concept of modes in an ECU, some
+runnables which are atomic software components.                                     characteristics of a gasoline engine control unit named
+  According to the AUTOSAR (automotive open sys-                                    DemoCar is presented in Fig. 1 (the idea of this picture
+tem architecture) standard [4], runnables are mapped to                             is based on [7]). They are measured from inserting a key
+processing cores in a static manner, i.e. in a way utterly deter-                   into ignition until reaching its full power. Five consecutive
+mined during the design-time. This approach is more pre-                            modes have been presented together with the correspond-
+dictable than dynamic (i.e. run-time) resource allocation                           ing throttle, revolutions per minute (RPM) and accelera-
+but usually leads to underutilised resources as the under-                          tion pedal positions. PowerUp is the starting mode which
+lying chips have to guarantee timing execution even for                             is present just after the key being inserted into the igni-
+the worst-case scenario, as the runnables in automotive                             tion. Then, the Stalled mode follows, in which the throttle
+systems are usually bounded by hard real-time constraints                           is still not open. The engine starts in the Cranking mode,
+                                                                                    hence the number of RPM increases reaching the idle
+*Correspondence: piotr.dziurzanski@york.ac.uk                                       RPM level. Then the mode is switched to Idle, which
+Department of Computer Science, University of York, Deramore Lane,                  remains until the driver pushes the accelerator pedal.
+Heslington, YO10 5GH York, UK                                                       This switches the current mode into Drive, in which the
+
+                                       © The Author(s). 2017 Open Access This article is distributed under the terms of the Creative Commons Attribution 4.0
+                                       International License (http://creativecommons.org/licenses/by/4.0/), which permits unrestricted use, distribution, and
+                                       reproduction in any medium, provided you give appropriate credit to the original author(s) and the source, provide a link to the
+                                       Creative Commons license, and indicate if changes were made.
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                         Page 2 of 16
+
+
+
+
+ Fig. 1 Modes in DemoCar
+
+
+
+
+throttle is wide open and the number of RPM is larger than              mode and presumably would require less resources and
+the idle RPM level.                                                     dissipate less energy. However, during mode change, the
+   It has been stressed in [7] that execution times of partic-          contexts of runnables that are executed on different cores
+ular runnables may differ significantly for various modes               in two subsequent modes need to be migrated from one
+of an ECU and thus applying different mappings for each                 core to another and the time of this migration shall be
+operating mode may be beneficial. This way a lower                      bounded, as hard real-time systems are considered in this
+number of cores could be needed than that of the corre-                 paper. Therefore, the worst case switching time has to be
+sponding system not considering operating modes. This                   assumed to provide the timing guarantees [8]. To migrate
+observation is true also for DemoCar. We can illustrate                 all involved runnables’ contexts during a required interval,
+it with two runnables: CylNumObserver and Instructions-                 some additional requirements for the available commu-
+Deviation, whose numbers of instructions to be executed                 nication bandwidth can be imposed. Thus the process
+during one runnables’ occurrence in the best- and worst-                of mode switching (e.g. from PowerUp to Drive) usually
+case scenarios are given in Table 1 (although this table                incurs overhead both in execution time and dissipated
+is a small subset of both states and runnables, for the                 energy, if an allocation needs to be changed. This over-
+sake of this example, we assume that there are no more                  head needs to be taken into account during schedulability
+states or runnables). From this table, it follows that the              analysis to decide whether an altered resource allocation
+largest number of operations to be executed during a sin-               for a particular mode is beneficial for the whole system
+gle occurrence (and hence the longest execution time) of                or not.
+runnable CylNumObserver is 543, and of InstructionsDe-                     In the example above, it has been demonstrated that
+viation − 5921. Thus to guarantee the schedulability of                 the difference in the number of operations to be exe-
+these runnables in the worst-case scenario, these extreme               cuted in various modes may be significant (in this par-
+values have to be assumed, totalling 6464 operations.                   ticular case it has been more than 76%). It means that
+However, these two extreme numbers of operations can-                   in some particular modes less computational resources
+not occur simultaneously, as the engine is either in mode               are required to execute all runnables before their dead-
+PowerDown or PowerUp. In the former, the maximum                        lines. These extra computational cores can be either
+number of operations during one runnable execution                      switched off, or transferred into a more energy saving
+totals 1464, whereas in the latter it is 6266. So we can                state if they support dynamic voltage and frequency scal-
+assume that even in the worst-case scenario the number                  ing (DVFS) technique. DVFS is universally popular in
+of operations to be executed does not exceed 6266. The                  CMOS circuits [9], in particular following the Advanced
+difference between the operation numbers in these modes
+suggests that less resources may be needed in PowerDown
+than in PowerUp, which arises the opportunity for some                  Table 1 Numbers of operations for two runnables in two states
+energy savings. This effect is even more visible when all               in the best-case and worst-case scenarios
+runnables and modes are considered, which is shown later                                        Mode
+in this paper.                                                                                  PowerDown              PowerUp
+   As stated above, there is a tempting possibility of per-             Runnable                Min. Op.    Max. Op.   Min. Op.   Max. Op.
+forming resource allocation and schedulability analysis
+                                                                        CylNumObserver          245         543        134        345
+for each mode independently. Such allocation will be
+                                                                        InstructionsDeviation   728         921        3728       5921
+feasible as long as the system remains in a particular
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                    Page 3 of 16
+
+
+
+
+Configuration and Power Interface (ACPI) open standard.                 2 Related works
+In this standard, several energy states, named P-states, are            Exploiting the knowledge about distinguishable operating
+introduced. In the highest P-state, P0, a processing core               modes in a system is tempting and thus modal systems
+works with the highest voltage and frequency level, but                 are an increasingly popular subject in research. Tradition-
+offers the best performance. In P1 and other modes, the                 ally, the research focused on single-processor systems [12]
+core works slower, but dissipates less energy, as dynamic               or, more recently, homogeneous bus-based multi-cores
+(or switching) power P is proportional to the square of                 [13]. As the contemporary microcontrollers dedicated to
+core supply voltage V and its clock frequency f, P ∝                    the automotive industry, such as Infineon TriCore, follow
+fV 2 . Since any reduction of core voltage requires an ade-             these architecture principles, the schedulability analysis
+quate decrease of the clock frequency, some trade-off                   presented in [14] may be directly applied to them when
+between energy savings and computation performance is                   modal applications are considered.
+expected.                                                                  Recently, Network on Chip (NoC) has been proposed
+  The DVFS technique seems to be particularly applica-                  as a base for integrated system architecture for auto-
+ble to hard real-time systems, as in these systems there                motive electronic systems in [15]. The authors of that
+are usually no additional benefits from faster task execu-              paper argued that the proposed architecture provided the
+tion as long as it is before the deadline. Therefore, slower            required composability level and error containment to
+executions at lower voltage and frequency levels can be                 integrate multiple functions on a single ECU. In [3], the
+performed in order to lower energy dissipation if all the               authors discussed the major benefits of using NoCs in
+deadlines are satisfied.                                                the automotive domain, such as complexity reduction,
+  Contribution: In this paper, we consider various modes                reduction of resource requirements, increased depend-
+of automotive applications to be mapped into a NoC-                     ability, legacy reuse and economic benefits. In [16], it was
+based multi-core system. We determine a quasi-optimal                   shown how NoCs can handle delay faults or process varia-
+allocation for each mode by employing a genetic algo-                   tions in automotive applications. The increased reliability
+rithm based approach. The genetic algorithm is a well-                  was demonstrated in a scenario when processing cores
+known metaheuristic inspired by the process of natural                  become faulty one after another or in a case of a single
+selection that belongs to the larger class of evolutionary              link or router fault. This result was achieved by apply-
+algorithms. It is commonly used to generate high-quality                ing a dependable routing algorithm and dependable task
+solutions to optimization and search problems by rely-                  execution. Additionally, the underlying processing cores
+ing on bio-inspired operators such as mutation, crossover               were efficiently used for load balancing. Considering all
+and selection [10]. Reference [10] details more about                   these benefits, a NoC architecture may be expected to be
+genetic algorithms. This approach performs optimization                 applied in the automotive industry in foreseeable future
+for energy dissipation and migration cost in terms of the               and thus it has been also used in the solution proposed in
+context length of the transferred runnables. To guarantee               this paper.
+that the mode switching migration finishes in the required                 Since the number of possible scenarios in NoC-based
+time, the traditional schedulability analysis is used to                multi-cores is typically prohibitively high [17], a number
+determine the necessary network bandwidth. A trade-off                  of research activities aims at developing design-time (off-
+between the amount of transferred data during a mode                    line) heuristics to reduce the number of operating points
+change and the energy dissipation in the following state is             in the design space exploration (DSE) process [17]. The
+investigated.                                                           DSE process can be carried out using classic heuristic
+  A preliminary version of this work has been published                 techniques for clustering modes so that their final num-
+in [11]. This paper extends the work in [11] by including               ber is manageable. Then, during run-time of that system,
+more detailed explanations and experimental results.                    a run-time manager (RTM) determines the current mode
+  The proposed approach can be applied to any hard real-                out of an explicitly given set by observing some variables
+time systems, where different operating modes can be                    of the model [7].
+identified, and automotive systems in particular.                          Two different mapping approaches are proposed in [18],
+  This paper is organised as follows. In the next section,              but they do not allow task migration, i.e. once a task is
+the state-of-the-art solutions are reviewed. Then, the                  assigned to a processing core, it remains there until its
+adopted application and platform models together with                   computation is finished. In contrast, Benini et al. [19]
+the problem formulation are described. In the follow-                   allowed tasks to migrate between processing cores when
+ing section, the steps of the proposed design flow                      the envisaged performance gain is higher than the pre-
+are presented. Then, they are experimentally evalu-                     computed migration cost.
+ated using two electronic control units from Robert                        The possible modes and transitions between them can
+Bosch GmbH. The paper is finalised with concluding                      be shown in a formal way in order to analyse the worst
+remarks.                                                                case switching time between two modes. An example
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                      Page 4 of 16
+
+
+
+
+formal way could be to use finite state machines (FSMs),                no proposal of any other method that jointly addresses
+as proposed in [20]. An FSM is an abstract machine that                 the problems of (i) guaranteeing no hard deadline viola-
+can be in exactly one of a finite number of states at any               tion during mode switching, (ii) performing schedulability
+given time. The FSM can change from one state to another                analysis for NoC-based multi-core systems, (iii) finding
+in response to some external inputs; the change from                    a trade-off between migration data amount and energy
+one state to another is called a transition. An FSM is                  dissipation.
+defined by a list of its states, its initial state, and the condi-        A preliminary version of this work is published in [11],
+tions for each transition. This facilitates to identify all the         which has been extended with more detailed explanations
+allowed modes, represented as states in the FSM, and the                and results.
+transitions between them and to check the cost of mode
+switchings. In [21], for H.264 decoder, an average switch-              3 System model
+ing time overhead between two modes has been measured                   In this paper, we investigate ways to determine whether an
+to be equal to 0.2% of the total system time. This slight               automotive modal application executing and communi-
+value has been caused by a low number of the existing                   cating over a specific network on chip can meet all its hard
+modes, obtained due to the clustering, and thus relatively              deadlines. Therefore, we need a system model that covers
+rare switching. In [22], the authors suggest to map as many             the modal application as well as the NoC-based platform
+tasks as possible to the same core in various modes to                  and its configurations.
+avoid the data or code items to be moved between differ-
+ent resources when switching between modes. However,                    3.1 Application model
+this condition does not take into consideration different               In this work we assume that the application model is con-
+context sizes of the tasks. In the proposed approach, we                sistent with the AUTOSAR standard [4]. Each application
+minimise the amount of data to be migrated instead.                     (or taskset)  includes a set of p tasks with hard real-
+  To guarantee hard real-time constraints during task                   time constraints which can be represented with a vector
+migration, a methodology is proposed in [23]. How-                       = [ τ1 , . . . , τp ]. As this paper concerns the automotive
+ever, a costly schedulability analysis is performed during              domain, these tasks are referred to as runnables. The more
+run-time. Further, experiments supporting their proposed                general term task will only be used in reference to other
+approach are not provided, but one may predict that the                 application domains.
+overload of that dynamics could be considerable.                           The taskset’s properties depend on the current mode μ
+  The approach closest to the approach described in this                of the application. The runnables are periodic and each
+paper is that of [7], where mode transition points in an                occurrence of a runnable is named a job. The taskset is
+engine management system are identified and it is shown                 known in advance, including the WCET of each runnable
+that a load distribution by mode-dependent task alloca-                 in every mode μ, μ = {1, . . . , m}, its period, priority and
+tion is better balanced in comparison with a static task                its relative deadline equal to this period. Runnables are
+allocation. However, in contrast to our approach, the task              atomic schedulable units communicating with each other
+migration costs have not been considered.                               with so called labels, which are memory locations of a
+  In our prior work [24], an earlier version of the proposed            particular length. The order of read and write operations
+approach has been presented. In that version, DVFS has                  to labels denotes the runnable dependencies, as the write
+not been exploited, thus only a single objective genetic                operation to a particular label should be completed before
+algorithm has been employed to find a quasi-optimum                     its reading. We assume that the labels are stored in the
+mapping, whereas in this paper we use a two-objective                   same NoC nodes as the runnables that read these labels.
+genetic algorithm and also encode core voltage/frequency                Consequently, if more than one runnable mapped to dif-
+levels into individuals. The contribution of that paper has             ferent cores read from the same label, its content is to be
+focused mainly on the issue of schedulability in each mode              replicated to all the NoC nodes with these cores and the
+and also during mode changes, whereas in this paper we                  writer should update the label value at all these locations.
+present multiple solutions in a form of a Pareto frontier to            It means that the writer is aware of all its readers and
+choose a solution representing a trade-off between migra-               knows their locations in all the possible modes.
+tion time and the energy dissipated in the future mode.                    Similarly to [23], we split a runnable’s context into two
+Also, different modes in the DemoCar example have been                  parts: (i) invariant, which is not modified at run-time and
+identified.                                                             (ii) dynamic, including all volatile memory locations. We
+  The close observation of literature survey indicates that             assume that an upper bound of the dynamic part size of
+designing NoC-based real-time systems with distinguish-                 all runnables is known in advance.
+able operating modes has been mainly limited to soft                       All possible modes of the application together with the
+timing constraints, which means deadline violations could               allowed transitions between them are known. They may
+occur. To the best of our knowledge, there has been                     be described using a finite state machine, similar to the
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                    Page 5 of 16
+
+
+
+
+one presented in Fig. 2, where seven modes and 16 pos-
+sible transitions are shown. Deadlines for mode switching
+time between each neighbouring pair of modes shall also
+be provided.
+
+3.2 Platform model
+The hardware platform assumed in this paper is a mesh
+network on chip (NoC). The rationale behind this choice
+is due to its several benefits as presented in the Related
+works section.
+   The considered NoCs are assumed to have x · y nodes
+with cores,  = {π1,1 , . . . , πx,y } and local memories, and
+the same number of routers  = {ψ1,1 , . . . , ψx,y }, as
+shown in example in Fig. 3. Each link is modelled as a                   Fig. 3 An example many-core system platform
+single resource, so, for example, to transfer a portion of
+data from π1,2 to appropriate sink π3,1 , we need such link
+resources allocated simultaneously: π1,2 −ψ1,2 , ψ1,2 −ψ2,2 ,           3.3 Problem formulation
+ψ2,2 − ψ3,2 , ψ3,2 − ψ3,1 , ψ3,1 − π3,1 .                               Given a platform and an application model with a defined
+   In every mode, each runnable is mapped to one core and               set of operating modes, the problem is to determine
+a label is stored in the local memories of the cores request-           schedulable mappings for each mode so that the amount
+ing that label. The data between two nodes is transmitted               of data to be migrated during the allowed mode changes
+in packets. Each packet is comprised of a header, which                 and energy dissipated by the platform are minimised.
+includes the necessary control fields such as the desti-                   It might be possible that by increasing the amount of
+nation address, and a payload with an actual intended                   data to be migrated during a given mode change, the total
+data. Data transfer overhead is taken into consideration,               energy consumption might be minimised because of a bet-
+assuming constant time for transferring a single flit (Flow             ter mapping in the following mode. Therefore, a trade-off
+control digIT, a piece of a network package whose length                between these two objectives might exist and it should
+usually equals the data width of a single link) between                 be illustrated with a Pareto frontier of points representing
+two neighbouring cores if no contentions are present. If                different energy consumption and amount of data to be
+a source and a target cores are not adjacent or if any                  migrated.
+contention exists among the data transfers, the worst-                     During mode switching, the taskset should be still
+case transfer time is determined using the algebraic model              schedulable despite the additional network traffic gen-
+described in [25]. Timing constants for packet latencies                erated by the runnable migrations. The neighbouring
+while traversing one router and one link are given and                  modes with similar runnables’ execution time can be clus-
+denoted as dR and dL , respectively. The priority of data               tered. This way, the number of modes is lower as clusters
+transfer packets is assumed to be equal to the priority                 are used to group a set of modes into a single mode.
+of the runnable sending them. The processing cores can                  Such reduction in the number of the existing modes can
+operate under a given set of voltage and frequency levels,              decrease the frequency of the runnable migrations, which
+but the links have no P-states.                                         is explained later in this paper.
+
+
+
+
+ Fig. 2 FSM describing modes in DemoCar
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                       Page 6 of 16
+
+
+
+
+  The deadlines for mode switching time between each                      In the remaining part of this section, we firstly explain
+neighbouring pair of modes must not be violated.                        the steps performed off-line, followed by the description
+                                                                        of the dynamic stage.
+4 Proposed approach
+In this section, the steps of the proposed design flow are              4.1 Mode detection/clustering
+described. Since it has been assumed that the tasksets                  During analysis of a modal system it may happen that
+of the considered applications are known in advance, it                 runnables executed in neighbouring modes (i.e. the modes
+is possible to perform the majority of the required com-                connected in the FSM) have similar WCETs and resource
+putations statically. Consequently, the mapping problem                 utilisations. In such case, there is little benefit in determin-
+can be split into two stages: off-line (static) and on-line             ing two separate mappings for these modes and migrating
+(dynamic), as shown in Fig. 4. The computation time of the              the runnables’ contexts during transitions between these
+off-line part is not crucial and thus heuristics with even              modes. It would be more reasonable to cluster these states
+high complexity, such as genetic algorithms, may be used                and treat them as a single mode in the further steps of the
+for runnable and label mappings.                                        proposed approach.
+   During the application run-time, detection of the cur-                 Similarly, some transitions between modes may have
+rent mode is assumed to be done by observing a certain                  to be done immediately, whereas others can be less time
+variable. When a value of this variable is being changed,               tight. If runnable contexts’ migration has to be performed
+the current runnable and label mapping might need to                    quickly, for example between two consecutive runnable
+be switched. The mappings have been identified at the                   occurrences (jobs), the bandwidth needed to transfer the
+design-time while trying to minimise the amount of data                 appropriate amount of data in that time may be unrea-
+to be migrated during the static mapping for both initial               sonably wide. In such situation, clustering of these modes
+and non-initial modes. Schedulability analysis guarantees               shall also be considered.
+that even the worst case switching time does not violate                  The proposed approach is agnostic with respect to the
+the deadline required for mode changes. If such violation               chosen clustering method. In our implementation, the
+is unavoidable, either the states should be clustered, or the           popular k-mean algorithm has been applied, whose idea
+network bandwidth is to be increased.                                   was given in [26] for the first time. The features used for
+                                                                        clustering are the WCETs (or the numbers of operations
+                                                                        to be executed in the worst-case scenario) of particu-
+                                                                        lar runnables. Each mode is represented as a point in a
+                                                                        p-dimensional vector space, referred later to as feature
+                                                                        space. In the k-mean algorithm, a number of clusters, k,
+                                                                        and m points in the p-dimensional feature space are pro-
+                                                                        vided as inputs. The number of clusters represents the
+                                                                        number of groups in which all the points in the feature
+                                                                        space need to be partitioned by employing a clustering
+                                                                        algorithm, for example, the k-mean clustering algorithm.
+                                                                        An appropriate value of k is often evident due to the
+                                                                        knowledge about the relations between m modes in the
+                                                                        considered application. If this knowledge is limited, one of
+                                                                        the numerous existing solutions can be used to determine
+                                                                        the right value of k, e.g. [27].
+                                                                          Initially, the k first points are treated as single-element
+                                                                        clusters, and the remaining m − k points are assigned
+                                                                        to the cluster with the nearest centroid based on the
+                                                                        Euclidean distance. Then, the centroid for each cluster
+                                                                        is recomputed. These two stages, i.e. assigning points to
+                                                                        the cluster with the nearest centroid and the centroid re-
+                                                                        computation are repeated until convergence. A set of k
+                                                                        clusters is returned as output. The modes grouped into
+                                                                        one cluster are merged into one mode in which WCET
+                                                                        for each runnable is equal to the maximal WCET for the
+                                                                        particular runnable in any mode grouped in this cluster.
+ Fig. 4 Steps of the proposed energy aware dynamic resource
+ allocation method benefiting from modal nature of applications
+                                                                          This concept may be illustrated with the following sim-
+                                                                        ple example. Let us have an application with p = 2
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                                    Page 7 of 16
+
+
+
+
+runnables  = [ τ1 , τ2 ] in m = 5 distinctive modes. As                weight of edge (vk , vl ) ∈ E , ω(vk , vl ) is equal to the sum of
+there are only two runnables, the m points in a feature                 weights of edges (vk , vl ) ∈ E and (vl , vk ) ∈ E.
+space have two dimensions, one corresponding to the                       We use an algorithm for undirected graphs, as we take
+WCET for τ1 and the second one corresponding to the                     into consideration the probability of mode switching in
+WCET for τ2 , and thus they can be shown on a plane.                    both directions, i.e. the sum of these probabilities for two
+These feature points are presented as five circles in Fig. 5,           directed edges connecting these states in the related FSM
+where the OX and OY coordinates represent the WCETs                     (the weights cannot be thus treated as probabilities in the
+(in ms) for τ1 and τ2 , respectively. The number of clusters            undirected graph as they may be higher than 1).
+has been set to k = 3 and thus three centroids have been                  To guarantee a single analysis of each mode while fol-
+found, shown in the figure with crosses. The lines in the               lowing the most probable paths, a maximum spanning
+figure divide the plane into segments that are closer to a              tree can be constructed. We recollect that a spanning tree
+certain centroid than to the remaining ones. The modes                  of a graph G(V , E ) is its subgraph T(V , E ) which is con-
+described with the feature points belonging to the same                 nected and whose number of edges is equal to the number
+segment are merged into a single mode. For example, in                  of vertices minus 1, |E | = |V | − 1. If T denotes the
+the uppermost segment two feature points can be found:                  set ofall spanning
+                                                                                             trees of G, a maximum spanning tree
+[ 1, 5] and [ 2, 6]. After merging the corresponding modes,                         
+                                                                        Tmax V , Emax    of G is a spanning tree if and only if:
+the WCET for the clustered mode equals max(1, 2) =
+2 ms for τ1 and max(5, 6) = 6 ms for τ2 .                                                                          
+                                                                                ∀ 
+                                                                            T(V ,E )∈T
+                                                                                                      ω(v, z) ≥               ω(v, z),
+                                                                                                
+                                                                                         (v,z)∈Emax               (v,z)∈E
+4.2 Spanning tree construction
+In the proposed approach, the FSM describing the modes
+is traversed starting from the initial mode and then the                where ω(v, z) is the weight value assigned to the edge
+runnable migration corresponding to each traversed tran-                from a vertex v to z. A maximum          spanning tree can
+sition is analysed. In this traversal, each mode should be              be constructed in time O |E |log|V | using the classic
+analysed exactly once as only one mapping is assigned to                Prim–Jarník’s algorithm [28].
+one mode. If a particular mode can be reached from a                       According to this greedy algorithm, a tree is initialised
+number of different modes, the most probable transition                 with an arbitrary vertex. In our implementation, we select
+shall be chosen. Hence the FSM describing mode changes                  the vertex corresponding to the initial state in the FSM.
+should include weights denoting state transition proba-                 Then, in each step, one vertex is chosen and added to the
+bilities. These probabilities can be given or determined                tree. This selected vertex is not yet in the tree and is con-
+during a simulation of the modal system. Then, the FSM is               nected with any tree vertex with an edge having the largest
+treated as a weighted directed connected graph G(V , E),                weight. This operation is repeated until all vertices are
+where V is the set of vertices {v1 , v2 , . . .} and E denotes the      added to the tree.
+set of directed edges. We firstly convert this graph into its              Let us illustrate this idea with a simple example, an FSM
+undirected counterpart, G(V , E ), where set E includes an            with three states, A, B and C, presented in Fig. 6a. The cor-
+edge (vk , vl ) if and only if (vk , vl ) ∈ E ∨ (vl , vk ) ∈ E. The     responding undirected weighted graph is shown in Fig. 6b.
+                                                                        Vertex A is selected as the first vertex of the spanning
+                                                                        tree (Fig. 6c). Two vertices are adjacent to the spanning
+                                                                        tree, B and C, which is shown in the figure with dashed
+                                                                        lines. In the next step, vertex B is added to the span-
+                                                                        ning tree, as it is connected with vertex A with an edge
+                                                                        with the largest weight, ω(A, B) = 0.9 (Fig. 6d). Vertex
+                                                                        C is adjacent to the tree and can be connected to ver-
+                                                                        tex A or B. Then, in the third step, vertex C is connected
+                                                                        to vertex B as this edge has a larger weight, ω(B, C) =
+                                                                        1.4 > ω(A, C) = 0.7. Since all the vertices have been
+                                                                        added to the spanning tree, the Prim–Jarník’s algorithm is
+                                                                        completed. The maximum spanning tree is presented in
+                                                                        Fig. 6e.
+                                                                           Notice that the operation performed in this step nei-
+                                                                        ther influences the application behaviour nor limits
+                                                                        the possible mode transitions. It only makes the least
+ Fig. 5 Example of five modes grouped into three clusters               frequent transitions not optimized during the further
+                                                                        stages.
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                                 Page 8 of 16
+
+
+
+
+ Fig. 6 Example of the maximum spanning tree construction: FSM describing mode changes (a), the correponding undirectional graph (b), first (c),
+ second (d) and third (e) step of the Prim-Jarník’s algorithm
+
+
+
+
+4.3 Static mapping
+In the proposed approach, the algorithms for resource
+allocation in the initial and the remaining modes vary, and
+thus they are presented separately in the following two                     Algorithm 1: Pseudo-code of no deadline violation
+subsections.                                                                with energy minimisation algorithm for the initial
+                                                                            mode mapping
+4.3.1 Initial mode                                                           inputs : Workload ;
+Algorithm 1 presents a pseudo-code of a genetic algo-                                 Resource set ;
+rithm that can be used to identify a mapping for the initial                 outputs : Runnable mapping; Core P-states;
+mode. The algorithm ensures that no deadline violation
+                                                                              1  Generate an initial random population of
+occurs under the chosen allocation. We propose to use
+                                                                                runnable mappings and P-states;
+two fitness functions—measuring (i) the number of dead-
+                                                                              2 while not termination condition do
+line violations and (ii) the total energy dissipated by the
+                                                                              3     Evaluate the number of deadline violations;
+resources. The first fitness function value is of primary
+                                                                                   //criterion (i)
+importance, as in a hard real-time system no deadline
+                                                                              4     Evaluate the dissipated energy; //criterion (ii)
+violation is allowed. However, among fully schedulable
+                                                                              5     Group together the individuals with the same
+mappings, the one leading to a lower dissipated energy is
+                                                                                   number of deadline violations;
+chosen.
+                                                                              6     Sort the groups by increasing number of
+   Each chromosome in the genetic algorithm contains
+                                                                                   deadline violations;
+genes of two types, as shown on the top of Fig. 7. The first
+                                                                              7     Sort individuals in each group with respect to
+p genes indicate the target cores for p runnables and the
+                                                                                   the dissipated energy;
+remaining || genes (for a mesh NoC || = x · y, where x
+                                                                              8     Perform tournament selection; //criterion (i)
+and y are the mesh dimensions) specify the P-states of the
+                                                                                   has higher priority than criterion (ii)
+consecutive cores.
+                                                                              9     Generate individuals using crossover and
+   In the algorithm, the following two main steps can be
+                                                                                   mutation;
+singled out.
+                                                                             10     Create a new population with the best found
+   Step 1. Initial population generation (line 1). An arbi-
+                                                                                   mappings;
+trary number of random individuals (runnable mappings
+                                                                                end
+and P-states) is created.
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                       Page 9 of 16
+
+
+
+
+ Fig. 7 Genes in chromosomes
+
+
+
+   Step 2. Creating a new population (lines 3–10). For each             long as a termination condition is not fulfilled, which can
+individual, values of the two fitness functions (the number             be a maximal number of generated populations or lack of
+of deadline violations and dissipated energy (lines 3–4))               improvement in a number of subsequent generations.
+are computed. Individuals with the same number of dead-                   For example, assume that a population is comprised of
+line misses are grouped together (line 5). The groups                   four individuals, i1 , i2 , i3 and i4 . The evaluation of these
+are then sorted with respect to the number of deadline                  individuals made in line 3 shows that for individuals i1 and
+violations in the ascending order (line 6). Inside each                 i3 as many as 2 deadlines are missed, whereas the map-
+group, individuals are sorted according to their grow-                  pings for i2 and i4 are schedulable considering the P-state
+ing dissipated energy (line 7). The tournament selection                assignments encoded in these individuals. According to
+is then performed, where individuals from a group with                  the energy dissipation evaluated in line 4, i1 dissipates the
+a lower number of deadline violations are always pre-                   lowest energy, followed by i2 , i3 and i4 (in this order).
+ferred, whereas among the individuals from one group                      Since i1 and i3 violate the same number of deadlines,
+the one with the lower dissipated energy is to be chosen                they are joined together in one group, Group1 , accord-
+(line 8). The computation of the tournament outcome is                  ing to line 5. Individuals i2 and i4 are grouped together in
+characterised with low overhead due to the appropriate                  Group2 as they do not violate any deadline. In each group,
+ordering of the groups and individuals in each group per-               the individuals are sorted with respect to the dissipated
+formed earlier. The individuals winning the tournament                  energy in the ascending order (line 7).
+are then combined using a typical crossover operation and                 In the tournament selection performed in line 8, each
+mutated (line 9). Then, a new population is created from                individual from Group2 wins over any individual from
+these individuals (line 10). Step 2 is repeated in a loop as            Group1 , as the number of violated deadlines is the more
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                    Page 10 of 16
+
+
+
+
+important criterion. So, for example, i4 beats i1 despite               and DMα1 ,Mβ2 = [ 1, 0, 1]. The migration costs between
+dissipating more energy. If a tournament is performed for               these mappings are cMα1 ,Mβ1 = DMα1 ,Mβ1 · WT = 200 and
+two individuals from the same group, i.e. violating the                 cMα1 ,Mβ2 = DMα1 ,Mβ2 · WT = 250 bytes. If minimisation of
+same number of deadlines, the individual characterised                  the migrated data size is the only criterion, mapping Mβ2
+with a lower energy dissipation is the winner. For example,             shall be chosen for mode β.
+if both individuals from Group1 enter the tournament, i1                  A recursive greedy algorithm for reducing the amount
+becomes the winner.                                                     of data transferred during mode changes is presented in
+                                                                        Algorithm 2.
+4.3.2 Non-initial modes
+As mentioned earlier, it is of primary importance to
+migrate as little data as possible during mode changes to                Algorithm 2: Pseudo-code of a migration data
+minimise the migration time and energy. However, it may                  transfer and energy minimisation algorithm
+be beneficial to migrate more data if the energy dissipated                 inputs : A spanning tree ST based on Finite
+in the next mode is much lower than the migration energy.                              State Machine (FSM) describing the
+Thus, there could be some trade-off between migration                                  system modes with transaction
+data (or time) and energy dissipation in the next mode. It                             probabilities;
+is a role of a designer to choose a proper solution from the                           W - size of each runnable memory
+Pareto frontier.                                                                       footprint;
+   A mapping M is a vector of p core locations, M =
+[ πτ1 , . . . , πτp ], where each element corresponds with the              outputs : Runnable and label mapping for each
+appropriate element of  (taskset) and can be substituted                             mode; P-states for cores in each mode;
+with any element of set  (processing cores).                               1  α ← the state of ST corresponding to the
+   To perform optimization for the migration cost that                        initial state of FSM;
+considers the context length of the transmitted runnables,                  2 Mα ← a set of schedulable mappings in mode
+weight vector W is introduced. Each element of this vector                    α;
+W = [ wτ1 , . . . , wτp ] is equal to the amount of data that has           3 Mα ← the mapping in Mα that dissipates the
+to be transferred when a particular runnable (τ1 , . . . , τp ) is            lowest amount of energy;
+migrated, including the labels to be read or written.                       4 forall the β being a direct successor of α in ST
+   Let Mα and Mβ be sets of mappings (i.e. sets of M vec-                     do
+tors) that are fully schedulable in a given system in modes                 5      Mβ ← FindMappingMin(α, β, Mα );
+α and β, respectively. The elements of the difference vec-                    end
+tor DMα ,Mβ = [ dτ1 , . . . , dτp ] indicate which runnables are
+to be migrated when the mode is changed from α to β.                            procedure FindMappingMin(η, κ, Mη )
+Each element dδ , δ ∈ {τ1 , . . . , τp }, takes value 1 if the par-        1.1  Mκ ← a Pareto frontier of schedulable
+ticular runnable is allocated to different cores in mappings                   mappings in κ minimizing criterion Eq. (2) and
+Mα ∈ Mα and Mβ ∈ Mβ , and 0 otherwise:                                         energy dissipation in mode κ using W;
+                                                                           1.2 Mκ ← the mapping in Mκ selected with
+           
+               1, if Mα,δ = Mβ,δ ,                                            respect to design priorities;
+    dδ =                                                        (1)
+               0, otherwise.                                               1.3 forall the ι being a direct successor of κ in ST do
+                                                                           1.4     Mι ← FindMappingMin(κ, ι, Mκ );
+where Mα,δ and Mβ,δ denote the δ-th element of vectors                         end
+Mα and Mβ , respectively. The migration cost c between                     1.5 return Mκ ;
+two modes α and β is then computed in the following way
+
+    cMα ,Mβ = DMα ,Mβ · WT .                                    (2)       Since some cycles are likely to occur in a graph rep-
+                                                                        resenting the finite state machine describing transitions
+   For example, we consider a taskset with three                        between modes, a maximum spanning tree (ST) is to be
+runnables  = [ τ1 , τ2 , τ3 ]. The elements of vector W =              built, as described earlier. Then the mode corresponding
+[ 100, 200, 150] describe the context lengths (in bytes)                to the initial state of the FSM is selected as the current
+of τ1 , τ2 and τ3 , respectively. Let, there is one map-                mode (line 1). For this mode, a set of schedulable map-
+ping in mode α, Mα = {Mα1 } and two mappings in                         pings is generated, e.g. with Algorithm 1 (line 2). If more
+mode β, Mβ = {Mβ1 , Mβ2 }, where Mα1 = [ π1 , π1 , π2 ],                than one schedulable mapping is found, the one leading
+Mβ1 = [ π1 , π2 , π2 ] and Mβ2 = [ π2 , π1 , π1 ]. Thus the cor-        to the lowest energy dissipation is selected (line 3). Then
+responding difference vectors equal DMα1 ,Mβ1 = [ 0, 1, 0]              for each direct successor of the ST vertex corresponding
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                    Page 11 of 16
+
+
+
+
+to the FSM initial state, the FindMappingMin procedure                    The dynamic (i.e. changeable) part of the context shall
+is executed (lines 4 and 5).                                            be migrated at once using the last job of the periodic
+   In the FindMappingMin procedure, a Pareto frontier of                server. It means that the local memory locations that can
+schedulable mappings for that successor vertex is found                 be modified by the runnable must not be precopied, but
+using two criteria: (i) minimal migration cost criterion                migrated after the last execution of the runnable in the
+represented by Eq. (2) and (ii) minimal energy dissipated               old location. This requirement can influence the mini-
+in the next mode (line 1.1). The most suitable schedu-                  mum periodic server size (i.e. the time allocated to it by a
+lable mapping is chosen from the Pareto frontier based                  scheduler in each hyperperiod, where hyperperiod is the
+on the design priorities (line 1.2). The FindMappingMin                 least common multiple of all runnables’ periods) and, con-
+procedure is then recursively run for each direct succes-               sequently, the network bandwidth, as it must be then wide
+sor of the ST vertex provided as the function parameter                 enough to guarantee migration of the dynamic part before
+(lines 1.3 and 1.4).                                                    the next runnable’s job execution (in the new location).
+   More mappings could be delivered to the FindMapping-                   In the proposed approach, any kind of periodic servers
+Min procedure to browse a larger search space by skipping               can be used. However, the trade-off between implementa-
+lines 3 and 1.2 in the algorithm and providing all elements             tion complexity and ability to guarantee the deadlines of
+of Mα instead of just one. It is the role of a designer to set          hard real-time runnables, as described for example in [30],
+priorities between the migration time and energy dissipa-               shall be considered. More details regarding the applied
+tion to select the most suitable solution from the Pareto               schedulability analysis scheme in the proposed approach
+frontier.                                                               are provided in [24].
+   If Algorithm 2 is applied to the example spanning tree
+presented in Fig. 6e, mode A is substituted to α as it                  4.5 On-line steps
+corresponds with the initial state of the FSM shown                     In the proposed approach, three steps are performed on-
+in Fig. 6a. Then the mapping Mα that is schedulable                     line: Detection of current mode, Mapping switching and
+and dissipates the lowest amount of energy is deter-                    Changing voltage/frequency levels of cores.
+mined using Algorithm 1. As there is only one direct                       In all the ECUs known to the authors of this paper, the
+successor of mode A in the spanning tree, the Find-                     system modes are defined explicitly and there is a possi-
+MappingMin procedure is executed for mode B. In this                    bility of determining the current mode by observing some
+procedure, a Pareto frontier between schedulable map-                   system model variables, similarly to [7]. (For example, in
+pings in mode B minimizing energy dissipation in B                      DemoCar such variable is named _sm and is stored in
+and the amount of data to be transferred during mode                    runnable OperatingModeSWCRunnableEntity.)
+switching from A to B is determined. After selecting the                   When the mode change is requested, an agent residing
+appropriate mapping using the assumed design priori-                    in each core prepares a set of packages with runnables
+ties, procedure FindMappingMin is executed again for                    to be migrated via the network. This agent is configured
+mode C, the only successor of mode B in the spanning                    statically and is equipped with a table with information
+tree.                                                                   about runnables that need to be migrated during a partic-
+                                                                        ular mode change. Then the contexts of these runnables
+4.4 Schedulability analysis                                             are migrated. In the following hyperperiods, runnables
+The proposed runnable mapping technique aims to ben-                    are transported using periodic servers of the length deter-
+efit from the modal nature of applications, but it also                 mined statically using schedulability analysis, as described
+possesses new challenges. If the modes are treated inde-                earlier. The agent is aware of the number of periodic
+pendently from each other, the end-to-end schedulabil-                  server jobs that have to be used during the whole migra-
+ity of runnables and packet transmission in each mode                   tion process, and has the dynamic (volatile) portion of the
+can be analysed using equations from [29]. However, the                 context identified. This part of the context is to be trans-
+instant of transition between the modes requires special                mitted in a single job of the periodic server, just after the
+attention, as additional migration-related traffic appears              last execution of the runnable at its old location. After
+including the whole contexts of the runnables and labels to             migrating the dynamic part of the runnable’s context, it is
+be migrated. To guarantee the taskset schedulability dur-               removed from the earlier (migration source) core.
+ing migration, we propose to treat a migration process as                  Simultaneously, the same agent can receive migration
+any other asynchronous process in the typical schedulabil-              data from other agents in the network. When the precom-
+ity analysis, i.e. to use so-called periodic servers, which are         puted (during the design-time) number of hyperperiods
+periodic tasks executing aperiodic jobs. When a periodic                elapses, the contexts of these runnables are fully migrated
+server is executed, it processes pending runnable migra-                and are ready to be executed on the migration target core.
+tion. If there is no pending migration, the server simply                  Before the first execution of a runnable in a new mode,
+holds its capacity.                                                     the agent switches the P-state of the processing core to
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                          Page 12 of 16
+
+
+
+
+the value determined during the static analysis, described              Table 2 Numbers of operations for runnables in all three modes
+earlier in this paper.                                                  of the ECM application in the best-case and worst-case scenarios
+  The details of the agent depend on the underlying oper-                                Mode 1               Mode 2           Mode 3
+ating system. Regardless of its implementation, Detection               Runnable     Min. Op. Max. Op. Min. Op. Max. Op. Min. Op. Max. Op.
+of current mode shall be characterised by low compu-                    Runnable_01 12       363       12        363      12       363
+tational complexity and thus shall impose low overhead
+                                                                        Runnable_02 0        2         0         0        0        2
+for the system during run-time. The number of the
+hyperperiods required for performing runnable migra-                    Runnable_03 29       222       0         0        29       222
+tion during Mapping switching depends on the size of                    Runnable_04 300000 600000      300000 600000      2        121
+runnables and labels to be transferred, mappings, and                   Runnable_05 55000    60000     55000     60000    5        209
+network bandwidth, in particular flit size and timing con-              Runnable_06 10000    16700     0         0        2        167
+stants for packet latencies while traversing one router and             Runnable_07 20000    100000    20000     100000   2        80
+one link (dR and dL ). This dependency will be explored in
+                                                                        Runnable_08 100000 200000      100000 200000      1        67
+the following section.
+                                                                        Runnable_09 150000 200000      150000 200000      5        25
+5 Experimental results                                                  Runnable_10 100000 200000      100000 200000      30       171
+As examples, we consider two industrial applications,
+an engine control management (ECM) and a lightweight
+engine control system named DemoCar. In this section,
+                                                                        and Mode 2. The maximum numbers of operations for
+we follow the stage order presented in Fig. 4. We begin
+                                                                        all 10 runnables have been treated as features, so for
+with mode clustering and construction of the spanning
+                                                                        Mode 1, Mode 2 and Mode 3 their corresponding points
+tree, followed by runnables’ mapping and determining of
+                                                                        in the feature space are equal to [363, 2, 222, 600000,
+the required network bandwidth.
+                                                                        60000, 16700, 100000, 200000, 200000, 200000], [363, 0,
+   The energy dissipation has been determined using the
+                                                                        0, 600000, 60000, 0, 100000, 200000, 200000, 200000] and
+technique described in [31]. The average values obtained
+                                                                        [363, 2, 222, 121, 209, 167, 80, 67, 25, 171], respectively.
+during a series of simulations are following. During 1
+                                                                        The k-mean clustering algorithm has found the following
+s, a processing core dissipates 1.66E+4 μJ when idle and
+                                                                        two centroids: [363, 1, 111, 600000, 60000, 8350, 100000,
+2.99E+4 μJ when busy. An idle link dissipates 1.43E+3 μJ
+                                                                        200000, 200000, 200000] and [363, 2, 222, 121, 209, 167,
+whereas a link transporting a package dissipates 3.69E+3
+                                                                        80, 67, 25, 171]. Modes Mode 1 and Mode 2 are closer to
+μJ during 1 s assuming 16-bit wide data connection links
+                                                                        the first centroid, so they are clustered in a single mode,
+between cores. The core energy has been scaled using
+                                                                        Cluster 1, as shown in Fig. 9. Notice that the Euclidean
+relation P ∝ fV 2 for a set of six P-states, from P0, where
+                                                                        distances between the two points in the feature space cor-
+the maximum voltage/frequency level has been assigned,
+                                                                        responding to Mode 1 and Mode 2 and the centroid are
+to P5.
+                                                                        relatively low, which means that these two modes do not
+   For the considered applications, next, we describe the
+                                                                        differ significantly and thus merging them into one mode
+results of (i) mode clustering and spanning tree construc-
+                                                                        can be beneficial. As the maximal numbers of operations
+tion, (ii) mappings exploration for initial and non-initial
+                                                                        to be executed in each runnable in Mode 1 are higher
+modes and (iii) energy and data migration trade-off influ-
+                                                                        than or equal to the corresponding numbers in Mode 2,
+ence on NoC bandwidth.
+                                                                        the former are assumed to be used for the whole clus-
+                                                                        ter. For such simple FSM with only two states, creating
+5.1 Mode clustering and spanning tree construction
+                                                                        the maximal spanning tree is rather trivial. The only edge
+The first of the considered applications, ECM, is com-
+                                                                        is the one connecting the initial mode Cluster 1 with
+prised of three modes, in which runnables have different
+                                                                        Mode 3.
+best and worst case number of operations to be executed,
+as presented in Table 2. The transitions between all these
+modes are possible, as shown in Fig. 8. The hyperperiod
+for this application is equal to 200 ms.
+  From Table 2 it follows that two modes, Mode 1
+and Mode 2, only differ in absence of three runnables
+(Runnable_02, Runnable_03 and Runnable_06) in the lat-
+ter. The remaining runnables have exactly the same num-
+ber of operations to be executed in the best and worst
+case scenarios. It may be then beneficial to decrease                    Fig. 8 FSM describing modes in ECM
+the number of modes to k = 2 by clustering Mode 1
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                    Page 13 of 16
+
+
+
+
+                                                                         Fig. 11 Spanning tree for clustered DemoCar
+
+
+ Fig. 9 FSM describing clustered modes in ECM
+                                                                        Not surprisingly, this solution has been reported for P-
+                                                                        State P0. In this state, the core is characterised by the
+  Our second analysed case, a gasoline engine control unit              best performance while dissipating the highest amount of
+named DemoCar, is a larger application as it consists of 18             energy, equal to 10333.4 μJ per hyperperiod.
+runnables and 61 labels.                                                   The NoC size has been then enlarged to 2 × 1 and the
+  Its flow graph has been presented in [32] together with               flit size has not been altered. For this architecture, a num-
+a detailed description. In Fig. 2, seven identified modes               ber of schedulable mappings has been found. The schedu-
+of this application are presented. These modes have been                lable mapping with the lowest dissipated energy, equal to
+identified by inspecting the code of the runnable named                 11912.6 μJ per hyperperiod, assigned P-States P1 and P3
+OperatingModeSWC, which computes values of transac-                     to the first and the second processing core, respectively.
+tion and output functions of the FSM steering this engine.              The first core has been assigned with seven runnables:
+  The transitions between modes Stalled, Cranking, Idle,                Runnable_02, Runnable_03, Runnable_04, Runnable_06,
+Drive are to be performed between two consecutive jobs                  Runnable_07, Runnable_09, Runnable_10, whereas the
+of their runnables, which is upperbounded with 5 ms for                 remaining three runnables have been assigned to the sec-
+nine runnables. Since performing runnable migration dur-                ond core.
+ing such short time window would require a bandwidth                       The algorithm presented in Algorithm 2 has been
+of considerable size, these modes have been clustered into              applied to find a schedulable mapping in the second mode,
+Cluster1. For similar reason, Wait has been clustered with              Mode 3. As the total number of operations to be executed
+PowerDown into Cluster2. Finally, three modes can be                    are much lower than in the initial mode (see Table 2),
+identified after the clustering step: PowerUp, Cluster1 and             the mapping has been performed to only one core. The
+Cluster2, as presented in Fig. 10. The probabilities of mode            second core has been decided to be switched off in this
+switching have been shown above the arrows. The max-                    mode.
+imum spanning tree, constructed with the Prim–Jarník’s                     Consequently, only two mappings were possible: all
+algorithm, is presented in Fig. 11.                                     runnables from the first core can be migrated to the sec-
+                                                                        ond core and vice versa. The number of possible solutions
+5.2 Mappings exploration for initial and non-initial modes              is larger though, as different P-states can be applied to
+For the ECM application, the genetic algorithm presented                the chosen core. One solution dominated the remaining
+in Algorithm 1 has been executed for the initial mode,                  ones in both the criteria. In this mapping, 3330.43 μJ are
+Cluster 1. This algorithm has been configured to gener-                 dissipated per hyperperiod and 267,725 bytes have to be
+ate 100 generations of 20 individuals each. The size of the             migrated. The most energy efficient P-state, named P5,
+NoC has been initially set to 1×1 and the flit size has been            has been sufficient to timely execute all the runnables.
+fixed to 16 bits. For this architecture, the genetic algo-                 The same procedure has been applied to the DemoCar
+rithm failed to find any schedulable mapping. As many as                application. For the PowerUp (initial) mode to be executed
+320 jobs out of 409 present in a hyperperiod have been                  on a NoC-based multi-core system, we estimate the dissi-
+executed after their deadlines in the best solution found.              pated energy and number of violated deadlines during one
+                                                                        hyperperiod by allocating runnables and labels to different
+                                                                        cores.
+                                                                           The size of the NoC mesh has been initially configured
+                                                                        as 2 × 2 with no idle cores, since this size had been earlier
+                                                                        checked (also using Algorithm 1) to be large enough to
+                                                                        execute DemoCar in the most computational intensive
+                                                                        mode, Cluster1, not violating any of its timing constraints.
+                                                                        The flit size has been fixed again to 16 bits. The timing
+                                                                        characteristics, energy dissipation per hyperperiod and
+ Fig. 10 FSM describing clustered modes in DemoCar                      the number of idle resources for different modes are sum-
+                                                                        marised in Table 3 and commented below. The genetic
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                            Page 14 of 16
+
+
+
+
+Table 3 Timing and energy characteristics of 2 x 2 mesh NoC executing DemoCar in different modes
+Mode                 No. deadline violations            Energy dissipation per hyperperiod             No. idle cores             No. idle links
+PowerUp              0                                  3093.01 μJ                                     3                          16
+Cluster1             0                                  9719.45 μJ                                     0                          10
+Cluster2             0                                  5909.37 μJ                                     2                          10
+
+
+
+
+algorithm has been executed to perform assignment of                    5.3 Energy and data migration trade-off influence on NoC
+the runnables to cores with timing characteristics for the                  bandwidth
+initial PowerUp mode. The genetic algorithm has been                    As it has been shown above, the ECM application has
+configured to generate 100 generations of 20 individuals                been mapped to a low number of processing cores (one or
+each. The first fully schedulable allocation has been found             two, depending on the current mode) so that the underly-
+in the first generation, which suggests that it might be                ing NoC lacked any multi-hop links. For this application,
+possible to allocate the taskset to a lower number of cores.            one solution dominated the others and thus no Pareto
+  After performing further search it has appeared that                  curve has been built, as explained in the previous sub-
+the taskset in the initial mode is schedulable even when                section. In this dominating solution, 267,725 bytes have
+mapped to one (out of four) active core in P-State P0.                  to be migrated between the NoC nodes when the cur-
+The energy dissipated in this mode equals to 3093.01 μJ                 rent mode is being changed. This has to be added to 2660
+per hyperperiod (100 ms). Thus, thanks to the modal                     bytes that are sent and received by these cores during each
+approach, one can switch off 75% of the cores while the                 hyperperiod due to the runnable execution. Such amount
+application is in the Cluster1 mode.                                    of data can be migrated using a periodic server during one
+  As stated above, for the PowerUp mode, schedulable                    hyperperiod (200 ms) as long as the router (dR ) and link
+mappings have been found even if three of the four cores                (dL ) latencies do not exceed 500 and 200 ns, respectively.
+remain idle. It means that in this mode three cores can                   In the case of the DemoCar application, we have eval-
+be switched off, leading to considerable energy savings.                uated the number of hyperperiods required to migrate
+Similarly, two cores can remain idle in the Cluster2 mode.              runnables from PowerUp to Cluster1, depending on con-
+However, despite intensive search using a genetic algo-                 stants dR and dL , and presented them in Table 4. Two
+rithm, all four cores are needed in the Cluster1 mode to                extreme solutions from the Pareto frontier illustrated in
+have the taskset fully schedulable. Thus, when the cur-                 Fig. 12 are analysed: A is the mapping with the lowest
+rent mode changes from PowerUp to Cluster1, three cores                 amount of data to be migrated, B is the solution with the
+have to be activated, whereas two cores can be switched                 lowest energy dissipated in mode Cluster1. The hyper-
+off after leaving the Cluster1 mode.                                    period length for DemoCar equals 100 ms and this time
+  Next we focused on the transition between the PowerUp                 is enough to migrate all data when the router and link
+and Cluster1 modes. For PowerUp, only one core is active                latencies are equal to 100 and 50 ns, respectively, for both
+and thus all runnables are to be mapped to the only
+active core. However, in other cases a larger set of map-
+pings that are fully schedulable on active cores has been
+identified. A Pareto frontier using two criteria, minimal
+amount of data to be migrated and minimal energy dissi-
+pated in the next mode, has been constructed and drawn
+in Fig. 12. If energy dissipation is crucial for the design
+and longer switching time can be accepted, the right-
+most solution from the Pareto curve shall be chosen. On
+the contrary, the leftmost solution from the Pareto curve
+is appropriate for the system with switching time more
+bounded, where some energy loss may be tolerated. The
+remaining six solutions form a compromise between these
+two extremes.
+  Assuming that the minimal energy dissipation is cru-
+cial for the system, the solution leading to dissipation of
+9719.45 μJ (in the next mode) should be chosen. Then,                     Fig. 12 Pareto curve illustrating the trade-off between minimal
+using the same priority, the mapping in the Cluster2 mode                 amount of data to be migrated and minimal energy dissipated in the
+                                                                          next mode
+would dissipate 5909.37 μJ per hyperperiod.
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                                                                            Page 15 of 16
+
+
+
+
+Table 4 Number of hyperperiods (100 ms) required for switching                Funding
+between modes PowerUp to Cluster1 in DemoCar depending on                     The research leading to these results has received funding from the European
+router (dR ) and one link latencies (dL )                                     Union’s Seventh Framework Programme (FP7/2007-2013) under grant
+                                                                              agreement no. 611411 and the EPSRC through the project LowPowNoC -
+                                         No. of hyperperiods                  Evaluation and reduction of power dissipation in multicore systems based on
+dR [ns]             dL [ns]              Solution A              Solution B   Networks-on-Chip (Ref EP/J003662/1).
+
+100                 50                   1                       1            Authors’ contributions
+                                                                              PD contributed to the design flow stages, algorithms, using periodic server for
+200                 100                  1                       2            data migration, proposal of the trade-off between the amount of migrated
+400                 100                  1                       2            data and energy dissipation, software implementation of the described
+                                                                              algorithms and performing experiments. AKS contributed to the general idea
+500                 200                  2                       4            about hybrid approach, co-author of system model description, co-author of
+800                 400                  3                       7            related work section. LSI contributed to the general idea about
+                                                                              multidimensional genetic algorithm used for schedulability-related problems,
+1000                500                  4                       8            input on energy estimation macromodels for NoCs, input on dynamic task
+                                                                              mapping heuristics for NoCs and co-author of related work section. All authors
+the extreme solutions. However, when the routers and                          read and approved the final manuscript.
+
+links have higher latency, the NoC needs a significant                        Competing interests
+lower number of hyperperiods to migrate all the data in                       The authors declare that they have no competing interests.
+solution A.
+                                                                              Publisher’s Note
+                                                                              Springer Nature remains neutral with regard to jurisdictional claims in
+6 Conclusions                                                                 published maps and institutional affiliations.
+An approach for runnable migration in a NoC-based
+                                                                              Received: 20 September 2016 Accepted: 18 July 2017
+multi-core system has been proposed as a way to decrease
+the number of cores needed for guaranteeing safe execu-
+tion of a hard real-time software. Applying different volt-                   References
+age/frequency levels (P-states) to cores facilitates decreasing               1. MD Natale, AL Sangiovanni-Vincentelli, Moving from federated to
+                                                                                  integrated architectures in automotive: The role of standards, methods
+of energy dissipation even further. The proposed approach                         and tools. Proc. IEEE. 98(4), 603–620 (2010)
+is comprised of steps to be performed statically (off-line)                   2. T Fuhrman, S Wang, M Jersak, K Richter, On designing software
+and during run-time (on-line). The approach has been                              architectures for next-generation multi-core ECUs. SAE Int. J. Passenger
+                                                                                  Cars - Electron. Electr. Syst. 8(1), 115–123 (2015)
+illustrated with two industrial applications. In both of                      3. R Obermaisser, CE Salloum, B Huber, H Kopetz, From a federated to an
+them, a finite state machine describing mode changes has                          integrated automotive architecture. IEEE Trans. Comput. Aided Des.
+been extracted from their code and transition probabil-                           Integr. Circ. Syst. 28(7), 956–965 (2009)
+                                                                              4. AUTOSAR development partnership (2016). http://www.autosar.org.
+ities have been identified during simulation. The closely                         Accessed 20 Sept 2016
+related modes have been merged into clusters. A genetic                       5. A Monot, N Navet, B Bavoux, F Simonot-Lion, Multisource software on
+algorithm has been used to determine the runnable-to-                             multicore automotive ECUs - combining runnable sequencing with task
+                                                                                  scheduling. IEEE Trans. Ind. Electron. 59(10), 3934–3942 (2012)
+core mapping for the initial mode. Similarly, a multi-
+                                                                              6. R Wilhelm, J Engblom, A Ermedahl, N Holsti, S Thesing, D Whalley,
+objective genetic algorithm minimizing the migrated data                          G Bernat, C Ferdinand, R Heckmann, T Mitra, F Mueller, I Puaut, P
+and the energy dissipated in the next mode has been used                          Puschner, J Staschulat, P Stenström, The worst-case execution-time
+                                                                                  problem – overview of methods and survey of tools. ACM Trans. Embed.
+for the remaining modes. Each Pareto-optimal solution
+                                                                                  Comput. Syst. 7(3), 36–13653 (2008)
+determines the runnables to be migrated when a change                         7. J Park, J Harnisch, M Deubzer, K Jeong, P Leteinturier, I Suh, Mode-dynamic
+of the current mode is requested. The migration time has                          task allocation and scheduling for an engine management real-time
+                                                                                  system using a multicore microcontroller. SAE Int. J. Passeng. Cars - Electron.
+been evaluated using schedulability analysis depending on
+                                                                                  Electr. Syst. 7(1), 133–140 (2014)
+the network bandwidth. In the first application, in one                       8. R van Kampenhout, S Stuijk, K Goossens, in 2015 Euromicro Conference on
+mode a single processing core is sufficient to execute all                        Digital System Design (DSD). A Scenario-Aware Dataflow Programming
+the functionalities before their deadlines, whereas in the                        Model (IEEE, Funchal, 2015), pp. 25–32
+                                                                              9. E Quiñones, J Abella, FJ Cazorla, M Valero, Exploiting intra-task slack time
+remaining modes two processing cores are required. In                             of load operations for DVFS in hard real-time multi-core systems. SIGBED
+the case of the engine control unit, in a particular mode                         Rev. 8(3), 32–35 (2011)
+only quarter of the initial number of cores is used.                          10. K Deb, A Pratap, S Agarwal, T Meyarivan, A fast and elitist multiobjective
+                                                                                  genetic algorithm: Nsga-ii. Trans. Evol. Comp. 6(2), 182–197 (2002)
+   The proposed approach requires the development of an                       11. P Dziurzanski, AK Singh, LS Indrusiak, in IEEE 19th International Symposium
+agent realising the migration process. Since its architec-                        on Real-Time Distributed Computing (ISORC). Energy-aware resource
+ture details depend on the underlying operating system,                           allocation in multi-mode automotive applications with hard real-time
+                                                                                  constraints (IEEE, York, 2016), pp. 100–107
+its implementation and evaluation in real embedded envi-                      12. J Real, A Crespo, Mode change protocols for real-time systems: A survey
+ronments are planned as a future work.                                            and a new proposal. Real-Time Syst. 26(2), 161–197 (2004)
+                                                                              13. J Goossens, P Richard, in Proceedings of the 21st International Conference
+Acknowledgements                                                                  on Real-Time Networks and Systems. RTNS ’13. Partitioned scheduling of
+The authors would like to thank Björn Saballus and Devendra Rai from Robert       multimode multiprocessor real-time systems with temporal isolation
+Bosch GmbH for providing ECM and Democar ECUs.                                    (ACM, New York, 2013), pp. 297–305
+Dziurzanski et al. EURASIP Journal on Embedded Systems (2017) 2017:30                Page 16 of 16
+
+
+
+
+14. M Negrean, S Klawitter, R Ernst, in 2013 Design, Automation Test in Europe
+    Conference Exhibition (DATE). Timing analysis of multi-mode applications
+    on AUTOSAR conform multi-core systems (IEEE, Grenoble, 2013),
+    pp. 302–307
+15. H Kopetz, R Obermaisser, CE Salloum, B Huber, in Software Engineering for
+    Automotive Systems, 2007. ICSE Workshops SEAS ’07. Fourth International
+    Workshop On. Automotive software development for a multi-core
+    system-on-a-chip (IEEE, Minneapolis, 2007), pp. 2–2
+16. T Yoneda, M Imai, H Saito, T Hanyu, K Kise, Y Nakamura, in 2014 IEEE Asia
+    Pacific Conference on Circuits and Systems (APCCAS). An NoC-based
+    evaluation platform for safety-critical automotive applications, (2014),
+    pp. 679–682
+17. AK Singh, M Shafique, A Kumar, J Henkel, in Design Automation Conference
+    (DAC), 2013 50th ACM/EDAC/IEEE. Mapping on multi/many-core systems:
+    Survey of current and emerging trends (IEEE, Austin, 2013), pp. 1–10
+18. A Schranzhofer, JJ Chen, L Thiele, Dynamic power-aware mapping of
+    applications onto heterogeneous MPSoC platforms. IEEE Trans. Ind.
+    Inform. 6(4), 692–707 (2010)
+19. L Benini, D Bertozzi, M Milano, in Proceedings of the 24th International
+    Conference on Logic Programming. ICLP ’08. Resource management policy
+    handling multiple use-cases in MPSoC platforms using constraint
+    programming (Springer, Berlin, Heidelberg, 2008), pp. 470–484
+20. L Schor, I Bacivarov, D Rai, H Yang, S-H Kang, L Thiele, in Proceedings of the
+    2012 International Conference on Compilers, Architectures and Synthesis for
+    Embedded Systems. CASES ’12. Scenario-based design flow for mapping
+    streaming applications onto on-chip many-core systems (ACM, New York,
+    2012), pp. 71–80
+21. SV Gheorghita, M Palkovic, J Hamers, A Vandecappelle, S Mamagkakis,
+    T Basten, L Eeckhout, H Corporaal, F Catthoor, F Vandeputte,
+    KD Bosschere, System-scenario-based design of dynamic embedded
+    systems. ACM Trans. Des. Autom. Electron. Syst. 14(1), 3–1345 (2009)
+22. S Stuijk, M Geilen, B Theelen, T Basten, in Embedded Computer Systems
+    (SAMOS), 2011 International Conference On. Scenario-aware dataflow:
+    Modeling, analysis and implementation of dynamic applications (IEEE,
+    Samos, 2011), pp. 404–411
+23. P Munk, B Saballus, J Richling, HU Heiss, in Architecture of Computing
+    Systems. Proceedings, ARCS 2015 - The 28th International Conference On.
+    Position paper: Real-time task migration on many-core processors (VDE,
+    Porto, 2015), pp. 1–4
+24. P Dziurzanski, AK Singh, LS Indrusiak, B Saballus, in Proceedings of the 23rd
+    International Conference on Real Time and Networks Systems. RTNS ’15. Hard
+    real-time guarantee of automotive applications during mode changes
+    (ACM, New York, 2015), pp. 161–170
+25. LS Indrusiak, P Dziurzanski, in 2015 International Conference on Embedded
+    Computer Systems: Architectures, Modeling, and Simulation, SAMOS 2015,
+    Samos, Greece, July 19-23, 2015. An interval algebra for multiprocessor
+    resource allocation, (2015), pp. 165–172
+26. H Steinhaus, Sur la division des corps materiels en parties. Bull. Acad. Pol.
+    Sci., Cl. III. 4, 801–804 (1957)
+27. CA Sugar, GM James, Finding the number of clusters in a dataset. J. Am.
+    Stud. 98(463), 750–763 (2003)
+28. RC Prim, Shortest connection networks and some generalizations. Bell
+    Syst. Tech. J. 36(6), 1389–1401 (1957)
+29. Z Shi, A Burns, in Proceedings of the Second ACM/IEEE International
+    Symposium on Networks-on-Chip. NOCS ’08. Real-time communication
+    analysis for on-chip networks with wormhole switching (IEEE Computer
+    Society, Washington, DC, 2008), pp. 161–170
+30. RI Davis, A Burns, A survey of hard real-time scheduling for multiprocessor
+    systems. ACM Comput. Surv. 43(4), 35–13544 (2011)
+31. K Latif, C Effiong, A Gamatie, G Sassatelli, L Zordan, L Ost, P Dziurzanski,
+    L Indrusiak, in Forum on Specification & Design Languages. FDL ’15, Work-in-
+    Progress Session. An integrated framework for model-based design and
+    analysis of automotive multi-core system (ECSI, Barcelona, 2015)
+32. P Dziurzanski, AK Singh, LS Indrusiak, B Saballus, in Proceedings of the 2nd
+    International Workshop on Dynamic Resource Allocation and Management
+    in Embedded, High Performance and Cloud Computing. DREAMCloud’16.
+    Benchmarking, system design and case-studies for multi-core based
+    embedded automotive systems (DreamCloud Consortium, Prague, 2016)
+

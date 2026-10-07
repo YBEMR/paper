@@ -1,0 +1,1022 @@
+98                                                                               IEEE TRANSACTIONS ON COMPUTERS,              VOL. 62,   NO. 1,   JANUARY 2013
+
+
+
+
+                    Robust Scheduling of Task Graphs
+                    under Execution Time Uncertainty
+                           Michele Lombardi, Michela Milano, and Luca Benini, Fellow, IEEE
+
+       Abstract—Effective multicore computing requires to make efficient usage of the computational resources on a chip. Offline mapping
+       and scheduling can be applied to improve the performance, but classical approaches require considerable a priori knowledge of the
+       target application. In a practical setting, precise information is often unavailable; one can then resort to approximate time and resource
+       usage figures, but this usually requires to make conservative assumptions. The issue is further stressed if real-time guarantees must
+       be provided. We tackle predictable and efficient nonpreemptive scheduling of multitask applications in the presence of duration
+       uncertainty. Hard real-time guarantees are provided with limited idle time insertion, by exploiting a hybrid offline/online technique
+       known as Precedence Constraint Posting (PCP). Our approach does not require probability distributions to be specified, relying instead
+       on simple and cheaper-to-obtain information (bounds, average values). The method has been tested on synthetic applications/
+       platforms and compared with an offline optimized Fixed Priority Scheduling (FPS) approach and a pure online FIFO scheduler; the
+       results are very promising, as the PCP schedules exhibit good stability and improved average execution time (14 percent on average,
+       up to 30 percent versus FPS and up to 40 percent versus the FIFO scheduler).
+
+       Index Terms—Scheduling, uncertain execution and communication times, task graph, multicore, precedence constraint posting,
+       optimization
+
+                                                                                 Ç
+
+1    INTRODUCTION
+
+M      ULTICORE   platforms have become widespread in
+      embedded computing, propelled by ever-growing
+computational demand and by the increasing number of
+                                                                                     tasks have dependencies and variable execution times [3],
+                                                                                     resulting in an uncontrolled performance degradation.
+                                                                                     Traditional anomaly avoidance techniques [4] rely on
+transistors per unit area, under continuously tightening                             delaying intertask communication or stretching the execu-
+energy budgets and cost constraints. Effective multicore                             tion times, leading to a considerable resource overhead.
+computing is however not only a technology issue, as we                                 Predictability is a primary issue whenever the application
+need to be able to make efficient usage of the large amount                          runs under real-time constraints. Since many performance
+of computational resources on a chip. This has a cross-                              enhancement techniques have potentially adverse conse-
+cutting impact on architecture design, resource allocation                           quences on worst case execution, applications with strong
+strategies, and programming models.                                                  predictability requirements often tend to underutilize
+   Offline mapping and scheduling is an effective approach                           hardware resources [5] (e.g., forbidding or restricting the
+to improve the application performance, but relies on                                use of cache memories, limiting resource sharing, etc.).
+considerable a priori knowledge, often unavailable in a                                 Our objective is to perform predictable and efficient
+practical setting. Conversely, approximate time and resource                         nonpreemptive scheduling of multitask applications in the
+usage figures are cheaper to obtain, but require either to                           presence of uncertainty. We assume the target platform to
+explicitly deal with uncertainty, or to make very conserva-                          be described as a set of resources with finite capacity. An
+tive assumptions. The issue is further stressed when the                             application is a set of dependent tasks, modeled as a graph
+platform lacks efficient preemption support, or when                                 where execution/communication time is characterized by
+predictability is a primary design goal.                                             known min-max intervals and unknown probability dis-
+   Nonpreemptive scheduling is widely used on clustered                              tribution. The primary focus is on the scheduling proce-
+domain-specific data processors under the supervision of a                           dure (i.e., ordering tasks over time): we assume a resource
+general-purpose CPU [1], [2]. Unfortunately, nonpreemp-                              mapping is available via some external tool.
+tive scheduling is known to be subject to anomalies1 when                               Building over our previous work [6], [7], we leverage a
+   1. Execution traces where one or more tasks run faster than their worst
+                                                                                     hybrid offline/online technique from the Project Scheduling
+case execution time but the overall application execution becomes slower.            domain, known as Precedence Constraint Posting (PCP) [8].
+                                                                                     A schedule in PCP consists of a set of additional arcs in the task
+                                                                                     graph: this is implemented at runtime by delaying each task
+. The authors are with the DEIS, University of Bologna, Via del
+  Risorgimento 2, Bologna 40136, Italy.
+                                                                                     until all its predecessors (either natural or artificial) are
+  E-mail: {michele.lombardi2, michela.milano, luca.benini}@unibo.it.                 over. As a consequence, the completion time adapts to
+Manuscript received 6 May 2011; revised 16 Sept. 2011; accepted 20 Sept.             actual task durations and unnecessary idleness is avoided.
+2011; published online 18 Oct. 2011.                                                 Finding an effective PCP schedule may prove very
+Recommended for acceptance by D. Bader.                                              challenging: our first contribution is an efficient optimiza-
+For information on obtaining reprints of this article, please send e-mail to:
+tc@computer.org, and reference IEEECS Log Number TC-2011-05-0304.                    tion algorithm for offline scheduling; the computed solu-
+Digital Object Identifier no. 10.1109/TC.2011.203.                                   tions are anomaly free, guaranteed to meet real-time
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+                                               0018-9340/13/$31.00 ß 2013 IEEE       Published by the IEEE Computer Society
+LOMBARDI ET AL.: ROBUST SCHEDULING OF TASK GRAPHS UNDER EXECUTION TIME UNCERTAINTY                                                                   99
+
+
+constraints (if any), and optimized for low average                           2.2    Scheduling in OR and Constraint Programming
+completion time. The algorithm is complete, i.e., returns a                          (CP)
+feasible graph augmentation if one exists.                                    The problem of scheduling a set of dependent tasks with
+   Despite PCP has appealing features for embedded                            fixed resource requirements (i.e., premapped) is known in
+systems scheduling (e.g., reduced idle time, low runtime                      the Operations Research literature as Resource Constrained
+overhead, no timer and no related interrupts), other                          Project Scheduling Problem (RCPSP); usually, task durations
+techniques are traditionally employed. As a second con-                       are assumed to be deterministic (e.g., fixed to the WCET2).
+tribution, we compare the results of our scheduling                           Covering the vast RCPSP literature is beyond the scope of
+procedure with Fixed Priority Scheduling (FPS) (optimized                     this paper: for the interested reader, work [15] represents an
+via tabu search) and a pure online FIFO scheduler. The                        ideal starting point; for a recent survey, one may refer to [16].
+results are very promising: the PCP schedules exhibit good
+                                                                                  In the field of Artificial Intelligence, so-called Constraint
+stability and even improved average completion time. The
+                                                                              Programming has been very successfully applied to the
+comparison is performed on synthetic instances and plat-
+                                                                              RCPSP. Typically, tasks are modeled by pairs of integer
+forms so as to isolate the contribution of the scheduling
+                                                                              variables Si , Ei , respectively, representing the start/end of
+strategy to system performance.
+                                                                              task ti (with duration di ). Start/end variables must satisfy
+   The paper is organized as follows: Section 2 discusses
+                                                                              Ei ¼ Si þ di . Precedence relations between tasks ti and tj can
+background and related work. The problem definition is
+                                                                              be modeled as simple inequalities Ei  Sj . Resource overu-
+provided in Section 3, the PCP optimization method is
+                                                                              sage is prevented by means of the so-called cumulative
+described in Section 4, while the experimental evaluation
+                                                                              constraint [17].
+is presented in Section 5.
+                                                                                  A solution is usually found via tree search; each
+                                                                              constraint in the model (e.g., inequalities or cumulative) is
+2   BACKGROUND AND RELATED WORK                                               an active component, embedding a filtering algorithm; when
+2.1 Real-Time Scheduling                                                      the solution process narrows the domain of a variable,
+Scheduling on multiprocessor system in the presence of                        filtering algorithms are triggered and prune provably
+hard deadlines and limited resource has been considered in                    infeasible values in the domains of the other variables,
+the field of real-time scheduling. As we assume here a                        possibly retriggering the process; if a domain gets empty, a
+resource allocation to be precomputed, we focus on                            dead end has been reached and backtracking occurs. The
+partitioned scheduling. We can cluster previously proposed                    mechanism is known as constraint propagation and results in
+approaches in two broad classes, namely: online and offline.                  a huge reduction of the search tree. The availability of
+An excellent and comprehensive description of the online                      powerful filtering algorithms for the cumulative constraint
+approaches is given in [4]; online techniques target systems                  (e.g., [18]) is at the base of the effectiveness of CP on
+where workloads become known only at runtime. In this                         scheduling problems.
+case, allocation and scheduling decision must be taken
+upon arrival of tasks in the system, and the respective                       2.3 Scheduling in the Presence of Uncertainty
+algorithm must be extremely fast, typically constant time or                  Classical RCPSP and multiprocessor scheduling formula-
+low-degree polynomial time. Given that multiprocessor                         tions assume complete offline problem knowledge; most
+allocation and scheduling on bounded resources is NP-                         likely, in a real-world setting, many problem parameters
+Hard, online approaches cannot guarantee optimality and                       will be unknown before the execution. Many elements of
+focus on safe acceptance tests, i.e., a schedulable task set may              uncertainty can be considered: here, we limit ourselves to
+be (unfortunately) rejected but a nonschedulable task set                     uncertain activity durations; for a broader perspective, one
+will never be accepted. More recent works have focused on                     may refer to [19] and [20].
+techniques for improving allocation and reducing the                             Following the classification in [21], we distinguish
+likelihood of failing schedulability tests [9], [10].                         between proactive and reactive approaches. A pure proactive
+    Offline approaches assume the knowledge of the task                       technique produces a fully instantiated schedule (i.e., an
+graph and its characteristics before execution and usually                    assignment of task start times) before the execution.
+assume a fixed execution time for all tasks. Even though the                  Conversely, pure reactive approaches take all decisions
+allocation and scheduling problems remains NP-Hard,                           online. Most practical approaches lie somewhere in be-
+efficient complete (exact) algorithms are known (see, for                     tween, as they produce an initial baseline schedule and
+instance, [11] and references therein) that work well in                      perform online revisions in the case of disruptions.
+practice; many incomplete (heuristic) approaches have been                       Usually, some knowledge of the duration uncertainty (in
+proposed for very large problems that exceed the capabil-                     the form of a probability distribution) is assumed to be
+ities of complete solvers [12]. These approaches can also be                  known; this is used to guide search and to evaluate robustness.
+used in the case of variable execution times, but they need                   Robust schedules can be obtained through the insertion of
+to force determinism: at runtime, task execution can be                       slack time [22] or by handing over part of the decisions to an
+stretched artificially (e.g., using timeouts or idle loops) to                online policy, i.e., by computing a flexible schedule [23], [24].
+terminate as in the worst case. This eliminates scheduling                       When uncertain durations are considered, the expected
+anomalies [13], but implies significant platform under-                       completion time (in the probabilistic sense) is the most
+utilization and unexploitable idleness [4]. Alternatively,                    popular cost function; the exact computation of this value has
+powerful formal analysis techniques can be used to test the                   exponential complexity [24]; hence, approximations are
+absence of scheduling anomalies [14]. However, anomaly
+removal is left to the software designer.                                        2. Worst Case Execution Time.
+       Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+100                                                                          IEEE TRANSACTIONS ON COMPUTERS,            VOL. 62,   NO. 1,   JANUARY 2013
+
+
+needed in practice: sampling is a common approach; a                             In this work, we adopt a tree-search-based PCP approach,
+method based on precedence relations is adopted in [25] (to                   close in spirit to [31]. However, we perform MCS selection
+deal with process variations) and requires Normally dis-                      by solving a (polynomial) minimum flow problem rather
+tributed durations; Manolache et al. [26] summarize other                     than via (exponential) enumeration; as a drawback, the
+approaches based on sampling and Markov processes and                         identified MCS may be of poorer quality when used for
+introduce a novel and efficient approximate method for the                    opening a choice point. Our flow-based method is similar to
+expected completion time with Fixed Priority Scheduling.                      the one in [36], but the algorithm we use is considerably
+   So-called Internet Computing/Area Maximization Sche-                       simpler. The underlying temporal model is an STNU,
+duling (IC- and AM-scheduling, see [27] and [28]) have been                   where constraints and filtering replace the ad hoc consis-
+introduced to tackle scenarios where resource availability                    tency algorithm employed in [35]; this makes the approach
+and execution times are highly unpredictable (e.g., compu-                    particularly well suited for implementation on off-the-shelf
+tation nodes over the Internet). The approaches are in fact                   Constraint Programming solvers.3 Unlike in stochastically
+online mapping and scheduling policies, aiming to max-                        robust resource allocation, we focus on finding high quality
+imize the number of tasks ready to be dispatched through-
+                                                                              schedules for dependent tasks, given a fixed resource
+out graph execution. Duration information is completely
+                                                                              mapping; since we do not rely on probability distributions,
+disregarded and the choice of which task to dispatch is only
+                                                                              we provide deterministic (i.e., 100 percent) rather than
+based on structural graph properties: optimal dispatching
+rules for uniform durations can be obtained for specific                      probabilistic deadline satisfaction guarantees. Compared
+graph structures; interestingly, they are shown to consider-                  to IC/AM-scheduling, we target a very different scenario,
+ably outperform other widely employed scheduling policies                     where platform resources are deterministically available
+even in the case actual durations are nonuniform. The IC/                     and approximate knowledge on task durations can be a
+AM approaches cannot provide hard real-time guarantees.                       priori obtained: this information is exploited to improve the
+   Stochastically robust resource allocation [29] considers                   schedule quality and to provide hard real-time guarantees.
+single-thread processors and no explicit intertask commu-                     An experimental comparison with IC/AM-scheduling on a
+nication (hence no dependencies); under such assumptions,                     simplified problem formulation is beyond the scope of this
+finding an optimal schedule is trivial (tasks mapped to the                   paper, but will be considered as a topic for future research.
+same processor are simply executed in sequence) and the
+focus is on providing an optimal mapping; probability
+density functions are used to describe task durations and to                  3     PROBLEM DEFINITION
+formulate probabilistic deadline constraints.                                 We start by providing an abstract definition of our target
+                                                                              problem. The definition allows a broad range of real-world
+2.4 PCP and Temporal Constraint Networks                                      platform and applications to be modeled (of course with
+In this paper, we rely on the Precedence Constraint Posting                   some limitations): some examples are shown in Section 3.2.
+technique to provide a flexible schedule; the method                              We target the problem of scheduling a set of interdepen-
+consists in systematically removing possible resource                         dent tasks with uncertain duration over a set of preassigned
+conflicts by adding precedence constraints [8]. Possible
+                                                                              hardware resources, in the presence of hard real-time
+conflicts are identified as Minimal Critical Sets (MCSs), i.e.,
+                                                                              constraints. Formally, the input for the optimization process
+minimal sets of tasks causing a resource overusage in the
+                                                                              is a directed, acyclic Task Graph G ¼ hT ; Ai, where T is the
+case of overlapping execution [23], [30]. Thanks to the
+minimality property, an MCS is wiped out (resolved) by                        set of tasks ti and A is the set of graph arcs ðti ; tj Þ, representing
+adding a single precedence constraint between a pair of                       precedence relations. Each task ti is annotated with a
+involved tasks; an MCS free graph is anomaly free as well.                    minimum and a maximum value for the uncertain duration
+Finding MCSs is a nontrivial task, since their number is                      (referred to as di and Di ) and with an average value di . Each
+exponential in the size of the graph. The set of precedence                   arc ðai ; aj Þ is labeled with minimum and a maximum time lag
+constraints to be added can be obtained via tree search [31]                  (referred to as ij and ij ), so that the time distance between
+or by means of a heuristic [32].                                              the end of ti and the beginning of tj is forced to be larger than
+   PCP approaches usually rely on Simple Temporal Net-                        ij and smaller than ij . Time lags do not represent bounds for
+works (STNs, see [33]) for temporal consistency check.                        a separation constraint with uncertainty. In detail, a minimal
+Simple Temporal Networks with Uncertainty (STNU, see                          time lag is a deterministic separation constraint; there is some
+[34]) are STNs extended to provide support for uncertain                      analogy with the latency and gap parameters in the LogP
+durations. An STNU has nodes, representing temporal                           model [37], but minimal time lags are not necessarily related
+events, and arcs, constraining the time distance between the                  to intertask communication. A maximal time lag is a relative
+occurrence of the source and the target event to be in an                     deadline, i.e., the maximum allowed distance between a pair
+interval ½min; max; in particular, STNUs distinguish                         of dependent tasks.
+between free constraints (the distance can be decided at                          We allow a release time (or Earliest Start Time) and a
+execution time) and contingent constraints (the time distance
+                                                                              deadline (or Latest End Time) to be specified for each task
+can only be observed). An STNU is said to be dynamic
+                                                                              and denote them as estðti Þ and letðti Þ. The execution of ti
+controllable if, during execution, the distance for free
+                                                                              must take place within the interval ½estðti Þ; letðti Þ and the
+constraints can be decided so that the partial sequence
+executed so far is ensured to extend to a complete solution,                  time lags must be respected, whatever the actual activity
+whatever durations remain to be observed. Dynamic
+                                                                                 3. Such as IBM ILOG CP Solver (http://www-01.ibm.com/software/
+controllability can be enforced in polynomial time as                         websphere/ilog/), GeCode (http://www.gecode.org/), or Google OR-tools
+described in [35].                                                            (http://code.google.com/p/or-tools/).
+       Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+LOMBARDI ET AL.: ROBUST SCHEDULING OF TASK GRAPHS UNDER EXECUTION TIME UNCERTAINTY                                                                    101
+
+
+
+
+Fig. 1. Task graph and problem input.
+
+durations are. A set of platform resources R is part of the
+input; each resource rk has limited capacity ck and each task
+ti requires an amount rqik  0 of every resource rk (rqik ¼ 0                  Fig. 2. (A,C) Schedules for the problem of Fig. 1. (B) Expected
+                                                                               completion time approximation.
+denotes no requirement).
+    The problem consists in computing an offline schedule
+                                                                               Definition 1 (Partial Schedule). Given a Task Graph
+such that temporal and resource constraints are satisfied for
+                                                                                 G ¼ hT ; Ai, a partial schedule is a set of additional precedence
+every possible value of task durations; furthermore, we wish the
+                                                                                 constraints A such that, for every possible value of the
+expected completion time (or some approximation) to be
+                                                                                 durations, the start times obtained according to the earliest
+minimized. Fig. 1 shows an example of problem instance.
+                                                                                 start policy violate neither temporal nor resource constraints.
+Note duration variability is captured by using bounds (e.g.,
+extracted via WCET analysis) and average values rather                            No resource conflicts means no scheduling anomalies, so
+than via a probability distribution, to reduce the computa-                    that a partial schedule has predictable worst case behavior.
+tional complexity. As shown in Section 4.1, this is sufficient                 In the partial schedule in Fig. 2C, arc ðt4 ; t5 Þ has been added
+to guarantee the satisfaction of hard real-time constraints; as                to prevent the resource conflict caused by the overlapping
+a drawback, the value of the expected makespan can be                          execution of t4 and t5 . The quality of a partial schedule is
+only roughly approximated: this issue is discussed in                          evaluated in terms of expected completion time via the
+Section 4.2. Minimal and maximal time lags are specified                       approximation discussed in Section 4.2.
+for arc ðt4 ; t7 Þ.
+                                                                               3.2 Modeling Examples
+3.1 Scheduling Problem Solution                                                Tasks represent noninterruptible computation units, such
+Classical offline Scheduling methods for this scenario                         as nonpreemptive processes. Single (dual) thread cores may
+assume worst case task durations (i.e., Di ) and specify a                     be represented as resources with capacity one (two). A
+fixed starting time of each task (see Section 2.1). Fig. 2A                    multicore CPU can be modeled as a set of resources, or be
+shows an optimal fixed start schedule for the example                          abstracted as a single resource having the total number of
+problem; due to time lags, t7 must be scheduled at least 1 time                supported threads as capacity.
+unit after t4 and t4 cannot be scheduled more than seven time                     Memory devices with a limited number of ports can be
+units earlier than t7 . In the case actual durations are shorter               modeled as resources with capacity equal to the maximum
+than Di , idleness is inserted to preserve the start times.                    number of simultaneous accesses; a shared bus can be
+However: 1) this technique requires a mechanism to insert                      similarly modeled as a resource, with the bandwidth as
+idle time (e.g., timers, interrupts); 2) maximal time lags may                 capacity.4 Latency due to intertask communications can be
+be violated; and 3) unnecessary inefficiency is introduced.                    included in task durations, or modeled via minimal time lags
+    Ideally, one would like to be able to anticipate activities                (e.g., in the case of nonblocking communication). Alterna-
+in the case their predecessors last shorter. We achieve this                   tively, communication activities can be described as artifi-
+goal by adopting a flexible scheduling approach, i.e., by                      cially introduced tasks: this is a more proper approach in the
+computing an offline partial schedule, where some decisions                    case of uncertain communication time (recall time lags are
+still have to be taken. In particular, the schedule is specified               not related to uncertainty), or whenever performing inter-
+as a set A of additional synchronization constraints (i.e.,                   task communication requires some kind of limited resource
+                                                                               (e.g., DMA channels, bus bandwidth).
+precedence relations). Those may be implemented as fake
+data communications, or by maintaining counters for the
+number of completed predecessors. Fig. 2C shows an                             4     SOLUTION METHOD
+example of such a partial schedule, consisting in the added                    We solve the described problem by means of Constraint
+arc ðt4 ; t5 Þ; note the augmented graph corresponds to a huge                 Programming (see Section 2.2) and tree search; each
+set of possible schedule instantiations, depending on the                      branching node represents a temporally feasible, resource
+actual duration values.                                                        infeasible partial schedule. The search proceeds by checking
+    A partial schedule is completed at runtime by starting                     the presence of a Minimal Critical Set (see Section 2.3) and
+each task ti according to an earliest start policy, namely, as                 testing all possible ways to resolve it (i.e., by adding
+soon as: 1) ti has been released and 2) all its predecessors
+(both actual and artificial) have completed execution. The                       4. A previous study [38] provided evidence that modeling the
+                                                                               communication overhead as a fraction of the bandwidth has bounded
+additional precedence relations are carefully computed so as to                impact on task durations as long as less than 60 percent of the available
+prevent resource contention; formally:                                         bandwidth is used.
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+102                                                                             IEEE TRANSACTIONS ON COMPUTERS,              VOL. 62,   NO. 1,   JANUARY 2013
+
+
+precedence constraints). Search stops when the augmented
+graph contains no MCS, so that the capacity of every resource
+is not exceeded in any online generated schedule. Details on the
+branching process are given in Section 4.4. Our main
+procedure finds a partial schedule satisfying all problem
+constraints: optimization is performed by progressively
+tightening a threshold on the maximum allowed expected
+completion time, according to a binary search scheme.
+    The critical difficulties are: 1) checking the feasibility of
+temporal constraints; 2) computing the expected completion
+time; and 3) checking and enforcing resource feasibility.
+    Maintaining temporal feasibility. For the temporal con-
+                                                                                 Fig. 3. Temporal model for the problem of Fig. 1; time lags are ½0; 1
+straints to be satisfied as from Definition 1, the online                        when not specified.
+scheduler must be able to assign valid start times based on
+the observed durations of predecessor tasks. This matches                            1.   introducing two event variables Si , Ei for the start
+the definition of Dynamic Controllability from Section 2.4                                and the end of each task ti , respectively, with
+and motivated the choice of Simple Temporal Networks                                      domain ½estðti Þ; 1 and ½0; letðti Þ;
+with Uncertainty for the temporal model; this is presented                           2.   adding a free constraint
+in Section 4.1.
+                                                                                                                         ½ij ;ij 
+    Computing the expected completion time. Exact computa-                                                            Ei ! Sj
+tion of the expected completion time has exponential
+complexity and requires probability distributions for task                                for each arc ðti ; tj Þ in the Task Graph; and
+                                                                                     3.   adding a contingent constraint
+durations (see Section 2.3). In this work, we use a very
+simple approximation as a proxy for the expected value,                                                                  ½di :Di 
+described in Section 4.2.                                                                                             Si ! Ei
+    Checking and enforcing resource feasibility. We check the                            for each task ti in the Task Graph.
+feasibility of resource constraints by detecting the presence                       Where we recall di =Di is the minimum/maximum
+of MCSs; this is done in polynomial time by using Graph                          duration for task ti and ij =ij is the minimum/maximum
+Flow theory results. Moreover, given the effectiveness of                        time lag for arc ðti ; tj Þ. Fig. 3B shows the temporal model
+resource constraint filtering in Constraint Programming                          for the project graph in Fig. 1 (reported to ease the
+(see Section 2.2), we enable some constraint propagation                         reader). For each activity ti in the graph, start/end event
+by coupling the temporal model with a pair of classical                          variables (resp. Si ; Ei ) are linked by contingent constraints
+Constraint Programming scheduling models. Details are                            (solid arcs) with a ¼ di and b ¼ Di . Free constraints are
+given in Section 4.3.                                                            used to represent intertask precedence relations (dotted
+4.1 The Time Model                                                               arcs); in the example, we have a ¼ 2, b ¼ 1 for ðt1 ; t4 Þ and
+The adopted temporal model consists of a constraint-based                        a ¼ 0 and b ¼ 1 for all other arcs. Observe that presented
+formulation of the STNU formalism5; we rely on constraint                        temporal model can easily capture more complex tempor-
+propagation to enforce consistency. The model provides the                       al relations.
+following building blocks:
+                                                                                 4.1.1 Dynamic Controllability via Constraint Propagation
+      .   Event variables (Ti ), associated with events i (such as              Constraint propagation and filtering algorithm are in
+          a task start or end); their domain represents the time                 charge of maintaining the network dynamically controlla-
+          span where i can occur.                                               ble. In particular, dynamic controllability holds if and only
+                                 ½a;b
+      .   Free constraints ðTi ! Tj Þ; meaning that the domains                 if, for each free/contingent constraint between Ti and Tj and
+          of Ti and Tj must allow j to occur  time units after                 each value in the domain of Ti , then the domain of Tj
+          j , for at least a value  2 ½a; b.                                  contains enough values for the constraint to be satisfied;
+                                           ½a:b
+      .Contingent constraints (Ti ! Tj ), meaning that the                      any value in the domain of Tj not strictly required is useless
+       domains of Ti and Tj must allow j to occur  time                        and should be pruned.
+       units after j , for every value  2 ½a; b.                                  In detail, the domain of each event variable Ti is
+For all constraints 0  a  b must hold; events may be                           specified by means of four values, namely, sp ðTi Þ, so ðTi Þ,
+forced to occur simultaneously by setting a ¼ b ¼ 0. Event                       eo ðTi Þ, and ep ðTi Þ. Values sp ðTi Þ and ep ðTi Þ delimit the so-
+variables connected by directional binary constraints form a                     called possible span and specify the time interval where
+directed graph.                                                                  the event i has some chance to take place; formally, let 
+   The above elements are sufficient to represent a variety                      be the set of possible execution states  (i.e., combination
+of time constraints; in particular, a temporal model of the                      of task durations and online scheduler decisions):
+problem at hand can be built by                                                  Definition 2 (Possible Span). The possible span of time
+                                                                                   variable Ti associated with time event i is the interval ½sp ; ep 
+  5. With the restriction that the time bounds must be all nonnegative.            such that 8 in the span:
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+LOMBARDI ET AL.: ROBUST SCHEDULING OF TASK GRAPHS UNDER EXECUTION TIME UNCERTAINTY                                                                      103
+
+                                                                                          sp ðTj Þ < sp ðTi Þ þ a    )     sp ðTj Þ ¼ sp ðTi Þ þ a;     ð3Þ
+
+                                                                                          sp ðTi Þ < sp ðTj Þ  b    )     sp ðTi Þ ¼ sp ðTj Þ  b;     ð4Þ
+
+                                                                                          so ðTj Þ < so ðTi Þ þ a    )     so ðTj Þ ¼ so ðTi Þ þ a;     ð5Þ
+
+Fig. 4. The four value domain of time event variables.                                    so ðTi Þ < so ðTj Þ  b    )     so ðTi Þ ¼ so ðTj Þ  b;     ð6Þ
+               9 2  such that i occurs at time :                     ð1Þ
+                                                                                          eo ðTj Þ > eo ðTi Þ þ a    )     eo ðTj Þ ¼ eo ðTi Þ þ a;     ð7Þ
+Conversely, values so ðTi Þ and eo ðTi Þ bound the so-called
+obligatory span; if an event is forced to occur out of its                                eo ðTi Þ > eo ðTj Þ  b    )     eo ðTi Þ ¼ eo ðTj Þ  b;     ð8Þ
+obligatory span (i.e., if sp > eo or ep < so ), dynamic controll-
+ability is compromised. Formally:                                                         ep ðTj Þ > ep ðTi Þ þ a    )     ep ðTj Þ ¼ ep ðTi Þ þ a;     ð9Þ
+Definition 3 (Obligatory Span). The obligatory span of time
+  variable Ti associated with time event i is the smallest interval                      ep ðTi Þ > ep ðTj Þ  b    )      ep ðTi Þ ¼ ep ðTj Þ  b:   ð10Þ
+  ½so ; eo  such that
+                                                                                In practice, sp ðTi Þ þ a is a lower bound for sp ðTj Þ, sp ðTj Þ  b is
+               8 2 ; i does not occur in ½so ; eo                           a lower bound for sp ðTi Þ, and so on. The rules need to be
+                                                                         ð2Þ    triggered only when a domain change occurs. In the
+                            , no dyn: controllability:
+                                                                                following, we discuss the soundness of rules (3) and (4);
+Overall, the following theorem holds:                                           remaining rules can be motivated in a similar fashion.
+
+Theorem 1. Dynamic controllability holds if and only if                         Discussion of Rule (3). Event i cannot occur earlier than
+                                                                                  sp ðTi Þ (as by Definition 2). Since at least a time units must
+  sp  so  eo  ep .
+                                                                                  elapse between i and j , then event j has no chance to
+Proof. As for Definition 3, dynamic controllability implies                       occur earlier than sp ðTi Þ þ a.
+  the existence of an execution state  such that i occurs
+                                                                                Discussion of Rule (4). Event j cannot occur earlier than
+  in ½so ; eo . Since the obligatory span is the smallest                          sp ðTj Þ. Since at most b time units must elapse between i
+  interval for which condition (2) holds, we have that                              and j , then event i is not allowed to occur earlier than
+  ½so ; eo   ½sp ; ep . Thus, dynamic controllability is violated                sp ðTj Þ  b.
+  iff ½sp ; ep  \ ½so ; eo  ¼ ;, i.e., if ½sp ; ep  or ½so ; eo  become                                                                 ½a:b
+                                                                                    Dynamic Controllability on a contingent constraint Ti !
+  empty (sp > ep or so > eo ).                                            t
+                                                                          u     Tj is enforced by application of an analogous set of rules:
+
+     For an event variable not involved in any precedence                              sp ðTj Þ < sp ðTi Þ þ a      )    sp ðTj Þ ¼ sp ðTi Þ þ a;      ð11Þ
+constraint, we have sp ¼ so and eo ¼ ep ; user defined release
+times and deadlines directly constrain sp and ep values,                               sp ðTi Þ < sp ðTj Þ  a      )    sp ðTi Þ ¼ sp ðTj Þ  a;      ð12Þ
+while so ; eo are only indirectly affected (i.e., to maintain
+½so ; eo   ½sp ; ep ).                                                               so ðTj Þ < so ðTi Þ þ b     )    so ðTj Þ ¼ so ðTi Þ þ b;      ð13Þ
+     Precedence constraints affect variable domains, as de-
+picted in Fig. 4. Values sp and ep delimit the region where each                        so ðTi Þ < so ðTj Þ  b     )    so ðTi Þ ¼ so ðTj Þ  b;      ð14Þ
+i may occur at runtime: for example, 1 (corresponding to
+variable T1 ) can first occur at time 10, if 0 occurs at 0 and the
+                                                                                        eo ðTj Þ > eo ðTi Þ þ b     )    eo ðTj Þ ¼ eo ðTi Þ þ b;      ð15Þ
+constraint has duration 10; similarly, 2 can first occur at 20 as
+at least 10 time units must pass between 1 and 2 due to the
+                                                                                        eo ðTi Þ > eo ðTj Þ  b     )    eo ðTi Þ ¼ eo ðTj Þ  b;      ð16Þ
+precedence constraint. As for the upper bounds, 2 cannot
+occur after time 60 or there would be a value  2 ½10; 20 with
+no support in the domain of 3 ; conversely, 1 can occur as late                       ep ðTj Þ > ep ðTi Þ þ b     )    ep ðTj Þ ¼ ep ðTi Þ þ b;      ð17Þ
+as time 50, since there is at least a value  2 ½10; 20 with a
+support in the domain of 2 . Concerning bounds on the                                    ep ðTi Þ > ep ðTj Þ  b    )      ep ðTi Þ ¼ ep ðTj Þ  b:   ð18Þ
+obligatory region, note that if 1 is forced to occur before time               Rule (11) is analogous to rule (3) for free constraints and so
+20, the network is no longer dynamic controllable, as in that                   on; however, the time distance between the events is not
+case there would not be sufficient time between 0 and 1 .                     under user control in this case, resulting in different rules
+Similarly, 2 cannot be forced to occur later than time 60 or                   for the possible and the obligatory span. Some discussion
+there would be a value  2 ½10; 20 such that the precedence                    on soundness of rules (12) and (13) is reported in the
+constraint between 2 and 3 cannot be satisfied.                               following; similar reasoning applies to the remaining ones.
+     Dynamic Controllability can be enforced by iterative applica-              Rule (12). Event j cannot occur earlier than sp ðTj Þ; since the
+tion of proper filtering rules for all free and contingent                        contingent constraint could assume any value  in the
+constraints, until a fix point is reached. For a free constraint                  interval ½a; b (including a), then i is not allowed to occur
+    ½a;b
+Ti ! Tj , the filtering rules are                                                earlier than sp ðTj Þ  a.
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+104                                                                                IEEE TRANSACTIONS ON COMPUTERS,           VOL. 62,   NO. 1,   JANUARY 2013
+
+
+Rule (13). Let  be the time instant when i occurs; then, for                         2.  rules (11)-(18) for contingent constraints apply on the
+   dynamic controllability to hold, the domain of j must                                  obligatory intervals ½so ðSi Þ; eo ðSi Þ and ½so ðEi Þ; eo ðEi Þ the
+   have enough flexibility to accommodate every duration                                  same kind of filtering which would be applied by a
+   which Nature could assign to the constraint; in other                                   fixed duration constraint, with duration equal to Di .
+   words, j cannot be forced to occur before  þ b. The                           Hence, we can chain the event variables to pairs of classical
+   minimum  for which dynamic controllability of Ti is not                        integer variables, namely, Si , Ei and S          
+                                                                                                                                    i , Ei . Variable Si is
+                                                                                                                                                              
+
+   compromised is so ðTi Þ; hence, so ðTi Þ þ b provides a valid                   synchronized to the interval ½sp ðSi Þ; ep ðSi Þ by simple chaining
+   bound for so ðTj Þ.                                                             constraints, while variable Si is chained to ½so ðSi Þ; eo ðSi Þ and
+                                                                                   so on. Then, we post the following constraints:
+   The described constraint model allows testing in constant
+time whether a contingent or free constraint can be                                                  Ei ¼ Si þ Di       E   
+                                                                                                                            i ¼ Si þ Di ;
+consistently added with the current network; this can
+                                                                                   where Di is an extra integer variable, ranging in ½di ::Di .
+be done by simply checking if the application of the
+                                                                                   Variables Si ; Ei define a classical task in Constraint
+corresponding filtering rules would violate the condition
+                                                                                   Programming with variable, user decided duration; vari-
+from Theorem 1.
+                                                                                   ables S    
+                                                                                           i ; Ei identify a second CP task with fixed duration,
+4.2 Expected Completion Time Approximation                                         equal to Di . Usual cumulative constraints and related
+The cost function for our optimization approach is a proxy for                     filtering algorithms can be taken off the shelf and applied to
+the expected completion time of the application; namely, this                      perform propagation. Specifically, we use timetable, edge-
+is the completion time corresponding to the scenario where                         finder, and balance filtering (see [18]).
+all tasks take their average case duration di . This is achieved                  4.3.2 Minimal Critical Set (CS) Detection
+by building an accessory temporal model, containing
+                                                                                   One of the key difficulties with complete search based on
+      1. two event variables S0i ; E0i for the start and the end of                MCS branching is how to detect and choose conflict sets to
+         each task ti , respectively, with domain ½estðti Þ; 1                    branch on; this stems from the fact that the number of MCS
+         and ½0; letðti Þ;                                                        is in general exponential in the size of the Task Graph;
+                             ½ij ;ij 
+   2. a free constraint E0i ! S0j for each arc ðti ; tj Þ in the                  hence, complete enumeration incurs the risk of combinator-
+         Task Graph; and ½d ;d                                                  ial explosion.
+                                 i i
+   3. a free constraint S0i ! E0i (i.e., with constant dura-                          We argue that just detecting a possible conflict does not
+         tion) for each task ti in the Task Graph.                                 require MCS enumeration; in detail, we provide a method
+Observe the accessory model has free constraints only; at                          to detect (non necessarily minimal) Critical Sets by solving a
+search time, whenever a constraint is added between                                minimum flow problem. By definition, a temporal network
+variables Ei and Si , a twin constraint is added between E0i                       is MCS free if and only if it is CS free. Moreover, once a CS
+and S0i . The expected completion time approximation is                            is available, an MCS can then be obtained by simply
+given by the maximum ep ðE0i Þ value (see Fig. 2B, where the                       removing tasks.
+approximation value is 9.5).                                                           Note that an MCS represents a possibly occurring resource
+                                                                                   conflict: it may be the case that no overusage arises for some
+4.3        Handling Resource Constraints                                           duration instantiations. According to our method, the
+4.3.1 Enabling cumulative Constraint Propagation                                   conflict must be nevertheless resolved to remove schedul-
+                                                                                   ing anomalies, resulting in a partially overconstrained
+Resource restrictions are handled in Constraint-based
+                                                                                   schedule. Unfortunately, the only alternatives are either to
+scheduling by means of resource constraints (such as
+                                                                                   use a dynamic scheduling heuristic (incurring the risk of
+cumulative) and related filtering algorithms. The approach
+                                                                                   anomalies) or to switch between many precomputed
+is very effective, but usual filtering algorithms do not apply
+                                                                                   schedules depending on the observed durations (requires
+to uncertain durations (while variable, user decided dura-
+                                                                                   an exponentially large scheduling table).
+tions are supported).
+                                                                                       Detecting the presence of a Critical Set with our method
+   We managed to enable constraint propagation by chain-
+                                                                                   has polynomial complexity and does not loose completeness. As a
+ing pairs of tasks with constant or user decided duration to
+                                                                                   drawback, the identified CS set is not in general well suited
+specific spans. The key point is being able to map tasks in our
+                                                                                   to open a choice point. We cope with this issue via a simple
+temporal model (i.e., pairs of event variables connected by a
+                                                                                   conflict minimization step, guided by a greedy heuristic. A
+contingent constraint) to integer domain variables used in                         sketch of the adopted MCS detection strategy is shown in
+constraint-based scheduling (see Section 2.2).                                     Algorithm 1. In the following, each of the steps will be
+   Let Si , Ei be the event variables representing the start and                   described in deeper detail; the adopted criterion to evaluate
+                          ½di :Di 
+end of a task ti ; let Si ! Ei be the contingent constraint                       the quality of a Critical Set will be given as well. As a
+modeling the task duration. Observe that                                           starting point, observe that
+
+      1.    rules (3)-(10) for contingent constraints apply on the                 Algorithm 1. MCS detection method
+            possible intervals ½sp ðSi Þ; ep ðSi Þ and ½sp ðEi Þ; ep ðEi Þ the    1: set best MCS so far (best     ;)
+            same kind of filtering which would be applied by a                      2: for rk 2 R do
+            user decided duration constraint, with duration                         3:    find a conflict set cs by solving a minimum flow
+            ranging in ½di ; Di ; and                                                    problem
+            Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+LOMBARDI ET AL.: ROBUST SCHEDULING OF TASK GRAPHS UNDER EXECUTION TIME UNCERTAINTY                                                                               105
+
+
+
+
+Fig. 5. (A) Resource Graph for the TG in Fig. 1. (B) Resource Graph with        Fig. 6. (A) Initial flow at the root node, for the TG in Fig. 1. (B) Minimum
+split nodes, to allow the application of Edmonds-Karp algorithm (arcs           flow at the root node for the same graph.
+from/to source and sink are omitted).
+                                                                                amount of flow from source to sink, so that all flow
+ 4:    if weight of cs is higher than ck then                                   requirements are satisfied (see [39]).
+ 5:       refine cs to a Minimal Critical Set mcs via greedy                          The problem can be solved by starting from an initial
+          minimization                                                          feasible flow and performing iterative reductions with the
+ 6:       if mcs is better than best then                                       inverse Edmonds-Karp’s algorithm [40], with complexity
+ 7:          best ¼ mcs                                                         OðjAR j  F Þ (where F is the value of the initial flow—note
+ 8: return best                                                                 the algorithm is in fact pseudopolynomial). Once the final
+                                                                                flow is known, activities in the S/T cut7 form the maximum
+Statement 1. Since the tasks in a CS must have the chance to                    weight independent set.
+   overlap, they always form a stable set (or independent set) on                     Solving the minimum flow problem. Since Edmonds-Karp’s
+   the Task Graph, further annotated with all precedence                        algorithm only allows requirements on arcs, each task ti
+   constraint added during search or detected by time reasoning.                must be split into two connected subnodes t0i ; t00i , so that the
+                                                                                minimum flow requirement rqik is effectively assigned to
+    We augment such graph with fake source and sink                             the arc ðt0i ; t00i Þ. Every arc ðti ; tj Þ 2 AR is then converted into
+nodes; this is referred to as resource graph. Formally, the                     an arc ðt00i ; t0j Þ and assigned minimum flow requirement 0.
+resource graph is a pair hT [ fsource; sinkg; AR i, where                       Fig. 5B shows the modified graph corresponding to the
+ðai ; aj Þ 2 AR iff the arc                                                     Resource Graph of Fig. 5A; flow requirements label each
+   1.     is in the original graph (i.e., ðai ; aj Þ 2 A);                      ðt0i ; t00i Þ; arcs connecting the source and the sink node are
+   2.     is added by search (i.e., ðai ; aj Þ 2 A );                          omitted (for sake of clarity) when they can be deduced by
+   3.     is detected by complete or incomplete time reason-                    the transitive property.
+          ing6; in particular, we check if ep ðEi Þ  sp ðSi Þ;                       The initial flow at the root of the search tree is computed
+    4. connects the source to any node (i.e., ai ¼ source); and                 by routing rqik flow units for each task ti :
+    5. connects any node to the sink (i.e., aj ¼ sink).                            1. along arc ðsource; t0i Þ;
+    Fig. 5A shows the resource graph for the TG in Fig. 1, at the                  2. along arc ðt0i ; t00i Þ, to satisfy the requirement; and
+root of the search tree (i.e., when no additional precedence                       3. along arc ðt00i ; sinkÞ.
+constraint has yet been posted), assuming a global deadline of
+                                                                                   Fig. 6A shows an example of initial feasible flow,
+12 time units has been assigned to every task and constraint
+                                                                                computed as described; flow values appear in dashed
+propagation has updated the domains in the temporal model.
+Note the (dashed) arcs ðt2 ; t3 Þ and ðt2 ; t4 Þ are not in the                 boxes and node names are omitted for sake of clarity. The
+original graph: one can check that they are detected by time                    quality of this initial solution is usually pretty poor; since
+reasoning, since ep ðt2 Þ ¼ 12  D7  D6  D5 ¼ 4 and sp ðt3 Þ ¼                the value of the initial flow has a direct impact on the
+sp ðt4 Þ ¼ d0 þ d1 ¼ 4; hence, ep ðt2 Þ  sp ðt3 Þ, ep ðt2 Þ  sp ðt4 Þ.        Edmond-Karp algorithm runtime, one may want to devise a
+    Given a target resource rk , let us assign to each task ti the              better algorithm. However, observe that during search arcs
+requirement       rqik as a weight; then a stable set S is a CS iff             can only be added to the resource graph; since adding arcs
+P                                                                               may only reduce the flow, we have
+   ti 2S rq ik > ck . Therefore:
+
+Statement 2. We can check the existence of an MCS on a                          Statement 3. The minimum flow at a node in the search tree is a
+   resource rk by finding the maximum weight stable set on the                     feasible initial flow for all its child nodes.
+   resource graph (Fig. 5A) and checking its total weight.
+                                                                                   Furthermore, it is likely a very good starting flow; for
+   This can be done by solving a minimum flow problem;                          example, Fig. 6B shows the minimized flow computed from
+namely, we can read each resource requirement as a flow                         the initial value in Fig. 6A; one can check the overall value is
+requirement, and then try to route the minimum possible                         very low, compared to the initial one (4 versus 12). We
+                                                                                therefore prime the process with the mentioned (poor
+   6. Adding detected arcs is not essential for the method correctness, but
+prevents the algorithm from finding some MCS with no chance to occur in            7. That is, all arcs ðt0i ; t00i Þ such that t0i is not connected to the graph sink
+practice due to bounds on task durations.                                       (and t00i is not connected to the source) via nonsaturated arcs.
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+106                                                                                  IEEE TRANSACTIONS ON COMPUTERS,         VOL. 62,   NO. 1,   JANUARY 2013
+
+
+quality) initial flow, then perform minimization at the root                         4.4 The Branching Process
+of the search tree and carry on the minimized flow as initial                        Once an MCS is selected at each search step, then a choice
+feasible flow for the child nodes; the process is repeated and                       point is open; in detail, let RS be the list of all ordered pairs of
+the flow value is restored upon backtracking. This allows a                          tasks ðti ; tj Þ in the CS; ideally, each pair corresponds to a
+very efficient, incremental solution of the minimum flow                             possible resolver. We discard from RS pairs such that the
+problem. If the flow value exceeds the capacity ck , a Critical                      corresponding resolver cannot be consistently added given
+Set has been identified; otherwise, the graph contains no CS                         the current state of the temporal model (this can be checked in
+                                                                                     constant time as described in Section 4.1.1). Moreover, we
+with respect to resource rk .
+                                                                                     discard further pairs by applying the simplification method
+   Critical set evaluation and minimization. Once a Critical Set
+                                                                                     from [31]. Those techniques enable the algorithm to focus on
+has been identified, a number of issues still have to be
+                                                                                     meaningful resolvers and reduce the number of search nodes.
+coped with; namely, 1) the detected CS is not necessarily
+                                                                                        Then, the remaining pairs in RS are ranked by decreasing
+minimal and 2) the detected CS does not necessarily yield a
+                                                                                     preserved span of the corresponding resolver (similarly to
+good choice point. Note that branching on nonminimal CS
+                                                                                     [18]); the preserved obligatory span is given priority, while
+can result in exploring unnecessary search paths.
+                                                                                     the preserved possible span is used to break ties. Let tik , tjk be
+   While issue 1 can be simply dealt with by removing tasks
+                                                                                     the chosen pair, then binary choice point is opened; on the
+from the CS, issue 2 requires the definition of a criterion to                                                                     ½0;1
+                                                                                     left branch, a new free constraint Eik ! Sjk is added to
+rank different CS. Similarly to [31], we base our ranking on
+preserved space, which evaluates the amount of flexibility                           resolve the MCS. On the right branch, the same constraint is
+                                                                                                                                                 ½;1
+retained if a new precedence constraint is posted between                            forbidden: this amounts to add the free constraint Sjk ! Eik ,
+tasks ti and tj . In detail, we have to distinguish between                          where the minimum time lag  (arbitrarily low) enforces a
+preserved possible span and preserved obligatory span; the                           strict inequality. Note that, while precedence constraints
+former can be computed as                                                            added to resolve the MCS actually have to be taken into
+                              8                                                      account by the online scheduler, forbidden precedence
+                              > 1; if sp ðSj Þ  ep ðEi Þ;                           constraints represent deductions; as a consequence, they do
+                              <
+                                0; if sp ðEi Þ  sp ðSj Þ;
+      preservedp ðti ; tj Þ ¼                                                        not need to be explicitly enforced by the online scheduler.
+                              :  Cmin  Cmax ; otherwise
+                              > B
+                                         2A
+with
+                                                                                     5    EXPERIMENTAL EVALUATION
+                                                                                     We implemented our approach on top of the commercial
+      A ¼ ðep ðSj Þ  sp ðSj Þ þ 1Þ       ðep ðEi Þ  sp ðEi Þ þ 1Þ                  CP solver IBM-ILOG Solver 6.7. The test problem consists in
+      B ¼ ðep ðSj Þ  sp ðEi Þ þ 1Þ       ðep ðSj Þ  sp ðEi Þ þ 2Þ                  scheduling applications on a platform template consisting
+                                                                                     of clustered execution engines, connected by limited
+      Cmin ¼ maxf0; sp ðSj Þ  sp ðEi Þg                ðsp ðSj Þ  sp ðEi Þ þ 1Þ
+                                                                                     bandwidth ports. Our scheduling routine is invoked after
+      Cmax ¼ maxf0; ep ðSj Þ  ep ðEi Þg                ðep ðSj Þ  ep ðEi Þ þ 1Þ:   a preliminary heuristic resource mapping step, performed
+                                                                                     via a state-of-the-art Graph Partitioning algorithm.
+Note the quantity preservedp ðti ; tj Þ is always between 0 and 1.
+                                                                                        A first set of experiments has the objective to assess the
+Formulas for the preserved obligatory span preservedo ðti ; tj Þ
+                                                                                     efficiency of the approach; next, the quality of the provided
+can be obtained by replacing sp with so and ep with eo . We                          solution is evaluated via Monte Carlo simulation and
+define the preserved possible/obligatory span of a Conflict                          compared against a fixed priority scheduling method and
+Set as the cumulative preserved spans of the precedence                              a simple online FIFO scheduler.
+constraints which can be posted to resolve it. Formally:                                The adopted application and platform models are
+Definition 4. The preserved possible span of a Conflict Set CS                       described in detail in Section 5.1; the mapping method is
+                                                                                     discussed in Section 5.2; and the details of the evaluation
+  is given by
+                                                                                     process are given in Section 5.3. Finally, efficiency tests and
+                             X
+       preservedp ðCSÞ ¼             preservedp ðti ; tj Þ:                          the comparison results are provided in Sections 5.4 and 5.5.
+                                      ti ;tj 2CS
+                                 Ei !Sj is consistent                                5.1 Application and Platform Models
+                                                                                     We consider a common template for embedded Multi-
+   The definition of the preserved obligatory span of a CS is                        processor Systems on Chip (MPSoCs), featuring an ad-
+analogous. According to the First-Fail principle [41], we                            vanced general-purpose CPU with memory hierarchy and
+give preference to Conflict Sets having the smallest pre-                            OS support and an array of programmable processors, also
+served obligatory span, while the smallest preserved                                 called accelerators, for computationally intensive tasks.
+possible span is considered in the case of ties.                                     Accelerators have limited or no support for preemption
+   Our CS minimization procedure simply consists of                                  and often feature private memory subsystems [1], [2], [42].
+iteratively removing the task yielding the CS with the                               Explicit communication is efficiently supported (e.g., with
+highest quality; the process stops when no further task can                          specialized instructions or DMA), but uniform shared
+be removed (i.e., the CS has become minimal). This                                   memory abstraction is either unavailable or it implies
+specific method was chosen from a set of experimented                                significant overheads.8
+minimization algorithms due to its efficiency and reason-                                8. This can be emulated in software by propagating via copy operations
+ably good effectiveness.                                                             all private memory modifications onto external shared memory [1].
+          Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+LOMBARDI ET AL.: ROBUST SCHEDULING OF TASK GRAPHS UNDER EXECUTION TIME UNCERTAINTY                                                                     107
+
+
+                                                                               the estimated average execution time as a measure of the
+                                                                               computation load of a task; therefore, if S is a set of tasks, the
+                                                                               overall set load is the sum of the average execution times.
+                                                                                   The METIS algorithm forces the difference between the
+                                                                               maximum and minimum workload to be within a small
+                                                                               specified bound (6 percent of the smallest weight) and, as a
+                                                                               secondary objective, minimizes the sum of the bandwidth
+Fig. 7. (a) Target platform. (b) DMA carried communication; the shaded         requirements of arcs connecting tasks in different sets.
+and the white part of each task represent minimal and maximal
+durations.                                                                         The output of the partitioning algorithm is a collection of
+                                                                               task sets, one per each cluster; in particular, let peðti Þ be the
+     We model the heterogeneous MPSoC as shown in Fig. 7a.                     index of the computational engine where task ti is mapped.
+All shaded blocks are resources that will be allocated and                     Based on this information, a Task Graph as from Section 3 is
+scheduled. For the sake of clarity, all empty blocks are not                   built by introducing, for each task in the original application,
+modeled in the problem formulation. Accelerators                               a node with di ¼ dmin    i     , Di ¼ dmax
+                                                                                                                      i   , and di ¼ ðdmin i   þ dmax
+                                                                                                                                                    i  Þ=2.
+(CL1; . . . ; CLN) are modeled as clusters of one or more                      Intracluster communication corresponds to arcs ðti ; tj Þ. Then,
+execution engines. A cluster with n execution engines is                       an extra task t0ij is introduced for each intercluster commu-
+                                                                               nication ðti ; tj Þ; task t0ij represents a data transmission activity
+considered a resource with capacity ck ¼ n and models an
+                                                                               and uses bðti ; tj Þ units of the Output Port of cluster peðti Þ and
+accelerator with multiple execution pipelines (e.g., a
+                                                                               of the Input Port of cluster peðtj Þ. The communication task t0ij
+clustered VLIW) or a multithreaded processor with a fixed
+                                                                               has uncertain duration corresponding to that of the inter-
+number of hardware-supported threads. Note that the case
+                                                                               cluster communication, i.e., in the interval ½dmin                 max
+                                                                                                                                            ij ; dij  and
+of C ¼ 1 (single-instruction-stream accelerator) is handled                                          min max
+                                                                               average value ðdij ; dij Þ=2. Finally, the task is connected to
+without loss of generality.
+                                                                               ti and tj by means of arcs ðti ; t0ij Þ and ðt0ij ; tj Þ. All minimal time
+     We model the target application prior to mapping as a
+                                                                               lags are 0 and all maximal time lags are 1. This Task Graph is
+set of tasks ti , with dependencies due to data communica-
+                                                                               the actual input for our scheduling method.
+tion. A formal description according to the definition and
+the notation in Section 3 will be available after the mapping                  5.3 The Evaluation Process
+stage. When two dependent tasks are allocated onto the                         We perform an experimental evaluation on a benchmark
+same cluster, their communication is implicitly handled via                    consisting of synthetically generated Task Graphs, to be
+shared variables on local memory. On the contrary,                             mapped on synthetic platforms. The choice was motivated
+communication between tasks allocated on two different                         by 1) the need for a large number of graphs to provide a
+clusters has nonzero latency and requires a known fraction                     reliable efficiency assessment of our solver9; and 2) the
+bðti ; tj Þ of the total bandwidth available at the output                     intention to investigate the impact of different duration
+communication port (triangle marked with O) of the cluster                     distributions on the expected completion time, in order to
+hosting the source task and the input port (triangle marked                    assess the accuracy of out approximate cost function.
+with I) of the cluster hosting the destination task. The                          As a drawback, runtime overhead is not taken into
+master CPU is left implicit as its function is mostly related                  account; being the schedule statically computed and based
+to orchestration. Input and output ports can be seen as                        on simple precedence relations, we expected the computa-
+                                                                               tional burden on the runtime layer to be fairly small.
+resources with capacity equal to the provided bandwidth.
+                                                                                  In detail, two sets of instances (referred to as Groups 1 and
+Tasks and intercluster communications have uncertain
+                                                                               2 in the following) were obtained by means of a flexible
+durations, bounded by known values; let those be, respec-
+                                                                               generator, designed to produce realistic Task Graphs.10
+tively, dmini   , dmax
+                   i   , and dmin    max
+                               ij , dij ; for our experimentation,             Group 1 consists of TGs containing 20 to 70 nodes prior the
+we assume the average durations values to be, respectively,
+                                                                               mapping process; the number of outgoing arcs for each node
+ðdmin
+   i     þ dmax
+              i  Þ=2 and ðdmin       max
+                             ij þ dij Þ=2. We assume all dura-                 (branching factor) is in the range 3-5 (sink nodes excluded);
+tion bound to be integer.
+                                                                               TGs in group 2 have fixed number of nodes prior to mapping
+5.2 Computing a Resource Allocation                                            (namely, 40) and branching factor from 2-4 to 6-8. For both
+Prior to the scheduling, tasks are heuristically mapped to the                 groups, maximum duration values are up to two times the
+                                                                               minimum ones (both for tasks and data communications).
+available resources; once a task-to-cluster allocation is given,
+                                                                                  We consider two (abstract) target platforms (Platform A
+Input and Output ports are implicitly assigned to intercluster
+                                                                               and Platform B, in the following); platform A has 16 single-
+communications. We recall that, since the focus of this paper
+                                                                               thread accelerators, while platform B has four of them
+is on the scheduling algorithm, our objective is just to                       (quad-thread). Each accelerator has a single input port and
+compute a reasonably good mapping. Given the large impact                      a single output port; all ports are assumed to have uniform
+of resource allocation on the final schedule quality, a different              bandwidth. Each task in the original graph requires one
+partitioning technique could replace the one described in the                  execution thread; data communications require from 10 to
+following, with a chance to obtain better results.                             90 percent of the port bandwidth, in case the producer and
+    Tasks are mapped to clusters by means of the graph                         the consumer are mapped to different accelerators.
+partitioning algorithm METIS [43]. Namely, tasks are parti-
+tioned in a number of sets equal to the number of clusters,                      9. The production and characterization of a sufficient number of real
+                                                                               applications would take prohibitive time.
+with the double objective to 1) balance the computational load                   10. The generator has been presented at the PST ICAPS2007 workshop
+and 2) minimize intercluster communication. We consider                        and is available for download at http://ai.unibo.it/node/410.
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+108                                                                           IEEE TRANSACTIONS ON COMPUTERS,            VOL. 62,   NO. 1,   JANUARY 2013
+
+
+                           TABLE 1                                                                         TABLE 2
+      Tightest Deadline Identification: Results on Group 1                            Tightest Deadline Identification: Results on Group 2
+
+
+
+
+                                                                               added precedence relations is relatively large; in principle,
+                                                                               this may result in a deterioration of the expected comple-
+   The TGs are mapped to the target platforms as
+described in Section 5.2, the resulting transformed graphs                     tion time and should be considered in the next evaluation
+are the actual input for the evaluation process; this consists                 phase. Despite the problem being NP-hard, most of the
+of two distinct phases; in first place, we use our method to                   instances are solved to optimality in a fraction of second;
+identify the tightest global hard real-time constraint the                     the availability of resource constraint propagation (see
+graph can meet; in a second step, we compute a schedule                        Section 4.3.1) plays a key role here, as disabling resource
+with minimum expected completion time, guaranteed to                           propagation raises the solution time by orders of magni-
+meet the identified deadline.                                                  tude. The efficiency of the MCS detection procedure
+                                                                               improves the method scalability, since with growing
+5.4 Finding the Tightest Achievable Deadline                                   number of nodes, the number of Critical Sets in a graph
+We assume the applications are subject to a global hard                        can become prohibitive for complete enumeration.
+real-time constraint; the identification of a nontrivial dead-                    A few instances in Group 1 (namely, two) could not be
+line value is itself a challenging task and can be used to                     solved to optimality: even in this case, however, the bound
+provide a first assessment of the method efficiency.                           gap is very low, meaning the produced schedule is still very
+   The identification proceeds by performing binary search                     good. Moreover, a feasible solution close from the final lower
+over the possible deadline values (in particular, we consider                  bound is usually available pretty early in the search process
+integer values only); the approach requires to repeatedly run                  (1.6 percent of the bound after 0.07 seconds for the timed
+an NP-hard feasibility test, which is provided by our tree-                    out instance in Group 1). Note that time-out instances are
+search solver. In this phase, the cost function is disregarded                 excluded from the computation of the mean solution time.
+and the solver stops as soon as it finds a partial schedule
+guaranteed to meet the deadline value currently being tested;                  5.5 Expected Completion Time Minimization
+note the problem is still NP-hard. The output of the process                   In the second stage of the evaluation, we tackle the
+are a lower and an upper bound (lb; ub) on the tightest                        minimization of the expected completion time. Here, only
+achievable deadline and a partial schedule guaranteed to                       a subset of the benchmarks instances is considered (Group 2,
+meet the upper bound value. Obviously, if lb ¼ ub, the tightest                branching factor 4-6); the tightest hard deadline from the
+deadline has been identified. Experiments are performed on                     previous evaluation stage is enforced on each graph.
+an Intel Xeon X5570, 2.93 GHz; being the problem NP-hard, a                    Optimization is performed via binary search on the expected
+limit of 600 seconds was enforced over all runs.                               completion time proxy (see Section 4.2), while the deadline
+   Tables 1 and 2 show the results of this first evaluation,                   stays fixed throughout the process. Finally, the actual
+respectively, for Groups 1 and 2. Each row reports results                     quality of the resulting schedule is assessed via Monte
+for a group of 10 instances; we list the minimum and                           Carlo simulation.
+maximum number of nodes after the mapping process                                 PCP approaches are quite uncommon in the multi-
+(within the group), the average number of added pre-                           processor scheduling domain; hence, the main objective of
+cedence relations in the final schedule, the time for the                      this experimentation is to assess the viability of the
+binary search process (in seconds), the number of timed out                    proposed technique compared to traditional ones. For this
+instances, and the bound gap (i.e., ublb =lb ) in the case the                purpose, our method is compared against a Fixed Priority
+tightest deadline is not reached; standard deviations are                      Scheduling approach with offline optimization and a pure
+between round brackets. The first column shows the initial                     online FIFO scheduler.
+number of nodes prior to mapping for Group 1 and the                              FPS scheduler. The considered FPS method is a variant of
+branching factor range for Group 2.                                            the one presented in [44], based on Tabu search and
+   The increase in the number of nodes after the mapping                       performing both mapping and scheduling. Since the focus
+process is due to the added interaccelerator communication                     of this paper is on pure scheduling, we force the mapping
+tasks: this is more relevant for Platform A, due to the                        from Section 5.2 and use tabu search only for priority
+smaller number of threads per accelerator. The number of                       assignment. Moreover, we have extended the approach to
+        Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+LOMBARDI ET AL.: ROBUST SCHEDULING OF TASK GRAPHS UNDER EXECUTION TIME UNCERTAINTY                                                                     109
+
+
+                            TABLE 3                                                                        TABLE 4
+               Performance for Expected Completion                                         Completion Time via Monte Carlo Simulation
+                        Time Minimization
+
+
+
+
+deal with nonunary resources11: in [44], there is no such issue
+since only single-thread processors are taken into account.
+Finally, we replaced per-resource priority lists in [44] with a
+single global one; this is necessary to avoid conflicting                       in [44] and allowed to run up to 4 hours per instance. The
+priority assignments, since tasks in our model can have                         quality of the schedules is assessed by sampling task
+multiple resource requirements.12 Estimating the completion                     durations in each graph 10,000 times, then performing
+time with FPS requires more complex techniques compared
+                                                                                Monte Carlo simulation. On this purpose, the duration of
+to our approach. In [44], a clever approximation method is
+                                                                                each task ti is assumed to follow a Normal distribution with
+used to compute end time distributions for each task; the
+                                                                                mean di þDi =2 and standard deviation di þDi =6 ; the values are
+computation is fast enough to be embedded in the Tabu-
+                                                                                chosen so that 98 percent of the possible duration values are
+search optimization, although (by far) slower than the simple
+                                                                                in the interval ½di ; Di .
+proxy we adopt in this work; on the other hand, the accuracy
+                                                                                   Table 3 reports the performance for the expected comple-
+of the estimate is much higher.13
+                                                                                tion time minimization with our approach; all instances have
+   An advantage of FPS scheduling over our method is the
+                                                                                40 tasks prior to mapping; the number of nodes and arcs after
+ability to always start the highest priority task as soon as it is              the mapping phase is reported under columns nodes and arcs.
+possible. In PCP scheduling, the added precedence con-                          Columns time, time outs, and gap are the same as in Tables 1
+straints may force a task to wait for an “artificial” predecessor,              and 2. Once again, despite the problem is NP-hard, the
+even if all the required data and resources are available. On                   optimum is identified very quickly; this is mainly due to
+the other side, FPS may cause scheduling anomalies, while                       the effectiveness of constraint propagation, the efficiency of
+the PCP schedules are by construction anomaly free.                             the MCS detection procedure, and the simplicity of the expected
+   FIFO scheduler. This is a pure online approach, requiring                    completion time proxy. Conversely, the 4 hours time limit was
+no offline tuning; tasks are tentatively started as soon as                     exceed by tabu search in all but a few cases, due to the
+they are ready, and enqueued in the case the required                           computational complexity of the completion time approx-
+resources are not available. Whenever a task ends, a waiting                    imation. Two time-outs are reported on Platform A, but the
+task with all required resources available is chosen for                        final gap value is very low and a high quality solution is
+execution by following a FIFO order.                                            produced in just 0.14 seconds.
+   This scheduling strategy has the same advantages as FPS                         Table 4 shows the outcome of the Monte Carlo simula-
+over PCP; moreover, priority is accorded to the enqueued                        tion; thanks to the Central Limit Theorem, the completion
+tasks in a dynamic fashion, depending on the order the tasks                    time can be reasonably assumed to have Normal distribu-
+got enqueued; this may lead to myopic decisions or to                           tion.15 The expected completion time can therefore be
+clever ones depending on the runtime task durations. As a                       characterized in terms of mean (main number in each
+consequence, FIFO scheduling is not theoretically domi-                         column) and standard deviation (between round brackets).
+nated by either PCP nor FPS: the “best” scheduling strategy                     Somehow surprisingly, the PCP approach obtains consis-
+for a target benchmark can only be identified via experi-                       tently better results in terms of mean completion time; the
+mental evaluation.                                                              solution stability (i.e., standard deviation) is often better,
+   The tests are performed on an Intel Xeon X5570, 2.93 GHz;
+                                                                                but in this case there is no sharp dominance. Basically, for
+a limit of 600 seconds was enforced for the PCP approach.
+                                                                                the considered benchmark, the unpredictable delay due to
+Tabu-search optimization was configured14 as described
+                                                                                scheduling anomalies seems to be a far greater issue than the
+   11. For example, the four thread accelerators in Platform B or the input/    controlled waiting time due to artificial precedence relations.
+output ports.                                                                      The gap is sensibly smaller for the less constrained
+   12. For example, communication tasks require two distinct ports.             Platform B: this matches the proposed explanation, since
+   13. Moreover, as a byproduct, the proposed approximation method in
+[44] allows the authors to tackle soft real-time constraints.                   anomalies are due to limited resources and intertask
+   14. Tabu tenure: 4; max number of iterations: 4 #nodes; number of
+nonimproving iterations before a diversification: 0:33 #nodes; frequency           15. As long as the graph is sufficiently large and scheduling anomalies
+threshold for forcing a mode to become tabu: 0.6. The basic time interval for   are not too critical: in that case, a composition of Normal distributions
+the completion time approximation is 2.                                         would be more proper.
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+110                                                                            IEEE TRANSACTIONS ON COMPUTERS,            VOL. 62,   NO. 1,   JANUARY 2013
+
+
+
+
+Fig. 8. Sampled completion time distribution for the instance tg46-005.
+                                                                                Fig. 9. Sampled completion time distribution for the instance tg46-005.
+dependencies. To probe this conjecture, we have run
+experiments with uniformly distributed durations (hence,                           The Precedence Constraint Posting technique naturally
+higher variance) and larger branching factor. As expected,                      produces flexible schedules, allowed to stretch and accom-
+higher variability tends to increase the performance gap,                       modate actual task durations, reducing idle time; addition-
+while higher branching factors make it smaller; however,                        ally, an offline computed PCP schedule incurs a very little
+the final outcome does not move too much and the                                runtime overhead and can serve as a guideline for a more
+tightness of the resource constraints seems to be main                          complex online scheduler (e.g., to react to hardware faults).
+discriminating factor.                                                          All in all, the PCP technique has a strong, largely under-
+   Fig. 8 shows the sampled completion time distributions                       estimated, potential: we hope our work provides motivation
+for graph tg46-007 on Platform B; this is one of the cases                      for the research community and the industry to seriously
+where the performance difference between PCP and FPS                            consider the use of PCP as a scheduling method for
+scheduling is less prominent (yet sensible); as one can see, the                embedded processing.
+probability distributions are (roughly) Normal and the mean
+value of PCP and FPS is quite close. More insight in the
+behavior is provided by Fig. 9, showing for the same graph a
+                                                                                ACKNOWLEDGMENTS
+scatter plot with the PCP and FPS completion times for the                      The work described in this publication was supported by
+same realization of task durations. Observe that PCP and FPS                    the ARTEMIS project SMECY, ARTEMIS-2009-1-100230.
+tend to perform well/badly on the same instances so that,
+despite the quite large overlapping between the probability                     REFERENCES
+distribution, PCP actually beats FPS in most cases. This
+                                                                                [1]  D.C. Pham et al., “Overview of the Architecture, Circuit Design,
+behavior does not show up when the expected completion                               and Physical Implementation of a First-Generation Cell Processor,”
+times are too close (i.e., tg46-000 and tg46-005 on Platform B).                     IEEE J. Solid-State Circuits, vol. 41, no. 1, pp. 179-196, Jan. 2006.
+   Finally, since our approach relies on approximate execu-                     [2] M. Paganini, “Nomadik: A Mobile Multimedia Application
+tion times information to produce optimized schedules, we                            Processor Platform,” Proc. Asia and South Pacific Design Automation
+                                                                                     Conf. (ASP-DAC), pp. 749-750, 2007.
+performed some tests with increased duration variability.                       [3] J. Reineke et al., “A Definition and Classification of Timing
+Namely, we modified graphs tg46-002 and tg46-003 so that                             Anomalies,” Proc. Int’l Workshop Worst Case Execution Time
+maximum duration values are up to 10 times the minimum                               (WCET), 2006.
+                                                                                [4] J.W.S. Liu, Real-Time Systems. Prentice Hall, 2000.
+ones. We evaluated PCP, FPS, and FIFO schedules for                             [5] L. Thiele and R. Wilhelm, “Design for Timing Predictability,” Real-
+Platform A. Interestingly, the performance gaps are pre-                             Time Systems, vol. 28, no. 2, pp. 157-177, 2004.
+served, with the PCP schedules being 30 percent shorter                         [6] M. Lombardi, M. Milano, and L. Benini, “Robust Non-Preemptive
+compared to FIFO and around 20 percent compared to FPS.                              Hard Real-Time Scheduling for Clustered Multicore Platforms,”
+                                                                                     Proc. Conf. Design, Automation and Test in Europe (DATE), pp. 803-
+                                                                                     808, 2009.
+                                                                                [7] M. Lombardi and M. Milano, “A Precedence Constraint Posting
+6     CONCLUSION                                                                     Approach for the RCPSP with Time Lags and Variable Dura-
+We have developed a PCP-based offline scheduler for data-                            tions,” Proc. Int’l Conf. Principles and Practice of Constraint
+                                                                                     Programming (CP), pp. 569-583, 2009.
+flow described flow described applications with uncertain                       [8] N. Policella et al., “From Precedence Constraint Posting to Partial
+task durations. The method does not require probability                              Order Schedules: A CSP Approach to Robust Scheduling,” AI
+distributions to be known and relies instead on simpler and                          Comm., vol. 20, no. 3, pp. 163-180, 2007.
+cheaper-to-obtain information. The use of an expected                           [9] N. Fisher and S.K. Baruah, “The Partitioned Multiprocessor
+makespan proxy as objective (rather than a more accurate                             Scheduling of Non-Preemptive Sporadic Task Systems,” Proc.
+                                                                                     IEEE Int’l Real-Time Systems Symp. (RTNS), 2006.
+approximation) and advanced Constraint Programming                              [10] S.K. Baruah, “The Non-Preemptive Scheduling of Periodic Tasks
+techniques makes the solution time very affordable for                               upon Multiprocessors,” Real-Time Systems, vol. 32, no. 1, pp. 9-20,
+applications of realistic size; nevertheless, the approach                           2006.
+proved to be able to produce anomaly free schedules with                        [11] M. Ruggiero et al., “A Fast and Accurate Technique for Mapping
+                                                                                     Parallel Applications on Stream-Oriented MPSoC Platforms with
+low expected completion time and guaranteed to meet hard                             Communication Awareness,” Int’l J. Parallel Programming, vol. 36,
+deadline constraints.16                                                              no. 1, pp. 3-36, 2008.
+                                                                                [12] E. Zitzler et al., “Performance Assessment of Multiobjective
+  16. Obviously, provided the model is suitable for the target application           Optimizers: An Analysis and Review,” IEEE Trans. Evolutionary
+and platform.                                                                        Computation, vol. 7, no. 2, pp. 117-132, Apr. 2003.
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+LOMBARDI ET AL.: ROBUST SCHEDULING OF TASK GRAPHS UNDER EXECUTION TIME UNCERTAINTY                                                                          111
+
+[13] R.L. Graham, “Bounds for Certain Multiprocessing Anomalies,”                  [39] M. Golumbic, Algorithmic Graph Theory and Perfect Graphs,
+     Bell System Technical J., vol. 45, no. 9, pp. 1563-1581, 1966.                     second ed. Elsevier, 2004.
+[14] A. Brekling, M.R. Hansen, and J. Madsen, “Models and Formal                   [40] J. Edmonds and R.M. Karp, “Theoretical Improvements in
+     Verification of Multiprocessor System-on-Chips,” J. Logic and                      Algorithmic Efficiency for Network Flow Problems,” J. ACM,
+     Algebraic Programming, vol. 77, nos. 1/2, pp. 1-19, 2008.                          vol. 19, no. 2, pp. 248-264, 1972.
+[15] P. Brucker et al., “Resource-Constrained Project Scheduling:                  [41] R.M. Haralick and G.L. Elliott, “Increasing Tree Search Efficiency
+     Notation, Classification, Models, and Methods,” European                           for Constraint Satisfaction Problems,” Artificial Intelligence, vol. 14,
+     J. Operational Research, vol. 112, no. 1, pp. 3-41, 1999.                          no. 3, pp. 263-313, 1980.
+[16] S. Hartmann and D. Briskorn, “A Survey of Variants and                        [42] S. Bell et al., “TILE64 Processor: A 64-Core SoC with Mesh
+     Extensions of the Resource-Constrained Project Scheduling Pro-                     Interconnect,” Proc. IEEE Int’l Solid-State Circuits Conf. (ISSCC),
+     blem,” European J. Operational Research, vol. 207, no. 1, pp. 1-14,                pp. 88-598, 2008.
+     2010.                                                                         [43] G. Karypis and V. Kumar, “A Fast and High Quality Multilevel
+[17] P. Baptiste, C. Le Pape, and W. Nuijten, Constraint-Based                          Scheme for Partitioning Irregular Graphs,” SIAM J. Scientific
+     Scheduling. Kluwer Academic Publishers, 2001.                                      Computing, vol. 20, no. 1, pp. 359-392, 1999.
+[18] P. Laborie, “Algorithms for Propagating Resource Constraints in               [44] S. Manolache, P. Eles, and Z. Peng, “Task Mapping and Priority
+     AI Planning and Scheduling: Existing Approaches and New                            Assignment for Soft Real-Time Applications under Deadline Miss
+     Results,” Artificial Intelligence, vol. 143, no. 2, pp. 151-188, Feb. 2003.        Ratio Constraints,” ACM Trans. Embedded Computing Systems,
+                                                                                        vol. 7, no. 2, pp. 1-35, Feb. 2008.
+[19] J.C. Beck and A.J. Davenport, “A Survey of Techniques for
+     Scheduling with Uncertainty,” http://www.eil.utoronto.ca/
+     profiles/chris/gz/uncertainty-survey.ps, 2002.                                                        Michele Lombardi received the PhD degree in
+[20] W. Herroelen and R. Leus, “Project Scheduling under Uncertainty:                                      computer engineering from the University of
+     Survey and Research Potentials,” European J. Operational Research,                                    Bologna, with internships at EPFL Lausanne
+     vol. 165, no. 2, pp. 289-306, 2005.                                                                   and Cornell University. He is a postdoctoral
+                                                                                                           fellow at DEIS, University of Bologna; his
+[21] S. de Vonder, E.L. Demeulemeester, and W. Herroelen, “A
+                                                                                                           research activity is related to constraint pro-
+     Classification of Predictive-Reactive Project Scheduling Proce-
+                                                                                                           gramming and its integration with integer
+     dures,” J. Scheduling, vol. 10, no. 3, pp. 195-207, 2007.
+                                                                                                           programming and artificial intelligence techni-
+[22] A.J. Davenport, C. Gefflot, and J.C. Beck, “Slack-Based Techniques                                    ques; in particular, his focus is on resource
+     for Robust Schedules,” Proc. European Conf. Planning (ECP), pp. 7-                                    allocation and scheduling problems. He has
+     18, 2001.                                                                     published papers and performed reviews for international conferences
+[23] G. Igelmund and F.J. Radermacher, “Preselective Strategies for the            and journals. He is in the program committee of IJCAI 2011, CPAIOR
+     Optimization of Stochastic Project Networks under Resource                    2011/2012, and ICAPS 2012.
+     Constraints,” Networks, vol. 13, no. 1, pp. 1-28, Jan. 1983.
+[24] F. Stork, “Stochastic Resource-Constrained Project Scheduling,”                                       Michela Milano received the PhD degree in
+     PhD dissertation, Technische Universitat Berlin, 2001.                                                computer science. She has been an associate
+[25] F. Wang and Y. Xie, “Embedded Multi-Processor System-on-Chip                                          professor at the University of Bologna since
+     (MPSoC) Design Considering Process Variations,” Proc. IEEE Int’l                                      2001. Her research interest is in the area of
+     Symp. Parallel and Distributed Processing (IPDPS), pp. 1-5, Apr. 2008.                                constraint programming and its integration with
+[26] S. Manolache, P. Eles, and Z. Peng, “Schedulability Analysis of                                       integer linear programming. In these fields, she
+     Applications with Stochastic Task Execution Times,” ACM Trans.                                        has achieved international visibility. She is a
+     Embedded Computing Systems, vol. 3, no. 4, pp. 706-735, Nov. 2004.                                    program chair of CPAIOR 2005 and CPAIOR
+[27] R. Hall et al., “A Comparison of Dag-Scheduling Strategies for                                        2010. She has published more than 100 papers
+     Internet-Based Computing,” Proc. IEEE Int’l Symp. Parallel and                                        on peer-reviewed international journals and
+     Distributed Processing (IPDPS), pp. 1-9, 2007.                                conferences. She edited two books on Hybrid Optimization. She is an
+[28] G. Cordasco and A. Rosenberg, “Area-Maximizing Schedules for                  area editor of INFORMS Journal on Computing, Constraint Programming
+     Series-Parallel DAGs,” Proc. Int’l Euro-Par Conf., pp. 380-392, 2010.         Letters, and member of the editorial board of the Constraint International
+[29] V. Shestak and J. Smith, “Iterative Algorithms for Stochastically             Journal. She is the project coordinator of the EU-FP7 project e-POLICY:
+     Robust Static Resource Allocation in Periodic Sensor Driven                   Engineering the Policy Making like cycle, that fosters the use of
+     Clusters,” Proc. Int’l Conf. Parallel and Distributed Computing and           optimization and decision support techniques for aiding political decision
+     Systems (PDCS), pp. 166-174, 2006.                                            making and impact assessment.
+[30] A. Cesta, A. Oddi, and S. Smith, “Scheduling Multi-Capacitated
+     Resources under Complex Temporal Constraints,” Proc. Int’l Conf.                                       Luca Benini received the PhD degree in
+     Principles and Practice of Constraint Programming (CP), p. 465, 1998.                                  electrical engineering from Stanford University
+[31] P. Laborie, “Complete MCS-Based Search: Application to Re-                                             in 1997. He is a full professor at the Department
+     source Constrained Project Scheduling,” Proc. Int’l Joint Conf.                                        of Electrical Engineering and Computer Science
+     Artificial Intelligence (IJCAI), pp. 181-186, 2005.                                                    (DEIS) of the University of Bologna. He also
+[32] A. Cesta, A. Oddi, and S.F. Smith, “Iterative Flattening: A Scalable                                   holds a visiting faculty position at the Ecole
+     Method for Solving Multi-Capacity Scheduling Problems,” Proc.                                          Polytechnique Federale de Lausanne (EPFL)
+     17th Nat’l Conf. Artificial Intelligence and 12th Conf. Innovative                                     and he is currently serving as the chief architect
+     Applications of Artificial Intelligence (AAAI/IAAI), pp. 742-747, 2000.                                for the Platform 2012 project in STmicroelec-
+[33] R. Dechter, I. Meiri, and J. Pearl, “Temporal Constraint Net-                                          tronics, Grenoble. His research interests are in
+     works,” Artificial Intelligence, vol. 49, nos. 1-3, pp. 61-95, 1991.          energy-efficient system design and Multicore SoC design. He is also
+[34] T. Vidal and H. Fargier, “Handling Contingency in Temporal                    active in the area of energy-efficient smart sensors and sensor networks
+     Constraint Networks: From Consistency to Controllabilities,”                  for biomedical and ambient intelligence applications. He has published
+     J. Experimental and Theoretical Artificial Intelligence, vol. 11, no. 1,      more than 500 papers in peer-reviewed international journals and
+     pp. 23-45, 1999.                                                              conferences, four books and several book chapters. He is a fellow of the
+[35] P.H. Morris and N. Muscettola, “Temporal Dynamic Controll-                    IEEE, a member of the Academia Europea, and a member of the
+     ability Revisited,” Proc. Nat’l Conf. Artificial Intelligence (AAAI),         steering board of the ARTEMISIA European Association on Advanced
+     pp. 1193-1198, 2005.                                                          Research & Technology for Embedded Intelligence and Systems.
+[36] N. Muscettola, “Computing the Envelope for Stepwise-Constant
+     Resource Allocations,” Proc. Int’l Conf. Principles and Practice of
+     Constraint Programming (CP), pp. 139-154, 2002.                               . For more information on this or any other computing topic,
+[37] D. Culler et al., “LogP: A Practical Model of Parallel Computa-               please visit our Digital Library at www.computer.org/publications/dlib.
+     tion,” Comm. ACM, vol. 39, no. 11, pp. 78-85, 1996.
+[38] L. Benini et al., “Allocation and Scheduling for Mpsocs via
+     Decomposition and No-Good Generation,” Proc. Int’l Joint Conf.
+     Artificial Intelligence (IJCAI), vol. 19, pp. 1517-1518, 2005.
+         Authorized licensed use limited to: Wuhan University. Downloaded on September 22,2026 at 08:06:58 UTC from IEEE Xplore. Restrictions apply.
+

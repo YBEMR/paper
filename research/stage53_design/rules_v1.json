@@ -1,0 +1,143 @@
+{
+  "schema_version": "stage53-rules-v1",
+  "hypothesis": "H52",
+  "objective": "min system energy on common finite window under deadline/resource/domain/thermal constraints",
+  "methods": [
+    "joint_noheat",
+    "one_full_suffix_per_initial_action",
+    "same_domain_thermal_reference"
+  ],
+  "execution": {
+    "known_requests": true,
+    "nonpreemptive": true,
+    "migration": false,
+    "in_stage_frequency_change": false,
+    "cpu_domain": "D0",
+    "cpu_overlap_requires_same_frequency": true,
+    "frequency_change_only_when_domain_empty": true,
+    "npu_capacity": 1,
+    "execution_intervals": "[start,finish)",
+    "same_time_event_order": "complete then start",
+    "grid_applies_to": "start only; do not round durations, deadlines or finish times",
+    "request_completion": "finish of S3",
+    "allow_waiting": true,
+    "shared_response_across_requests": true,
+    "shared_response_across_cpu_units": true
+  },
+  "tolerance": {
+    "time_s": 1e-09,
+    "energy_absolute_J": 1e-10,
+    "energy_relative": 1e-08,
+    "temperature_C": 1e-06
+  },
+  "energy_layers": {
+    "order": "raw energy ascending",
+    "anchor": "first still unassigned energy",
+    "member_test": "abs(E-anchor)<=max(1e-10,1e-8*max(abs(E),abs(anchor)))",
+    "chaining": false
+  },
+  "ordering": {
+    "keys": [
+      "energy_layer",
+      "sum_request_finish_s",
+      "max_request_finish_s",
+      "canonical_key"
+    ],
+    "stage_order": [
+      "A.S0",
+      "A.S1",
+      "A.S2",
+      "A.S3",
+      "B.S0",
+      "B.S1",
+      "B.S2",
+      "B.S3"
+    ],
+    "canonical_per_stage": [
+      "start_s",
+      "unit_id",
+      "frequency_id"
+    ],
+    "unit_order": [
+      "C1",
+      "C2",
+      "N"
+    ],
+    "mode_order": [
+      "L",
+      "H",
+      "FIXED"
+    ],
+    "secondary_numeric_sort": "unrounded finite numeric values, ascending; time tolerance only for legality"
+  },
+  "baseline": {
+    "initial_time_s": 0,
+    "action": "all actual starts at initial time, including Stage/unit/mode; empty set is wait",
+    "candidate_space": "all legal no-heat complete schedules over all legal mode and energy layers",
+    "representatives_per_action": 1,
+    "representative": "minimum under ordering",
+    "representative_order": "same ordering",
+    "thermal_check": "entire complete representative and idle tail",
+    "stop": "first certified safe representative",
+    "all_rejected": "no_safe_representative, unless unresolved/time budget prevents conclusion",
+    "returned_plan": "fixed full schedule, not event-by-event online replanning",
+    "noheat_generation_incomplete": "unresolved; partial library is not an exact planner"
+  },
+  "thermal_verdict": {
+    "safe": "every node peak < limit - band",
+    "violation": "any node peak > limit + band",
+    "unresolved": "otherwise, including equality at either band boundary",
+    "evaluation": "continuous constant-power segment extrema including endpoints/stationary points and tail"
+  },
+  "evaluation": {
+    "energy": "(idle_cpu_total+idle_npu+external)*window+sum(active_increment*duration)",
+    "independent_check": "piecewise system-power integration",
+    "cpu_heat": "idle_cpu_total + sum increments of all running CPU-mapped stages",
+    "npu_heat": "idle_npu + increment of running NPU-mapped stage",
+    "external_heat": "none within declared two-node boundary",
+    "valid_energy_ranking": "complete, resource/dependency/domain/grid/deadline legal, certified thermal safe"
+  },
+  "budget": {
+    "seconds_per_case_per_method": 60,
+    "includes": [
+      "generation",
+      "sorting",
+      "selection",
+      "thermal_evaluation"
+    ],
+    "share_precomputed_library": false,
+    "read_reference_in_baseline": false,
+    "timeout": "retain certified witnesses/bounds and unresolved fields; never exclusion",
+    "rerun_with_larger_budget": false
+  },
+  "reporting": {
+    "main_count": 8,
+    "check_count": 2,
+    "cohorts_separate": true,
+    "reference_evidence": [
+      "safe_witness",
+      "lower_bound_J",
+      "upper_bound_J",
+      "optimum_value_proved",
+      "optimal_configuration_set_complete",
+      "exclusion_proved",
+      "unresolved"
+    ],
+    "output_fields": [
+      "full_schedule",
+      "full_configuration",
+      "request_completion_s",
+      "energy_J",
+      "peak_temperature_C_by_node",
+      "thermal_status",
+      "completion_status",
+      "candidate_coverage",
+      "budget_status"
+    ],
+    "symmetry": "CPU label swaps are not mapping gains",
+    "no_safe_representative": "not a proof of infeasibility",
+    "baseline_gap": "safe lower-energy independent witness proves a gap lower bound, not necessarily exact optimum",
+    "hot_case_outcomes": "not predicted; no input changes to force failure or mapping changes"
+  },
+  "parameter_changes": "never overwrite v1; any correction gets a new version and reason; no result-driven tuning"
+}

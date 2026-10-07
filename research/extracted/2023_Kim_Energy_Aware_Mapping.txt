@@ -1,0 +1,1072 @@
+1666                                                                                                   IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+
+
+
+Energy-Aware Scenario-Based Mapping of Deep
+  Learning Applications Onto Heterogeneous
+   Processors Under Real-Time Constraints
+                                             Jangryul Kim                and Soonhoi Ha , Fellow, IEEE
+
+        Abstract—To cope with the increasing demand for deep learning applications in embedded systems, emerging embedded devices
+        tend to equip multiple heterogeneous processors, including GPU and deep learning hardware accelerator, called neural processing unit
+        (NPU). It becomes popular to run multiple deep learning (DL) applications simultaneously to provide several functionalities. In this work,
+        we assume that applications have real-time constraints that may vary at run time. While extensive studies have been conducted
+        recently to find an efficient mapping of multiple DL applications on various hardware platforms, they do not consider the constraints
+        imposed by the NPU and the associated software development kit (SDK) in a real embedded platform. In this paper, we propose a
+        novel energy-aware mapping methodology of multiple DL applications onto a real embedded system that has multiple heterogeneous
+        processors. The objective is to minimize energy consumption while satisfying the real-time constraints of all applications. In the
+        proposed scheme, we first select Pareto-optimal mapping solutions for each application. Then mapping combination is explored,
+        considering the scenario that indicates the dynamism of applications while satisfying the constraints. Also, we reduce energy
+        consumption by tuning the frequency of processors. We could satisfy up to 40% higher deadline constraints and reduce the
+        energy consumption by 22%  31% compared to the static mapping methods with real-life applications and different scenarios on a
+        real platform.
+
+        Index Terms—Deep learning applications, scenario-based design methodology, application mapping, schedulability test
+
+                                                                                       Ç
+
+
+1      INTRODUCTION                                                                        minimize energy consumption while satisfying the real-
+                                                                                           time constraints of all applications.
+       EEP learning (DL) applications are becoming more pop-
+D     ular in embedded systems. The increasing demand for
+DL applications is driving embedded devices to equip deep
+                                                                                              There exist several technical challenges involved in this
+                                                                                           mapping problem. First, DL applications usually have real-
+                                                                                           time constraints in terms of latency, and the real-time con-
+learning hardware accelerators, called neural processing
+                                                                                           straints may vary at run time. For instance, suppose that a
+units (NPUs), besides a multi-core CPU and a GPU. A well-
+                                                                                           self-driving car runs four object detection networks for the
+known example is NVIDIA Jetson AGX Xavier that contains
+                                                                                           streaming images received from the four sides: front, back,
+a CPU, GPU, and two deep learning accelerators (DLAs),
+                                                                                           left, and right. As the car speed increases, the latency con-
+which is the assumed hardware platform in this paper. A
+                                                                                           straint will be tightened. Second, the set of concurrently
+DLA is a kind of NPU. On the other hand, it becomes more
+                                                                                           running applications may vary. If the car is moving for-
+popular to run multiple DL applications parallel in an
+                                                                                           ward, we may want to suspend the object detection from
+embedded system. While extensive studies have been con-
+                                                                                           the backside. To handle such dynamism of multiple applica-
+ducted recently to find an efficient mapping of multiple DL
+                                                                                           tions, we define scenarios that tell which applications are
+applications on various hardware platforms ([1], [2], [3],
+                                                                                           running.
+[4]), they do not consider NPUs or have assumptions that
+                                                                                              The third challenge is to estimate the performance of each
+are not met in real implementation. In this paper, we pro-
+                                                                                           mapping candidate. In most previous works, it is assumed
+pose a novel energy-aware mapping methodology of multi-
+                                                                                           that the worst-case execution time (WCET) of each layer in a
+ple DL applications onto a real embedded system that has
+                                                                                           DL application is known, and the performance of mapping
+multiple heterogeneous processors. The objective is to
+                                                                                           can be estimated analytically. But layer-wise profiling is
+                                                                                           often not appropriate in real systems. An embedded device
+   The authors are with the Department of Computer Science and Engineer-                  is accompanied by a software development kit (SDK) that
+    ing, Seoul National University, Seoul 08826, Korea. E-mail: {urmydata,                 helps a user develop a DL application. TensorRT [5] is the
+    sha}@snu.ac.kr.
+                                                                                           SDK for an NVIDIA device. TensorRT internally optimizes
+Manuscript received 17 March 2022; revised 13 October 2022; accepted 30                    the inference by applying the techniques such as layer fusion
+October 2022. Date of publication 2 November 2022; date of current version
+10 May 2023.                                                                               which combines multiple consecutive layers mapped on the
+This work was supported by Samsung Electronics Co., Ltd. under Grant                       same processor to a single kernel. Furthermore, additional
+IO201210-07941-01.                                                                         kernels can be inserted when the network is partitioned to
+(Corresponding author: Soonhoi Ha.)
+Recommended for acceptance by C. Silvano.
+                                                                                           GPU and DLAs. This makes the problem difficult because
+Digital Object Identifier no. 10.1109/TC.2022.3218991                                      the profiled per-layer execution time may not be available in
+                                   0018-9340 © 2022 IEEE. Personal use is permitted, but republication/redistribution requires IEEE permission.
+                                                 See ht_tps://www.ieee.org/publications/rights/index.html for more information.
+        Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+KIM AND HA: ENERGY-AWARE SCENARIO-BASED MAPPING OF DEEP LEARNING APPLICATIONS ONTO HETEROGENEOUS...                                                     1667
+
+
+                                                                                the CPU and the FIFO execution on the GPU and DLAs. We
+                                                                                explore the frequencies together since the frequency affects
+                                                                                the execution time and energy consumption as well as
+                                                                                schedulability.
+                                                                                    As the last step, we adjust the frequencies of processors
+                                                                                with a heuristic to save energy. Since the deadline constraint
+                                                                                may vary at run time, the proposed scheme tunes the fre-
+                                                                                quencies of processors for each deadline constraint and
+                                                                                each scenario. For example, if the deadline constraint is alle-
+Fig. 1. Overall flow of the proposed mapping methodology.                       viated or the transition to a less tighten scenario occurs, the
+                                                                                frequencies can be lowered while satisfying the constraints.
+                                                                                    As a result of the proposed mapping process, we get the
+the analysis and mapping exploration. To tackle the third                       static mappings for applications and frequencies for each
+challenge, the proposed method performs mapping in two                          scenario and each constraint. At run time, the frequencies
+phases. In the first phase, we find the Pareto-optimal map-                     are adjusted following the scenario and the associated con-
+pings of each application based on the direct measurement on                    straints based on the resident mapping result. The proposed
+the real hardware platform. In the second phase, we explore                     method is verified with extensive experiments using real-
+the mapping combination of multiple applications based on                       life applications, various scenarios, and real board.
+the measured execution times obtained from the previous                             Three main contributions of this paper can be summa-
+phase.                                                                          rized as follows:
+    The fourth challenge comes from the restrictions imposed
+by the device and its SDK. TensorRT optimizes the network,                            This paper reveals the technical challenges involved
+saves it as an engine, and loads the engine to the assigned                            in multiple DL applications on a real embedded
+processor. Since the loading takes a long, a few seconds, it                           device that consists of heterogeneous processors,
+may not be done at run time without deadline violation. It                             including NPUs.
+means that dynamic task migration is not allowed. And the                           We propose a novel methodology for mapping mul-
+maximum number of DLA-mapped parts is limited. In addi-                                tiple DL applications onto heterogeneous processors,
+tion, since there are only two levels of priority in GPU and no                        tackling the technical challenges. While previous
+priority level in DLA, the priority assignment is usually not                          studies assume that the execution time of a layer on
+used for GPU and DLAs. Note that the traditional fixed pri-                            each PE is known before a mapping decision is
+ority-based worst-case response time (WCRT) analysis may                               made, such per-layer profiling is not possible for
+incur over-estimated results in case many tasks have the                               DLAs. And there are several implications imposed
+same priority. Hence the mapping techniques based on                                   by the SDK that needs to be considered in making a
+the assumption that tasks are assigned different priorities                            mapping decision. The proposed methodology con-
+are not suitable to our problem.                                                       siders such limitations imposed by DLA and its SDK.
+    To tackle these challenges, we propose a novel scenario-                        While mapping decision is made statically, we adjust
+based mapping methodology to map multiple DL applica-                                  the frequency of processors dynamically to minimize
+tions onto heterogeneous processors. The overview of the                               energy consumption while satisfying the real-time
+proposed method is described in Fig. 1. It starts with the fol-                        constraints of all DL applications.
+lowing input information: all DL applications to run in the                         The experiments are carried out on the real platform
+given hardware platform, scenario information that speci-                              to show the efficacy of the proposed approach.
+fies the applications to be run for each scenario, and various                     The rest of this paper is organized as follows. In the next
+constraints to consider, such as real-time requirements of                      section, we review the related work. Then, in Section 3, we
+applications. In the first step, we obtain a set of Pareto-opti-                explain the background. Section 4 presents a motivational
+mal mappings of each application onto heterogeneous pro-                        example, notation, and problem definition. The proposed
+cessors in a pipelined fashion via an evolutionary meta-                        scheme is explained in Section 5. After the experiment
+heuristic. The end-to-end latency and the average power                         results are discussed in Sections 6 and 7 concludes the
+consumption for each processor are objectives of mapping                        paper.
+exploration in this step. For each Pareto solution, we parti-
+tion the network of each application into sub-networks that                     2       RELATED WORK
+will be converted to an engine to run on the mapped proces-
+                                                                                This section reviews the related work in the following two
+sor by TensorRT.
+                                                                                subsections involved in the proposed method: mapping/
+    In the second step, we explore the possible mapping
+                                                                                scheduling multiple applications and running multiple DL
+combinations of multiple applications considering the
+                                                                                applications.
+dynamic variation of scenarios via another meta-heuristic.
+Since no task migration is allowed, we should make the par-
+titioned sub-networks of all networks resident for all                          2.1 Mapping and Scheduling Multiple Applications
+scenarios. This step aims to minimize the average energy                        Since the mapping and scheduling problem of multiple appli-
+consumption for all scenarios while satisfying the schedul-                     cations on multiple processing elements (PEs) is known to be
+ability condition on all processors. The schedulability analy-                  NP-hard [6], numerous sub-optimal techniques have been
+sis is performed considering the preemptive execution on                        proposed. They are classified into a design-time approach,
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+1668                                                                                      IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+
+                                                             TABLE 1
+                  Comparison With the Related Works of Running Multiple Deep Learning Applications in Terms of:
+                Optimization Approach, Pipelining, Use of NPU, Schedulability Check, Experiment on a Real Platform,
+                                                      and Energy Awareness
+
+           Works                       Opt.          Pipe.        Using NPU            Sched. check           Real exp.         Energy aware
+           NestDNN [20]              Hybrid                                                                       ✓                   ✓
+           DeepEye [21]              Hybrid            ✓                                                          ✓                   ✓
+           S 3 DNN [1]                Run                                                     4                   ✓
+           DART [2]                  Design            ✓                                      ✓                   ✓
+           LaLaRAND [4]               Run              ✓                                      ✓                   ✓
+           Pujol et al. [22]         Design                             ✓                     ✓                   ✓
+           Kang et al. [3]           Design            ✓                ✓                     ✓                                       ✓
+           Proposed                  Hybrid            ✓                ✓                     ✓                   ✓                   ✓
+
+
+
+run-time approach, and a hybrid approach that combines the                      scenarios and make a static schedule for each scenario.
+design-time analysis and run-time adaption [7].                                 Gheorgita et al. [15] introduced the concept of system sce-
+    In the design-time approach, it is assumed that all appli-                  narios and proposed the methodology to reduce the energy
+cations are running concurrently. If there is a dynamic vari-                   consumption. They identified the scenario and optimized
+ation of workload, the worst-case scenario is considered.                       the system per scenario at design time. At the run time, the
+Earlier works used list scheduling heuristics, named BIL [8]                    scenario is predicted, and the system is arranged with a
+and HEFT [9], to schedule multiple applications onto het-                       pre-optimized setting. Schor et al. [16] proposed a design
+erogeneous processors. They assume that each application                        flow for mapping applications on manycore systems repre-
+is specified by a DAG, and the execution time of a node on                      senting the dynamic scenario variation with an FSM which
+each processor is known.                                                        has a finite number of scenarios. Assuming that the map-
+    Kang et al. [10] proposed a two-phase optimization                          pings are resident, they found a sub-optimal mapping for
+scheme for the mappings of multiple applications repre-                         each scenario by an evolutionary algorithm. It aims to mini-
+sented by SDF (Synchronous Dataflow) graphs [11]. They                          mize the maximum core utilization.
+find a Pareto-optimal set of static schedules for each graph                       The other researchers find a set of static mappings for
+via a genetic algorithm in the first step, then explore the                     each application and find an appropriate static mapping at
+combination of per-graph schedules with the schedulability                      run time depending on the scenario. Jung et al. [17] speci-
+analysis with another genetic algorithm. Their two-step                         fied the dynamic behavior of applications by the dataflow
+approach is similar to our proposed technique, while their                      model and FSM. They performed design-time analysis for
+assumed hardware platforms are homogeneous processors.                          each application subject to the number of processors. At run
+    If the workload varies at run time, the run-time approach                   time, the number of used processors is changed according
+is usually taken, aiming to maximize the load balancing if                      to the state to satisfy the throughput constraint. Quan et al.
+there are no real-time constraints. Niknafs et al. [12] pro-                    [18] proposed a scenario-based run-time mapping algo-
+posed a mapping and scheduling method for incoming                              rithm on an MPSoC-based embedded system. After finding
+tasks. They optimize the energy consumption with the                            a set of mappings of each application, they cluster workload
+mixed-integer linear programming formulation and the heu-                       scenarios and find the static mapping for each scenario.
+ristic while satisfying the deadline of tasks. Also, they inves-                Their method finds the critical task that hinders achieving
+tigated the effect of the workload prediction in terms of                       the goal throughput of each application and re-maps the
+keeping the deadline and minimizing the energy consump-                         task to fulfill the objective. Also, they expand their approach
+tion while not discussing how workload prediction can be                        by adding a run-time throttling step that estimates the over-
+made. Khasanov et al. [13] presented a run-time manage-                         head of reconfiguration [19]. However, they evaluated the
+ment method for multi-threaded applications to reduce                           proposed technique with an in-house system-level simula-
+energy consumption without deadline violation on a homo-                        tor, not a real hardware platform.
+geneous multiprocessor system. They introduced the multi-                          To the best of our knowledge, there is no previous work
+dimensional knapsack problem-based heuristic for fast                           that considered all technical challenges identified in this
+scheduling. Run-time techniques usually assume that the                         work. Our proposed technique belongs to the hybrid
+execution time of each application is known as a priori.                        approach based on the finite set of scenarios similar to [16].
+Donyanavard et al. [14] collect data through periodic sensing
+and predict the performance and power based on the data.
+And they introduced a fast heuristic of run time task alloca-                   2.2 Running Multiple Deep Learning Applications
+tion to reduce the energy consumption while retaining the                       Research on the execution of multiple DL applications in
+throughput. However, they did not consider real-time                            embedded systems has recently become active. Table 1 sum-
+constraints.                                                                    marizes the comparison of some related works and posi-
+    To utilize the benefits of design-time approaches and                       tions the proposed method.
+run-time approaches, hybrid methods have been studied                              NestDNN [20] presented a framework that schedules mul-
+extensively. Some researchers assume that the dynamic                           tiple DL applications considering run-time resource require-
+behavior of a system can be modeled as a finite set of                          ments. At design time, they created a multi-capacity model
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+KIM AND HA: ENERGY-AWARE SCENARIO-BASED MAPPING OF DEEP LEARNING APPLICATIONS ONTO HETEROGENEOUS...                                                     1669
+
+
+
+
+                                                                                Fig. 3. The workflow of generating execution context in TensorRT.
+
+
+                                                                                They assume that layer-wise profiling information is given
+                                                                                for all processing elements. Since it is not possible for NPU,
+Fig. 2. The example composition of kernels.                                     they estimated the execution time of a layer on NPU by mul-
+                                                                                tiplying the GPU execution time and the average perfor-
+consisting of models that provide a resource-accuracy trade-                    mance ratio between GPU and NPU. Unlike the proposed
+off for each application. Then, they monitor the resource and                   technique, they do not consider the scenarios, assuming
+select the proper model for each application at run time. How-                  that all DL applications run concurrently. Moreover, NPU is
+ever, they did not exploit model-parallelism nor pipelining of                  not used on a real platform in their experiments even
+each application. DeepEye [21] proposed a wearable camera                       though they considered the NPU in the analysis. With these
+that is capable of running multiple DL applications. They seg-                  limitations, they could find the mapping of all applications
+regated layers into the computation- and memory-heavy                           together at once. On the contrary, we propose a three-step
+layers at design time. At run time, they interleaved the execu-                 approach to consider scenarios and the technical challenges
+tion of layers of multiple applications on a CPU-GPU hetero-                    imposed by the NPU and its SDK.
+geneous system in a pipeline manner. It aims to reduce the                         As displayed in Table 1, the mapping problem addressed
+latency of inference while prolonging the battery lifetime.                     in this work has not been tackled by the previous work, to
+Although both hybrid schemes, NestDNN [20] and DeepEye                          the best of our knowledge.
+[21], considered the trade-off between energy and perfor-
+mance, they did not consider the real-time requirements of                      3     BACKGROUND
+applications.
+    S 3 DNN [1] introduced a run-time methodology that                          In this section, we review the characteristics of NVIDIA Jet-
+optimizes real-time correctness while increasing the                            son AGX Xavier (Xavier), the target platform for evaluation
+throughput for multiple deep neural networks (DNNs).                            of the proposed methodology, and its SDK, TensorRT.
+Their method selectively fuses multiple images to use fewer
+DNN instances and schedule instances to GPUs with a                             3.1 NVIDIA Jetson AGX Xavier
+least-slack-first (LSF) policy. In spite of using the deadline-                 The Xavier equips three types of processors: an octa-core
+aware scheduling policy, it does not guarantee to keep the                      ARMv8 CPU, a single Volta GPU, and two NVIDIA DLAs.
+deadline. So, we put a triangle in the table to mean the par-                   The DLA shows a power efficiency, but it is slower than
+tial consideration of the schedulability. They did not exploit                  GPU, and it does not support all types of layers. For exam-
+the model parallelism of applications. DART [2] proposed a                      ple, some layers, such as Yolo layer, cannot be executed on
+framework for multiple DNNs on a CPU-GPU heteroge-                              DLA. Also, per-kernel profiling is not supported for DLA.
+neous system. They mapped the layers of DNNs onto CPU                           The unit of profiling for DLA is a pipeline stage, which will
+and GPU via a heuristic at design time. They ensured the                        be explained in the following section. The board has a uni-
+schedulability of real-time applications and increased the                      fied and shared DRAM for CPU and GPU. It means that on-
+throughput of best-effort applications. Albeit they applied                     chip communication between CPU and GPU is carried out
+the admission control for new tasks at run time, it does not                    by DRAM memory access. However, there is an overhead
+change the mappings. LaLaRand [4] is a framework target-                        in a DLA to load the data from DRAM to internal memory
+ing a CPU-GPU heterogeneous system similar to DART. It                          for the inference. It requires adding extra kernels to be exe-
+allocates layers to processors at run time, supporting                          cuted for communication. For example, Fig. 2a indicates the
+dynamic layer-level quantization. The main goal is to                           kernel composition when running Yolov2 network on the
+improve the schedulability of the system while minimizing                       GPU. Fig. 2b shows the kernel composition when layers #13
+the accuracy loss by layer-level mapping and quantization.                      to #18 are mapped to a DLA, and the rest are mapped to
+All these methods [21], [2], and [4] exploit the temporal par-                  GPU. The colored reformatter kernel (input/output reform.)
+allelism of inference by pipelining in a CPU-GPU heteroge-                      is added at the interface between the GPU and the DLA, as
+neous system. However, their target platform does not                           displayed in Fig. 2b. Since the overhead of the added kernel
+contain an NPU that incurs several limitations in its usage.                    depends on the mapping, it needs to be considered in the
+    Pujol et al. [22] and Kang et al. [3] presented the design-                 mapping step.
+time method on a heterogeneous platform including NPU.
+The former implemented DL applications in Apollo [23] on                        3.2 NVIDIA TensorRT
+the Xavier board. They executed multiple networks while                         TensorRT [5] is an SDK for high-performance inference tar-
+keeping the schedulability. However, each neural network                        geted on NVIDIA products. Fig. 3 displays the workflow of
+instance runs on a single type of processor in their method                     TensorRT [24]. The optimized inference engine is generated
+without exploiting the model parallelism or pipelining. The                     by the Builder module from a given network definition. In
+latter, Kang et al. [3], uses a GA technique to find per-layer                  the building process, some optimization techniques such as
+mapping of multiple DL applications, aiming at minimizing                       layer fusion are applied. Then the Runtime module loads
+the WCRT for each application and energy consumption.                           and deserializes the engine to create execution context. The
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+1670                                                                                        IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+
+
+
+Fig. 4. An example schedule of deep learning inference.
+
+
+
+Runtime module also maps a PE to the deserialized engine.
+The execution context is assigned to a stream in a GPU or a
+DLA. It is possible to run the network across multiple PEs
+in a pipelined manner by dividing a network into multiple                        Fig. 5. Motivational example: patrol robot.
+pipeline stages. Each pipeline stage needs to be defined by a
+separate network with which a separate engine and the
+associated execution context are generated.                                      transition occurs and which state is the initial state. In this
+    Fig. 4 illustrates an example schedule corresponding to                      paper, we assume that the residence time of all states is the
+the TensorRT implementation, where a single execution                            same for simplicity. If the state transition probability is
+context is mapped to a DLA stream or a GPU stream. Ten-                          given, however, we will be able to compute the relative resi-
+sorRT does not support a CPU to execute the inference. The                       dence time of all states. Since this computation is out of the
+CPU performs pre/post-processing, marked as Pre. and                             scope of this work, it is left as future work.
+Post. in Fig. 4. The pre-processing step loads the input data
+and adjusts the data layout for inference, while the post-
+processing step performs other processing after inference is                     4.2 Notation
+done. Due to the execution environment of the Xavier                             Notations used for system model and the problem defini-
+board, the number of deserialized engines mapped to DLAs                         tion are summarized in Table 2.
+is limited to four at most at the time of writing this paper. It                    Architecture Specification: The target platform has a set of
+means that the total number of pipeline stages mapped to                         heterogeneous PEs, PE, and processor type proc can be one
+two DLAs may not be greater than four.                                           of CPU, GPU, and DLA. Each processor has a set of discrete
+                                                                                 frequencies: freqCPU , freqGPU , freqDLA . We denote jfreqj as
+                                                                                 the sum of jfreqCPU j, jfreqGPU j, and jfreqDLA j.
+4      SYSTEM MODEL                                                                 Application Specification: We denote a given set of multiple
+4.1 Motivational Example                                                         DL applications as A, and each application appi consists of
+Let us consider a patrol robot that explores a certain space,                    layers. After pipelining decision is made, an application
+as shown in Fig. 5a. The robot moves around and searches                         appi can be represented by a tuple hSi ; pi i, where Si and pi
+for objects around it. The robot has cameras on all four                         are the set of stages and the invocation period of appi ,
+sides: back and forth, left and right. It executes multiple                      respectively. Stage sij 2 Si is a pipelining stage of appi corre-
+object detection networks to detect objects while moving.                        sponding to the pre- or post-processing step or an inference
+We assume that objects within a certain distance can be                          part partitioned to GPU or a DLA. The blue and green box
+detected by other means such as ultrasonic sensors. If an                        in Fig. 6 illustrates two stages mapped to a DLA and the
+object is detected, we run an object detection network to                        GPU, respectively. The applications run periodically with
+identify the object. It means that the number of object net-                     the implicit deadline assumption under which the period
+works may vary at run time. Such system behavior can be                          becomes the relative deadline.
+described by an FSM, as illustrated in Fig. 5b. Each state has
+the applications to be executed. In the figure, each applica-                                                TABLE 2
+tion app0 , app1 , app2 , and app3 denotes the application corre-                        Notations for System Model and Problem Definition
+sponding to each camera at the front, left, right, and back,
+respectively. For instance, state sc1 indicates the state that                   Sign                    Description
+consists of applications app0 , app1 , and app2 running at the                   PE                      A set of heterogeneous PEs
+same time. In addition, each inference has a deadline                            freqproc                A set of frequencies for processor type proc
+because its result is used as an input to determine the action                   jfreqj                  The sum of all jfreqproc j
+of the robot. Furthermore, the deadline constraint can vary                      A                       A set of multiple DL applications
+depending on the speed of the robot. If the robot moves                          appi                    An application in A
+faster, then the object detection should be finished earlier. It                 Si                      A set of stages of appi
+is also important to reduce energy consumption since the                         pi                      A period and relative deadline of appi
+robot is battery-powered.                                                        sij                     A jth stage of appi
+   In this paper, we propose a design methodology for run-                       t i;j
+                                                                                   k                     A kth task of sij
+ning multiple DL applications with real-time constraints on                      jsij j                  The number of tasks in sij
+a heterogeneous processor system while minimizing the                            P ðsij Þ and P ðt i;j
+                                                                                                   k Þ   A period of sij and t i;j
+                                                                                                                               k , respectively
+energy consumption, to support this motivational example.                        Csi and Cti;j           The WCET of sij and t i;j
+                                                                                    j
+                                                                                                                               k , respectively
+Even though we use an FSM to describe the dynamic system                                      k
+
+behavior, what is needed in the proposed approach is how                         SC                      A set of scenarios
+                                                                                 sci                     A scenario in SC
+long the system stays and which applications are running in                      Asci                    A set of applications to be run on sci
+each state. Thus we omit the explanation of how state
+        Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+KIM AND HA: ENERGY-AWARE SCENARIO-BASED MAPPING OF DEEP LEARNING APPLICATIONS ONTO HETEROGENEOUS...                                                      1671
+
+
+
+
+Fig. 6. Pipelining of the DL application.                                        Fig. 7. The overview of step 1.
+
+
+
+   Mapping and Scheduling Specification: A task is a unit used                   constraint is inverse of the throughput constraint1. There
+in the analysis. Since the profiling granularity and the                         exist other constraints imposed by the NPU and its SDK, as
+scheduling policy are different among processors, tasks are                      described in Section 1.
+defined differently depending on the mapped processor.                              Objective: We aim to reduce the energy consumption of
+For GPU, a task corresponds to a kernel that may include                         the system. If we do not know how long it stays in each
+one or more layers since TensorRT fuses layers to a single                       scenario at runtime, it is not feasible to estimate the actual
+kernel via layer fusion, as displayed with a purple box in                       energy consumption. Thus, the average energy consump-
+Fig. 6. While per-kernel profiling on the GPU is viable and                      tion over scenarios is used as the objective function in the
+each kernel runs in a non-preemptive way ([25], [26]), per-                      experiments. Note that the proposed methodology can be
+kernel profiling is not provided for DLA. Hence, the pipe-                       applied with a different formula for expected energy
+line stage mapped to a DLA becomes a single task in the                          consumption.
+DLA (blue box in Fig. 6). The pre- or post-processing of the                        Output: The output of the design-time analysis is the
+inference is a preemptable task that is mapped on the CPU.                       mapping of stages in applications onto processors and
+Stage sij consists of one or more tasks, each of which is                        the frequency of processors for each scenario and each
+denoted by t i;jk , and the number of tasks in the stage is                      deadline constraint. In a real deployment, the output
+denoted by jsij j. Note that the inference is sequentially exe-                  includes the measured energy consumption.
+cuted due to the data dependency between tasks [2], and
+the order of task execution in the GPU is set by TensorRT
+[5]. Note that a DL application has a chain structure of tasks,                  5     PROPOSED METHODOLOGY
+which is also assumed in [2] and [4].                                            As shown in Fig. 1, the proposed methodology consists of
+   The period of a stage sij or a task t i;j                i
+                                         k , denoted by P ðsj Þ or               three steps explained in this section.
+     i;j
+P ðt k Þ respectively, is the same as the period of an applica-
+tion, pi . In addition, Csi and Cti;j represent the WCET of
+                            j        k                                           5.1 Step 1: Finding Pareto-Optimal Mapping
+stage sij and task t i;j
+                     k , respectively. We assume that the exe-                          Solutions for Each Application
+cution time of a task is inversely proportional to the fre-                      Because of the challenges imposed by the NPU and its SDK,
+quency of the mapped processor. The mapping decision of                          we first determine the Pareto-optimal mappings for each
+appi is denoted as a function Map : Si ! PE. A stage is a                        application instead of making the mapping decision for all
+mapping unit, and it can be mapped to a single PE. The                           applications at once. We aim to simultaneously minimize
+tasks in the same stage are mapped to the same PE. Data                          the average end-to-end latency and average power con-
+transfer overhead is considered since we measure the                             sumption of each processor via a genetic algorithm (GA).
+latency through direct measurement, including the extra                          Genetic algorithm is a widely used meta-heuristic inspired
+kernels added by TensorRT as depicted in Fig. 2. Since the                       by evolutionary processes in nature, where sub-optimal sol-
+migration overhead is huge, the mapping decision is made                         utions are found iteratively, starting with randomly gener-
+statically and not changed at run time.                                          ated initial solutions. A solution of the problem is encoded
+   Scenario Specification: A set of scenarios is specified as an                 as a chromosome, and the objective function value, called
+FSM where a state corresponds to a scenario. The set of                          fitness, of each solution is evaluated and compared in each
+states (scenarios) is represented as SC. Each scenario sc 2                      generation. Since there exist several GA solvers publicly
+SC consists of a set of applications to be run, Asc , which is a                 available, it is used in the current implementation of the
+subset of A. For example, in Fig. 5b, Asc1 consists of three                     proposed methodology. Other meta-heuristics can be used
+applications, app0 , app1 , and app2 .                                           as long as multiple objectives are supported.
+                                                                                     Fig. 7 illustrates the overview of this step. The GA gets the
+4.3 Problem Definition                                                           network as the input and initializes multiple chromosomes
+                                                                                 or generates a given number of initial random solutions.
+The problem addressed in this paper can be defined as
+                                                                                 After fitness evaluation, we select a set of chromosomes and
+follows.
+                                                                                 create new chromosomes (offspring) through evolutionary
+   Input: All applications in A and the scenarios, repre-
+                                                                                 operations such as crossover and mutation. This step is per-
+sented by an FSM, are given as input. The available fre-
+                                                                                 formed on the real board since the fitness evaluation is
+quency range of processors is already known at design time.
+   Constraints: The range of throughput constraints is given.
+                                                                                    1. We use throughput constraint (FPS) and deadline constraint inter-
+For instance, it may be needed to process 15 or 30 image
+                                                                                 changeably to indicate a real-time constraint in this paper. For example,
+frames per second(FPS), depending on the robot speed.                            the throughput constraint of 30 FPS (frame per second) indicates the
+Since we assume the implicit deadline, the deadline                              deadline constraints of 33,333us.
+        Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+1672                                                                                      IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+
+                             TABLE 3
+               Options for Intra-Network Pipelining
+
+Options      # of pipeline stages             Composition of PEs
+A                       2                      DLA0 - GPU
+B                       3                  GPU - DLA0 - GPU
+C                       3                  DLA0 - DLA1 - GPU                    Fig. 8. The overview of step 2.
+D                       4                GPU - DLA0 - DLA1 - GPU
+E                       1                         GPU
+
+                                                                                the bigger value between the measured biggest value and
+                                                                                the value obtained by adding six times the standard devia-
+performed by direct measurement of latency and average                          tion to the mean. The estimated WCET of each task is saved
+power consumption on the real hardware platform.                                in a database and used for the schedulability check in the
+   The chromosome structure is shown on the right side of                       next step. In addition, the average power of processors and
+Fig. 7. The first three genes indicate pipeline cut points, and                 average-case execution time (ACET) for each mapping solu-
+the last gene specifies the mapping option. A cut-point indi-                   tion are also measured. This information is used to calculate
+cates the index of the last layer partitioned into a stage. For                 the fitness value in the next step. We use the maximum fre-
+instance, the first pipeline stage consists of the 0th layer                    quencies for all processors in this step.
+through the 29th layer. We compare five pipelining options
+that are listed in Table 3. Since the networks we used in this
+paper have some layers that cannot be performed on a DLA                        5.2 Step 2: Exploring the Mapping Combination
+at the last part of the network, the last stage is assigned to                  After Pareto-optimal mapping solutions for each applica-
+GPU in all options. In options C and D, we distinguish two                      tion are determined, we find a sub-optimal combination of
+DLAs with DLA0 and DLA1. In options B and D, the GPU is                         individual mapping solutions of all applications and clock
+allocated two stages since the GPU has more computation                         frequencies of processors for scenarios. To find a sub-opti-
+power than DLA. In the example, option C is chosen in                           mal combination, a GA and two heuristics are devised, aim-
+which three pipeline stages are mapped to DLA0, DLA1,                           ing to minimize the expected energy consumption.
+and GPU, respectively, and two cut-points are specified: the
+second pipeline stage covers from the 30th layer to 40th                        Algorithm 1. Pseudo Code for Chromosome Evaluation
+layer, and the last pipeline stage starts from the 41st layer to
+                                                                                 1: procedure EvaluateChromosomechromosome
+the end of the network. A cut point value of 1 means that
+                                                                                 2: Check the number of DLA mapped stages
+there is no corresponding cut point. The maximum number                          3: if not executable on DLAs then
+of cut-points is three for mapping option D. For mapping                         4:     return MaxInt
+option E, no cut-point needs to be explored. It is noteworthy                    5: mappings = MapStageToPE(chromosome)
+that DLA0 and DLA1 can be switched in the mapping                                6: totalFitness = 0
+options depicted in Table 3.                                                     7: for each scenario do
+   The proposed chromosome structure can be applied to                           8:        schedulable, fitness = SetFreq(scenario,mappings)
+other systems. For a given hardware platform, it is needed                          "Schedulability check and fitness calculation are done in this
+to define the possible mapping options first and increase                           function
+the number of genes for pipeline cut-points up to the maxi-                      9:        if not schedulable then
+mum number of pipeline stages in the mapping options.                           10:           return MaxInt
+   The number of possible cut-point combinations depends                        11:     totalFitness += fitness
+on the number of layers and the number of pipeline stages.                      12: return totalFitness / the number of scenarios
+Since exhaustive exploration is very time-consuming, we
+reduce the number of cut-points to explore by filtering out                         The workflow of this step is described in Fig. 8, and the
+some cut points. We exclude the cut points between the con-                     chromosome structure of the GA is shown in the center of
+volutional layer and its activation because the convolutional                   the figure. Each gene represents a mapping solution index.
+layer and the next activation layer are fused in the Ten-                       In the example of Fig. 8, the mapping of the first application
+sorRT. If there are consecutive layers that cannot be mapped                    is the 36th mapping among all Pareto-optimal mappings of
+to DLA, cut-points between them are also excluded.                              the corresponding application. Since we cannot change the
+   For each Pareto-optimal solution, we estimate the WCET                       mapping of an application dynamically due to the limita-
+of each task on each processing element with a measure-                         tion of the SDK, the selected mapping defined by a gene is
+based method. For the CPU task (pre/post-processing task),                      fixed in all scenarios.
+we measure the execution time using the POSIX time                                  How to compute the fitness value of a chromosome is
+library. As for DLA, the assigned stage is regarded as a sin-                   depicted in Algorithm 1. First, it checks whether the number
+gle task, and its execution time is measured by augmenting                      of tasks (stages) assigned to DLAs is more than four (line 2).
+the code segment at the start and the end of the DLA task.                      If it exceeds four, the maximum fitness value is assigned to
+As explained above, a GPU task corresponds to a kernel in                       indicate that this chromosome cannot be a feasible solution.
+the associated pipeline stage. The execution time of a task                     For a feasible solution, mapping stages to PEs is determined
+(kernel) on GPU is measured by the TensorRT IProfiler. To                       by a heuristic (line 5). Note that the mapping solution of an
+estimate the WCET of a task from measurements, we find                          application does not say which DLA is used between two
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+KIM AND HA: ENERGY-AWARE SCENARIO-BASED MAPPING OF DEEP LEARNING APPLICATIONS ONTO HETEROGENEOUS...                                                     1673
+
+
+DLAs. Thus we devise a simple heuristic to determine                            to minimize the energy consumption for each scenario
+which DLA will be used for each application.                                    while satisfying the schedulability constraint (line 8). If no
+                                                                                feasible schedule is found in any scenario, the maximum fit-
+Algorithm 2. Pseudo Code for Mapping Stages to PE                               ness value is immediately returned to mark the solution as
+                                                                                infeasible. Otherwise, the average fitness value over all sce-
+Require AppList: the list of applications "In the decreasing order
+                                                                                narios is returned.
+             of the max length of DLA stage (task)
+             Require mappings: the table to save mapping info
+ 1: procedure MAPSTAGETOPE(chromosome)                                          5.2.1 Mapping Stages to PEs
+ 2: CPUIdx, DLAIdx = 0, 0                                                       The proposed heuristic for mapping stages to PEs is
+ 3: Parse mapping option of app               "Based on chromosome              depicted in Algorithm 2. At first, it parses the mapping
+ 4: nearAppList = MakeNeighborAppList()                                         option for each selected mapping of application (line 3).
+ 5: for each app in AppList do                                                  Then, the neighbor application list is made for each applica-
+ 6:     if app is already mapped then                                           tion (line 4). The list of neighbor applications of the target
+ 7:        continue
+                                                                                application consists of the applications that will be executed
+ 8:     for each stage do
+                                                                                simultaneously in some scenarios. We sort the applications
+ 9:        if stage maps on CPU then
+                                                                                in the decreasing order of the maximum length of the DLA
+10:           mappings[app][stage] = CPUIdx
+                                                                                stage (task). Mapping is done in a round-robin fashion
+11:           CPUIdx = (CPUIdx + 1) % CPUCoreNum
+12:        else if stage maps on GPU then                                       using the mapping index on each processor (lines 5-16). If a
+13:           mappings[app][stage] = 0 "One GPU on the board                    stage is mapped to the CPU, it is mapped to the indexed
+14:        else stage maps on DLA                                               core of the CPU, and the index is incremented. In the case of
+15:           mappings[app][stage] = DLAIdx                                     GPU, the mapping index is always zero since there is only
+16:           DLAIdx = (DLAIdx + 1) % DLANum                                    one GPU in the target board. If a stage is mapped to a DLA,
+17:     for nearApp in nearAppList[App] do                                      two DLAs are alternatively mapped. Since the applications
+18:        Repeat the line 6 to 16 for nearApp                                  are sorted based on the DLA workload, the heuristic aims to
+19: return mappings                                                             balance the workloads of two DLAs available in the hard-
+                                                                                ware platform. After the mapping for the current applica-
+                                                                                tion is complete, we map the neighbor applications in the
+                                                                                same fashion (lines 17-18).
+Algorithm 3. Pseudo Code for Frequencies Decision
+  Require ProcList: the list of processors "In the order of GPU,                5.2.2 Frequency Decision
+            CPU, and DLA                                                        After the mapping of stages is settled, we determine the fre-
+ 1: procedure SETFREQ(scen,maps)                                                quency of each processor. Since the frequency affects the
+ 2: set frequencies for all processors (freqs) as maximum                       execution time, we perform the schedulability test for each
+ 3:    i, schedulable, minSchedulable, minFitness = 0, False,                   frequency combination. Since the number of frequency com-
+     False, MaxInt                                                              binations is too large to be explored exhaustively inside a
+ 4: Save curr freqs as the best freqs                                           GA, a heuristic is devised to explore the frequencies in a
+ 5: for two iterations do                                                       greedy fashion as depicted in Algorithm 3. The initial fre-
+ 6:      for each processor in ProcList do                                      quency combination is set by using the maximum frequency
+ 7:        set curr processor frequency as maximum                              of each processor (line 2). Since the algorithm reduces fre-
+ 8:        while True do
+                                                                                quencies in a greedy way, we examine the reduction
+ 9:           schedulable = checkScheduability(scen,maps,freqs)
+                                                                                amount of power consumption per each frequency change
+10:           if schedulable then
+                                                                                and determine the order based on the reduction amount.
+11:              fitness = calculateFitness(scen,maps,freqs)
+12:              if fitness < minFitness then
+                                                                                The order turns out to be GPU, CPU, and DLA in the pro-
+13:                 save curr freqs as the best freqs                           cess of fitness calculation covered in the next paragraph. We
+14:                 minFitness, minSchedulable = fitness, True                  select the processor whose frequency is to be changed (line
+15:           else                                                              6), starting from the maximum frequency (line 7), and check
+16:              if curr frequency is not the maximum then                      the schedulability with the current frequency combination
+17:                 Revert to the previous frequency                            (line 9). If it passes the schedulability test, we calculate the
+18:              break                                                          fitness value that is the expected energy consumption and
+19:           if curr frequency is the minimum frequency then                   save it if it is the minimum fitness (lines 11-14). And we
+20:              break                                                          reduce the current processor’s frequency one level down
+21:           else                                                              (line 22). If the schedulability test fails, we go back to the
+22:              Set curr processor frequency one level down                    previous frequency (line 17). We repeat this process until
+23: return minSchedulable, minFitness                                           the frequency becomes the lowest one (lines 19-20). Then,
+                                                                                we select the next processor whose frequency is to be
+   Next, the schedulability test for each scenario is per-                      altered (line 6), starting from the last schedulable frequency
+formed on each processor. How to perform the schedulabil-                       combination found so far. In the first iteration, we find the
+ity test will be explained below in this section. Since the                     lowest schedulable frequency in the order of GPU, CPU,
+clock frequency affects the execution time of each task on a                    and DLA in a greedy fashion. In the next iteration, it
+mapped processor, we select the frequencies of processors                       searches the frequency range between the highest frequency
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+1674                                                                                      IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+
+and the found frequency to check if the energy can be low-                                                 TABLE 4
+ered with a higher frequency, again in a greedy fashion.                         The Benchmark Networks and the Volume of Design Space for
+                                                                                         Step 1 to Find the Pareto-Optimal Mappings
+
+5.2.3 Fitness Calculation                                                       Network          Layer # Selected cut-points Total cand. Pareto sol.
+Fitness is defined as the average energy consumption for all                                                      #               #          #
+scenarios in a given period. We use the average value for all                   Yolov2 [35]        54            22             2025       112
+scenarios since we do not know which scenario to stay how                       Yolov3 [36]        179           78            82161       158
+                                                                                Yolov2tiny         24            10             221         19
+long. It can be applied differently if we have the probability
+                                                                                [35]
+information. To estimate energy consumption, we first iden-                     Yolov3tiny          35                     10             221           14
+tify the relationship between the frequency and power con-                      [36]
+sumption for each processor by the regression analysis
+based on the measurement. We consider both static and
+dynamic power consumption.
+                                                                                considering the jitter is no greater than the deadline con-
+    For the estimation of static power consumption, we
+                                                                                straint, the deadline constraint is satisfied. We can assign
+change the frequencies over an available range as displayed
+                                                                                the distinct priority levels to the tasks mapped on the CPU,
+in Table 72. We estimate the static power on a fixed fre-
+                                                                                and the tasks are scheduled by preemptive scheduling with
+quency when no application runs, which is similar to the
+                                                                                a fixed priority. However, the tasks mapped on GPU or
+work of [28]3. So we figure out the relation between fre-
+                                                                                DLA have the same priority.
+quency and static power by measuring the power after set-
+                                                                                   The worst-case response time of a CPU task, t i;j              i
+                                                                                                                                           k 2 sj of
+ting the minimum and maximum frequencies to be equal.
+                                                                                appi , is bounded by equation (1) which is well-known for
+    For dynamic power estimation, we measure the average
+                                                                                fixed-priority preemptive scheduling ([29], [30]). The WCRT
+power consumption of each application by varying the fre-
+                                                                                of the task is the converged value of rm . The hpðt i;j   k Þ is a set
+quency of each processor. For the CPU and GPU, we use the
+                                                                                of higher or equal priority tasks that are mapped to the
+mapping option E. On the other hand, option A is used for
+                                                                                same PE with t i;jk and belong to the other applications. For
+DLAs with all mappable layers for DLA. When changing
+                                                                                simple notation, t h indicates a task in hpðt i;j
+                                                                                                                                k Þ. Jth is the jitter
+the frequency of one processor, we set the frequencies of the
+                                                                                of the t h .
+other processors to be maximum. Then, we obtain the rela-
+tionship between the frequency and dynamic power by sub-                                                      X l rm þ Jt
+                                                                                             rmþ1 ¼ Cti;j þ                     h
+                                                                                                                                  e  Cth
+tracting the estimated static power from the measured total                                           k          i;j
+                                                                                                                       P ðt h Þ
+                                                                                                                 t h 2hpðt k Þ
+power. Such regression analysis is conducted individually
+for four benchmark applications that are described in                                                                            where r0 ¼ Cti;j            (1)
+                                                                                                                                                k
+Table 4.
+    With the obtained relationship between the frequency                           In the case of GPU, the kernels within a stream are exe-
+and dynamic power, we estimate the average dynamic                              cuted in a FIFO order, and kernels are executed in a non-
+power consumption of the given mapping at a given fre-                          preemptive way ([25], [26]). Since the priority of all GPU
+quency. The average power consumption of each processor                         tasks is equal, the WCRT may be over-estimated if we con-
+on each mapping solution is measured in step 1 with the                         sider worst-case interference from all tasks. Thanks to the
+maximum frequencies as explained in Section 5.1. We apply                       chain structure of an deep learning application and the
+the relationship to estimate the dynamic power consump-                         FIFO scheduling policy of GPU, we can reduce the pessi-
+tion of processors at the given frequencies for a given map-                    mism of the analysis. The worst-case response time of stages
+ping. The dynamic energy consumption is computed by                             mapped to the GPU can be calculated by the formula as
+multiplying the computed dynamic power consumption                              shown in equation (2).
+and the average execution time. The average execution time
+                                                                                                            X
+is estimated to be inversely proportional to the frequency                                        r ¼ Csi þ       Bsi ;se
+from the profiled ACET. For static energy consumption, we                                               j
+                                                                                                                i
+                                                                                                                    j                     (2)
+                                                                                                                   se 2epðsj Þ
+multiply the estimated static power consumption and
+the period. The estimated energy consumption is the sum of                         In this formula, epðsij Þ means a set of stages that are
+the static and dynamic energy consumption.                                      mapped to the same PE with sij of appi and belong to the
+                                                                                other applications. Bsi ;se represents the maximum interfer-
+                                                                                                             j
+5.2.4 Schedulability Analysis                                                   ence from stage se to sij where se indicates a stage in epðsij Þ.
+For schedulability analysis, we estimate the worst-case                         It is the maximum sum of WCETs of as many successive
+response time (WCRT) for each chain-structured DL appli-                                                         P ðsi Þ
+cation by tailoring the compositional performance analysis                      tasks in se as minðjsij j; ðdP ðsej Þe þ 1Þ  jse jÞ, which is likely to
+[29]. If the sum of the WCRTs for each part of an application                   be smaller than the entire WCET of stage se , Cse . Suppose
+                                                                                that stage sij consists of 7 kernels (tasks), and the interfering
+    2. While the Xavier board allows a user to change the processor fre-        stage se consists of 3 kernels. Since kernels in a stage are
+quencies [27], the voltage is under the direct control of the board power       queued sequentially, a kernel of an application can be inter-
+management firmware. Hence, we tune the processor frequencies only.             fered by at most one kernel of the other application, thanks
+    3. The static power in this paper means the power when no applica-
+tion runs in the P-state. So, the static power can be affected by the           to the FIFO scheduling policy. Thus the maximum number
+frequency.                                                                      of interfering kernels cannot be more than the number of
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+KIM AND HA: ENERGY-AWARE SCENARIO-BASED MAPPING OF DEEP LEARNING APPLICATIONS ONTO HETEROGENEOUS...                                                     1675
+
+
+kernels in sij , jsij j. In case the number of kernels in the inter-            the heuristic at design time. At run time, we refer to the
+fering stage is smaller than jsij j, we compute the maximum                     table to get the frequency combination of the closest tighter
+possible number of interfering kernels by multiplying the                       deadline constraint than the actually required deadline.
+number of kernels in the stage and the number of interfer-
+                                     P ðsi Þ
+ence, which is bounded by dP ðsej Þe þ 1. If stage se that has                  6     EXPERIMENTS
+three kernels can interrupt twice maximally, the six kernels
+may interfere the target stage sij at most. Then, the mini-                     6.1 Experiment Set-Up
+mum value between jsij j (¼ 7), and 2  jse j (¼ 6) becomes the                 The hardware platform used in the experiments is a Jetson
+number of kernels that may interfere.                                           AGX Xavier board with Jetpack 4.3 and TensorRT 6. We use
+   Since the stage mapped to a DLA consists of a single task                    the tkDNN [32] library and JEDI [24] framework to deploy DL
+as explained in Section 4, the schedulability test for a DLA                    applications in a pipeline way on TensorRT easily. We use
+also can be performed with equation (2). The estimated                          four deep learning networks described in Table 4 as bench-
+worst-case response time of an application is the sum of the                    mark applications that are specified with tkDNN and JEDI.
+response time of the stages considering the jitter. Since we                    Since the leaky relu activation is not supported on the DLA, we
+assume implicit deadline constraints, the estimated WCRT                        used the networks, provided in JEDI, that replace leaky relu
+should be no greater than the period for each application.                      with relu. The COCO2017 val is used for inference with an
+                                                                                image size of 256x256 with FP16 precision, and the batch size
+                                                                                is set to one. In the target board, the power consumption is
+5.2.5 Complexity Analysis                                                       measured by the tegrastats command.
+Since Algorithm 1 calls Algorithms 2 and 3, we first investi-                      For GA implementation, the DEAP [33] framework is
+gate the complexity of Algorithms 2 and 3. First of all, we                     used. In the first step of the proposed method, the maxi-
+assume that the schedulability analysis has a given time                        mum evolution count is set to 20,000 and the population
+complexity, T ðPE; Asci Þ, which is a function of processors                    size to 65. In each generation, two chromosomes are created
+and applications. Even though the response time analysis is                     as offspring of each survivor through genetic operations
+known as NP-Hard [31], it is usually computed fast for the                      such as uniform crossover, one-point mutation, and random
+problem size assumed in this paper. In Algorithm 2, the                         selection. We execute the GA on the target board since it
+amount of computation is proportional to the number of all                      requires running the network to obtain the performance
+stages because the mapping is determined in a round-robin                       value by measurement. In the second step, we proceed up
+manner so that its time complexity is OðSi jSi jÞ. Since it uses                to 10,000 generations with 128 chromosomes in the popula-
+a space for nearAppList, the space complexity is OðjAj                         tion. The same operations in the previous step are used
+jAjþ Si jSi jÞ.                                                                 except that Lexicase [34] is used for the selection operation.
+   Algorithm 3 has a nested loop of two levels. Since each                      To check the maximum achievable deadline constraint,
+loop runs at most the summation of the number of frequen-                       we find the mappings from the lower constraint, then use
+cies for each processor, the time complexity is Oðjfreqsj                      the found mapping as an initial solution for exploring
+T ðPE; Asci ÞÞ. The space complexity of Algorithm 3 is                          the higher constraints. In this step, the GA is run on a host
+Oðjfreqj þ Si jSi j þ jPEjÞ, including the space for frequencies                computer that consists of Ubuntu 18.04.6 LTS, AMD Ryzen
+and processors. Since Algorithm 1 calls Algorithms 2 and 3                      9 3950X 16-Core Processor with 64GB RAM.
+for each scenario, Algorithm 1 has the time complexity of
+OðjSCj  ðSi jSi j þ jfreqsj  T ðPE; Asc ÞÞÞ and the space com-
+                                                                                6.2 Finding Pareto-Optimal Mappings of
+plexity of Oðjfreqj þ Si jSi j þ jPEj þ jAj  jAjÞ.
+                                                                                       Each Application
+                                                                                As mentioned in Section 5.1, we filter out the cut points to
+5.3    Step 3: Tuning Frequencies for Varying                                   reduce the design space. Table 4 shows the number of layers
+       Deadline Constraints                                                     and selected cut points for each network. The number of can-
+While we consider the tightest deadline constraint in the                       didate cut points is reduced to fewer than a half of the total
+previous step, the deadline constraint can be loosened at                       number of layers. The total number of cut-point combina-
+run time if the robot moves slowly. It means that there is a                    tions is calculated based on the mapping options of Table 3.
+chance to use lower frequencies while satisfying the dead-                      For
+                                                                                22 example,
+                                                                                       22     inthe
+                                                                                                   22
+                                                                                                          22of Yolov2, it is calculated as follows:
+                                                                                                       case
+line constraint when the deadline constraint is loosened. In                                  2
+                                                                                  1  þ   2     þ   3   þ  0 ¼ 2025. The last column shows
+the last step of the proposed methodology, we explore the                       how many Pareto-optimal solutions could be obtained by the
+frequency combinations, varying the deadline constraints.                       proposed GA. The number of Pareto-optimal solutions is
+We use the same heuristic as Algorithm 3 for each deadline                      0.2%  8.6% of total candidates.
+constraint. Since running the heuristic at run time incurs
+non-negligible overhead, we sample the deadline con-
+straints and construct a table that contains the frequency                      6.3 Exploring Mapping Combination and Tuning
+combination for the sample deadline constraint. For exam-                             Frequencies
+ple, if the maximum deadline constraint is given as 30 FPS4,                    In this experiment, we evaluate the second step of the pro-
+we define a set of discrete deadline constraints and perform                    posed scheme with four different system behaviors that are
+                                                                                represented by FSMs. In addition to our motivational exam-
+                                                                                ple of Fig. 5b denoted by FSM-A, Table 5 shows which
+    4. Since we assume the implicit deadline, the deadline constraint is
+inverse of the throughput constraint. The higher FPS indicates the              applications are performed in each state for other three
+tighter deadline constraint.                                                    FSMs. Since the transition of states does not affect the result
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+1676                                                                                       IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+
+                                                              TABLE 5
+                    Information on Three Different System Behaviors: Which Applications are Performed in Each State
+
+
+
+
+of the mapping, we omit the transition information between                               frequency for each processor is set to the maximum
+state.                                                                                   without applying step 3.
+    FSM-B is an extended version of FSM-A with twice more                            Work of [3](SOTA): It also explores static mapping
+scenarios. In FSM-C, the maximum number of applications                                  with maximum frequencies ignoring scenarios simi-
+running concurrently is limited to two. Meanwhile, the                                   lar to GB, but it uses the estimated layer-wise execu-
+number of applications is increasing in FSM-D. The most                                  tion times. After obtaining the mapping result from
+important factor is the maximum number of applications                                   the SOTA method, we recalculate the fitness and
+running concurrently since the schedulability test is con-                               schedulability analysis with the actual execution
+ducted in this step. We also conduct the experiments with                                times for fair comparison.
+two different combinations of applications as denoted by                             Proposed(PR): It finds a static mapping combination
+cases a and b shown in Table 6. In the case of a, all applica-                           tailored for each system behavior. It explores the
+tions from app0 to app3 are the same network, Yolov2. We                                 design space with the objective to reduce the average
+assign the priority of tasks mapped to CPU in the following                              energy consumption by considering scenarios and
+order: app0 , app3 , app1 , app2 . On the other hand, the tasks                          constraints.
+mapped onto GPU or DLA have an equal priority. Although                             In this experiment, we make three comparisons. Firstly,
+all applications are assumed to have the same period in all                      we compare the tightest deadline constraint that each
+experiments, the proposed method allows them to have dis-                        method can support without schedulability violation. Also,
+tinct periods.                                                                   the comparison is made in terms of the fitness value. Then
+    We compare the proposed method with the following                            we evaluate the effect of frequency tuning in terms of
+three methods.                                                                   energy reduction. Lastly, we confirm the necessity of the
+                                                                                 proposed heuristics compared with the exhaustive search in
+       Local(LC): It allows dynamic task migration across                       terms of speed.
+        the scenarios. We find the sub-optimal mapping of
+        applications for each scenario by a GA. However, it
+        is not feasible in practice since dynamic task migra-                    6.3.1 Comparison of the Maximum Achievable FPS
+        tion is too costly in the target platform. Nonetheless,                  Table 8 shows the maximum FPS that each method can
+        this method serves as a decent indicator to check                        achieve. In all FSMs except for FSM-D, the PR method
+        how close is the proposed method to the ideal case.                      can satisfy the tighter deadline constraint (higher FPS) than
+       Baseline(BS): It is a typical case of running each deep                  both BS and GB methods. The PR could satisfy 15%  86%
+        learning application on a single processing element,                     tighter constraint compared to the BS method, and up to
+        GPU. Since all applications have some layers that are                    40% tighter constraint than the GB method. Since the static
+        not supported by DLA, it uses only GPU in the infer-                     mapping is determined by the worst-case scenario in the PR
+        ence, which corresponds to option E in Table 3.                          method and FSM-D runs all applications in state SC4, PR
+       Global(GB): It uses a GA to find a sub-optimal static                    and GB have the same FPS constraint for FSM-D. While
+        mapping of all applications, assuming that all appli-                    comparison with BS confirms the advantage of utilizing het-
+        cations are running concurrently, ignoring the sce-                      erogeneous processors, comparison with GB confirms the
+        narios. It produces the same mapping for all
+        system behaviors from FSM-A to FSM-D. The                                                           TABLE 7
+                                                                                            The Frequency Range Used in the Exploration
+
+                                                                                 Processor                     Frequency range (MHz)
+                          TABLE 6
+        Cases for a Combination of Applications in FSMs                          DLA            550.4, 640, 729.6, 806.4, 896, 972.8, 1062.4, 1152,
+                                                                                                                  1228.8, 1395.2
+Case         app0             app1               app2              app3          GPU            675.75, 828.75, 905.25, 1032.75, 1198.5, 1236.75,
+                                                                                                                  1338.75, 1377
+a          Yolov2          Yolov2             Yolov2             Yolov2          CPU           1190.4, 1267.2, 1344, 1420.8, 1497.6, 1574.4, 1651.2,
+b          Yolov2         Yolov2tiny         Yolov3tiny          Yolov3                         1728, 1804.8, 1881.6, 2035.2, 2112, 2188.8, 2265.6
+
+
+        Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+KIM AND HA: ENERGY-AWARE SCENARIO-BASED MAPPING OF DEEP LEARNING APPLICATIONS ONTO HETEROGENEOUS...                                                    1677
+
+
+                        TABLE 8                                                                           TABLE 10
+Comparison of the Maximum Achievable FPS Among Methods                                        Throughput Constraint (FPS) Variation
+
+Methods            Case a - FSMs                    Case b - FSMs              Case          FSM-A            FSM-B             FSM-C             FSM-D
+              A      B       C   D             A      B      C    D            a           35, 40, 45        35, 40, 45        40, 45, 50       30, 35, 40
+LS            47      47        71    40      32      32        38     28      b           20, 25, 30        20, 25, 30        25, 30, 35       15, 20, 25
+BS            32      32        44    24      21      21        33     15
+GB                         40                              28
+                                                                               maximum FPS as shown in Table 9 a. The DLA frequency,
+SOTA [3]                   39                              26                  which is not shown in the table, turns out to be maximum at
+PR            47      47        56    40      32      32        38     28      all times. It means that reducing the GPU or the CPU fre-
+                                                                               quency is better than reducing the DLA frequency in terms
+                                                                               of average energy consumption. Since the GPU consumes
+advantage of considering the scenarios in the mapping deci-
+                                                                               more power than the CPU, the proposed heuristic tries to
+sion. The work of [3] shows slightly worse results than the
+                                                                               reduce the GPU frequency as much as possible while satis-
+GB method. When using estimated time, the mappings
+                                                                               fying the schedulability constraint. Since the CPU performs
+obtained by [3] could satisfy 50 FPS and 32 FPS for each
+                                                                               pre-processing and post-processing tasks that have a linear
+case, respectively, but recalculation with the actual execu-
+                                                                               dependency on the inference part, we may need to reduce
+tion times shows different results. This is because the worst-
+                                                                               the CPU execution time by increasing the CPU frequency
+case execution time could be underestimated when using
+                                                                               under a lower FPS constraint in order to satisfy the con-
+the estimated time so that an infeasible solution can be
+                                                                               straint on the end-to-end worst-case response time. While
+falsely classified as feasible.
+                                                                               the GPU frequency decreases as the FPS constraint is loos-
+   The proposed method shows a similar result as LC except
+                                                                               ened, there is no such tendency in the CPU frequency. It
+for FSM-C of case a. In the LC method, DLA mapping can be
+                                                                               explains why the CPU frequency increases as the FPS
+changed for each scenario. Hence we can assign a different
+                                                                               constraint decreases from 30 FPS to 25 FPS for case b in
+DLA to each application when two applications are running
+                                                                               Table 9 b.
+in all scenarios in FSM-C. On the other hand, two applications
+                                                                                  To evaluate the effectiveness of the proposed GA-based
+are mapped to the same DLA in some scenarios in the PR
+                                                                               heuristic for the second step of the proposed scheme, we
+method. In case b, the entire Yolov3 is mapped GPU since its
+                                                                               find an optimal mapping of the GB method by exploring
+execution time is much larger than the other networks and
+                                                                               exhaustively the design space that is vast (1124 mappings
+GPU is faster than DLAs. Since GPU becomes the bottleneck
+                                                                               for the case a). It is observed that the resultant mapping is
+in the schedulability check, the PR yields the same result to
+                                                                               the same as found by the proposed GA heuristic. Since only
+the ideal one, LC. Comparison with LC proves the effective-
+                                                                               a few mappings can satisfy the deadline constraint, the pro-
+ness of the proposed static mapping technique.
+                                                                               posed GA-based scheme could find the optimal solution in
+   Table 9 a shows a mapping decision example that the
+                                                                               our experiments, we believe. The proposed GA-based heu-
+proposed method produces for FSM-A. In the table, D[0-40],
+                                                                               ristic explored much less design space. This experiment
+G[41-53] means that pipelining option A is taken, layers #0
+                                                                               confirms the efficacy of the proposed GA-based exploration
+to #40 are mapped to DLA, and the rest are mapped to
+                                                                               method as the second step of the proposed methodology.
+GPU. In case a, all applications use the same mapping result
+since they are all Yolov2. In case b, however, the selected
+options are different for applications: option C is used for                   6.3.2 Frequency Tuning Effect
+app0 and option E is used for app3 while option A is used                      In this experiment, we examine the effect of frequency tuning as
+for the others. It indicates that we need to explore different                 the deadline constraint varies at run time. For a given mapping,
+mapping options for applications. Table 9 b describes how                      we visit each scenario to find the best frequency combination of
+frequencies can be changed as the deadline constraint varies                   processors in terms of estimated energy consumption. Note
+at run-time after mapping decision is made to achieve the                      that we can obtain a higher FPS performance than that of Table 8
+
+                                                              TABLE 9
+                                Mapping and Frequency Tuning Result for FSM-A From the Proposed Method
+
+
+
+
+      Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+1678                                                                                       IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+
+
+
+Fig. 9. Fitness ratio as the FPS constraint varies for FSM-A.                    Fig. 10. Average fitness ratio over the FPS constraint variation for all
+                                                                                 benchmarks.
+
+
+for the GB method in case there is no scenario that runs all                     ratio of methods over the FPS constraint variation. In this
+applications. With the given mapping obtained from the GB                        figure, the fitness ratio is the relative fitness over the fit-
+method, we increase the throughput constraint until there is                     ness value of the PR method on each bundle. While the
+any scenario that cannot meet the constraint. The modified                       difference between methods PR and GB is noticeable, PR
+maximum achievable FPS from the GB method for each FSM                           and PR-GB show almost no difference. Also, GB and
+turns out to be 45, 45, 51, and 40 FPS for case a, while it is the               SOTA methods give similar results. It means that the fre-
+same as PR in Table 8 for case b. It is still lower than the maxi-               quency adjustment is more important than the mapping
+mum achievable FPS obtained from the PR method. We vary                          decision for energy reduction. In addition, the difference
+the deadline constraint as described in Table 10, where the                      between the two proposed methods (PR and PR-GB meth-
+tightest constraint is determined by the GB method.                              ods) and the ideal case (LC method) is smaller than the
+   Fig. 9 shows how the fitness ratio varies as the deadline                     gap between the proposed methods and both GB and
+constraint varies for the FSM-A benchmark with cases a                           SOTA methods.
+and b, respectively. The fitness value represents the esti-
+mated energy consumption during the same time duration.
+The fitness ratio is the relative fitness over the lowest value.                 6.3.3 Execution Time for Fitness Evaluation
+The figure demonstrates the energy can be reduced while                          Since frequency tuning is a key issue for energy reduction,
+satisfying the constraint by manipulating the frequencies. In                    we explore the frequency combination of processors in the
+addition, the difference between the PR and both GB and                          fitness evaluation of each candidate mapping in step 2, as
+SOTA methods is large, while the gap between PR and LC                           explained in Section 5.2.2. Table 11 shows the average exe-
+methods is small. In this comparison, the GB method does                         cution time for fitness evaluation and the end-to-end time
+not tune the frequency as the constraint varies.                                 of the proposed method during 50 generations in the pro-
+   To study the effectiveness of frequency tuning, we pro-                       posed GA-based heuristic, compared with a brute-force
+pose an alternative method which is a variant of the PR                          exhaustive method. The speedup by the heuristic is more
+method. We apply the frequency tuning algorithm to the                           than at least 26 times for fitness evaluation and 28 times for
+resultant mapping obtained by the GB method, calling                             end-to-end execution than the brute-force method. It is con-
+this method as PR-GB. Fig. 10 shows the average fitness                          firmed by experiments that both schemes produce the same
+
+
+                                                             TABLE 11
+                     Average Fitness Evaluation Time and End-to-End Execution Time During 50 Generations in GA
+
+Case          Method               Average fitness evaluation time (sec)                                   End-to-end execution time (sec)
+                                FSM-A     FSM-B         FSM-C        FSM-D                     FSM-A           FSM-B         FSM-C         FSM-D
+a            heuristic            1.41           3.44            3.08            1.68           317.66           1119.19          1268.51           439.59
+            brute-force           46.13          99.76           87.30          57.08          13390.05         35457.24         36095.17          17972.25
+b            heuristic            2.28           5.07            3.98            3.30           519.03           1223.27          726.65            867.07
+            brute-force           61.00         131.78          118.78          87.21          17405.57         34586.12         23861.59          27643.66
+
+        Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+KIM AND HA: ENERGY-AWARE SCENARIO-BASED MAPPING OF DEEP LEARNING APPLICATIONS ONTO HETEROGENEOUS...                                                     1679
+
+
+                                                                                calculated by multiplying the running time and the average
+                                                                                power consumption of the system that includes not only
+                                                                                processors but also the other components. We compare the
+                                                                                PR, PR-GB, GB, and SOTA methods, excluding the LC
+                                                                                method that is infeasible on a real platform. We perform
+                                                                                each experiment three times and get the average value.
+                                                                                Fig. 11 shows the measured average energy consumption
+                                                                                over the FPS variation for two cases a and b. The energy
+                                                                                ratio indicates the relative energy consumption over the
+                                                                                lowest value on each bundle. In both cases, the gap between
+                                                                                PR and PR-GB is not noticeable, as expected by our estima-
+                                                                                tion result. The proposed methods could save the energy by
+                                                                                22%  31%, compared with the GB and SOTA methods.
+                                                                                Albeit the estimated energy saving (Fig. 10) is slightly
+                                                                                higher than the actual saving shown in Fig. 11, the differ-
+                                                                                ence is not significant. It confirms that the proposed method
+                                                                                effectively reduces energy consumption in a real hardware
+                                                                                platform.
+
+
+Fig. 11. Average energy ratio over the FPS constraint variation, mea-           7     CONCLUSION
+sured after real deployment.
+                                                                                We propose a scenario-based mapping methodology to run
+                                                                                multiple DL applications on heterogeneous processors, aim-
+                                                                                ing to reduce energy consumption while satisfying the real-
+                                                                                time constraints. The proposed technique considers several
+                                                                                technical challenges imposed by the use of NPU and its
+                                                                                associated SDK. The proposed method consists of three
+                                                                                steps. In the first step, we obtain the Pareto-optimal map-
+                                                                                pings for each application. In the second step, we seek a
+Fig. 12. The run time management following scenarios.
+                                                                                sub-optimal mapping combination of applications, consid-
+                                                                                ering the scenarios and real-time constraints. In the last
+                                                                                step, we fine-tune the frequencies of processors if the dead-
+fitness value for the resultant mappings. It proves the effec-                  line constraint is loosened. The proposed method is con-
+tiveness of the proposed frequency selection heuristic.                         firmed by using real-life applications with different
+                                                                                scenarios. We could satisfy up to 40% higher deadline con-
+                                                                                straints and reduce the energy consumption by 22%  31%
+6.4 Real Deployment                                                             compared to the state-of-the-art static mapping methods
+We apply the proposed methodology to run benchmark appli-                       with real-life applications and different scenarios on a real
+cations on the target board. A run-time controller is imple-                    platform. It is left to future work to apply the proposed
+mented to control the execution status of applications                          method to new hardware platforms, SDKs, and applications
+according to the scenario, as illustrated in Fig. 12. It consists of            that are continuously being developed.
+multiple threads to communicate with the applications. In the
+experiment, a thread requests execution of the associated                       REFERENCES
+application to process each input periodically and suspends
+                                                                                [1]   H. Zhou, S. Bateni, and C. Liu, “S^3DNN: Supervised streaming
+itself until the completion of the processing is informed. The                        and scheduling for GPU-accelerated real-time DNN workloads,”
+communication overhead between the controller and applica-                            in Proc. IEEE Real-Time Embedded Technol. Appl. Symp., 2018,
+tions is considered in the latency estimation at the design time                      pp. 190–201.
+by subtracting the overhead from the deadline at the design-                    [2]   Y. Xiang and H. Kim, “Pipelined data-parallel CPU/GPU sched-
+                                                                                      uling for multi-DNN real-time inference,” in Proc. IEEE Real-Time
+time optimization. The communication overhead is set by the                           Syst. Symp., 2019, pp. 392–405.
+bigger value between the measured value and the value that                      [3]   D. Kang, J. Oh, J. Choi, Y. Yi, and S. Ha, “Scheduling of deep
+the mean plus six times the standard deviation. The frequen-                          learning applications onto heterogeneous processors in an embed-
+                                                                                      ded device,” IEEE Access, vol. 8, pp. 43 980–43 991, 2020.
+cies are managed by the controller for each scenario and each                   [4]   W. Kang, K. Lee, J. Lee, I. Shin, and H. S. Chwa, “Lalarand: Flexi-
+constraint. While we change the processor frequencies, we set                         ble layer-by-layer CPU/GPU scheduling for real-time DNN
+the frequency of the other components to the maximum. The                             tasks,” in Proc. IEEE Real-Time Syst. Symp., 2021, pp. 329–341.
+controller runs on a single dedicated core which is not used                    [5]   NVIDIA TensorRT, 2022. Accessed: Jul. 15, 2022. [Online]. Available:
+                                                                                      https://developer.nvidia.com/blog/tensorrt-3-faster-tensorflow-
+for DL applications. Note that the run-time management itself                         inference/
+is not a contribution of this paper.                                            [6]   M. R. Garey, Computers and Intractability; A Guide to the Theory of
+    In this experiment, we run applications on the target                             NP-Completeness. San Francisco, CA, USA: Freeman, 1990.
+board during the same duration, 10 seconds, varying the                         [7]   A. K. Singh, M. Shafique, A. Kumar, and J. Henkel, “Mapping on
+                                                                                      multi/many-core systems: Survey of current and emerging
+scenarios for each mapping and frequency tuning result                                trends,” in Proc. IEEE/ACM/EDAC Des. Automat. Conf., 2013,
+for each deadline constraint. The energy consumption is                               pp. 1–10.
+       Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+1680                                                                                           IEEE TRANSACTIONS ON COMPUTERS, VOL. 72, NO. 6, JUNE 2023
+
+[8]    H. Oh, “A static scheduling heuristic for heterogeneous process-               [29] J. Palencia Gutierrez, J. J. Gutierrez Garcia, and M. Gonzalez Har-
+       ors,” in Proc. Eur. Conf. Parallel Process., 1996, pp. 573–577.                     bour, “On the schedulability analysis for distributed hard real-
+[9]    H. Topcuoglu, S. Hariri, and Min-You Wu, “Performance-effective                     time systems,” in Proc. Euromicro Workshop Real Time Syst., 1997,
+       and low-complexity task scheduling for heterogeneous computing,”                    pp. 136–143.
+       IEEE Trans. Parallel Distrib. Syst., vol. 13, no. 3, pp. 260–274, Mar. 2002.   [30] J. Lehoczky, “Fixed priority scheduling of periodic task sets with
+[10]   S.-H. Kang, D. Kang, H. Yang, and S. Ha, “Real-time co-schedul-                     arbitrary deadlines,” in Proc. IEEE Real-Time Syst. Symp., 1990,
+       ing of multiple dataflow graphs on multi-processor systems,” in                     pp. 201–209.
+       Proc. IEEE/ACM/EDAC Des. Automat. Conf., 2016, pp. 1–6.                        [31] F. Eisenbrand and T. Rothvo, “Static-priority real-time scheduling:
+[11]   E. A. Lee and D. G. Messerschmitt, “Synchronous data flow,” Proc.                   Response time computation is NP-hard,” in Proc. IEEE Real-Time
+       IEEE, vol. 75, no. 9, pp. 1235–1245, Sep. 1987.                                     Syst. Symp., 2008, pp. 397–406.
+[12]   M. Niknafs, “Runtime resource management with workload pre-                    [32] M. Verucchi et al., “A systematic assessment of embedded neural
+       diction,” in Proc. IEEE/ACM/EDAC Des. Automat. Conf., 2019, pp. 1–6.                networks for object detection,” Proc. IEEE Int. Conf. Emerg. Technol.
+[13]   R. Khasanov and J. Castrillon, “Energy-efficient runtime resource                   Factory Automat., 2020, pp. 937–944.
+       management for adaptable multi-application mapping,” in Proc.                  [33] F.-A. Fortin et al., “DEAP: Evolutionary algorithms made easy,” J.
+       Des. Automat. Test Eur. Conf. Exhib., 2020, pp. 909–914.                            Mach. Learn. Res., vol. 13, pp. 2171–2175, 2012.
+[14]   B. Donyanavard, T. Mck, S. Sarma, and N. Dutt, “SPARTA: Run-                   [34] T. Helmuth, L. Spector, and J. Matheson, “Solving uncompromis-
+       time task allocation for energy efficient heterogeneous many-                       ing problems with lexicase selection,” IEEE Trans. Evol. Comput.,
+       cores,” in Proc. IEEE Int. Conf. Hardware/Softw. Codesign Syst. Synth.,             vol. 19, no. 5, pp. 630–643, Oct. 2015.
+       2016, pp. 1–10.                                                                [35] J. Redmon et al., “Yolo9000: Better, faster, stronger,” in Proc. Conf.
+[15]   S. V. Gheorghita, “System-scenario-based design of dynamic                          Comput. Vis. Pattern Recognit., 2017, pp. 7263–7271.
+       embedded systems,” ACM Trans. Des. Automat. Electron. Syst.,                   [36] J. Redmon and A. Farhad, “Yolov3: An incremental improvement,”
+       vol. 14, pp. 1–45, 2009.                                                            2018, arXiv:1804.02767.
+[16]   L. Schor, “Scenario-based design flow for mapping streaming
+       applications onto on-chip many-core systems,” in Proc. Int. Conf.
+       Compilers, Archit. Synth. Embedded Syst., 2012, pp. 71–80.                                            Jangryul Kim received the BS degree in computer
+[17]   H. Jung, “Dynamic behavior specification and dynamic mapping                                          science and engineering from Sogang University,
+       for real-time embedded systems: Hopes approach,” ACM Trans.                                           Seoul, South Korea, in 2017. He is currently working
+       Embedded Comput. Syst., vol. 13, pp. 1–26, 2014.                                                      toward the PhD degree with the department of com-
+[18]   W. Quan and A. D. Pimentel, “A scenario-based run-time task                                           puter science and engineering, Seoul National Uni-
+       mapping algorithm for MPSoCs,” in Proc. IEEE/ACM/EDAC Des.
+                                                                                                             versity, Seoul. His current research interests include
+       Automat. Conf., 2013, pp. 1–6.
+                                                                                                             system performance estimation and design space
+[19]   W. Quan, “Scenario-based run-time adaptive MPSoC systems,” J.                                         exploration of embedded systems.
+       Syst. Archit., vol. 62, pp. 12–23, 2016.
+[20]   B. Fang, “NestDNN: Resource-aware multi-tenant on-device deep
+       learning for continuous mobile vision,” in Proc. Annu. Int. Conf.
+       Mobile Comput. Netw., 2018, pp. 115–127.
+[21]   A. Mathur, “Deepeye: Resource efficient local execution of multi-
+       ple deep vision models using wearable commodity hardware,” in                                        Soonhoi Ha (Fellow, IEEE) received the BS and
+       Proc. Annu. Int. Conf. Mobile Syst. Appl. Serv., 2017, pp. 68–81.                                    MS degrees in electronics engineering from
+[22]   R. Pujol, “Generating and exploiting deep learning variants to                                       Seoul National University, Seoul, South Korea, in
+       increase heterogeneous resource utilization in the nvidia xavier,”                                   1985 and 1987, respectively, and the PhD degree
+       in Proc. Euromicro Conf. Real-Time Syst., 2019.                                                      in electrical engineering and computer science
+[23]   APOLLO: An open autonomous driving platform, 2018. Accessed:                                         from the University of California at Berkeley, Ber-
+       Mar 15, 2022. [Online]. Available: https://apollo.auto/                                              keley, CA, USA, in 1992. He is currently a profes-
+[24]   E. Jeong, J. Kim, and S. Ha, “Tensorrt-based framework and optimi-                                   sor with Seoul National University. His current
+       zation methodology for deep learning inference on jetson boards,”                                    research interests include HW/SW codesign of
+       ACM Trans. Embedded Comput. Syst., vol. 14, pp. 15–18, 2022.                                         embedded systems, embedded machine learn-
+[25]   T. Amert, N. Otterness, M. Yang, J. H. Anderson, and F. D. Smith,                                    ing, and Internet of Things. He has actively partic-
+       “GPU scheduling on the NVIDIA TX2: Hidden details revealed,”                   ipated in the premier international conferences in the EDA area, for
+       in Proc. IEEE Real-Time Syst. Symp., 2017, pp. 104–115.                        instance serving CODES+ISSS in 2006, ASPDAC in 2008 as the pro-
+[26]   M. Yang, “Avoiding pitfalls when using NVIDIA GPUs for real-                   gram co-chair, and ESWEEK in 2018 as the general chair.
+       time tasks in autonomous systems,” in Proc. Euromicro Conf. Real-
+       Time Syst., 2018, Art. no. 20.
+[27]   NVIDIA Jetson Developer Guide, 2022. Accessed: Jul. 15, 2022.                  " For more information on this or any other computing topic,
+       [Online]. Available; https://docs.nvidia.com/jetson/archives/                  please visit our Digital Library at www.computer.org/csdl.
+       l4t-archived/l4t-3231/
+[28]   E. Tang, S. Minakova, and T. Stefanov, “Energy-efficient and high-
+       throughput CNN inference on embedded CPUs-GPUs MPSoCs,”
+       in Proc. Int. Conf. Embedded Comput. Syst., 2022, pp. 127–143.
+
+
+
+
+         Authorized licensed use limited to: Zhejiang University. Downloaded on September 07,2026 at 01:35:16 UTC from IEEE Xplore. Restrictions apply.
+

@@ -1,0 +1,1104 @@
+       NeuOS: A Latency-Predictable
+Multi-Dimensional Optimization Framework
+  for DNN-driven Autonomous Systems
+     Soroush Bateni and Cong Liu, University of Texas at Dallas
+       https://www.usenix.org/conference/atc20/presentation/bateni
+
+
+
+
+    This paper is included in the Proceedings of the
+      2020 USENIX Annual Technical Conference.
+                           July 15–17, 2020
+                           978-1-939133-14-4
+
+
+
+
+                                  Open access to the Proceedings of the
+                                2020 USENIX Annual Technical Conference
+                                        is sponsored by USENIX.
+    NeuOS: A Latency-Predictable Multi-Dimensional Optimization Framework for
+                        DNN-driven Autonomous Systems
+
+                                            Soroush Bateni and Cong Liu
+                                           The University of Texas at Dallas
+
+                        Abstract                                      Low Power
+                                                                      High Latency
+                                                                                              Good Power
+                                                                                              Good Latency
+                                                                      Low Accuracy            Good Accuracy
+Deep neural networks (DNNs) used in computer vision
+have become widespread techniques commonly used in
+                                                                                                     High Power
+autonomous embedded systems for applications such as                                                 Good Latency             Accuracy
+
+
+
+
+                                                                                                                     Timing
+image/object recognition and tracking. The stringent space,
+                                                                                                     High Accuracy
+
+
+weight, and power constraints seen in such systems impose                            Energy                                   Energy
+a major impediment for practical and safe implementation                              (a)                                       (b)
+of DNNs, because they have to be latency predictable             Figure 1: Ternary depiction of the 3D optimization space.
+while ensuring minimum energy consumption and maximum
+accuracy. Unfortunately, exploring this optimization space      advancement of fast, energy-efficient embedded platforms,
+is very challenging because (1) smart coordination has to       particularly accelerator-enabled multicore systems such as
+be performed among system- and application-level solutions,     the NVIDIA Drive AGX and the Tesla AI platforms [44, 22].
+(2) layer characteristics should be taken into account, and        Autonomous systems based on embedded hardware plat-
+more importantly, (3) when multiple DNNs exist, a consensus     forms are bounded by stringent Space, Weight, and Power
+on system configurations should be calculated, which is         (SWaP) constraints. The SWaP constraints require system de-
+a problem that is an order of magnitude harder than any         signers to carefully take into account energy efficiency. How-
+previously considered scenario. In this paper, we present       ever, DNN-driven autonomous embedded systems are consid-
+NeuOS, a comprehensive latency predictable system solution      ered mission-critical real-time applications and thus, require
+for running multi-DNN workloads in autonomous systems.          predictable latency1 and sufficient accuracy2 (of the DNN
+NeuOS can guarantee latency predictability, while managing      output) in order to pass rigorous certifications and be safe for
+energy optimization and dynamic accuracy adjustment based       end users [46]. This causes a challenging conflict with energy
+on specific system constraints via smart coordinated system-    efficiency since accurate DNNs require a tremendous amount
+and application-level decision-making among multiple DNN        of resources to be feasible and to be timing-predictable, and
+instances. We implement and extensively evaluate NeuOS          are by far the biggest source of resource consumption in such
+on two state-of-the-art autonomous system platforms for a       systems [5]. This usually results in less complicated (and less
+set of popular DNN models. Experiments show that NeuOS          resource-demanding) DNN models to be designed and used
+rarely misses deadlines, and can improve energy and accuracy    in these systems, reducing accuracy considerably.
+considerably compared to state of the art.                         Fig. 1(a) shows a hypothetical three-dimensional space
+1    Introduction                                               between latency, power, and accuracy mapped to a ternary
+                                                                plot [55] (where (Energy + Timing + Accuracy) has
+The recent explosion of computer vision research has led to     been normalized to 3). Each dot in Fig. 1(a) represents
+interesting applications of learning-driven techniques in au-   a configuration with a unique set of latency, power, and
+tonomous embedded systems (AES) domain such as object           accuracy characteristics. The power consumption is usually
+detection in self-driving vehicles and image recognition in
+robotics. In particular, deep neural networks (DNNs) with           1 Latency from each system component (including the DNNs) in AES
+
+generally the same building blocks have been dominantly         will add up to the reaction latency between when a sensor observes an event
+                                                                and when the system externally reacts to that event, such as by applying
+applied as effective and accurate implementation of image
+                                                                the breaks in a self-driving vehicle. The faster a system reacts, the more
+recognition, object detection, tracking, and localization to-   likely it is for the system to avoid a disaster, such as an accident. However,
+wards enabling full autonomy in the future [60, 50]. For ex-    policymakers might adopt a reasonable reaction time, such as 33ms or even
+ample, using such DNNs alone, Tesla has recently demon-         300ms [48, 27, 12, 14, 9, 4] as ”safe enough".
+                                                                    2 We should mention here that there is currently no established standard
+strated that a great deal of autonomy in self-driving cars      to connect DNN accuracy to the safety of a particular system, such as DNNs
+can be achieved [33]. Another catalyzer for the feasibility     in self-driving vehicles. In this paper, we assume the more accurate the DNN,
+of DNN-driven autonomous systems in practice has been the       the safer the system is.
+
+
+
+
+USENIX Association                                                           2020 USENIX Annual Technical Conference                     371
+adjusted at system-level via dynamic voltage/frequency                workloads in autonomous embedded systems. NeuOS can
+scaling (DVFS) [5, 21]. The accuracy adjustment is done               manage energy optimization and dynamic accuracy adjust-
+at application-level via DNN approximation configuration              ment for DNNs based on specific system constraints via smart
+switching (see Sec. 4 for details). Note that both DVFS               coordinated system- and application-level decision-making.
+and DNN configuration adjustments would impact runtime                   NeuOS is designed fundamentally based on the idea of
+latency. This figure highlights three configurations with             multi-DNN execution by introducing the concept of cohort,
+various levels of latency, power consumption, and accuracy            a collective set of DNN instances that can communicate
+tradeoff that might or might not be acceptable given the              through a shared channel. To track this cohort, we address how
+current performance constraints. Choosing the best three-             latency, energy, and accuracy can be measured and propagated
+dimensional trade-off optimization point is a significant             efficiently in the multi-DNN cohort.
+challenge given the vast and complex DVFS and accuracy                   Besides the fundamental goal of providing latency pre-
+configuration space.                                                  dictability (i.e., meeting deadlines for processing each DNN
+   Although all autonomous systems are required to be latency         instance), NeuOS addresses the challenge of balancing energy
+predictable in nature, the constraints on power and accuracy          at system level and accuracy at application level for DNNs,
+may vary based on the type of autonomous system (e.g.,                which has never been addressed in literature to the best of our
+highly constrained power for drones and maximum accuracy              knowledge. Balancing three constraints at various execution
+requirement for autonomous driving). To illustrate one such           levels in the multi-DNN scenario requires smart coordina-
+variation, note Fig. 1(b), which shows a constraint on latency,       tion 1) between system level and application level decision
+and a constraint on accuracy imposed in the configuration             making, and 2) among multiple DNN instances.
+space limiting the possible configurations considerably.                 Towards these coordination goals, we introduce two algo-
+Challenges specific to DNN-driven AES. In addition to the             rithms in Sec. 4.2 that are executed at the layer completion
+aforementioned optimization problem, DNNs are constructed             boundary of each DNN instance: one algorithm that can pre-
+from layers, where each layer responds differently to DVFS            dict the best system-level DVFS configuration for each DNN
+changes and has unique approximation characteristics (as              member of the cohort to meet deadline and minimize power
+we shall showcase in Sec. 3.1). In order to meet a latency            for that specific member in the upcoming layer, and one al-
+target with optimized energy consumption and accuracy,                gorithm that decides what application level approximation
+each layer requires a unique DVFS and approximation                   configuration is required for others if any one of these system-
+configuration, whereas existing approaches such as Poet [23]          level DVFS decisions were chosen. These two algorithms
+and JouleGuard [21] deal with DNNs as a black-box.                    effectively propagate all courses of action for the next layer in
+Moreover, system-level DVFS adjustments and application-              order to meet the deadline. Based on these two algorithms, we
+level accuracy adjustments happen at two separate stages.             propose an optimization problem in Sec. 4.3 that can decide
+Without smart coordination, the system might fall in a                the best course of action depending on the system constraint,
+negative feedback loop, as we shall demonstrate in Sec. 3.2.          and minimize system overhead. This method is effective be-
+This coordination needs to happen at layer boundaries,                cause 1) it introduces an identical decision-making among
+making the problem at least an order of magnitude harder              all DNN instances in the cohort and solves the coordination
+than previous work.                                                   problem between system-level and application-level decision
+   Furthermore, existing techniques mostly focus on single-           making, and 2) provides adaptability to three typical scenarios
+tasking scenarios [5, 3, 20] whereas AES generally require            imposing different constraints on energy and accuracy.
+multiple instances of different DNNs. As we shall motivate            Implementation and Evaluation. We implement a system
+in Sec. 3.3 using a real-world example, these DNNs need               prototype of NeuOS and extensively evaluate NeuOS using
+to communicate and build a cohort on a layer-by-layer basis           popular image detection DNNs as a representative of
+to avoid greedy and inefficient decision-making. Moreover,            convolutional deep neural networks used in AES. The
+system-level and application-level coordination in this multi-        evaluation is done under the following conditions:
+DNN scenario is much harder than isolated processes                       • Extensible in terms of architecture. We fully imple-
+considered in previous work.                                                ment NeuOS using a set of popular DNN models on
+   Finally, existing approaches [13, 5] optimize latency                    two different platforms: an NVIDIA Jetson TX2 SoC
+performance on a best-effort basis (e.g., by using control                  (with architecture designed for low overhead embedded
+theory) that can overshoot a latency target (as demonstrated                systems), and an NVIDIA AGX Xavier SoC (with archi-
+in Sec. 3.2). A better solution should include proven real-time             tecture designed for complex autonomous systems such
+runtime strategies such as LAG analysis [51].                               as self-driving cars).
+Contribution. In this paper, we present NeuOS3 , a compre-               • Multi-DNN scenarios. We ensure that our system can
+hensive timing-predictable system solution for multi-DNN                   trade-off and balance multiple DNNs in all conditions
+  3 The latest version of NeuOS can be found at https://github.com/        by testing NeuOS under three cohort sizes: a small 1-
+Soroosh129/NeuOS.                                                          process, a medium 2-4 process, and a large 6-8 process.
+
+
+
+372   2020 USENIX Annual Technical Conference                                                                   USENIX Association
+    • Latency predictability. We extensively compare NeuOS                  VDD_IN
+                                                                                                                         Σ   Σ    Σ   Σ    Σ   Σ
+                                                                            Power (VDD_SYS_CPU)(VDD_SYS_GPU) (VDD_DDR)
+
+      to six state-of-the-art solutions in literature, and find that        Source
+                                                                                   V/F Gate V/F Gate Pre Regulator
+      NeuOS rarely misses deadlines under all evaluated sce-
+      narios, and can improve runtime latency on average by                            CPU       GPU        V/F Gate
+
+      68% (between 8% and 96% depending on DNN com-                            V/F Gate V/F Gate
+                                                                                                          8GB Memory             FC FC
+      plexity) on TX2, by 40% on average (between 12% and
+                                                                              4x LITTLE 2x big                                   SoftMax
+      89%) on AGX, and by 54% overall.                                           Cores  Cores
+
+    • Versatility. NeuOS can be easily adapted to the follow-
+                                                                                      (a) Jetson TX2 V/F Structure       (b) An example DNN
+      ing three constraint scenarios:
+                                                                         Figure 2: DVFS configuration space and DNN structure.
+         – Balanced energy and accuracy. Without any
+           system constraints given, NeuOS is proved to be             as the convolutional and the normalization layers, which are
+           energy efficient while sacrificing an affordable            connected via their inputs and outputs.
+           degree of accuracy, improving energy consumption
+                                                                          DNNs by nature are approximation functions [36]. DNNs
+           on average by 68% on TX2, by 40% on average on
+                                                                       are trained on a specific training set. After training, accuracy
+           AGX, while incurring an accuracy loss of 21% on
+                                                                       is measured by using a test data set, set aside from the
+           average (between 19% and 42%).
+                                                                       training set and measuring the accuracy (e.g., top-5 error rate–
+         – Min energy. When energy is constrained to be min-           comparing the top 5 guesses against the ground truth). The
+           imal, NeuOS is able to sacrifice accuracy a small           accuracy of the overall DNN can be adjusted by manipulating
+           amount (at most 23%) but further improve energy             the layer parameters.
+           consumption by 11% over the general unrestricted
+                                                                          A rich set of DNN approximation techniques have been
+           case, while meeting the latency requirement.
+                                                                       proposed in the literature and adopted in the industry [17,
+         – Max accuracy. When accuracy is given as a                   58, 24, 29, 43, 56, 7, 18]. Such techniques aim at reducing
+           constraint, NeuOS is able to improve accuracy               the computation and storage overhead for executing DNN
+           by 10% on average compared to balanced case,                workloads. An example technique to provide approximation
+           but also sacrifices energy by only a small amount,          for convolutional layers is Lowrank [45], which performs a
+           increasing by 23% on average.                               lowrank decomposition of the convolution filters. In our im-
+                                                                       plementation, dynamic accuracy adjustment or “hot swapping”
+2    Background                                                        layers will refer to applying the lowrank decomposition to the
+DVFS space in autonomous systems. The trade-off between                upcoming layers before their execution. Note that applying
+latency and power consumption is usually achieved via ad-              such approximation adjustments on the fly is possible because
+justments to frequency and/or voltages of hardware compo-              the generated pair of layers have the exact combined input and
+nents. A software and hardware technique typical of modern             output dimensions. Moreover, this adjustment is only possible
+systems is DVFS. Through DVFS, system software such as                 for future layers at each layer boundary.
+the operating system or hardware solutions can dynamically             Measuring Accuracy. The approximation on the fly will
+adjust voltage and frequency. To understand this technique             affect the final accuracy. Due to the dynamic nature of this
+better, consider Fig. 2(a), showing the components of a Jet-           adjustment, the exact value of accuracy measurement using
+son TX2, which contains a Parker SoC with a big.LITTLE                 traditional methodology is impractical. Most related work
+architecture with 2 NVIDIA Denver big cores and 4 ARM                  thus incorporate an alternative scoring method [3], where the
+Cortex A53 LITTLE cores. The Parker SoC also contains                  system will deduce the accuracy score accordingly if certain
+a 256-core Pascal-architecture GPU. The TX2 module also                approximation techniques are to be applied to the next layer.
+contains 8 GB of shared memory (the Jetson AGX Xavier                  In our method, we assume a perfect score for the original
+also used in Sec. 5 has a more advanced Xavier SoC with                DNN, and switching to the lowrank approximation of any
+8 NVIDIA “Carmel” cores, a 512 Volta-architecture GPU,                 layer will reduce the score by a set amount. For example,
+and 16GB of shared memory). Each component includes a                  running AlexNet in its entirety will result in a score of 100. If
+voltage/frequency (V/F) gate that can be adjusted via soft-            we swap a convolutional layer with a lowrank version of that
+ware. The value for frequency and voltage for each component           layer, the overall accuracy will be affected by some amount
+forms a unique topple, called a DVFS configuration through-            (e.g., 1 in our method), thus yielding a lower score (e.g., 99
+out this paper.                                                        under the scoring method). Therefore, the score is always
+DNN and its approximation techniques. Fig. 2(b) depicts a              relative to the original DNN configuration and not related to
+simplified version of a Deep Neural Network (DNN). Neurons             the absolute value of accuracy on a particular dataset. This
+are the basic building blocks of DNNs. Depending on the layer          method of keeping relative accuracy is still invaluable to
+neurons belong to, they perform various different operations.          maximizing accuracy in a dynamic runtime environment but
+A DNN may contain multiple layers of different types, such             cannot be used to calculate the exact accuracy loss.
+
+
+
+USENIX Association                                                                   2020 USENIX Annual Technical Conference                       373
+          23                                           23                                                                    Energy            Deficit    Accuracy
+                                                                                                                                                                                Switch to        Overshoot
+          20                                           20
+
+
+
+
+                                                                                                   Normalized Value
+                                                                                                                        1                                             System
+                                                                                                                                                                                 Lower            : System
+          17                                           17                                                                                                            too Slow
+                                                                                                                                                                                Accuracy         is too Fast
+Layer #
+
+
+
+
+                                             Layer #
+          14                                           14                                                             0.5
+          11                                           11                                                               0                                                                   Application level
+           8                                            8                                                                                                                                       System level
+           5                                            5                                                             -0.5
+           2                                            2                                                              -1                                                       Switch to        Overshoot
+                                                                                                                                                                      System
+               0    2000 4000 6000 8000 10000               0     20     40    60     80    100                               3       6   9     12 15 18 21                      Slower           : System
+                                                                                                                                                                     too Fast
+                      Best DVFS Conf. #                     Best Theoretical Approx. Conf. (%)                                                Layer #                            DVFS            is too Slow
+
+
+                                                                                                                                              (a)
+Figure 3: Calculated best system level DVFS configuration                                                                                                                          (b)
+and best application level theoretical approximation config-                                      Figure 4: Negative feedback loop between an application-
+uration for AlexNet on Jetson TX2 in order to meet a 12ms                                         level solution and a system-level solution.
+deadline (0 means no approximation).
+                                                                                                  Observation 1: Layer-level trade-off makes the problem an
+3              Motivation                                                                         order of magnitude harder than ordinary blackbox techniques.
+In this section, we lay out several motivational case studies
+                                                                                                  3.2                        Balancing in three-dimensional Space
+to understand the challenges that exist for DNNs, and gain
+insights on why existing approaches (or naively extended                                          Balancing energy/latency and accuracy/latency in isolation
+ones) may fail under our problem context.                                                         can be naive, and lead to unnecessary consumption of energy
+                                                                                                  or reduced accuracy. Fig. 4a shows a similar experiment
+3.1                Balancing in two-dimensional Space                                             to Sec. 3.1, but both the system and application (Alexnet)
+The trade-off to meet a specified latency target while maxi-                                      are employed at the same time without any coordination.
+mizing accuracy is done in a 2-dimensional space by choosing                                      The goal of both solutions is to reach a 20ms deadline (by
+an approximation configuration for the application. Similarly,                                    using latency deficit, LAG, as a guide (Sec. 4.2)). In the
+the 2-dimensional trade-off between energy and latency is                                         case of AlexNet, the system-level DVFS adjustment can be
+done by changing an optimal DVFS configuration. Traditional                                       enough to meet the desired deadline. In an ideal scenario,
+control-theory based solutions treat the entire application as                                    only energy is adjusted slightly until AlexNet is not behind
+a black-box, and decide on what DVFS or approximation                                             schedule. However, as is evident in the figure, normalized
+configuration should be chosen every few iterations of that                                       energy consumption and accuracy for each layer are both
+specific application [21, 20]. However, treating DNNs as a                                        decreased continuously and dramatically. This is due to an
+blackbox does not yield the most efficient results. Fig. 3 left                                   unwanted negative loop, where a negative deficit (indicating
+hand shows the best DVFS configuration for each layer of                                          that the system is behind schedule) has resulted in the
+AlexNet among all possible DVFS configurations for a Jetson                                       application-level solution switching to a lower approximation
+TX2 in terms of energy consumption. The y-axis is the layer                                       configuration. Because these configurations are discrete, as
+number for AlexNet, and the x-axis is the DVFS configuration                                      we shall discuss in Sec. 4.2, the deficit will overshoot (at
+index, partially sorted based on frequency and activated core                                     around layer 10) and becomes positive (meaning the system is
+counts. The dots show the configuration that has the absolute                                     ahead of schedule). The system-level solution would see this
+minimum energy consumption. As is evident, each layer has                                         deficit as a headroom to reduce energy consumption, and in
+a different optimal DVFS configuration. More interestingly,                                       the case of Fig. 4a, has turned the positive deficit into a small
+we observe a non-linearity where sometimes faster DVFS                                            negative at around layer 18. This cycle (as depicted in Fig. 4b)
+configurations have lower energy consumption. This is due                                         is repeated until the minimum approximation configuration
+to the massive parallelism of GPUs, where increasing the fre-                                     is reached. This result is extremely undesirable in accuracy-
+quency by 2x for example can yield a 10-fold improvement                                          sensitive applications such as autonomous driving (but can
+in performance, which outweighs the momentary increase in                                         be okay for energy sensitive applications such as remote
+energy consumption. Fig. 3 right hand shows the best theo-                                        sensing). Thus, a feasible solution would be for the system
+retical approximation configurations required for each layer                                      and application to communicate, and make decisions based on
+of AlexNet in order to meet a 12ms deadline4 . As is evident                                      given constraints for an application based on given constraints.
+in the figure, each layer requires a different approximation                                      This communication should be done at the granularity of
+configuration for optimal results.                                                                layers, which makes the problem extra hard.
+   Thus, the DNN must somehow become transparent to the                                           Observation 2: Trade-off in a 3-dimensional latency, energy,
+system, conveying layer-by-layer information in order to                                          and accuracy optimization space is a significant challenge
+make the correct decisions. This can make the decision space                                      due to both system constraints as well as lacking harmony
+in the 2-dimensional space at least an order of magnitude                                         between application-level and system-level solutions.
+harder (e.g., AlexNet has 23 layers) since every layer must be                                    3.3                        Balancing for Multi-DNN Scenarios
+considered for each execution of the DNN application.
+                                                                                                  To the best of our knowledge, no existing approach deals
+          4 Please see Sec. 4.2 for more details on how this is calculated.                       with multiple DNN instances in a coordinated manner.
+
+
+
+374                2020 USENIX Annual Technical Conference                                                                                                               USENIX Association
+                           Latency               Energy                                DNN is compared to an ideal schedule that meets the relative
+                     0.4                                          1000
+                                                                  900                  deadline D), which tracks the progress of DNN execution
+
+
+
+
+                                                                         Energy (mJ)
+       Latency (s)
+
+                                                                  800                  at layer boundaries, P for energy consumption (in mJ) for
+                                                                  700
+                     0.2
+                                                                  600                  each layer, and a variable X to reflect accuracy. We choose
+                                                                  500
+                                                                  400
+                                                                                       to track LAG at runtime instead of using an end-to-end
+                      0                                           300                  optimization because it is more practical due to two reasons:
+                           1   2     3      4   5    6    7   8
+                                         Instance ID                                   1) in a multi-DNN scenario, predicting the overlap between
+                                                                                       different DNN instances (and thus coordinating an optimal
+Figure 5: Energy consumption and execution time of running
+                                                                                       solution) cannot be done offline without making unrealistic
+8 instances of Resnet-50 on a Jetson TX2 under PredJoule.
+                                                                                       assumptions, such as synchronized release times, and, 2) LAG
+Straightforwardly extending single-tasking latency/energy                              is especially useful in a real system since it can account for
+trade-off approaches, such as PredJoule [5], to multi-tasking                          outside interference, such as interference by other processes
+scenarios would only result in decision-making that is local                           in the system, whereas an end-to-end optimization framework
+and greedy, based on locally measured variables. To showcase                           could miss the latency target. Moreover, as we shall discuss in
+why coordination in this additional dimension is a key                                 Sec. 4.2, the value of P can be inferred by LAG in our design
+issue, examine Fig. 5, which shows the latency and energy                              as these two variables fundamentally depend on the runtime
+consumption for running 8 DNN instances together averaged                              DVFS configuration. Thus, the essential variables to track
+over 20 iterations under PredJoule on a Jetson TX2. We                                 the status of a DNN execution can be simplified to {LAG, X}.
+chose PredJoule because in our experiments, it outperformed                            Since we are dealing with a multi-DNN scenario, each DNN
+all other existing solutions on exploring the 2D tradeoff                              instance will have its own set of these variables. To know the
+between latency and energy for DNNs. The left (right) y-axis                           collective status of the system, each DNN instance will put
+in Fig. 5 depicts the latency (energy consumption) in seconds                          its variables in a shared queue.
+(miliJoules) for each instance. As is evident in the figure, the                          In order to answer the second question regarding what
+DVFS management is greedy, resulting in instances 1 and                                optimization targets should be imposed on the system, we
+2 having relatively good latency and energy consumption.                               focus on the following three typical scenarios (expanded on
+This greediness has pushed the rest of the DNN instances                               in Sec. 4.3) that entail different performance constraints:
+into unacceptable latency range (which is above 150ms for                                  • Min Energy (MP ) is when NeuOS is deployed on
+ResNet-50) because the chosen DVFS configuration at each                                     an embedded system with a critically small energy
+layer boundary has been mostly beneficial only to the current                                envelope. Thus, the system should minimize energy
+layers of DNN instance 1 and 2. Moreover, the distribution                                   without sacrificing too much accuracy. This scenario
+of timing and energy consumption is not even across all                                      is motivated by applications seen in extremely power-
+instances because of the same reason. This disparity is the                                  limited systems such as drones, robotics, and a massive
+result of an uncoordinated system solution that chooses DVFS                                 set of internet-of-thing devices.
+configurations greedily based on local variables.                                         • Max Accuracy (MA ) is when NeuOS is deployed on
+Observation 3: In addition to the 2D and 3D complexities                                    a system that has limited energy but accuracy is of
+of solving the latency/accuracy/energy trade-off, a complete                                utmost importance. Thus, the system should try to
+system solution must also accommodate for Multi-DNN                                         maximize accuracy without losing too much energy. This
+scenarios, which are inherently more complicated to model                                   scenario is motivated by CPS-related applications such
+and predict than single-DNN scenarios. The case studies                                     as autonomous driving.
+also imply that naive extensions on existing single-DNN
+                                                                                          • Balanced Energy and Accuracy (S) describes a more
+2D solutions may fail in multi-DNN cases because they
+                                                                                            general, flexible scenario when the system is limited by
+make greedy decisions based on local variables without
+                                                                                            both energy consumption and accuracy requirements,
+coordination towards being globally optimal.
+                                                                                            but no priority is given to either. Thus, the system should
+                                                                                            try to balance energy consumption and accuracy.
+4     System Design
+                                                                                          With the given scenarios and the values of {LAG, X} at
+4.1     NeuOS Overview                                                                 hand, we can answer the two key research questions presented
+To optimize the three-dimensional tradeoff space at the layer                          in our motivation: 1) how to coordinate in a multi-DNN
+granularity, two basic research questions need to be answered                          scenario such that the overall system is balanced and can meet
+first: 1) how to define and track the values of the three                              the performance constraints, and, 2) how to efficiently tradeoff
+performance constraints in the system, and 2) what target                              between latency, energy, and accuracy given the complexity of
+should be imposed for optimizing each constraint.                                      the problem space and how to prevent the negative feedback
+   For the first research question, we define a value of LAG                           loop discussed in Sec. 3.2?
+(defined in Sec. 4.2, as a measurement of how far behind the                           Design overview. Fig. 6 shows the overall design of NeuOS
+
+
+
+USENIX Association                                                                               2020 USENIX Annual Technical Conference          375
+        Queue
+                                               {Di,LAGi}            deadline Di as a form of LAG [51], denoted by LAGi . LAGi
+                                                 Alg. 1             is a local variable (that can be updated at layer boundaries)
+
+                  D1
+      {LAG1,X1}
+                       L1    L2        L3
+                                             {DVFS List (Δ)}        for each DNN instance that keeps track of how far ahead or
+                  D2
+      {LAG2,X2}        L1   L2    L3        Alg. 2 … Alg. 2         how far behind the DNN instance is compared to the deadline
+                                            {X1}     {Xn}           at time t. LAGi is calculated as:
+                  Dn
+
+      {LAGn,Xn}
+                       L1    L2    L3          MP/MA/S
+                                                                                   LAGi (t, Li (t)) =     ∑ (dl − el ),           (1)
+                   Figure 6: Design Overview                                                            l∈Li (t)
+
+
+around {LAG, X}. The left side depicts the shared queue             in which Li (t) is the list of the layers of instance i that have
+among multiple DNN instances. In the middle, a simple               completed by time t. For layer l ∈ Li (t), dl and el depict the
+example of n concurrently running DNN instances each with           sub-deadline for layer l and the recorded execution time for
+three layers is shown. NeuOS makes runtime decisions on             layer l, respectively. NeuOS keeps track of el by measuring
+DVFS and DNN approximation configuration adjustments at             the elapsed time between each layer. Moreover, we use the
+layer boundaries, i.e., whenever a layer of a DNN instance          proportional deadline method [38] to devise sub-deadlines
+completes. This is beneficial not only because applying             for each layer based on Di , the relative (end-to-end) deadline
+approximation on-the-fly is possible only at layer boundaries,      of DNN instance i, in which the subdeadline dl for layer l is
+but in terms of overhead as well (as proved by our evaluation).     calculated as:
+   As illustrated in the figure, at the boundary between layers                         dl = (el / ∑ (ex )) · Di ,                (2)
+L2 and L3 of the first DNN instance, NeuOS is going through                                       x∈Li
+the process of decision-making which contains several steps.
+The first step is Alg.1, which senses the last known value          where ∑x∈Li (ex ) denotes the execution time of DNN i. The
+of LAG for each DNN instance. Alg. 1 decides what DVFS              proportional nature of sub-deadlines means that they only
+configuration (at system level) is best for each instance in        need to be calculated once for the lifetime of a given DNN
+order to meet their deadlines D, outputting a list of potential     instance on a platform.
+DVFS configurations (∆), where each member of the list                 Each DNN instance i would broadcast LAGi among all
+corresponds to a DNN instance. In the next step, the list           instances via the shared queue. Thus, LAGi would reflect the
+of potential DVFS configurations are fed into Alg.2, which          last known status of DNN instance i up to the last executed
+predicts what approximation {Xi } (at application level) would      layer. We call the collection of LAG from all instances the
+be required for other DNN instances to meet the deadline if         LAG cohort, and we denote it by Φ. At completion of a DNN
+the DVFS configuration for any one of the DNN instances             instance, a special message is sent to the cohort so that every
+is applied. Thus, Alg. 1 and Alg. 2 in tandem discover all          DNN instance in the system is aware of their exit.
+possible courses of action the system can take to meet the             Based on the LAG cohort, the DNN instances can make
+deadline. However, at this point, no decision has been made         decisions on accuracy and DVFS. A cohort will be perfect if
+on what DVFS configuration or accuracy configuration should         every LAG within it is 0, or ∀LAGi ∈ Φ, LAGi = 0. This means
+be chosen for the system, because that depends on the given         that all layers have exactly finished by their sub-deadline so
+system constraint. This problem is inherently an optimization       far. Thus, the system has reasons to believe that the DNN
+problem of finding the best possible choice in the propagated       instances will exactly finish by the deadline and do not require
+configuration space. We present this optimization problem           a faster DVFS or an approximation configuration, saving
+formally in Sec. 4.3, where depending on broad scenarios, a         energy and accuracy in the process.
+particular setting is chosen for the next period of execution.         Since LAG indicates how far behind (LAG < 0) or ahead
+In the last step of NeuOS, the system chooses one of these          (LAG > 0) each DNN is, the DVFS and the approximation
+possibilities based on the scenario involved.                       configuration need to be adjusted to run faster or slower
+                                                                    accordingly. However, energy consumption and accuracy
+4.2    Coordinated System- and Application-level                    constraints must also be considered. We discuss each next.
+       Adjustments                                                  System-level DVFS adjustment. At system-level, the ques-
+                                                                    tion is which DVFS configuration is the best given the state
+In this section, we expand on how runtime LAG is measured,          of Φ to minimize energy consumption while reducing LAG
+how it relates to energy consumption, how accuracy X                to zero? The answer would vary between different DNN in-
+is calculated, and how the two developed algorithms take            stances in the cohort, as they exhibit different LAGs. More-
+advantage of these two measurements to discover all possible        over, different layers react differently to DVFS adjustments.
+choices the system can make efficiently in order to reduce the         Alg. 1 is responsible for finding the best DVFS configu-
+LAG to zero and meet the deadline.                                  ration for each DNN instance in the cohort. Alg. 1 takes as
+LAG. We quantify the relationship between the partial               input the LAG cohort Φ and a SpeedUp/PowerUp table for
+execution time at time t of DNN instance i (ei ) and its relative   the current layer of each DNN instance i. The structure of
+
+
+
+376   2020 USENIX Annual Technical Conference                                                                      USENIX Association
+Algorithm 1 ∆ Calculator.                                                      Algorithm 2 Xi Calculator.
+Input: Φ     ⊲ Progress Cohort                                                 Input: ∆      ⊲ Potential DVFS list.
+Input: SpeedUp/PowerUp[]       ⊲ The SpeedUp/PowerUp table of DNNs.            Input: SpeedUp/Accuracy[]        ⊲ The SpeedUp/Accuracy table of DNNs.
+Output: ∆                                                                      Input: SpeedUp/PowerUp[]         ⊲ The SpeedUp/PowerUp table of DNNs.
+                                                                               Output: X[][]     ⊲ The accuracy list for each DNN instance for each δ
+ 1: function R ETURN∆(Φ)
+ 2:    for LAGi in Φ do                                                         1: function R ETURNXi (∆)
+ 3:        SPi ← Di +LAG
+                     Di
+                        i
+                          .                                                     2:    for δc in ∆ do
+ 4:        δi ← LookUp SpeedUp/PowerUp[SPi ]                                    3:        for i = 0 to i < |∆| do
+                                            
+                                                                                                     SP (δc )·(Di +LAGi )
+                                                                                4:            SAi ← i      Di
+                                                                                5:            X[c][i] ← LookUp SpeedUp/Accuracy[SAi ]
+                                                                                                                                     
+Table 1: SpeedUp/PowerUp and SpeedUp/Accuracy tables.
+  (a) SpeedUp/PowerUp for a layer of DNN instance i.   (b) SpeedUp/Accuracy.
+
+  DVFS Configuration(δ)       SpeedUp       PowerUp      X       SpeedUp       on other DNN instances i 6= c? The speedup of δc for other
+  1                           1x            1x           81%     1x            DNN instances can be calculated by using δc as the lookup
+  2                           2.1x          2x           71%     1.8x          key in their corresponding SpeedUp/PowerUp table. But what
+  3                           2.8x          1.5x         59%     2.5x          if this speedup does not reduce LAGi to zero? To solve this
+                                                                               problem, we next present the algorithm that calculates the
+the SpeedUp/PowerUp table is depicted in Table 1a. The first                   application-level approximation required to reduce LAGi to
+column of Table 1a is the index for all the possible DVFS                      zero given a DVFS configuration δc ∈ ∆.
+configurations in the system. The second column indicates
+how fast each DVFS configuration is in the worst case sce-                     Application-level accuracy adjustment. Alg. 2 portrays the
+nario compared to the baseline DVFS configuration (baseline                    procedures to calculate the required approximation for the
+is usually chosen to be the slowest configuration). The third                  upcoming layers of all DNN instances based on a DVFS
+column indicates how much power that DVFS configuration                        configuration. If the instance i is behind the ideal schedule by
+will consume relative to baseline.                                             LAGi , with a relative deadline of Di , and if the chosen DVFS
+   Storing relative speedup and powerup values (instead of                     configuration is δc , the remaining required speedup can be
+absolute measurements) is useful for looking up the table. In                  calculated as follows (line 4):
+Alg. 1, given a LAGi (line 2) and a relative deadline Di for
+                                                                                                               SPi (δc ) · (Di + LAGi )
+DNN instance i, the required speedup (denoted as Si ) could                                     SAi (δc ) =                             ,         (4)
+                                                                                                                            Di
+be directly calculated as (line 3):
+                                  Di + LAGi                                    in which SAi (δc ) is the required speedup (or slowdown) via
+                          SP =              ,                           (3)    approximation for DNN instance i when DVFS configuration
+                                      Di
+                                                                               δc is chosen, and SPi (δc ) · (Di + LAGi ) is the new projected
+in which SP is the speedup (or slowdown) value calculated                      execution time of DNN instance i. The value of SAc , the
+as the relationship between the current projected execution                    speedup from accuracy for the chosen DVFS configuration,
+time (Di + LAGi ) and the ideal execution time (Di ). Since                    should always be zero or less than zero since by definition,
+LAG can be negative or positive, the value of SP can                           δc is the ideal DVFS configuration for c and requires no
+indicate a slowdown or speedup, where the slowdown is a                        additional speedup from approximation.
+way to conserve energy, which is the goal of NeuOS. The                           The value of SAi is then used as a lookup key to a new table,
+LookUp procedure (line 4) would then find the closest DVFS                     called the SpeedUp/Accuracy table, depicted in Table 1b.
+configuration that matches the speedup (or slowdown) in                        Table 1b stores the relative worst case execution times for
+relation to the current configuration.                                         each layer’s approximation configuration. We index each
+   For our Alg. 1 to operate, we prepare a structure such as                   row by X, which is the value of the total accuracy of that
+Table 1a for all DNN instances in a hashed format5 . The                       configuration6 . Note that the exact value of X has no effect
+LookUp procedure would then directly find a bucket by us-                      in the algorithm and what matters is the relative order in
+ing the SpeedUp as an index. The output of Alg. 1 is a set                     Table 1b (i.e., the lower we go down the table, the lower the
+∆ = {δ1 , δ2 , ..., δn }, in which δi is the ideal DVFS config-                relative accuracy). The output of Alg.2 is the row index in the
+uration for DNN instance i in order to meet the deadline.                      SpeedUp/Accuracy table sufficient to meet the deadline for
+Imagine we ultimately decide that δc ∈ ∆ is the best DVFS                      all DNN instances except c. We denote this index for layer k
+configuration for the next scheduling period. A very interest-                 of DVFS configuration i as Xik . This value is then broadcasted
+ing question would be that, what is the effect of applying δc                  in the accuracy cohort and indicates the application-level
+   5 Our hashing is custom, and hashes the relationship between SpeedUp           6 Each row could be indexed by any measure. However, indexing with
+
+and PowerUp. This method relies on partially sorting the DVFS configuration    X has benefits in overhead reduction for the LookUp procedure in Alg. 2
+space. You can find the latest hashing code at https://git.io/Jfogq            because it can be more easily hashed.
+
+
+
+
+USENIX Association                                                                         2020 USENIX Annual Technical Conference               377
+configuration chosen for the next immediate layer of the          Statistical Approach for Balanced Energy and Accuracy.
+corresponding DNN instance.                                       To achieve balanced energy and accuracy, we propose a
+  The remaining question is that which δc should be chosen.       statistical approach that checks the state of ∆ and the projected
+We answer this question next.                                     accuracy cohort in statistical terms to make a decision. The
+                                                                  calculation of SPi and SAi (which depends on SPi ) resemble the
+4.3    Constraints and Coordination                               form of Bivariate Regression Analysis (BRA) [57], in which:
+The combination of Alg. 1 and Alg. 2 produces a list of poten-                                     Di + LAGi
+tial DVFS configurations ∆, and for each DVFS configuration                         SAi = SPi ·              + 0,              (7)
+                                                                                                       Di
+in ∆, a corresponding list of required approximations for all
+DNN instances in the cohort if that DVFS configuration were       in which, Di +LAG
+                                                                                Di
+                                                                                   i
+                                                                                     is called the influence of SPi on the required
+to be applied. Such a scenario can be visualized as a decision    approximation. To measure this influence, we first calculate
+tree. The remaining question of our design would be which                                   i=n−1
+                                                                                                    Di + LAGi
+path to go down to in order to have a perfect LAG cohort. As                           I=    ∑                ,                (8)
+                                                                                                        Di
+discussed in Sec. 3.2, the requirements on energy and accu-                                  i=0
+racy can vary depending on specific scenarios. We present         in which I is the collective influence of LAG on approxi-
+the following three approaches based on the three scenarios       mation. If the value of I is high, it means that the accuracy
+defined in Sec. 4.1, i.e., minimum energy (MP ), maximum          can be more adversely affected by a low value of DVFS-
+accuracy (MA ), and balanced energy and accuracy (S).             induced speedup(SPi ). Similarly, a low value of I means that
+                                                                  the accuracy can remain minimal even with a low value for
+Min Energy. This approach aims at minimizing power                DVFS-induced speedup. We simplify our decision making
+usage at the cost of accuracy. To choose the best DVFS            by dividing the LAG cohort Φ into three groups based on
+configuration in the DVFS candidate set ∆, we should              how big or small the value of LAG is. The boundary for the
+look at the corresponding SPi (δc ), δc ∈ ∆ values in the         intervals is calculated using:
+SpeedUp/PowerUp table and choose the δc that has the
+smallest PowerUp value for that corresponding DNN instance,                                  max{Φ} − min{Φ}
+                                                                                Boundary =                       .         (9)
+namely:                                                                                              3
+                                                                  The three groups G1[0...Boundary], G2[Boundary...2·Boundary],
+  δc = {δi ∈ ∆ | PowerU pi (δi ) ≤ PowerU pi (δx ), ∀δx ∈ ∆},
+                                                                  and G3[2 · Boundary...3 · Boundary] are then formed, and the
+                                                            (5)
+                                                                  ultimate DVFS configuration is chosen as:
+in which PowerU pi (δi ) is extracted from the
+SpeedUp/PowerUp table of DNN instance i. Note that in
+                                                                                 
+                                                                                 median(G1) i f (I < t)
+                                                                                 
+our experience, the values of PowerUp can be non-linear in                  δc = median(G2) i f (t < I < 1 + t) ,         (10)
+relation to SpeedUp, and hence, a comprehensive search as
+                                                                                   median(G3) i f (I > 1 + t)
+                                                                                 
+                                                                                 
+noted above is required. Then, using Alg. 2, the accuracy
+cohort can be calculated and broadcasted based on the pro-        in which, t is a threshold for I, set to the standard deviation σ
+jected new execution times. Even though this approach has         of the set I. However, t can be chosen by the system designer
+the best power consumption, it will not have the best accuracy    to indicate a requirement on power consumption and accuracy.
+since many processes will most likely not meet the deadline       A small value for t will push the system towards faster DVFS
+without significant loss of accuracy, since the speedup from      configurations and vice versa.
+DVFS alone will likely not make up for the vast majority of       Discussion on choosing modes and safety. We would like
+the progress values in the cohort.                                to conclude our design by a discussion on which modes to
+                                                                  choose and the safety concern it might entail. Our stand
+Max Accuracy. In this method, our system chooses the DVFS         from a system perspective is to design a flexible system
+configuration δc in such a way that:                              architecture that can adapt to various external needs. Where
+                                                                  absolute mission-critical applications are concerned, we
+  δc = {δi ∈ ∆ | ∑(SA j (δi )) ≤ ∀ ∑(SA j (δx ∈ ∆)),              offer Max Accuracy. Nonetheless, depending on the safety
+                          ∀ DNN instance j in cohort},     (6)    requirement, our Balanced approach might be good enough
+                                                                  with the proper threshold t even for applications such as self-
+in which ∑ SA j (δi ) is the sum of all the required speedups     driving vehicles. However, choosing a mode dynamically
+from approximation (SAi ) for configuration δi , and ≤            at runtime or statically for a particular system offline has
+∀ ∑(SA j (δx ∈ ∆)) is indicating that the sum of approximation-   more to do with the certification standards (which are in their
+induced speedup for the chosen δc should be less than or          preliminary stages for self-driving vehicles) as well as the
+equal any other sum of approximation values for other δx ∈ ∆      requirement on maximum reaction time and accuracy. Thus,
+(this indirectly ensures minimized accuracy loss).                we believe the decision should be relegated to an external
+                                                                  policy controller [54, 31, 6, 34, 52]
+
+
+
+378   2020 USENIX Annual Technical Conference                                                                USENIX Association
+                      NeuOS             PredJoule                 Poet       Race2Idle                   Max-N                   Max-Q
+                                                1 Process                                       4 Process                     8 Process
+                   500                                                             500                            500
+                   400                                                             400                            400
+             TX2   300                                                             300                            300
+                   200                                                             200                            200
+                   100                                                             100                            100
+
+                   150                                                             150                            150
+                   120                                                             120                            120
+             AGX
+
+
+
+
+                   90                                                              90                             90
+                   60                                                              60                             60
+                   30                                                              30                             30
+                                                                                         Al     G R V M                Al  G R V M
+                              AlexNet    GoogleNet    ResNet-50     VGGNet                    ex oog esN GG ixe          ex oog esN GG ixe
+                                                                                                Ne le et N d               Ne le et N d
+                                                                                                  t Ne -50 et                t Ne -50 et
+                                                                                                        t                          t
+                         Figure 7: Energy under various methods (in mJ) for 1, 4, and 8 instances of 4 DNN models.
+                      NeuOS             PredJoule                 Poet       Race2Idle                  Max-N                   Max-Q
+                                               1 Process                                        4 Process                     8 Process
+                 120                                                              120                             120
+                 90                                                               90                              90
+           TX2
+
+
+
+
+                 60                                                               60                              60
+                 30                                                               30                              30
+
+                 80                                                               80                              80
+           AGX
+
+
+
+
+                 60                                                               60                              60
+                 40                                                               40                              40
+                 20                                                               20                              20
+                                                                                         Al  G R V M                   Al     G R V M
+                          AlexNet       GoogleNet    ResNet-50     VGGNet                  ex oog esN GG ixe                ex oog esN GG ixe
+                                                                                             Ne le et N d                     Ne le et N d
+                                                                                               t Ne -50 et                      t Ne -50 et
+                                                                                                     t                                t
+
+                         Figure 8: Latency under various methods (in ms) for 1, 4, and 8 instances of 4 DNN models.
+5     Evaluation                                                             experiments. Our method dynamically applies a lowrank
+                                                                             version of a convolutional layer whenever approximation is
+In this section, we test our full implementation on top of                   necessary by keeping both version of the layer in memory for
+Caffe [25] with an extensive set of evaluations.                             fast switching. The deadline for each DNN instance is based
+                                                                             on their worst-case execution time (WCET) on each platform,
+5.1    Experimental Setup                                                    and is set to 10ms, 30ms, 150ms, and 40ms respectively for
+                                                                             Jetson TX2 and 5ms, 10ms, 25ms, 30ms respectively for AGX
+In this section we lay out our experimental setup, which                     Xavier. Note that ResNet is much slower on Jetson TX2 due
+includes two embedded platforms and four popular DNN                         to the older JetPack software.
+models. We compare NeuOS to 6 existing approaches.                           Small Cohort, Medium Cohort, Large Cohort sizes. We
+Testbeds. We have chosen two different NVIDIA platforms                      test NeuOS under three different cohort size classes to test
+imposing different architectural features (since deployed                    for adaptability and balance: 1 process for small, 2 to 4
+autonomous systems solutions, particularly for autonomous                    processes for medium, and 6 to 8 processes for large. Each
+driving and robotics, seem to gravitate towards NVIDIA                       of these cohort sizes have their own unique challenges. We
+hardware as of writing this paper [26, 30]) to showcase                      measure average timing, energy consumption, and accuracy
+the cross-platform nature of our design when it comes to                     for these scenarios and provide a measure of balancing where
+hardware. We use NVIDIA Jetson TX2, with 6 big.LITTLE                        applicable. For medium and large cohorts, we include a mixed
+ARM-based cores and a 256-core Pascal based GPU with                         scenario, where different DNN models are executed, which
+11759 unique DVFS configurations, and the NVIDIA Jetson                      represents systems that use different DNNs (for example for
+AGX Xavier, the latest powerful platform for robotics and                    voice and image recognition). For the medium cohort, one
+autonomous vehicles with an 8-core NVIDIA Carmel CPU                         instance of each DNN model and for the large cohort, two
+and a 512-core Volta-based GPU with 51967 unique DVFS                        instances of each model are initiated.
+configurations.                                                              Adaptability to different system scenarios. As discussed in
+DNN models. Having a diversified portfolio of DNN models                     Sec. 4.1, we consider three different scenarios with different
+can showcase that NeuOS is future proof in the fast-moving                   limits on latency, energy and accuracy: minimum energy,
+field of neural networks. To that end, we use AlexNet [32],                  maximum accuracy, and balanced energy and accuracy.
+ResNet [19], GoogleNet [2], and VGGNet [49] in our                           Compared Solutions. We implement and compare six state-
+
+
+
+USENIX Association                                                                             2020 USENIX Annual Technical Conference          379
+                                              4 Process                 8 Process                   4P ApNet                8P ApNet
+                                  AlexNet                            GoogleNet                          ResNet                            VGGNet
+                      1                                  1                                  1                                 1
+                    0.9                                0.9                                0.9                               0.9
+            Score
+                    0.8                                0.8                                0.8                               0.8
+                    0.7                                0.7                                0.7                               0.7
+
+                          1   2    3     4     5   6         1   2     3     4    5   6         1   2    3     4    5   6         1   2    3     4    5   6
+                                  Iteration                           Iteration                         Iteration                         Iteration
+Figure 9: Average accuracy (y-axis as a fraction of 1) of the cohort over iteration of execution for 4 different DNN models with 4
+and 8 instances compared to ApNet (x-axis is the iteration number).
+
+of-the art solutions from the literature, including DNN-                                       On the Jetson AGX Xavier, NeuOS has better energy
+specific and DNN-agnostic ones, software-based DVFS and                                     consumption compared to all other approaches on every DNN
+hardware-based DVFS, and application-level and system-level                                 model except compared to PredJoule for VGGNet. As we
+solutions. We present a short detail for each as follows.                                   shall see for timing, PredJoule misses the deadline of 30 for
+   PredJoule [5] is a system-level solution tailored towards                                VGGNet, and NeuOS has decided to sacrifice energy to meet
+DNN by employing a layer-based DVFS adjustment solution                                     timing.
+for optimization latency and energy. Poet [23] is a system-                                 Latency. Fig. 8 shows the average execution time for NeuOS
+level control-theory based software solution that balances                                  compared to the 5 methods and using 4 DNN models. NeuOS
+energy and timing in a best-effort manner via adjusting DVFS.                               outperforms all other approaches, improving on average
+We choose to compare against Poet instead of its extended                                   execution time by 68% on Jetson TX2 and by 40% on AGX
+approaches including JouleGuard [21] and CoAdapt [20],                                      Xavier. It is also interesting to note that AGX Xavier is much
+as they employ essentially the same set of control theory-                                  faster than Jetson TX2, by 70% on average.
+based techniques as Poet. ApNet [3] is an application-level                                 Tail Latency. Through response time measurements, we
+solution based on DNNs that can theoretically provide a per-                                find that NeuOS rarely misses the deadline (3.25% of the
+layer approximation requirement offline to meet deadlines.                                  time). Moreover, the variance is low with the 99th percentile
+Race2Idle [28] is the classic “run it as fast as you can”                                   execution time for AlexNet, GoogleNet, ResNet-50, and
+philosophy, which is always interesting to compare to. Max-                                 VGGNet as 9.2 ms, 48 ms, 130.3 ms and 39.1 ms for TX2 and
+N [10, 11] is a reactive hardware DVFS that maximizes                                       5.0 ms, 12.0 ms, 26.1 ms and 36.2 ms for AGX respectively.
+frequency and sacrifices energy in the name of speed, in                                    Accuracy. We also measure the accuracy loss of NeuOS
+NVIDIA embedded hardware. Max-Q [10] is a hardware                                          compared to ground truth and compared to ApNet (Fig. 9
+DVFS on Jetson TX2 that dynamically adjusts DVFS on                                         omits small cohort for clarity). ApNet is the only DNN-
+the fly to conserve energy. However, this feature has been                                  specific application level solution we are aware of. NeuOS
+removed from the Xavier platform [11], and is replaced by                                   has an approximation score of 0.94% on average (out of 1),
+low level power caps, such as 10W, 15W, and 30W. We use                                     which is better than ApNet by 21%.
+the 15w cap instead of Max-Q on Xavier.
+                                                                                            5.2.2 Medium and Large Cohorts
+5.2   Overall Effectiveness                                                                 In order to save space, we only compare PredJoule for
+In this section, we measure the efficacy of NeuOS on the                                    the 4-process medium and 8-process large cohort sizes.
+two evaluated platforms under the balanced scenario. Since                                  In our testings, PredJoule already vastly outperforms other
+our design is concerned with timing predictability, energy                                  methodologies, and thus is a good comparison to NeuOS.
+consumption, and DNN accuracy, we measure all three                                         Energy. As is evident in the second and third columns of
+constraints and compare against state-of-the-art literature                                 Fig. 7, NeuOS can almost always outperform PredJoule
+under each platform and each scenario.                                                      in terms of energy consumption on Jetson TX2 improving
+5.2.1 Small Cohort                                                                          70% on average. However, rather interestingly, NeuOS
+Energy. The left column of Fig. 7 depicts our measurements                                  performs worse in terms of energy compared to PredJoule for
+in terms of average energy consumption compared to a GPU-                                   GoogleNet, ResNet, and VGGNet on AGX Xavier. This is
+enabled Poet, Max-Q, Max-N, PredJoule, and Race2Idle using                                  due to the fact that PredJoule again misses the deadlines on
+AlexNet, GoogleNet, ResNet-50 and VGGNet as the base                                        AGX Xavier, and NeuOS has sacrificed a negligible amount
+DNN model and using lowrank as the approximation method.                                    of energy (1.5% on average) in order to meet the deadline.
+As is evident in the figure, NeuOS is able to save energy                                   Latency. NeuOS always outperforms state-of the art, improv-
+considerably compared to all other methods on Jetson TX2                                    ing by 53% on average for Jetson TX2, and by 32% on average
+on all DNN models, with improvements of 68% on average for                                  for AGX. This is due to the fact that NeuOS is able to leverage
+Jetson TX2 and 46% on average for AGX Xavier. This saving                                   a small amount of accuracy and energy loss (in the case of
+is due to the fact that in some cases accuracy is minimally                                 AGX Xavier) for better timing and energy characteristics.
+traded off for the benefit of energy and timing.                                            Tail Latency. We find that deadline miss ratio is about the
+
+
+
+380   2020 USENIX Annual Technical Conference                                                                                                     USENIX Association
+                       T.S                    PredJoule                              MA                    MP
+          25                                                            140
+                                 1 Process                              120                   1 Process
+          20
+
+
+
+
+                                                              Energy (mJ)
+                                                                        100
+   Time (ms)
+
+
+
+
+          15                                                             80
+          10                                                             60
+                                                                         40
+               5                                                         20
+               01       2    3   4 5 6         7   8      9               01         2    3   4 5 6         7   8   9
+                                  Iteration                                                    Iteration
+          25                                                            140
+                                 2 Process                              120                   2 Process
+          20
+
+                                                              Energy (mJ)
+                                                                        100
+   Time (ms)
+
+
+
+
+          15                                                             80                                             (a) The entire configuration space   (b) Chosen configurations in the
+          10                                                             60                                             for all DVFS and accuracy combina-   triangle space.
+                                                                         40
+               5                                                         20                                             tions for Jetson TX2.
+               0                                                          0
+                   1    2    3   4 5 6         7   8      9                      1   2    3   4 5 6         7   8   9
+                                  Iteration                                                    Iteration                5.3.1 Energy and Latency.
+          30
+                                 3 Process
+                                                                        250
+                                                                                              3 Process
+                                                                                                                        We compare against PredJoule and measure average timing
+          25                                                            200
+                                                                                                                        for the cohort in ms and average energy in mJ in Fig. 10 for
+                                                              Energy (mJ)
+   Time (ms)
+
+
+
+
+          20
+                                                                        150
+          15
+                                                                        100
+                                                                                                                        1-process (small), 2-process (medium), and 3-process (large)
+          10
+           5                                                                50                                          scenarios on AlexNet over 9 iterations on the Jetson TX2.
+           0
+                   1    2    3   4 5 6         7   8      9
+                                                                             0
+                                                                                 1   2    3   4 5 6         7   8   9
+                                                                                                                        PredJoule is shown as a black line. The deadline in this
+                                  Iteration                                                    Iteration                scenario is set to 25 to show the interesting characteristics of
+Figure 10: Performance of NeuOS under three scenarios                                                                   each method.
+compared to PredJoule on Jetson TX2.                                                                                    Balanced. As is evident in the figure, our statistical balanced
+                                                                                                                        approach outperforms PredJoule over all iterations. Notably
+same as the small cohort. Moreover, the variance is similarly                                                           in the case of medium and large cohorts, PredJoule has
+low with the 99th percentile execution time for AlexNet,                                                                a particularly bad start in terms of timing and has higher
+GoogleNet, ResNet-50, and VGGNet as 10.4 ms, 39.2 ms,                                                                   fluctuation due to the greedy nature of DVFS selection.
+101.7 ms and 69 ms for TX2 and 11 ms, 12.5, 26.3 and 35.9                                                               Min Energy. Interestingly, MP performs very bad (still meets
+ms for AGX respectively for the medium cohort and 13.6 ms,                                                              the deadline) for the small cohort both in terms of timing and
+40.8 ms, 190 ms and 72 ms for TX2 and 10.7 ms , 54 ms , 62                                                              energy consumption. This is due to the algorithms discussed
+ms and 36.1 ms for AGX respectively for the large cohort.                                                               in Sec. 4.3. The system has switched to a very slow DVFS
+Accuracy. Fig. 9 shows the average accuracy of the cohort                                                               configuration to save energy. However, because of the non-
+over 6 iterations on AGX Xavier. As is evident in the figure,                                                           linearity inherent in very slow DVFS configurations for
+NeuOS generally improves upon accuracy as the system                                                                    GPUs [5], this has resulted in a very bad energy consumption
+progresses because the optimization in Sec. 4.3 is able to                                                              as well. However, the coordination starts to pay off for
+find better DVFS configurations. When compared to the                                                                   medium and large cohorts. This is because a coordinated
+efficient approximation-aware solution APnet, NeuOS is able                                                             multi-process cohort needs faster DVFS configurations and
+to achieve noticeably better accuracy in all scenarios.                                                                 thus, the circumstances push MP out of the slow and power
+Balance. A very important measure discussed in Sec. 3.3 is                                                              inefficient DVFS configuration subset. The greediness of
+how balanced the system solution is when faced with multiple                                                            PredJoule is inherent for medium and large cohorts in the
+processes. To measure how balanced NeuOS is compared                                                                    form of very large fluctuations throughout the iterations.
+to PredJoule in the 4-process and 8-process scenarios, we                                                               Max Accuracy. MA should improve accuracy while sacri-
+include min-max bars in Fig. 7 and Fig. 8 to showcase the                                                               ficing energy and timing. We shall discuss the accuracy de-
+discrepancy between minimum and maximum timing/energy.                                                                  cisions shortly. However, the timing for MA is worse than
+As is evident in the figure, the discrepancy is negligible                                                              balanced energy by a negligible amount. The same is true
+compared to the total energy consumption and execution time                                                             for energy consumption (23% on average). This highlights a
+(up to 79 mJ and 4 ms). Thus, NeuOS maintains balance                                                                   big design decision of the balanced scenario overall. Even for
+in the cohort. This is due to the coordinated cohorts and a                                                             the balanced general approach, sacrificing accuracy is done
+uniform non-greedy decision making approach introduced in                                                               very conservatively as was discussed earlier. Thus, the slight
+our design.                                                                                                             push toward perfect accuracy does not introduce very large
+                                                                                                                        overheads. However, as was discussed earlier guaranteeing
+5.3                Detailed Examination on Tradeoff                                                                     a tight deadline (such as 10ms for AlexNet) requires some
+In this section, we focus on the fact that system designers                                                             approximation if energy consumption is a consideration.
+might require certain constraints that limits the ability of                                                            5.3.2 Energy-Accuracy Tradeoff.
+NeuOS in a certain dimension. To this end, we test our                                                                  For accuracy and to show where the variations of NeuOS
+platform under three different scenarios: Maximum Accuracy                                                              jump in terms of system and application configurations, we
+(MA ), Minimum Power (MP ), and Balanced (T.S).                                                                         bring back the triangle of Fig. 1, but with real DVFS and
+
+
+
+USENIX Association                                                                                                                 2020 USENIX Annual Technical Conference              381
+Table 2: Average execution time overhead of NeuOS                  Table 3: Raw and percentage based memory overhead of
+compared to other approaches on AlexNet (ms).                      applying NeuOS for each model.
+
+                      1 Process   4 Process   8 Process                        (a) Overhead in addition to Caffe   (b) Ratio to total memory
+
+          NeuOS       0.145       0.571       0.738                            Lowrank    Hash Table     Ratio     Jetson TX2    AGX Xavier
+          PredJoule   0.772       0.929       1.597                AlexNet     226 MB     331 B          49%             10%              4%
+          ApNet       0           3.27        5.85                 GoogleNet   23 MB      2.1 KB         30%              2%              1%
+          Poet        151.03      604.12      1208.27              ResNet-50   82 MB      3.2 KB         45%              7%              3%
+                                                                   VGGNet      509 MB     634 B          48%             25%           12.7%
+
+accuracy configurations with the selected configurations of
+MP , MA , and T.S highlighted in Fig. 11b. As is evident in        6   Related Work
+the triangle, the deadline limits the possible configurations to   Trading off latency and power efficiency has been a hot topic
+the bottom left corner. However, within that limitation, MP        in the related fields including real-time embedded systems
+(in red) has chosen configurations that are lower on energy        and mobile computing [40, 8, 41, 53, 59, 16, 37, 42, 47, 1].
+consumption toward the upper right. On the other hand MA (in       Due to the explosion of approximation techniques in different
+green) has chosen configurations that are not as good in terms     application domains, there has been several recent works [15,
+of energy consumption, but are better in terms of accuracy         35, 13] seeking to address this problem in a three dimensional
+toward bottom left. Finally, T.S, colored black, is similar to     space covering accuracy as well. Unfortunately, these works
+MA because of the high emphasis on accuracy in our design.         cannot resolve the problem as their applicability is limited
+                                                                   in scope in various ways. JouleGuard [21], MeanTime [13],
+5.4    Overhead                                                    CoAdapt [20] and other similar approaches provide general
+Execution time: Table 2 shows the overhead of NeuOS                system or hardware solution for non-DNN applications that
+compared to Poet, PredJoule, and ApNet using AlexNet as            claim to explore the three dimensional optimization space.
+the baseline model on Jetson TX2 (times are in milliseconds).         A very recent set of works including PredJoule [5], and
+As is evident in Table 2, the overhead for NeuOS is                ApNet [3] are able to provide latency predictability (meeting
+negligible, especially compared to Poet and the overhead is        deadlines) for DNN-based workloads, yet they only consider
+also negligible compared to the overall execution time of          two out of the three dimensions and focus on single-DNN
+AlexNet itself. The reason Poet is so slow is because it has       scenarios. As we have discussed in Sec. 3.2, running ApNet
+to go through all DVFS configurations in a quadratic way           and PredJoule at the same time even at different frequencies
+(O(n2 ), n is the number of DVFS configurations). Even O(n)        will result in a negative feedback loop. Thus, a better, more
+would be unacceptable on embedded systems with more than           coordinated approach is required.
+10000 unique DVFS configurations. This proves that applying           Such limitations would dramatically reduce the complexity
+our complexity reduction techniques (via hashing) is a must        of the optimization space, as the system-level and application-
+for a practical system solution. Moreover, NeuOS is more           level tradeoffs focusing on a single task can be considered
+efficient than PredJoule and ApNet, especially in 4 Process        in an independent manner (e.g., pure system-level and
+and 8 Process scenarios.                                           application-level optimization under Poet [23] and CoAdapt,
+Memory: As discussed in Sec. 5.1, our implementation               respectively). This results in solutions that are inapplicable to
+keeps both the original and the lowrank approximation              any practical autonomous real-time system featuring a multi-
+of the model in GPU memory for fast switching at layer             DNN environment.
+boundaries. Moreover, NeuOS also holds the per-layer hash          7   Acknowledgment
+tables containing approximation and DVFS configuration
+                                                                   We would like to thank our shepherd, Amitabha Roy, and the
+information as described in Sec. 4. Table 3 depicts the
+                                                                   anonymous referees for their invaluable insight and advice
+added overhead in terms of both raw and percentage of
+                                                                   into making this paper substantially better. This work is
+the total NeuOS memory usage. As expected, the lowrank
+                                                                   supported by NSF grant CNS CAREER 1750263.
+approximated version of each model has slightly less overall
+size compared to the original model. Nonetheless, this             8   Conclusion
+technique sacrifices memory overhead to improve latency and        This paper presents NeuOS, a comprehensive latency pre-
+energy consumption. A viable alternative left as future work       dictable system solution for running multi-DNN workloads
+is dynamic approximation on the fly, which trades off latency      in autonomous embedded systems. NeuOS can guarantee
+for lower memory consumption. Moreover, the overhead of            latency predictability, while managing energy optimization
+the hash tables is negligible compared to the total memory         and dynamic accuracy adjustment based on specific system
+usage. Finally, the last two columns depict the cumulative         constraints via smart coordinated system- and application-
+maximum percentage of total available memory occupied by           level decision-making among multiple DNN instances. Ex-
+one instance of NeuOS for each platform (this memory usage         tensive evaluation results prove the efficacy and practicality
+also includes the temporary intermediate layer data [39]).         of NeuOS.
+
+
+
+382   2020 USENIX Annual Technical Conference                                                                      USENIX Association
+References                                                          nvidia.com/jetson/l4t/index.html#page/
+                                                                    TegraLinuxDriverPackageDevelopmentGuide/
+ [1] Jorge Albericio, Patrick Judd, Tayler Hetherington, Tor        power_management_jetson_xavier.html.
+     Aamodt, Natalie Enright Jerger, and Andreas Moshovos.
+     Cnvlutin: Ineffectual-neuron-free deep neural network     [11] NVIDIA     Corp.         Power management
+     computing. In ACM SIGARCH Computer Architecture                for jetson tx2 series devices.        https:
+     News, volume 44, pages 1–13. IEEE Press, 2016.                 //docs.nvidia.com/jetson/archives/
+                                                                    l4t-archived/l4t-3231/index.html#page/
+ [2] Mohammadhossein Bateni, Aditya Bhaskara, Silvio                TegraLinuxDriverPackageDevelopmentGuide/
+     Lattanzi, and Vahab Mirrokni. Distributed balanced             power_management_tx2_32.html.
+     clustering via mapping coresets. In Advances in
+                                                               [12] ETSI. Intelligent transport systems (its); vehicular com-
+     Neural Information Processing Systems, pages 2591–
+                                                                    munications; basic set of applications; part 3: Specifica-
+     2599, 2014.
+                                                                    tions of decentralized environmental notification basic
+ [3] Soroush Bateni and Cong Liu. Apnet: Approximation-             service, Aug 2018.
+     aware real-time neural network. In 2018 IEEE Real-        [13] Anne Farrell and Henry Hoffmann. Meantime: Achiev-
+     Time Systems Symposium (RTSS), pages 67–79, Dec                ing both minimal energy and timeliness with approxi-
+     2018.                                                          mate computing. In USENIX Annual Technical Confer-
+                                                                    ence, pages 421–435, 2016.
+ [4] Soroush Bateni and Cong Liu. Predictable data-
+     driven resource management: an implementation using       [14] ISO International Organization for Standardization.
+     autoware on autonomous platforms. In 2019 IEEE Real-           26262: 2018. Road vehicles—Functional safety.
+     Time Systems Symposium (RTSS), pages 339–352. IEEE,
+     2019.                                                     [15] Seungyeop Han, Haichen Shen, Matthai Philipose,
+                                                                    Sharad Agarwal, Alec Wolman, and Arvind Krishna-
+ [5] Soroush Bateni, Husheng Zhou, Yuankun Zhu, and                 murthy. Mcdnn: An approximation-based execution
+     Cong Liu. Predjoule: A timing-predictable energy               framework for deep stream processing under resource
+     optimization framework for deep neural networks. In            constraints. In Proceedings of the 14th Annual Interna-
+     2018 IEEE Real-Time Systems Symposium (RTSS),                  tional Conference on Mobile Systems, Applications, and
+     pages 107–118, Dec 2018.                                       Services, MobiSys ’16, pages 123–136, New York, NY,
+                                                                    USA, 2016. ACM.
+ [6] Raunak P Bhattacharyya, Derek J Phillips, Changliu
+     Liu, Jayesh K Gupta, Katherine Driggs-Campbell, and       [16] Song Han, Xingyu Liu, Huizi Mao, Jing Pu, Ardavan
+     Mykel J Kochenderfer. Simulating emergent properties           Pedram, Mark A Horowitz, and William J Dally. Eie:
+     of human driving behavior using multi-agent reward             efficient inference engine on compressed deep neural
+     augmented imitation learning. In 2019 International            network. In Computer Architecture (ISCA), 2016
+     Conference on Robotics and Automation (ICRA), pages            ACM/IEEE 43rd Annual International Symposium on,
+     789–795. IEEE, 2019.                                           pages 243–254. IEEE, 2016.
+                                                               [17] Song Han, Huizi Mao, and William J Dally. Deep
+ [7] Wenlin Chen, James Wilson, Stephen Tyree, Kilian
+                                                                    compression: Compressing deep neural networks with
+     Weinberger, and Yixin Chen. Compressing neural
+                                                                    pruning, trained quantization and huffman coding. arXiv
+     networks with the hashing trick. In International
+                                                                    preprint arXiv:1510.00149, 2015.
+     Conference on Machine Learning, pages 2285–2294,
+     2015.                                                     [18] Song Han, Jeff Pool, John Tran, and William Dally.
+                                                                    Learning both weights and connections for efficient
+ [8] Ping Chi, Shuangchen Li, Cong Xu, Tao Zhang, Jishen            neural network. In Advances in neural information
+     Zhao, Yongpan Liu, Yu Wang, and Yuan Xie. Prime:               processing systems, pages 1135–1143, 2015.
+     a novel processing-in-memory architecture for neural
+     network computation in reram-based main memory.           [19] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian
+     In ACM SIGARCH Computer Architecture News, vol-                Sun. Deep residual learning for image recognition. In
+     ume 44, pages 27–39. IEEE Press, 2016.                         Proceedings of the IEEE conference on computer vision
+                                                                    and pattern recognition, pages 770–778, 2016.
+ [9] European Commission. Rolling plan for ict standardisa-
+     tion, 2018.                                               [20] Henry Hoffmann. Coadapt: Predictable behavior for
+                                                                    accuracy-aware applications running on power-aware
+[10] NVIDIA Corp.     Power management for jet-                     systems. In Real-Time Systems (ECRTS), 2014 26th
+     son agx xavier devices.     https://docs.                      Euromicro Conference on, pages 223–232, 2014.
+
+
+
+USENIX Association                                                       2020 USENIX Annual Technical Conference         383
+[21] Henry Hoffmann. Jouleguard: energy guarantees for                 Formal Aspects of Component Software, pages 234–253.
+     approximate applications. In Proceedings of the 25th              Springer, 2013.
+     Symposium on Operating Systems Principles, pages 198–
+     214. ACM, 2015.                                              [32] Alex Krizhevsky, Ilya Sutskever, and Geoffrey E. Hinton.
+                                                                       Imagenet classification with deep convolutional neural
+[22] Sean Hollister. Tesla’s new self-driving chip is here, and        networks. In F. Pereira, C.J.C. Burges, L. Bottou,
+     this is your best look yet., Apr 2019.                            and K.Q. Weinberger, editors, Advances in Neural
+                                                                       Information Processing Systems 25, pages 1097–1105.
+[23] C. Imes, D. H. K. Kim, M. Maggio, and H. Hoffmann.
+                                                                       Curran Associates, Inc., 2012.
+     Poet: a portable approach to minimizing energy under
+     soft real-time constraints. In 21st IEEE Real-Time and       [33] TIMOTHY B. LEE. Tesla’s autonomy event: Impressive
+     Embedded Technology and Applications Symposium,                   progress with an unrealistic timeline, Apr 2019.
+     pages 75–86, April 2015.
+[24] Max Jaderberg, Andrea Vedaldi, and Andrew Zisserman.         [34] Jesse Levinson, Jake Askeland, Jan Becker, Jennifer
+     Speeding up convolutional neural networks with low                Dolson, David Held, Soeren Kammel, J Zico Kolter,
+     rank expansions. arXiv preprint arXiv:1405.3866, 2014.            Dirk Langer, Oliver Pink, Vaughan Pratt, et al. Towards
+                                                                       fully autonomous driving: Systems and algorithms. In
+[25] Yangqing Jia, Evan Shelhamer, Jeff Donahue, Sergey                2011 IEEE Intelligent Vehicles Symposium (IV), pages
+     Karayev, Jonathan Long, Ross Girshick, Sergio Guadar-             163–168. IEEE, 2011.
+     rama, and Trevor Darrell. Caffe: Convolutional ar-
+     chitecture for fast feature embedding. arXiv preprint        [35] Yongbo Li, Yurong Chen, Tian Lan, and Guru Venkatara-
+     arXiv:1408.5093, 2014.                                            mani. Mobiqor: Pushing the envelope of mobile edge
+                                                                       computing via quality-of-result optimization. In 2017
+[26] Shinpei Kato, Shota Tokunaga, Yuya Maruyama, Seiya                IEEE 37th International Conference on Distributed
+     Maeda, Manato Hirabayashi, Yuki Kitsukawa, Abraham                Computing Systems (ICDCS), pages 1261–1270. IEEE,
+     Monrroy, Tomohito Ando, Yusuke Fujii, and Takuya                  2017.
+     Azumi. Autoware on board: Enabling autonomous vehi-
+     cles with embedded systems. In 2018 ACM/IEEE 9th             [36] Shiyu Liang and R Srikant.       Why deep neural
+     International Conference on Cyber-Physical Systems                networks for function approximation? arXiv preprint
+     (ICCPS), pages 287–296. IEEE, 2018.                               arXiv:1610.04161, 2016.
+[27] Jaanus Kaugerand, Johannes Ehala, Leo Mõtus, and             [37] Robert LiKamWa, Yunhui Hou, Julian Gao, Mia Polan-
+     Jürgo-Sören Preden. Time-selective data fusion for in-            sky, and Lin Zhong. Redeye: analog convnet image sen-
+     network processing in ad hoc wireless sensor networks.            sor architecture for continuous mobile vision. In ACM
+     International Journal of Distributed Sensor Networks,             SIGARCH Computer Architecture News, volume 44,
+     14(11), 2018.                                                     pages 255–266. IEEE Press, 2016.
+[28] D. H. K. Kim, C. Imes, and H. Hoffmann. Racing               [38] Jane W. S. W. Liu. Real-Time Systems. Prentice Hall
+     and pacing to idle: Theoretical and empirical analysis            PTR, Upper Saddle River, NJ, USA, 1st edition, 2000.
+     of energy optimization heuristics. In 2015 IEEE 3rd
+     International Conference on Cyber-Physical Systems,          [39] Zongqing Lu, Swati Rallapalli, Kevin Chan, and Thomas
+     Networks, and Applications, pages 78–85, Aug 2015.                La Porta. Modeling the resource requirements of
+[29] Yong-Deok Kim, Eunhyeok Park, Sungjoo Yoo, Taelim                 convolutional neural networks on mobile devices. In
+     Choi, Lu Yang, and Dongjun Shin. Compression of deep              Proceedings of the 25th ACM international conference
+     convolutional neural networks for fast and low power              on Multimedia, pages 1663–1671, 2017.
+     mobile applications. arXiv preprint arXiv:1511.06530,
+                                                                  [40] M. Maggio, E. Bini, G. Chasparis, and K. Årzén. A
+     2015.
+                                                                       game-theoretic resource manager for rt applications. In
+[30] B. Kisacanin. Deep learning for autonomous vehi-                  2013 25th Euromicro Conference on Real-Time Systems,
+     cles. In 2017 IEEE 47th International Symposium on                pages 57–66, July 2013.
+     Multiple-Valued Logic (ISMVL), pages 142–142, May
+     2017.                                                        [41] Nikita Mishra, Huazhe Zhang, John D Lafferty, and
+                                                                       Henry Hoffmann. A probabilistic graphical model-
+[31] Olga Kouchnarenko and Jean-François Weber. Adapting               based approach for minimizing energy under perfor-
+     component-based systems at runtime via policies with              mance constraints. In ACM SIGARCH Computer Archi-
+     temporal patterns. In International Workshop on                   tecture News, volume 43, pages 267–281. ACM, 2015.
+
+
+
+384   2020 USENIX Annual Technical Conference                                                            USENIX Association
+[42] Brandon Reagen, Paul Whatmough, Robert Adolf,               [52] Chen Tang, Zhuo Xu, and Masayoshi Tomizuka.
+     Saketh Rama, Hyunkwang Lee, Sae Kyu Lee,                         Disturbance-observer-based tracking controller for neu-
+     José Miguel Hernández-Lobato, Gu-Yeon Wei, and                   ral network driving policy transfer. IEEE Transactions
+     David Brooks. Minerva: Enabling low-power, highly-               on Intelligent Transportation Systems, 2019.
+     accurate deep neural network accelerators. In ACM
+     SIGARCH Computer Architecture News, volume 44,              [53] Yaman Umuroglu, Nicholas J Fraser, Giulio Gam-
+     pages 267–278. IEEE Press, 2016.                                 bardella, Michaela Blott, Philip Leong, Magnus Jahre,
+                                                                      and Kees Vissers. Finn: A framework for fast, scal-
+[43] Adriana Romero, Nicolas Ballas, Samira Ebrahimi                  able binarized neural network inference. In Proceedings
+     Kahou, Antoine Chassang, Carlo Gatta, and Yoshua                 of the 2017 ACM/SIGDA International Symposium on
+     Bengio. Fitnets: Hints for thin deep nets. arXiv preprint        Field-Programmable Gate Arrays, pages 65–74. ACM,
+     arXiv:1412.6550, 2014.                                           2017.
+
+[44] Francisca Rosique, Pedro J Navarro, Carlos Fernández,       [54] Jean-François Weber. Tool support for fuzz testing of
+     and Antonio Padilla. A systematic review of perception           component-based system adaptation policies. In Inter-
+     system and simulators for autonomous vehicles research.          national Workshop on Formal Aspects of Component
+     Sensors, 19(3):648, 2019.                                        Software, pages 231–237. Springer, 2016.
+
+[45] Tara N Sainath, Brian Kingsbury, Vikas Sindhwani, Ebru      [55] Wikipedia contributors. Ternary plot - wikipedia,the free
+     Arisoy, and Bhuvana Ramabhadran. Low-rank matrix                 encyclopedia. https://en.wikipedia.org/wiki/
+     factorization for deep neural network training with high-        Ternary_plot, 2019. [Online; accessed 31-May-
+     dimensional output targets. In 2013 IEEE international           2019].
+     conference on acoustics, speech and signal processing,
+                                                                 [56] Jian Xue, Jinyu Li, Dong Yu, Mike Seltzer, and Yifan
+     pages 6655–6659. IEEE, 2013.
+                                                                      Gong.     Singular value decomposition based low-
+[46] Rick Salay, Rodrigo Queiroz, and Krzysztof Czar-                 footprint speaker adaptation and personalization for
+     necki. An analysis of iso 26262: Using machine learn-            deep neural network.      In Acoustics, Speech and
+     ing safely in automotive software. arXiv preprint                Signal Processing (ICASSP), 2014 IEEE International
+     arXiv:1709.02435, 2017.                                          Conference on, pages 6359–6363. IEEE, 2014.
+
+[47] Ali Shafiee, Anirban Nag, Naveen Muralimanohar,             [57] Taro Yamane. Statistics: An introductory analysis. 1973.
+     Rajeev Balasubramonian, John Paul Strachan, Miao
+                                                                 [58] Tien-Ju Yang, Yu-Hsin Chen, and Vivienne Sze. De-
+     Hu, R Stanley Williams, and Vivek Srikumar. Isaac:
+                                                                      signing energy-efficient convolutional neural networks
+     A convolutional neural network accelerator with in-
+                                                                      using energy-aware pruning. arXiv preprint, 2017.
+     situ analog arithmetic in crossbars. ACM SIGARCH
+     Computer Architecture News, 44(3):14–26, 2016.              [59] Huazhe Zhang and Henry Hoffmann. Maximizing
+                                                                      performance under a power cap: A comparison of
+[48] Akshay Kumar Shastry. Functional Safety Assessment
+                                                                      hardware, software, and hybrid techniques. SIGPLAN
+     in Autonomous Vehicles. PhD thesis, Virginia Tech,
+                                                                      Not., 51(4):545–559, March 2016.
+     2018.
+                                                                 [60] Mengshi Zhang, Yuqun Zhang, Lingming Zhang, Cong
+[49] Karen Simonyan and Andrew Zisserman.            Very             Liu, and Sarfraz Khurshid. Deeproad: Gan-based
+     deep convolutional networks for large-scale image                metamorphic autonomous driving system testing. arXiv
+     recognition. arXiv preprint arXiv:1409.1556, 2014.               preprint arXiv:1802.02295, 2018.
+[50] Nikolai Smolyanskiy, Alexey Kamenev, Jeffrey Smith,
+     and Stan Birchfield. Toward low-flying autonomous
+     mav trail navigation using deep neural networks for en-
+     vironmental awareness. In 2017 IEEE/RSJ International
+     Conference on Intelligent Robots and Systems (IROS),
+     pages 4241–4247. IEEE, 2017.
+
+[51] I. Stoica, H. Abdel-Wahab, K. Jeffay, S. K. Baruah,
+     J. E. Gehrke, and C. G. Plaxton. A proportional share
+     resource allocation algorithm for real-time, time-shared
+     systems. In 17th IEEE Real-Time Systems Symposium,
+     pages 288–299, Dec 1996.
+
+
+
+USENIX Association                                                        2020 USENIX Annual Technical Conference         385
+

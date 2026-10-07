@@ -1,0 +1,470 @@
+                 Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)
+
+
+
+
+          Energy-efficient Amortized Inference with Cascaded Deep Classifiers
+
+                          Jiaqi Guan1,2 , Yang Liu2 , Qiang Liu3 , Jian Peng2
+                                         1
+                                           Tsinghua University
+                             2
+                               University of Illinois at Urbana-Champaign
+                                     3
+                                       University of Texas at Austin
+    guanjq14@mails.tsinghua.edu.cn, liu301@illinois.edu, lqiang@cs.utexas.edu, jianpeng@illinois.edu
+
+
+                         Abstract                                       counter a significant constraint of energy or computational
+                                                                        cost for real-time inference. For example, mobile applications
+     Deep neural networks have been remarkable suc-                     cast a high demand on fast, energy-efficient inference; it is
+     cessful in various AI tasks but often cast high com-               desired to ensure that the majority (e.g., 90%) of the users do
+     putation and energy cost for energy-constrained ap-                not feel the latency of the computation, given that most im-
+     plications such as mobile sensing. We address this                 ages are easy to analyze. This requires new learning methods
+     problem by proposing a novel framework that op-                    that are both accurate and fast.
+     timizes the prediction accuracy and energy cost si-                   In this paper, we focus on test-time energy-efficient in-
+     multaneously, thus enabling effective cost-accuracy                ference of image classification. Traditional approaches are
+     trade-off at test time. In our framework, each data                usually based on directly scarifying accuracy for speed, e.g.,
+     instance is pushed into a cascade of deep neural net-              by reducing or compressing well-trained complex neural net-
+     works with increasing sizes, and a selection mod-                  works at a cost of loss of accuracy. A key observation, how-
+     ule is used to sequentially determine when a suffi-                ever, is that accuracy and cost can be simultaneously im-
+     ciently accurate classifier can be used for this data              proved, and do not necessarily need to scarify for each other;
+     instance. The cascade of neural networks and the                   this is because although deeper or more complex networks
+     selection module are jointly trained in an end-to-                 usually come with higher overall accuracy, a large portion of
+     end fashion by the REINFORCE algorithm to op-                      images can still be correctly classified using smaller or sim-
+     timize a trade-off between the computational cost                  pler networks, and the larger networks are necessarily only
+     and the predictive accuracy. Our method is able                    for the remaining difficult images. Thus, the approach of our
+     to simultaneously improve the accuracy and effi-                   work is to jointly train an ensemble of neural networks with
+     ciency by learning to assign easy instances to fast                different complexity, together with a selection module that
+     yet sufficiently accurate classifiers to save compu-               adaptively assigns each image to the smallest neural network
+     tation and energy cost, while assigning harder in-                 that is sufficient to generate high-quality label. Unlike tra-
+     stances to deeper and more powerful classifiers to                 ditional learning approaches that learns with constant com-
+     ensure satisfiable accuracy. Moreover, we demon-                   putation cost, our method learns to predict both accurately
+     strate our method’s effectiveness with extensive ex-               and fast. By training and using the policy module, our frame-
+     periments on CIFAR-10/100, ImageNet32x32 and                       work yields an efficient amortization strategy, which greatly
+     original ImageNet dataset.                                         reduce the computational or energy cost in the testing phase
+                                                                        with even boosted predictive performance.
+1    Introduction                                                          Technically, we frame the training of the neural classifiers
+The recent advances of deep learning techniques in computer             and the selection module into a joint optimization of the train-
+vision, speech recognition and natural language processing              ing accuracy with a constraint on the expected computational
+have tremendously improved the performance on challeng-                 cost (in terms of FLOPs cost). We design the policy mod-
+ing AI tasks, including image classification [Krizhevsky et             ule to be a optimal stopping process, which sequentially ex-
+al., 2012], speech-based translation and language model-                ams the the cascade of neural classifiers with increasing sizes
+ing. Since the first success of deep convolutional neural net-          (and hence predictive accuracies), and stops at the classifier
+work in the ImageNet challenge, more complex architec-                  that optimally trade-off the accuracy and complexity for each
+tures [Simonyan and Zisserman, 2014; He et al., 2016a;                  given image.
+Szegedy et al., 2017] have been proposed to further improve                Our joint training is performed in an end-to-end fashion by
+performance, but often at the cost of more expensive com-               the REINFORCE algorithm [Williams, 1992] to optimize a
+putation. However, in many real-world scenarios, such as                trade-off between the computational cost (in terms of FLOPs
+vision-based robotics and mobile vision applications, we en-            cost) and the predictive accuracy as reward signal. We per-
+
+
+
+
+                                                                 2184
+                  Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)
+
+form experiments on the CIFAR and ImageNet classification                3     Method
+datasets using a cascade of deep classifiers with varying sizes
+                                                                         In this section, we first formulate the energy-efficient infer-
+and architectures. As expected, on the CIFAR datasets, most
+                                                                         ence problem as an optimization with amortized constraint.
+images are assigned to the smaller networks which are al-
+                                                                         Then we reduce it to a sequential decision process and pro-
+ready sufficiently predictive for them, while the remaining
+                                                                         pose a solution based on REINFORCE algorithm. Finally, we
+difficult images are assigned to larger and more powerful net-
+                                                                         introduce the details of implementation like classifier struc-
+works. And nearly half of the images are assigned to smaller
+                                                                         ture, policy module structure used in the experiments.
+networks on the ImageNet dataset. Our proposed model out-
+performs a well-trained accurate deep ResNet classifier in               3.1    Energy-constrained Inference of Cascaded
+terms of accuracy but only requires less than 20% and 50%                       Classifiers
+FLOPs cost on the CIFAR-10/100 datasets, 66% and 53% on                  Classifiers, such as neural networks, are often more accu-
+the downsampled/original ImageNet dataset, respectively.                 rate with deeper or more complex architectures. However,
+                                                                         the high computational or energy cost of complex networks
+2   Related Work                                                         are prohibitive for fast, real-time inference in applications de-
+                                                                         ployed on mobile devices. If we have a cascade of classifiers
+There have been a number of existing methods on improv-                  with different sizes, it is possible to select the smallest, yet
+ing energy efficiency of deep neural networks. Most such                 sufficiently powerful classifier for each input data to achieve
+techniques focus on simplifying network structure and/or im-             both efficiency and accuracy simultaneously. This introduces
+proving basic convolution operations numerically. MobileNet              our main problem: Given a cascade of neural classifiers with
+[Howard et al., 2017] uses depthwise separable convolutions              different accuracies and cost, how to train them jointly to-
+to build light weight neural networks. ShuffleNet [Zhang et              gether with an efficient selection mechanism to assign each
+al., 2017] uses pointwise group convolutions and channel                 data instance to the classifier that optimally trade off accu-
+shuffle operation to build an efficient architecture. Other tech-        racy and cost?
+niques include pruning of connections [Han et al., 2015]                    Specifically, suppose we have K classifiers {Ck }K      k=1 with
+and bottleneck structure [Iandola et al., 2016]. In addition             different energy cost {Fk }K   k=1 . The energy cost Fk is as-
+to static techniques, Dynamic Capacity Network [Almahairi                sumed to correlate with the predictive capacity of classifiers,
+et al., 2016] adaptively assigns its capacity across different           and can be, for example, the value of FLOPs or the number
+portions of the input data by using a low and a high capac-              of layers in neural network classifiers. Given an input x, we
+ity sub-network. Spatially Adaptive Computation Time Net-                denote by y its true label and ŷ ∼ Ck (·|x) the label predicted
+works [Figurnov et al., 2017] dynamically adjust the number              by classifier Ck . In addition, we denote by Π(k|x) a random-
+of executed layers for the regions of the image. Anytime Neu-            ized policy that decides the probability of assigning input x to
+ral Networks [Hu et al., 2017] can generate anytime predic-              classifier Ck . Our target is to jointly train all classifiers {Ck }
+tions by minimizing a carefully constructed weighted sum of              and the policy Π(k|x) to minimize the expected loss function
+losses. Others [Li et al., 2015; Yang et al., 2016] consider cas-        under the constraint that the expected energy cost should be
+caded classifiers in object detection to quickly reject propos-          no larger than a desired budget B, that is,
+als that are easy to judge. Conditional computation [Bengio et
+al., 2015] and adaptive computation [Graves, 2016] propose                         max      E(x,y)∼D,kx ∼Π(·|x),ŷ∼Ckx (·|x) [−L (ŷ, y)]
+to adjust the amount of computational cost by using a policy                   Π,{Ct }K
+                                                                                      t=1
+to select data. Many of these static and dynamic techniques                    s.t E(x,y)∼D,kx ∼Π(·|x) [Fkx ] < B,
+are used in standard deep architectures such as ResNet [He
+et al., 2016a] and Inception [Szegedy et al., 2017], usually             where kx denotes the (random) classifier ID assigned to x.
+with a loss of accuracy. Different from these static and dy-             Further, we can reform the constrained optimization into an
+namic techniques, our method explicitly formulates the test-             unconstrained optimization of a penalized cost function:
+time efficiency as an amortized constrained sequential deci-                 max      E(x,y)∼D,kx ∼Π(·|x),y0 ∼Ckx (·|x) [−L (y 0 , y) − αFkx ]
+sion problem such that the expected computational cost, in               Π,{Ct }K
+                                                                                t=1
+terms of FLOPs cost, can be greatly reduced with even im-
+                                                                         where α controls the trade-off between the predictive loss
+proved accuracy by adaptively assigning training examples
+                                                                         function and the energy cost. There is an (implicit) one-to-one
+with various difficulty to their best classifiers.
+                                                                         map between the budget constraint B and the penalty coeffi-
+   Adaptive Neural Network [Bolukbasi et al., 2017](ANN) is              cient α under which these two forms are equivalent in duality.
+the most relevant approach to ours. In their model, cascaded             We will use the penalized form in our experiments for its sim-
+classifiers are trained and fixed, and only the termination poli-        plicity.
+cies are optimized to select the classifiers in a sequential man-
+ner. However, in our work, the classifiers in the cascade are
+                                                                         3.2    Energy Efficient Inference via Optimal
+also considered as a part of the entire policy so that they can                 Stopping
+be jointly optimized with the stopping policy module. Our ex-            The design of the selection module Π plays an critical role
+periments with the same baseline as ANN based on ImageNet                in our framework. It should (i) get access to and efficiently
+dataset show that our method provides a more powerful tool               leverage the information of the classifiers {Ck } to make rea-
+to further improve the efficiency.                                       sonable decisions, and (ii) be computationally efficient, e.g.,
+
+
+
+
+                                                                  2185
+                    Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)
+
+
+
+
+Figure 1: Our proposed model: Given an image in the dataset, starting from smallest model, our agent will decide whether to move to the
+next deeper model. If we decide to stop at a classifier, we predict the label based on the classifier. Finally, the agent will receive a reward as
+we described in the method section. Inside our agent, a stopping policy module takes label probability of a classifier’s top layer as input and
+decides whether to stop or continue.
+
+at least avoiding brute-forcely eliminating all the K classi-                     the current step with probability πt (st (x)). If it finally
+fiers and selects one the with largest confidence.                                stops at the k-th step, we use the current model Ck to
+   We propose to resolve this challenge by framing Π into a                       predict the label, that is, ŷ ∼ Ck (·|x).
+K-step optimal stopping process. At each time step t, we in-                   • Reward: After finally stopping at one classifier, the
+troduce a stopping policy module, which takes some feature                        agent receives a reward signal shown in Eq (1) consist-
+st (x) related to classifier Ct , and output a stopping probabil-                 ing of both the negative loss function for prediction and
+ity πt (st (x)) with which we decide to stop at the t-th classi-                  the accumulated energy cost from the first step. In this
+fier and take it as the final predictor for input x. Otherwise,                   paper, we use a normalized FLOPs count as the cost.
+we will move to a deeper classifier and repeat the same pro-
+                                                                            Assume the stopping probabilities {πt } and classifiers {Ct }
+cess until it reaches the deepest one. In this way, the overall
+                                                                            are parameterized by θ = {θπt , θCt }K   t=1 . Our final goal is to
+probability of selecting at the k-th classifier is
+                                   k−1                                      find the optimal θ to maximize the expected return, by un-
+            Π(k|x) = πk (sk (x))
+                                    Y
+                                       (1 − πt (st (x))).                   rolling the conditional distributions defined by the entire pol-
+                                                                            icy:
+                                    t=1
+Suppose we finally stop at the k-th classifier, our agent re-                                                                         
+ceives a reward consisting of two parts: the loss function for                    J(θ) = E(x,y)∼D Ek∼Π(·|x),ŷ∼Ck (·|x) R(k, x, y, ŷ)
+prediction using the selected classifier , i.e., L(ŷ, y) where                                       K k−1
+                                                                                                     X Y
+ŷ ∼ Ck (·|x), and the energy cost accumulated from the first                          = E(x,y)∼D                  (1 − πt (st (x); θ))
+                                  Pk
+classifier till current one, i.e., t=1 Ft . In practice, we also                                       k=1 t=1
+incorporate the accumulated computational cost of the stop-                                                 X                                 
+                                                                                       · πk (sk (x); θ) ·        Ck (ŷ|x; θ) · R(k, x, y, ŷ) .
+ping policy πt in each Ft . Importantly, once we stop at the
+                                                                                                            ŷ
+k-th classifier, we no longer run the classifiers that are more
+expensive than k, which significantly saves the computational               3.3    Solving by REINFORCE
+cost. Overall, this defines the following the reward signal:                To solve this optimal stopping problem, we apply the well-
+                                                 k−1
+                                                 X                          known REINFORCE algorithm [Williams, 1992] by rolling
+             R(k, x, y, ŷ) = −L (ŷ, y) − α           Ft          (1)      out each individual sample (x, y) according to the current pa-
+                                                 t=1                        rameter and derive the policy gradient in following form:
+To recap, our decision module is framed as a Markov decision
+process consisting of the following components:                                            k−1
+                                                                                           X
+  • Observation: The stopping probability πt (st (x)) at the                ∇
+                                                                            d θ J = ∇θ           log(1 − πt (st (x); θ)) + log(πk (sk (x); θ))
+     t-th step depends on a feature st (x) which should rep-                               t=1
+                                                                                                                    
+     resent the confidence level of the t-th classifier Ct . In                                   +log(Ck (ŷ|x; θ)) · (R(k, x, y, ŷ) − b)
+     this work, we simply use the output probability as the                 It is worthy to note that here we introduce a baseline b to re-
+     observation at each step, that is, st (x) = Ct (·|x).                  duce the variance in the estimated policy gradient. The base-
+  • Action: Based on the output probability of the current                  line b is chosen by minimizing the variance of the gradient
+     classifier, our stopping policy module decides to stop at              estimator on a mini-batch of the training data.
+
+
+
+
+                                                                     2186
+                  Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)
+
+                                                                                               CIFAR                   ImageNet32x32
+3.4    Cascaded Classifiers Using ResNet                                                      Unit                   Width
+                                                                                  Layer                  FLOPs(M)              FLOPs(M)
+                                                                                            Number                  Multiplier
+In this paper, we use image classification for benchmarking                         8       [1, 1, 1]      14.86       1         85.64
+our method. Deep residual network [He et al., 2016a] has                            20      [3, 3, 3]      43.17      1.5        192.36
+been widely used in image classification field since it was pro-                    32      [5, 5, 5]      71.48       2         341.68
+                                                                                    56      [9, 9, 9]     128.11       3         768.13
+posed. We choose ResNet as our model’s baseline because we                         110    [18, 18, 18]    255.51       4        1364.97
+can easily build a sequence of networks from shallow to deep
+by adjusting the number of units in each block. Generally,               Table 1: The ResNet structure used and their FLOPs.For the CIFAR
+the deeper network has the better prediction performance,                datasets, our classifier cascade consists of ResNets with different
+though having more computational cost. The ResNet archi-                 layers; For the ImageNet dataset, it is ResNet with 40 layers of dif-
+tecture we use is the same as the original version. Each block           ferent widths.
+has different numbers of units and each residual unit performs
+the residual learning, which has a form y = x + F (x, Wi ),              sifier starts with a 3 × 3 convolution layer with 16 filters,
+where x is called shortcut connection and F(x) is called resid-          followed by three blocks of residual units. Each unit con-
+ual function. The residual function we use is basic residual,            sists of two 3 × 3 convolution layers. In the second and third
+which consists of two 3 × 3 convolution layers that both have            blocks, the number of filters is doubled and the size of fea-
+equal input and output channels.Our ResNet is implemented                ture map is halved at the first unit. The numbers of units in
+in pre-activation [He et al., 2016b] version, in which each              each block are set to 1, 3, 5, 9, 18 to build this sequence of
+convolution layer is preceded by a batch normalization layer             ResNets, with 8, 20, 32, 56, 110 layers respectively. For the
+[Ioffe and Szegedy, 2015] and a ReLU non-linear unit. In ad-             ImageNet32x32 dataset, we adopt a width multiplier k fol-
+dition, after each block, the feature map size is halved and             lowing Wide-ResNet [Zagoruyko and Komodakis, 2016] to
+the number of filters is doubled, which follows the Very Deep            increase the capacity of individual classifiers by changing the
+Networks design [Simonyan and Zisserman, 2014] and en-                   number of filters. We set the width multipliers to 1, 1.5, 2, 3,
+sures all units have equal computational cost.                           4 and the number of convolution layers to 40, so that the ca-
+   We attach the policy network to this sequence of networks             pacity or FLOPs of the ResNet classifiers are approximately
+to achieve our algorithm. About the final output, drawing the            exponentially increasing. We notice that this adoption works
+technique of re-weighting all weak classifiers’ results to give          better than the original ResNet setting, due to the larger vol-
+an ensemble and more accurate result in boosting, we use in-             ume and higher diversity of the ImageNet dataset.
+tegrate outcomes from all previous classifiers instead of only              Here our design ensures that the depth (and hence the
+the outcome from the stop classifier. The stop probability               computational complexity) of the cascade of neural network
+given by the policy module, on the other hand, can be seen               increases exponentially. This ensures that we do not waste
+as the confidence of current classifier’s result. Thus, at the           significant computation resource in examining the smaller
+test stage, for those samples stopping at K-th classifier, we            networks. To be more specific, assume the computational
+re-weight the outcomes of first K classifiers according to stop-         cost of the network classifiers are bk , k = 1, . . . , K, where
+ping probabilities that the policy module has ever given, and            b > 1, then the cost when we stop at the k-th classifier is
+                                                                         Pk       l     b  k                     b              k
+then output an ensemble result. After using this technique, the             `=1 b ≤ b−1 b , which is at most b−1 times of b , the cost
+accuracy can be increased by about 0.1%.                                 incurred when we select the k-th classifier by oracle, without
+                                                                         examining any of the weaker classifiers.
+4     Implementation and Experimental Setting                               In addition, to fairly compare to the ANN paper on Ima-
+                                                                         geNet, we use pre-trained AlexNet [Krizhevsky et al., 2012],
+4.1    Datasets
+                                                                         GoogleNet [Szegedy et al., 2014] and ResNet-50 from Caffe
+As a proof of concept, we implement a cascade of deep neu-               Model Zoo as baseline, which is same as the ANN paper.
+ral network classifiers on four image classification datasets,           Their FLOPs are 7 × 109 , 15 × 109 and 38 × 109 respectively.
+including CIFAR-10, CIFAR-100 [Krizhevsky and Hinton,
+2009], ImageNet32x32 [Chrabaszcz et al., 2017] and original              4.3   Policy Module Specification
+ImageNet [Russakovsky et al., 2015] dataset. The first three             The stopping policy module is constructed using three fully-
+datasets consist of 32x32 RGB colored images. The CIFAR-                 connected layers, with 64 hidden neurons each for CI-
+10 and CIFAR-100 datasets both have 50, 000 training im-                 FAR datasets, and with 256 hidden neurons for the Ima-
+ages and 10, 000 test images, with 10 classes and 100 classes            geNet datasets. Each fully-connected layer is followed by a
+respectively. The ImageNet32x32 dataset is a down-sampled                ReLU non-linear unit except the last layer. Finally, the fully-
+variant of original ImageNet dataset, which contains the same            connected layers are followed by a softmax function which
+classes (1, 000 classes) and the same number of images (1.28             outputs the stopping probability. The input of this module
+million training images and 50k test images) with a reduced              is the label probability output from individual ResNets. This
+resolution of 32x32 pixels.                                              stopping policy module has nearly negligible computational
+                                                                         cost (∼0.01M FLOPs on the CIFAR datasets and ∼0.1M
+4.2    Neural Classifier Specification                                   FLOPs on the ImageNet dataset), compared to that of the
+To construct a cascade of neural network classifiers, we take            ResNets (see Table 1). We notice that other features, such
+the standard design of the ResNet architecture [He et al.,               as top-layer convolutional filters, would greatly increase the
+2016a] to build a sequence of ResNets with nearly exponen-               computational cost of this stopping policy module and have a
+tially increasing depths. In this cascade, each ResNet clas-             lower classification accuracy.
+
+
+
+
+                                                                  2187
+                        Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)
+
+                 CIFAR-10                             CIFAR-100                       ImageNet32x32 (Top-5 Error)
+                                                                                                                             ImageNet (Top-5 Error)
+      Model          Error    FLOPs        Model          Error    FLOPs              Model       Error      FLOPs
+                                                                                                                           Model      Error      FLOPs
+     ResNet-8      12.33%     5.82%       ResNet-8       39.98%    5.82%            ResNet40-1   39.72%       6.27%
+                                                                                                                          AlexNet    20.08%     18.42%
+    ResNet-20       9.00%    16.90%      ResNet-20       33.13%   16.90%           ResNet40-1.5  32.76%      14.09%
+                                                                                                                         GoogleNet   10.99%     39.47%
+    ResNet-32       8.40%    27.98%      ResNet-32       31.56%   27.98%            ResNet40-2   29.64%      25.03%
+                                                                                                                         ResNet-50   7.80%      100.00%
+    ResNet-56       7.70%    50.14%      ResNet-56       30.38%   50.14%            ResNet40-3   24.67%      56.27%
+                                                                                                                           ANN       8.14%      56.87%
+    ResNet-110      7.38%    100.00%     ResNet-110      28.63%   100.00%           ResNet40-4   22.22%     100.00%
+                                                                                                                           Ours      7.82%      53.47%
+       Ours         7.26%    18.16%         Ours         27.76%   48.98%               Ours      22.21%      66.22%
+
+Table 2: Comparing with Static ResNet Classifiers: We compare our model to well-trained, static ResNet classifiers with different sizes. In
+our method, the hyperparameter α is selected to match the accuracy of our method with that of the best static ResNet. Our model achieves
+not only lower error but also significantly less cost on all datasets.
+4.4      Other Implementation Details
+During the training phase, we adopt the standard data aug-
+mentation procedure [Lee et al., 2015; He et al., 2016a] on
+first three datasets: padding each side of the images by four
+zeros and randomly cropping a 32x32 image; randomly flip-
+ping left to right. For ImageNet dataset, we use the same data
+augmentation procedures used in original papers of baseline
+networks. For all the experiments, we use stochastic gradient
+descent with a momentum of 0.9 for the policy optimization.                        Figure 2: Results on CIFAR-10/100: The x-axis denotes the millions
+The learning rate schedule and the mini-batch size are set to                      of FLOPs and y-axis denotes the corresponding accuracy obtained
+be the same as in the original ResNet [He et al., 2016a] for the                   by the static ResNet (gray), our model (orange), and the simplified
+gradients associated. The learning rate for the stopping policy                    version of our model (blue), respectively. It is obvious that our mod-
+                                                                                   els outperform the static ResNet under the same energy cost on a
+module is set to be 0.1 and an exponential decay with a fac-                       large spectrum.
+tor of 0.9 is applied every four epochs according to internal
+cross-validation within the training data.                                         the result on the ImageNet32x32 dataset (Table 2) shows
+   To evaluate the classification performance, we use the top-                     that our model can achieve almost the same top-5 accuracy
+1 accuracy for the CIFAR datasets and an additional top-5                          compared with the largest static ResNet classifier but only
+accuracy for the ImageNet datasets, and they are also used                         requires 66.22% computational cost. On ImageNet dataset,
+in respective reward signals during training. We use the per-                      we construct a cascade of AlexNet, GoogleNet, and ResNet-
+image number of floating-point operations (FLOPs) to mea-                          50 as the baseline, which is same as the Adaptive Neural
+sure the computational cost, with multiplications, additions                       Network(ANN) paper to conduct a fair comparison. The re-
+and multiply-add operations considered. The network’s size                         sult (Table 2) shows that our model can achieve almost the
+and FLOPs of individual ResNets are shown in Table 1.                              same top-5 accuracy compared to ResNet-50 but requires
+                                                                                   only 53.47% FLOPs, while the ANN requires 3.4% more
+5      Results                                                                     FLOPs but the accuracy is 0.32% lower than ours.
+                                                                                      As another baseline, we have implemented a simplified
+On CIFAR dataset, We compare our model to well-trained                             version of our model (denote as “Ours (S)” in Figure 2), in
+ResNet classifiers with 8, 20, 32, 56 and 110 layers, respec-                      which we only train the stopping policy model to sequen-
+tively, whose architectures are constructed in the same way                        tially decide which the classifiers to use, and these classi-
+as the classifiers in our cascaded model. We vary the hyper-                       fiers within the cascade are pre-trained and fixed. The blue
+parameter α, the coefficient of the energy cost in the reward                      curve in Figure 2 indicates that this version can also outper-
+signal, in the range of 10−4 to 10−2 to demonstrate the trade-                     form the best ResNet110 classifier as it dynamically decides
+off between the computational cost (FLOPs) and accuracy.                           the smallest classifier that is sufficient for a input image. Our
+The comparisons on CIFAR-10 and CIFAR-100 are shown                                jointly trained model shows further improved performance,
+in Figure 2 and Table 2. In Figure 2, the gray curve shows                         especially when the amortized FLOPs required is small, as
+the performance of the static ResNet classifiers with differ-                      our model also determines which images to use for classifiers
+ence numbers of layers, and the orange curve shows the per-                        in the cascade during training, compared to this simplified
+formance of our model with different values of α. Clearly,                         version.
+our model achieves not only better classification accuracy but
+also higher cost effectiveness. Our model can achieve 0.12%                        Further Analysis
+higher accuracy with only 18.16% FLOPs on the CIFAR-10                             We further investigate how our model works exactly by vi-
+dataset, compared to the best performing static ResNet110                          sualizing representative samples assigned to different classi-
+classifier. On the CIFAR-100 set, our model obtains 0.87%                          fiers. Figure 3 shows five images stopped at various classifiers
+higher accuracy with only 48.98% FLOPs, compared to the                            and their label probability distributions given by the classi-
+best static ResNet110 classifier. It is worth noting that the ef-                  fiers they visited before stopping. Taking the third samples as
+ficiency improvement is more prominent on the CIFAR-10                             examples, we can see that the turnstile is first confused with
+than the CIFAR-100, due to the fact that CIFAR-100 is a                            forklift by the first two classifiers, but is correctly classified by
+more challenging dataset so that deeper classifiers are more                       the third classifier on which it stops. In the fifth image, howler
+frequently required to distinguish similar labels. Similarly,                      monkey is identified by the fifth classifier, but is wrongly pre-
+
+
+
+
+                                                                            2188
+                   Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)
+
+
+
+
+Figure 3: Example images and their predicted label probabilities: Five images from ImageNet assigned to different ResNet classifiers, with
+their label probability distributions given by the classifiers they visited.
+
+
+
+
+Figure 4: Accuracy distribution of classifiers in the cascade: The first three figures plot accuracy distributions on the CIFAR-10, CIFAR-100
+and ImageNet32x32 datasets. The i-th row and j-th column denotes the average accuracy predicted by the i-th classifier of samples assigned
+to the j-th classifier. The fourth figure is the distribution of test images on individual classifiers, where x-axis indexes five classifiers and
+y-axis denotes the proportion of samples eventually assigned to the corresponding classifier.
+
+dicted by all the first four classifiers as other classes, includ-          classify and are assigned to the smaller classifiers, while Im-
+ing spider monkey which is indeed easily confused with the                  ageNet is more difficult and a majority of it is assigned to the
+true label.                                                                 largest classifier. Even in ImageNet, our method successfully
+   We can divide the testing datasets into 5 subsets according              identifies a large portion of easier images, and hence obtain
+to which classifier an image is assigned to by the selection                better average FLOPs than the biggest static ResNet.
+module. This means that subset i contains all the images as-
+signed to the i-th classifier in the cascade. Figure 4 shows                6   Conclusion
+the average accuracy of the different subsets on different net-             In this work, we propose an energy-efficient model by cascad-
+works. We can see that for the data assigned to classifier i, the           ing deep classifiers with a policy module. The policy module
+accuracy at classifier i is consistently higher than the accura-            is trained by REINFORCE to choose the smallest classifier
+cies of classifier 1 to i− 1 on all three datasets (i.e., the diago-        which is sufficient to make accurate prediction for each in-
+nals are larger than the upper triangular elements), suggesting             put instance. Tested on image classification, our model as-
+that the selection modules successfully identify more accurate              signs a large portion of images to the smaller networks and
+classifiers. Interestingly, we find that the accuracy does not              remaining difficult images to the deeper models when nec-
+always increase when ResNet becomes deeper. For example,                    essary. In this way, our model is able to achieve both high
+on the relatively simple datasets, CIFAR-10 and CIFAR-100,                  accuracy and amortized efficiency during test time. We evalu-
+the accuracies of subset i at classifier i (i=2,3,4,5) are even             ate our energy-efficient model on the CIFAR-10, CIFAR-100
+higher than accuracies at classifier i + 1 to 5. This is because            and downsampled and original ImageNet datasets. It obtains
+the REINFORCE algorithm distributes only harder images to                   nearly the same as or higher accuracy than well-trained deep
+the deeper ResNets, making them less accurate on the easier                 ResNet classifiers but only requires approximately 20%, 50%
+images.                                                                     and 66% and 53% FLOPs cost respectively. With a spectrum
+   The rightmost panel of Figure 4 shows the proportions of                 of computational cost parameter α values, our model achieves
+the 5 subsets in different datasets. We can see that in CIFAR-              different trade-offs between amortized computational cost
+10 (blue) and CIFAR-100 (green), most images are easy to                    and predictive accuracy.
+
+
+
+
+                                                                     2189
+                 Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)
+
+References                                                              [Ioffe and Szegedy, 2015] Sergey Ioffe and Christian
+                                                                           Szegedy. Batch normalization: Accelerating deep network
+[Almahairi et al., 2016] Amjad Almahairi, Nicolas Ballas,                  training by reducing internal covariate shift. In Interna-
+  Tim Cooijmans, Yin Zheng, Hugo Larochelle, and Aaron                     tional Conference on Machine Learning, pages 448–456,
+  Courville. Dynamic capacity networks. In Interna-                        2015.
+  tional Conference on Machine Learning, pages 2549–
+  2558, 2016.                                                           [Krizhevsky and Hinton, 2009] Alex Krizhevsky and Geof-
+                                                                           frey Hinton. Learning multiple layers of features from tiny
+[Bengio et al., 2015] Emmanuel Bengio, Pierre Luc Bacon,                   images. 2009.
+  Joelle Pineau, and Doina Precup. Conditional computation
+                                                                        [Krizhevsky et al., 2012] Alex Krizhevsky, Ilya Sutskever,
+  in neural networks for faster models. Computer Science,
+  164(1):34–44, 2015.                                                      and Geoffrey E Hinton. Imagenet classification with deep
+                                                                           convolutional neural networks. In Advances in neural in-
+[Bolukbasi et al., 2017] Tolga Bolukbasi, Joseph Wang,                     formation processing systems, pages 1097–1105, 2012.
+  Ofer Dekel, and Venkatesh Saligrama. Adaptive neural                  [Lee et al., 2015] Chen-Yu Lee, Saining Xie, Patrick Gal-
+  networks for efficient inference. 2017.                                  lagher, Zhengyou Zhang, and Zhuowen Tu. Deeply-
+[Chrabaszcz et al., 2017] Patryk    Chrabaszcz,       Ilya                 supervised nets. In Artificial Intelligence and Statistics,
+  Loshchilov, and Frank Hutter. A downsampled vari-                        pages 562–570, 2015.
+  ant of imagenet as an alternative to the cifar datasets.              [Li et al., 2015] Haoxiang Li, Zhe Lin, Xiaohui Shen,
+  arXiv preprint arXiv:1707.08819, 2017.                                   Jonathan Brandt, and Gang Hua. A convolutional neural
+[Figurnov et al., 2017] Michael Figurnov, Maxwell D.                       network cascade for face detection. In Proceedings of the
+   Collins, Yukun Zhu, Li Zhang, Jonathan Huang, Dmitry                    IEEE Conference on Computer Vision and Pattern Recog-
+   Vetrov, and Ruslan Salakhutdinov. Spatially adaptive                    nition, pages 5325–5334, 2015.
+   computation time for residual networks. In IEEE Confer-              [Russakovsky et al., 2015] Olga Russakovsky, Jia Deng,
+   ence on Computer Vision and Pattern Recognition, pages                  Hao Su, Jonathan Krause, Sanjeev Satheesh, Sean Ma,
+   1790–1799, 2017.                                                        Zhiheng Huang, Andrej Karpathy, Aditya Khosla, and
+[Graves, 2016] Alex Graves.     Adaptive computation                       Michael Bernstein. Imagenet large scale visual recogni-
+  time for recurrent neural networks.   arXiv preprint                     tion challenge. International Journal of Computer Vision,
+  arXiv:1603.08983, 2016.                                                  115(3):211–252, 2015.
+                                                                        [Simonyan and Zisserman, 2014] Karen Simonyan and An-
+[Han et al., 2015] Song Han, Huizi Mao, and William J
+                                                                           drew Zisserman. Very deep convolutional networks for
+  Dally. Deep compression: Compressing deep neural net-
+                                                                           large-scale image recognition. Computer Science, 2014.
+  works with pruning, trained quantization and huffman cod-
+  ing. Fiber, 56(4):3–7, 2015.                                          [Szegedy et al., 2014] Christian Szegedy, Wei Liu, Yangqing
+                                                                           Jia, Pierre Sermanet, Scott Reed, Dragomir Anguelov, Du-
+[He et al., 2016a] Kaiming He, Xiangyu Zhang, Shaoqing                     mitru Erhan, Vincent Vanhoucke, and Andrew Rabinovich.
+  Ren, and Jian Sun. Deep residual learning for image recog-               Going deeper with convolutions. pages 1–9, 2014.
+  nition. In Proceedings of the IEEE conference on computer
+  vision and pattern recognition, pages 770–778, 2016.                  [Szegedy et al., 2017] Christian Szegedy, Sergey Ioffe, Vin-
+                                                                           cent Vanhoucke, and Alexander A Alemi. Inception-v4,
+[He et al., 2016b] Kaiming He, Xiangyu Zhang, Shaoqing                     inception-resnet and the impact of residual connections on
+  Ren, and Jian Sun. Identity mappings in deep residual                    learning. In AAAI, pages 4278–4284, 2017.
+  networks. In European Conference on Computer Vision,
+                                                                        [Williams, 1992] Ronald J Williams.         Simple statistical
+  pages 630–645. Springer, 2016.
+                                                                           gradient-following algorithms for connectionist reinforce-
+[Howard et al., 2017] Andrew G Howard, Menglong Zhu,                       ment learning. Machine learning, 8(3-4):229–256, 1992.
+  Bo Chen, Dmitry Kalenichenko, Weijun Wang, Tobias                     [Yang et al., 2016] Fan Yang, Wongun Choi, and Yuanqing
+  Weyand, Marco Andreetto, and Hartwig Adam. Mo-                           Lin. Exploit all the layers: Fast and accurate cnn object
+  bilenets: Efficient convolutional neural networks for mo-                detector with scale dependent pooling and cascaded rejec-
+  bile vision applications. arXiv preprint arXiv:1704.04861,               tion classifiers. In Proceedings of the IEEE Conference
+  2017.                                                                    on Computer Vision and Pattern Recognition, pages 2129–
+[Hu et al., 2017] Hanzhang Hu, Debadeepta Dey, J Andrew                    2137, 2016.
+  Bagnell, and Martial Hebert. Anytime neural networks                  [Zagoruyko and Komodakis, 2016] Sergey Zagoruyko and
+  via joint optimization of auxiliary losses. arXiv preprint               Nikos Komodakis. Wide residual networks. arXiv preprint
+  arXiv:1708.06832, 2017.                                                  arXiv:1605.07146, 2016.
+[Iandola et al., 2016] Forrest N Iandola, Song Han,                     [Zhang et al., 2017] Xiangyu Zhang, Xinyu Zhou, Mengx-
+   Matthew W Moskewicz, Khalid Ashraf, William J                           iao Lin, and Jian Sun. Shufflenet: An extremely efficient
+   Dally, and Kurt Keutzer.      Squeezenet: Alexnet-level                 convolutional neural network for mobile devices. arXiv
+   accuracy with 50x fewer parameters and¡ 0.5 mb model                    preprint arXiv:1707.01083, 2017.
+   size. arXiv preprint arXiv:1602.07360, 2016.
+
+
+
+
+                                                                 2190
+

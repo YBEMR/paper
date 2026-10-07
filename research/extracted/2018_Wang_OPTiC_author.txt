@@ -1,0 +1,1133 @@
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                             1
+
+
+
+
+          OPTiC: Optimizing Collaborative CPU-GPU
+             Computing on Mobile Devices with
+                    Thermal Constraints
+           Siqi Wang, Gayathri Ananthanarayanan, and Tulika Mitra, National University of Singapore
+
+
+
+    Abstract—The CPU-GPU co-execution of computation kernels                                                                (CPU Frequency)
+on heterogeneous MPSoC can significantly boost performance
+compared to the execution on either the CPU or the GPU
+
+
+
+
+                                                                             Execution Time (s)
+alone. However, engaging multiple on-chip compute elements
+concurrently at the highest frequency may not provide the
+optimal performance in a mobile system with stringent thermal
+constraints. The system may repeatedly exceed the temperature
+threshold necessitating frequency throttling and hence perfor-
+mance degradation. We present OPTiC, an analytical framework
+that given a computation kernel can automatically select the par-
+titioning point and the operating frequencies for optimal CPU-
+GPU co-execution under thermal constraints. OPTiC estimates,
+through modeling, CPU and GPU power, performance at differ-                                          CPU Workload Portion
+ent frequency points as well as the performance impact of thermal
+throttling and memory contention. Experimental evaluation on
+a commercial mobile platform shows that OPTiC achieves an
+                                                                             Execution Time (s)
+
+
+
+
+average 13.68% performance improvement over existing schemes
+that enable co-execution without thermal considerations.
+  Index Terms—Co-execution, mobile platforms, thermal, GPU
+
+
+                         I. I NTRODUCTION
+
+
+M       ODERN heterogeneous multi-processor system-on-
+        chip (MPSoC) architectures are equipped with multiple
+compute elements including multi-core CPUs, accelerators
+                                                                                                     CPU Workload Portion
+
+
+capable of general-purpose computing including graphic pro-                 Fig. 1: Execution time of SYRK kernel under varying CPU-
+cessing units (GPUs), digital signal processors (DSPs) and                  GPU workload partitioning and frequency.
+Field Programmable gate arrays (FPGAs). The execution of an
+                                                                            of computation kernels can significantly boost performance
+application is therefore no longer constrained to only the CPU
+                                                                            compared to the execution on either CPU or GPU alone.
+cores. The powerful CPU cores achieve good performance
+                                                                               On a mobile platform, the thermal constraints are more
+at the cost of high power consumption. With the inclusion
+                                                                            stringent in the absence of active cooling measures. As we
+of accelerators, some applications can reach the same or
+                                                                            engage multiple compute elements simultaneously, the total
+even better performance with lower power. In particular, for
+                                                                            power increases and the chip temperature may repeatedly
+applications with high data parallelism, porting the compu-
+                                                                            exceed the temperature threshold. This necessitates frequency
+tation onto GPUs largely improves performance and power
+                                                                            throttling by the underlying operating system and leads to
+efficiency. To facilitate this trend of collaboration among
+                                                                            performance degradation.
+multiple compute elements, Khronos Group defined OpenCL
+                                                                               Figure 1 illustrates the effect of thermal throttling on CPU-
+[1], a cross-platform programming model that enables the
+                                                                            GPU co-execution on a mobile platform with SYRK kernel
+exploitation of data parallelism. Multiple works [2], [3], [4]
+                                                                            from the Polybench benchmark suite [5]. The experimental
+in addition show that the partitioned CPU-GPU co-execution
+                                                                            setup is detailed in Section V. We perform a design space
+  Manuscript received July 24, 2018; accepted September 3, 2018.            exploration that sweeps through all the frequency levels of the
+  The first author and second author contributed equally to this work.      CPU and the GPU with all possible workload partitions. Each
+  This work was partially funded by Singapore Ministry of Education         line in the graph represents the execution time corresponding
+Academic Research Fund Tier 2 MOE2015-T2-2-088. This paper was rec-
+ommended by Associate Professor Aviral Shrivastava and Associate Editor     to a fixed CPU frequency, ranging from 900MHz to 2000MHz.
+Sudeep Pasricha. (Corresponding author: Tulika Mitra.)                      In this example, the GPU never gets throttled even when
+  Siqi Wang, Gayathri Ananthanarayanan and Tulika Mitra are with Depart-    running at the highest frequency and hence the GPU frequency
+ment of Computer Science, School of computing, the National University of
+Singapore, Singapore 117417.                                                is not plotted. The workload portion is the fraction allocated
+  Digital Object Identifier 10.1109/TCAD.xxxx.xxxx                          to the CPU, where 0 (or 1) corresponds to the execution
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                       2
+
+
+
+of the kernel on the GPU (or CPU) alone. As reported in              Cortex-A7 cluster      Cortex-A15 cluster         GPU
+previous works [2], [3], [4], CPU-GPU co-execution provides                (Host)            (Compute Device)     (Compute Device)
+
+lower runtime than either the CPU or the GPU execution               Core 0     Core 1      Core 4     Core 5
+alone. For SYRK, the best possible CPU alone, GPU alone                                                              ARM
+                                                                                                                    Mali-T628
+execution time are 31.62s and 58.61s, respectively, while the        Core 2     Core 3      Core 6     Core 7
+best possible co-execution runtime is 21.43s. The optimal con-
+figuration for this runtime is 1500MHz CPU frequency with             512KB L2-Cache          2MB L2-Cache         128KB L2-Cache
+
+64% of the workload allocated to CPU. Identifying the optimal
+configuration is challenging because it depends on (a) relative
+execution time of the kernel on CPU and GPU separately, (b)                          128-bit BUS Interface
+thermal throttling at higher frequency, and (c) contention for
+off-chip shared memory between CPU and GPU. But OPTiC                                       DRAM
+successfully solves this problem through analytical modeling
+                                                                  Fig. 2: Block Diagram of Exynos 5422 SoC with CPU and
+of all these factor individually and collectively.
+                                                                  GPU on Odroid XU3.
+   We can make several important observations from Figure 1.
+(1) Thermal throttling impacts the co-execution performance
+                                                                  counters due to insufficient documentation. We adopt targeted
+significantly. Higher frequency does not necessarily provide
+                                                                  micro-benchmarking to reverse engineer micro-architectural
+lower runtime. A lower frequency (1500MHz for SYRK) may
+                                                                  details, memory controller policies, precise definition of the
+induce less thermal throttling and lead to lower runtime
+                                                                  performance counters, and the latency of the operations. Also
+(21.43s) for co-execution compared to 24.61s at maximum
+                                                                  we employ analytical modelling in conjunction with statistical
+frequency of 2000MHz. (2) Even if two frequency settings
+                                                                  regression using the available hardware performance counters
+have the same single-device runtime, they may not behave
+                                                                  to estimate power-performance-thermal behaviour.
+similarly during co-execution due to different thermal behav-
+                                                                     We present OPTiC, an analytical framework that automati-
+ior. For example, the CPU-alone execution at 1900MHz and
+                                                                  cally selects the workload partition and the operating frequen-
+1400MHz for SYRK have the same runtime (34.3s); but the
+                                                                  cies for optimal CPU-GPU co-execution. OPTiC estimates,
+optimal workload partition and runtime for co-execution is
+                                                                  through modeling, the CPU and GPU performance (Section
+different, as shown in the zoomed-in plot.
+                                                                  IV-D1), power (Section IV-D2) at different frequencies, the
+   (3) The optimal workload partition is different for each
+                                                                  impact of thermal throttling on performance (Section IV-B,
+CPU operating frequency depending on the individual runtime
+                                                                  IV-A2), as well as the performance penalty due to CPU-GPU
+of CPU and GPU, thermal throttling behaviour, and memory
+                                                                  memory contention (Section IV-C, IV-A3). OPTiC achieves
+contention. The optimal CPU workload partition for SYRK
+                                                                  substantial performance improvement over existing schemes
+varies from 0.53 to 0.645 across different frequencies. (4)
+                                                                  that attempt co-execution without thermal considerations. Fur-
+When CPU workload portion is less than 50% for SYRK,
+                                                                  thermore, OPTiC predicts the exact optimal configuration
+the co-execution runtime is not impacted by CPU frequency.
+                                                                  choice for most benchmarks kernels. The runtime of the
+This is because with lower CPU workload, the GPU runtime
+                                                                  OPTiC selected configuration is, on an average, only 5.1%
+dominates even at the highest CPU frequency. But the GPU
+                                                                  higher compared to the optimal runtime obtained through
+is not thermally throttled in our platform with increased
+                                                                  exhaustive design space exploration.
+CPU frequency and temperature; hence GPU runtime and co-
+execution runtime remain unchanged.
+   The optimal workload partition and CPU-GPU frequency                                  II. BACKGROUND
+depend on the application characteristics. One may conduct           To explore CPU-GPU co-execution behaviour, we use a
+an exhaustive design space exploration to identify the optimal    mobile platform with heterogeneous MPSoC architecture,
+configuration. With M possible CPU frequencies, N possible        Odroid XU3 [6]. We detail the platform characteristics, the
+GPU frequencies and S partition points, the design space          programming model and the execution behaviours to facilitate
+has M * N * S points. On our platform, it takes almost            understanding of OPTiC.
+1.5 days to execute all the design points for a single kernel,    Experiment Platform: Odroid XU3 platform is powered by
+especially because the chip needs to be cooled down to the        Exynos 5422 SoC [7] shown in Figure 2. The SoC features
+same ambient temperature before each execution. In contrast,      ARM big.LITTLE architecture consisting of heterogeneous
+our analytical modelling takes only 5 mins to come up with the    processing with a cluster of four ARM Cortex A15 cores
+optimal configuration. Developing an analysis framework that      designed for performance, and a cluster of four ARM Cortex
+can predict the optimal configuration involves many challenges    A7 cores designed for power efficiency. The MPSoC also
+such as modelling the throttling behaviour of the kernel          includes ARM Mali T628 MP6 GPU implementing “Midgard”
+based on its power-performance characteristics, the underlying    architecture with six shader cores. The platform supports
+system behaviour, and the shared resource contention due to       OpenCL 1.1 facilitating general purpose computation on the
+concurrent execution. In addition, developing our analytical      GPU. The integrated CPU-GPU platform with shared DRAM
+model on a real hardware platform has its own challenges.         through the bus interface avoids the overheads of transferring
+We have limited information regarding the details of the          data between the CPU and the GPU during collaborative
+hardware architecture and the supported hardware performance      execution.
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                                                      3
+
+
+
+OpenCL Programming Model: The Open Computing Lan-
+guage is an open standard for developing parallel applica-                                    A15-1         A15-2         A15-3           A15-4          GPU
+                                                                                     80
+tions in heterogeneous multi-core architectures including CPU,
+                                                                                     75
+GPU, DSP, and FPGAs [1]. It allows runtime software from
+
+
+
+
+                                                                  Temperature ('C)
+                                                                                     70
+different vendors to co-exist and the same program can exploit
+                                                                                     65
+multiple different devices. An OpenCL host (CPU) controls
+                                                                                     60
+the computation by launching a kernel on the compute devices
+                                                                                     55
+(CPU, GPU, etc.). The compute device consists of one or more
+                                                                                     50
+compute units (e.g., a GPU Mali core). The host is responsible
+                                                                                     45
+for setting up the execution including run-time compiling
+                                                                                     40
+of OpenCL code, mapping/transferring data to the devices,                                 0             1            2              3             4             5
+initiating the execution and finally reading the data from the                                                           Time (s)
+devices for further execution. Each kernel instance, called a
+work-item, runs the kernel code on a single data point. A user-        Fig. 3: Thermal Behaviour of A15, GPU in co-execution.
+defined number of work-items form a work-group. All the
+                                                                  A15 cores as OpenCL devices.
+work-items in a work-group share a local memory and execute       Dynamic Voltage Frequency Scaling (DVFS): DVFS is the
+concurrently on a single compute unit. Memory consistency         most commonly used technique for the trade-off between
+is required for work-items within a work-group but not across     power/thermal and performance. Odroid XU3 provides DVFS
+different work-groups, which makes a work-group the unit for      feature per cluster for CPU and GPU cores. Note that all
+scheduling, and enables different work-groups to be launched      the cores within a cluster should run at the same frequency
+on different compute devices without concern about memory         level. The A15 cluster can be clocked between 200MHz to
+consistency.                                                      2000MHz at an interval of 100MHz and the GPU can be
+OpenCL Runtime: The OpenCL runtime software for the               clocked at seven different voltage-frequency settings between
+Mali GPU is supplied by the vendor. But the current mobile        177MHz and 600MHz. The voltage at each frequency level is
+SoCs typically do not include OpenCL support for the ARM          automatically set by the hardware, as shown in Table I and II.
+CPU cores. We install an open-source OpenCL runtime,
+FreeOCL [8] to utilize the CPU cores as OpenCL compute                               TABLE I: A15 CPU Frequency and Voltage Settings.
+devices. As different OpenCL runtime softwares are used for                          f (MHz)      900       1000     1100       1200          1300     1400
+the CPU and the GPU, the execution cannot be automati-                               V (mV)       932.5     958.8    985        1012.5        1038.8   1052.5
+cally partitioned across the devices at runtime. Instead, co-                        f (MHz)      1500      1600     1700       1800          1900     2000
+                                                                                     V (mV)       1080      1108.7   1147.5     1186.2        1237.5   1315
+execution is achieved by launching the kernel on both devices
+concurrently with pre-defined workload partitions, defined in                         TABLE II: GPU Frequency and Voltage Settings.
+the granularity of a work-group. The number of work-groups
+                                                                                       f (MHz)        600   543      480      420       350    266     177
+to be executed are decided statically through OPTiC.                                   V (mV)         975   962.5    912.5    875       850    975     762.5
+   For an OpenCL application executing on the CPU, the role
+of the CPU cores toggles between host and compute devices         Thermal Behaviour: The Odroid XU3 platform has five
+continuously. The CPU first acts as a host to launch the          temperature sensors that capture the temperature of the four
+kernel on the devices. The role of the CPU then transforms        cores in the A15 cluster and the GPU. During execution, the
+into an OpenCL device. The host program waits for the             temperature change is significant. Figure 3 shows the thermal
+CPU to be discharged from the kernel execution. The host          behaviour of the A15 cluster and the GPU when co-executing
+cannot launch another kernel on the GPU at this point even        SYRK at the highest frequency settings for the initial 5 seconds.
+if the GPU has completed its earlier workload. The GPU            We start sampling the thermal sensors before the kernel execu-
+has to wait till the CPU cores have completed the current         tion to capture the initial temperature. The difference in initial
+kernel execution. This effect introduces additional overhead      temperatures is because of the core placement. The thermal
+to GPU execution and is a limitation of the OpenCL runtime        response of each A15 core to the input power is different. The
+that we are using. To evaluate the CPU cores only as an           temperature of the A15 cluster rises when the kernel execution
+OpenCL device, we modified the FreeOCL runtime to pin             starts and the hottest core reaches 75◦ C (thermal threshold)
+the OpenCL host functions to the A7-cluster and the device        very quickly (within 1s). This triggers the underlying OS
+functions to the A15-cluster. The A7-cluster is also reserved     thermal management. The frequency of the whole A15 cluster
+for other system functions to reduce the interference with        is throttled down to 900 MHz, causing temperature drop. The
+OpenCL device functions. Also, OpenCL runtime considers           frequency changes back to 2000MHz once the temperature is
+the big.LITTLE clusters (A15 and A7 clusters) as a single         lower than the thermal threshold, causing the temperature to
+homogeneous device and splits the workload equally to run         rise again. The thermal throttling is triggered very frequently,
+on all A15 and A7 cores. Therefore, limiting the OpenCL           resulting in a fluctuating A15 cluster temperature around the
+workloads to only high-performance A15 cores eliminates the       thermal threshold (74 - 76◦ C). It greatly reduces the processing
+sub-optimal performance introduced by OpenCL runtime and          speed, resulting in as high as 41% increase in CPU runtime.
+ensures optimal prediction. In the paper, we will use CPU and     The temperature of the GPU is much cooler and stabilizes at
+A15 interchangeably to represent the OpenCL execution on          around 67◦ C in this example without any thermal throttling.
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                    4
+
+
+
+                   III. R ELATED W ORKS
+                                                                         CPU Profile @                   GPU Profile @
+   In recent years, researchers have focused towards develop-         Hardware         Power            Hardware       Power
+ing scheduling techniques to appropriately map the applica-           Counters      Consumption         Counters    Consumption
+tions onto heterogeneous MPSoCs comprising of functionally
+different computing cores (CPU and GPU) [9], [10]. Most of
+the techniques [11], [12], [13], [14] target towards maximizing        CPU Perf.      CPU Power         GPU Perf.    GPU Power
+performance and energy efficiency. These techniques map                 Model           Model            Model         Model
+the entire application kernel on to a single device (CPU or
+GPU). Several other works [15], [2], [4], [16], [3] partition
+the OpenCL workloads to be executed on CPU and GPU
+                                                                                 Throttling Model            Mem. Contention
+concurrently.                                                                                                    Model
+   Authors in [2] show that by exploiting both functional het-
+erogeneity and performance heterogeneity concurrently, sig-
+nificant performance gains can be obtained. Additionally, [2]                          Co-Execution Model
+presents a static workload partitioning technique and provides
+the voltage frequency settings to achieve power efficiency.
+                                                                                          Exp. Platform
+Recently, [4] proposes a mapping and thread partitioning
+scheme for executing multiple OpenCL applications concur-                                           E
+rently. They execute each application across all the design
+points and collect the execution time on the individual devices                     Fig. 4: OPTiC Framework.
+(CPU/GPU) to compute the optimal workload partition at
+each design point. They also model the delay due to existing         On the other hand, authors in [22] demonstrate a compile-
+enqueued threads from another application in the GPU and          time CPU frequency selection approach for affine programs.
+repartition the workload for minimum energy consumption at        The approach categorizes a certain program region by ap-
+runtime. The work in [3] also proposes scheduling approach        proximating the operational intensity and parallelism features
+for multiple kernels running concurrently on the GPU. OPTiC,      through static analysis. The frequency and core settings of
+in contrast, focuses on the co-execution of a single kernel and   the program category are chosen from profiling the processor
+does not require extensive offline profiling. Work [15] auto-     with representative micro-benchmarks. The authors further
+matically partitions threads to CPUs and GPUs by providing        implement a lightweight runtime DVFS approach based on
+new APIs. The APIs require access locations of all threads to     energy efficiency, and show that the compile-time approach to
+be analyzed statically and thus needs extensive profiling.        CPU frequency selection can significantly outperform runtime-
+                                                                  based approaches. The experimental evaluation of our work
+   However, none of the works mentioned earlier consider the
+                                                                  confirms these findings.
+effect of thermal constraints on the mobile platforms. Dynamic
+voltage and frequency scaling (DVFS) is a common technique           OPTiC, with comprehensive analytical model for CPU, GPU
+to address the power and thermal issues on the mobile plat-       performance, power and temperature, is able to predict the
+forms. Existing approaches to DVFS for power/thermal man-         impact of thermal behaviour on the execution time without
+agement include running at the lowest or highest frequency, as    extensive profiling, and recommends the best execution con-
+well as reacting to runtime workload to reduce or increase fre-   figuration before hand.
+quency based on the CPU usage. Many works[17], [18], [19]
+model the thermal behaviour of the device and dynamically                           IV. OPT I C F RAMEWORK
+adjust the frequencies of the processors to mitigate the effect      We present OPTiC: a framework for OPtimizing collab-
+of thermal violation on performance. Qscale[20] demonstrates      orative CPU-GPU computing with Thermal Constraints, as
+a thermally efficient thread scheduling and DVFS policy for       shown in Figure 4. The variables in blue denote the output
+heterogeneous mobile platforms. The authors limit the use of      of the respective models. The high-level operation of OPTiC
+the big CPU cores to execute only the QoS critical threads,       is as follows: For each kernel, two profile runs are performed
+which effectively slows down the heating of the big cores. The    to obtain the CPU and GPU parameters from CPU-alone and
+thread to core mapping of the QoS critical threads is based       GPU-alone executions, respectively. The profile run for CPU-
+on the thermal signature of each of the big cores and the         alone execution is performed at frequency f c while GPU-
+thermal coupling between the CPU and GPU. These works             alone execution is performed at f g . OPTiC uses the hardware
+do not involve workload partitioning and consider different       counters and power values from the profile runs, pass them
+applications executing concurrently on CPU and GPU.               through a performance model and power model to obtain
+   Another work [21] extends [2] and [4] to map and partition     the respective predictions for all possible target frequency
+the application in CPU-GPU MPSoCs taking into account the         configurations(f c and f g ). The predicted performance and
+temperature behaviour. It performs exhaustive profiling similar   power information are then passed to a thermal throttling
+to [4] that measures the temperature at different design points   model to capture the effect of thermal constraints. OPTiC
+to compute the new partition, in order to achieve minimum         extracts memory subsystem related hardware counters from the
+energy consumption and best temperature.                          profile runs and uses them in its memory contention model to
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                     5
+
+
+
+model the interferences between devices. These models finally         2) Effect of Thermal Throttling: Thermal throttling greatly
+add up to a co-execution model that calculates the performance     affects the runtime by drastically reducing the processing
+of the CPU-GPU co-execution for all the frequency pair             speed. It prolongs the execution, resulting in a longer execution
+combinations. The configuration with the minimum predicted         time which we denote as the throttled execution time as Efc c .
+                                                                                                                                  T
+runtime is the optimal configuration identified by OPTiC.          The workload partition calculated in Section IV-A1 is therefore
+   OPTiC does not attempt to predict a throttle-free configura-    not optimal. Note that the throttling of frequency starts only
+tion; rather the model is able to analyse the thermal behaviour    when the processor temperature reaches a certain threshold.
+and predict the impact of thermal throttling on the runtime and    We denote the time taken to reach the threshold to be tT L
+thus provide optimal performance achievable under the current      (time to reach thermal limit). The details of how we estimate
+thermal condition. We will next explain how we construct the       Efc c and tT L are discussed in Section IV-B.
+                                                                      T
+co-execution model (Section IV-A), followed by the details            Here we consider the common case where CPU frequency
+of the throttling model (Section IV-B), memory contention          is throttled and GPU is not affected for simpler illustration.
+model (Section IV-C), and finally the independent CPU and          Also note that in our platform, the GPU temperature is always
+GPU performance models (Section IV-D).                             lower than the thermal threshold and its frequency does not
+                                                                   get throttled. The rate of execution will be reduced after time
+                                                                   tT L , as shown in Figure 5 (b). We approximate the behaviour
+A. CPU-GPU Co-Execution Model                                      by estimating an average execution rate rc0 that is lower than
+   In OpenCL programming model as discussed in Section II,         the original rc . rc0 is calculated with throttled time as shown
+the unit for scheduling is a work-group. All the work-items in     in Eqn. (3). The numerator is the remaining workload when
+the same work-group execute concurrently. The work-groups          thermal throttling starts while the denominator is the time for
+are independent of each other. Thus we set the granularity of      processing the remaining workload.
+the workload partition to be a work-group. The execution time                                    1 − rc × tT L
+                                                                                         rc0 =                                  (3)
+is observed to be linearly proportional to the workload parti-                                    EfTc − tT L
+tion (number of work-groups) allocated when executing CPU
+                                                                      As shown in Figure 5(b), the yellow and green lines
+or GPU alone. When executing CPU and GPU concurrently, as
+                                                                   represent scenarios where the system starts the frequency
+both devices are working in their address spaces, we can safely
+                                                                   throttling at different time tT L . In the first scenario (yellow
+assume the same linear relation with the workload partition.
+                                                                   dotted line, CPU throttle 1), the temperature of CPU rises
+A non-linear model can be applied if the linear relationship
+                                                                   quickly resulting in frequency throttling at tT L = 2. The final
+does not hold for other platforms. The co-execution time is the
+                                                                   intersection of the CPU and GPU execution line is therefore
+maximum of the time taken by the individual devices with the
+                                                                   different from the non-throttling scenario. We again equate
+allocated workload partition. However, the effect of thermal
+                                                                   the workload processed by CPU and GPU in time E to 1 as
+throttling may drastically increase the execution time of the
+                                                                   rc tT L + rc0 (E − tT L ) + rg × E = 1. The execution time can
+devices. In addition, the execution of both devices concurrently
+                                                                   then be calculated by Eqn. (4).
+will cause contention among shared resources, such as the
+main memory. The effects of thermal throttling and memory                   E = (1 − rc × tT L + rc0 × tT L )/(rg + rc0 ),      (4)
+contention are included to complete the co-execution model.
+   1) Co-Execution of CPU and GPU: Figure 5 shows a                The equation is valid only when kernel execution time is larger
+diagram representing the execution time of CPU and GPU for         than tT L , i.e., thermal throttling happens before the kernel
+increasing number of work-groups. The primary and secondary        completes execution. As the CPU runtime is prolonged by
+Y-axes are the percentage of work-groups allocated to the CPU      throttling, the workload portion allocated to CPU is less and
+(increasing) and GPU (decreasing), respectively. At a given        the final execution time is longer.
+frequency combination ( f c , f g ) for CPU and GPU, the CPU          In the second scenario (green solid line, CPU throttle 2),
+takes Efc c time to complete all the work-groups, while the        the throttling happens later at tT L = 6. When executing
+GPU takes Efgg time. The rate of work-group processing is          CPU and GPU together, the execution is finished before CPU
+denoted as rc and rg for the CPU and the GPU respectively,         temperature exceeds the thermal threshold. So the optimal
+calculated as total workload (which is considered as 1) over       configuration remains unchanged as in the non-throttling sce-
+runtime: rc = 1/Efc c and rg = 1/Efgg The point where              nario (Eqn. (1)). The workload partition calculation remains
+the two execution time meet (E) is therefore the shortest          the same as shown in Eqn. (2).
+execution time possible to complete all the work-groups using         3) Effect of Memory Contention: In our experimental plat-
+co-execution (rc × E + rg × E = 1). The co-execution time          form, the CPU cores and GPU share the DRAM through a
+is calculated as shown in Eqn. (1). The workload partition is      bus interface. When CPU and GPU are executing concurrently,
+calculated using Eqn. (2).                                         both the devices compete for the shared memory subsystem.
+                                                                   This memory contention has different impacts on devices.
+                        1                 1                        We illustrate the case where CPU execution performance is
+              E=              =                              (1)
+                   (rc + rg )    (1/Efc c + 1/Efgg )               affected whereas GPU performance remains unchanged. As
+                                                                   shown in Figure 5 (c), the green solid line shows the CPU
+              CPU work portion = E/Efc c                           performance curve after considering contention. The effect of
+                                                             (2)
+              GPU work portion = 1 − E/Efc c                       memory contention is small in the beginning and becomes
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                                 6
+
+
+
+
+Fig. 5: (a) CPU GPU co-execution model. (b) Co-execution with CPU frequency throttling. (c) Co-execution with contention.
+
+more prominent as time passes. Such effect is captured by          reach TT L , and then predict the number of throttles after tT L
+discounting execution rate by δ. The execution time after          till the end of the kernel execution. We adopt the well-known
+including the effects of memory contention is calculated as        RC equivalent circuit model for the CPU temperature as shown
+                                rc                                 in Eqn. (6).
+                      E = 1/(        + rg )                 (5)
+                               1+δ                                                                                              −t
+   The workload partition calculation remains the same as                       T = Pfcc × Rc + (Tinit − Pfcc × Rc )e τ                      (6)
+shown in Eqn. (2). The workload portion to allocate on CPU
+                                                                   Here T is the CPU temperature, Pfcc is the power consumption
+is decreased with increased overall execution time. The details
+                                                                   on CPU, Rc is the core thermal resistance, τ is the chip
+of the calculation for the discount parameter δ is provided in
+                                                                   time constant, t is the elapsed time and Tinit is the initial
+Section IV-C.
+                                                                   temperature. The time taken to reach the thermal limit (tT L )
+   Now when we combine the effects of both the thermal
+                                                                   can therefore be calculated given the initial temperature and
+throttling and memory contention, the execution time can
+                                                                   power by Eqn. (7).
+be calculated with Eqn.0 (4) with updated processing rate
+        rc               rc
+rc = (1+δ)   and rc0 = (1+δ) .
+                                                                                                                !
+                                                                                                Rc Pfcc − Tinit
+   4) The Design Space: We have so far presented how we                           tT L = τ ln                                 (7)
+                                                                                                Rc Pfcc − TT L
+can predict the co-execution performance from the isolated
+CPU and GPU execution times, considering the effect of the            The time periods (tL and tH ), are the periods for which the
+thermal behaviour and the memory contention. The predicted                              c
+                                                                   CPU will stay at fthrot     and f c , respectively. Eqn. (7) is used to
+performance E(f c , f g ) is based on the frequency and iso-       compute these time periods with different initial temperature,
+lated execution time of the devices at a particular frequency      end temperature and power values. The temperature drops to
+combination(f c and f g ). The change of frequency not only        Tnew after the throttling before it rises again and the drop in
+changes the isolated execution time, but also changes the          temperature is approximated by κ times the power difference
+thermal throttling behaviour as well as the memory contention.                    c
+                                                                   at f c and fthrot   where κ is a platform specific parameter. To
+In order to find the optimal configuration for a kernel, we go     calculate tL , we plug in TT L as the initial temperature and
+through all the possible frequency combinations of the devices     Tnew as the end temperature with P c fthrot      c    , and the reverse
+(all possible combinations of f c and f g ) and predict the co-    with Pfcc for tH . The power values are predicted from the
+execution performance. The frequency configuration which           models discussed in Section IV-D2.
+gives the minimum execution time is therefore the optimal             In this model, we assume the workload to be in terms of
+configuration located by OPTiC.                                    cycles. We obtain the workload cycles from the non-throttled
+   Having presented the high-level operation of the framework,     CPU runtime Efc c of the workload at f c . As tT L denotes the
+we now introduce the individual components in detail.              time at which throttling sets in, the remaining workload that
+B. Thermal Throttling Model                                        needs to be executed after throttling LcR = (Efc c − tT L ) × f c .
+                                                                   As the CPU frequency oscillates between the set frequency f c
+   As active cooling is not often presented on mobile plat-               c
+                                                                   and fthrot  , we can approximate the workload cycles executed
+forms, the vendors often set a safe operating thermal limit                                                     c
+                                                                   in one throttle period T C = tL × fthrot              + tH × f c . The
+(TT L = 75◦ C ). The processor cores adjust their operating                                           c
+                                                                   number of throttles NT C = LR /T C. The remainder workload
+frequency based on the set thermal limit to prevent catastrophic
+                                                                   in the last throttle period LT C = (NT C − bNT C c) × T C. The
+failure of the chip. Once the CPU hits the thermal limit, the
+                                                                   new CPU runtime Efc c incorporating the effects of throttling
+OS performs frequency throttling. In the Linux kernel 3.10.72                                T
+                                                                   is calculated using Eqn. ( 8).
+present on our platform, the throttling mechanism oscillates
+the CPU frequency between the set frequency (f c ) and 900
+                                                                            
+                                                                             tT L + bNT C c × (tL + tH ) + fLcT C
+         c                                                                  
+MHz (fthrot   ). When the CPU temperature rises above TT L ,                
+                                                                                                                    throt
+                                                                                                                                         c
+                                                                                                                , if LT C ≤ tL × fthrot
+                                                                            
+                                          c                          c
+its operating frequency is adjusted to fthrot  . When the chip     EfTc =                                                  (L     −(t   ×f c
+                                                                                                                              T C     L   throt ))
+temperature goes below TT L , the frequency is set back to f c .            
+                                                                            
+                                                                             t T L + bN  T C c × (t L  +  tH ) +  tL  +             f c
+                                                                            
+   The performance impact due to throttling is quantified in                                                   , otherwise
+two steps. We first find the time taken (tT L ) by the core to                                                                               (8)
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                      7
+
+
+
+In our experimental platform, the GPU does not hit 75◦ C with      throttling and memory contention for the frequency pair of
+general-purpose workload at runtime. However, we can follow        CPU and GPU are predicted as discussed in Section IV-B and
+a similar approach to model the throttling behaviour of GPU        IV-C. This information is then plugged into the co-execution
+and obtain the throttled performance Efgg .                        model as discussed in Section IV-A to obtain the prediction
+                                         T
+                                                                   of the co-execution time. Here in this section we describe
+C. CPU-GPU Memory Contention Model
+                                                                   how the performance and power values for other frequency
+   As mentioned in Section IV-A3, the co-execution of CPU          configurations are obtained from a profile frequency.
+and GPU together causes memory contention. Through various            1) Performance Model: With the performance counter val-
+experiments on our evaluation platform, we found that the          ues collected from only one execution at a certain frequency,
+GPU memory accesses are prioritized over CPU accesses.             our performance models are able to predict the execution
+Thus there is a neglible impact on the performance of GPU          time of the application at all frequency points. Note that the
+due to contention for memory. Therefore, we model a resource       OpenCL execution incurs overheads on the host device such
+contention that causes an increase in execution time only for      as API overheads and the overhead caused by JIT compila-
+the CPU. We define this overhead as the contention overhead        tion [26]. These overheads do not need to be considered in
+(Cont). Cont is proportional to the execution time where the       our performance model as the host functions are pinned to the
+CPU and the GPU are concurrently executing.                        A7 cores.
+                      Cont = TCP U ∗ δ                       (9)         a) CPU Performance Model: Performance prediction
+                                                                   for traditional CPU processors is a well researched topic. Re-
+δ represents the increase in runtime due to co-execution over      searchers use simulations, analytical models, hardware counter
+its isolated runtime. TCP U is the isolated execution time of      based models and machine learning models [27], [28], [29],
+the kernel.                                                        [30], [31] to achieve good predictions. These approaches
+   Parameter δ is obtained through a two-step process.             usually require detailed knowledge of the micro-architecture
+For a given kernel, we use the following hardware coun-            or hardware counters that reveals the property of the hardware
+ters Cache:L2 data refill, Cache:L2 data write and                 and applications. The parameters to be used in the model are
+Cache:L2 data victim for the CPU and Mali L2 Cache:                micro-architecture specific and need to be carefully selected.
+External read bytes and Mali L2 Cache: External                    The OpenCL applications make the CPU behave similar to
+write bytes for the GPU from the profile run at f c and            the GPUs [26]. Thus different frequency levels may result in
+f g and obtain the average and maximum memory request              different thread scheduling and thus different performance. In
+rate in (bytes/sec) of CPU and GPU at frequency f c and            addition, the execution of OpenCL on CPU platforms is not a
+f g , respectively. The memory request rate varies based on        well-researched topic; existing works are mostly focusing on
+the memory intensity of the benchmark and the operating fre-       the API overheads rather than the actual execution time [26],
+quency. We obtain the average and maximum memory request           [32]. Therefore in this work, we adopt a simple analytical
+rate at other frequencies (f c and f g ) through a multi-variate   model of GPU [33] with hardware counter information, to
+additive regression model. The request rate at other frequencies   scale the execution performance to other frequencies for CPU.
+is modeled as a function of the variables α, ξ and λ. α denotes    The CPU execution time (E c ) is modeled as comprising of the
+the ratio of memory access time over computation. ξ is the         computational time, memory access time and latency hiding,
+ratio of target frequency over the profile frequency and λf is     as shown in Eqn.(12). Parameter α is the ratio of memory
+the memory request rate at profile frequency.                      access time over computation time and represents the compute
+                    λf = f unc1(α, ξ, λf )                 (10)    intensity. β represents the latency hiding fraction over the total
+                                                                   computation time and is linearly proportional to α.
+The second step is to model δ as a function of average and                             c
+                                                                                E c = Ecomp    c
+                                                                                            + Emem    c
+                                                                                                   − Ehide
+maximum memory request rate (λA        M
+                                 f , λf ) of both the CPU and                          c           c           c
+                                                                                    = Ecomp + α × Ecomp − β × Ecomp              (12)
+GPU.                                                                                                 c
+                            c
+                                 Mc     Ag     Mg                                   = (1 + α − β) × Ecomp
+            δf = f unc2(λAf c , λf c , λf g , λf g )     (11)
+                                                                      From the CPU profile run at one frequency (f c ), we
+   We use OpenCL-based STREAM benchmarks from [23]
+                                                                   collect the number of memory accesses through L2 cache
+to generate memory requests of various intensities from CPU
+                                                                   miss counter: Cache:L2 data refill (N mem) and the
+and GPU and measure the execution times of isolated and co-
+                                                                   computational information through number of computation
+execution runs. DS-5 Streamline [24] with gator is used to
+                                                                   instructions executed: Instruction: Executed (I ex) -
+obtain the required hardware counters. func1 is generated
+                                                                   Instruction: Load/Store (I mem). Thus α is calculated
+using generalized additive models of R [25] while func2
+                                                                   as the number of memory access over computation instruc-
+is generated using first-order linear regression model of R
+                                                                   tions: α = N mem/(I ex − I mem) × C1 , β = C2 × α. The
+including all the interaction terms.
+                                                                   constants C1 and C2 are application agnostic and computed by
+                                                                   analysing micro-benchmarks with different compute intensity.
+D. Power-Performance Estimation across Frequency Settings             When we employ frequency scaling of A15, the CPU
+  The optimal configuration for a given kernel is obtained by      frequency is changed to f c while the memory frequency does
+going through the design space of different frequency com-         not change. Indeed, the memory controller frequency cannot
+binations of the devices (shown in Table I,II). The respective     be changed in our platform. Therefore, the computation time
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                       8
+
+
+
+will be scaled with frequency, keeping the memory access                                        TMU
+time the same. The execution time at f c , denoted as Efc c , is                   SC             SC                SC
+estimated by Eqn.(13).
+                                                                                   SC             SC                SC
+                    fc
+             Efc c =         c
+                        × (Ecomp      c
+                                  − Ehide      c
+                                          ) + Emem                                  L2          MMU                 L2
+                    fc
+                    h fc               i                    (13)
+                                            c
+                  =      × (1 − β) + α × Ecomp                                              Thread Issue
+                      fc
+      b) GPU Performance Model: There is a rich literature
+                                                                                      A1      A2       LS       T
+on analytical performance models for conventional high-end
+GPUs [33], [34], [35], [36]. But ARM Mali GPU Midgard ar-
+chitecture differs in many-aspects from conventional desktop-                           Thread Completion
+class GPUs. Midgard GPUs are based on Very Long Instruc-                           Fig. 6: Mali GPU Architecture.
+tion Word (VLIW) architecture and each instruction word
+contains multiple operations. Single Instruction Multiple Data     a single cycle under ideal circumstances. LS instruction issues
+(SIMD) is adopted so that most arithmetic instructions operate     counter is used to approximate the L/S cycles (Lgmem ). The
+on multiple data elements simultaneously. Instead of extracting    overhead values OHT P and OHT M at the profiled frequency
+thread level parallelism, all threads in Midgard GPUs have         are therefore calculated using Eqn. (14) and (15). We assume
+individual program counters and the warp size is 1. Threads        the overhead values to be the same across all frequencies.
+on a Mali GPU are independent and can diverge without                 In order to predict for other GPU frequencies (f g ), Lgmem
+any performance impact. In addition, Mali GPUs use caches          needs to be scaled. The Lgmem cycles varies because of the
+instead of local memories and OpenCL local and private             changes in memory access cycles due to cache misses. In
+memories are mapped into main memory. To the best of our           ARM Midgard architecture, cache misses does not stall the
+knowledge, there are no published works on the performance         pipeline while waiting for the misses to be resolved, instead,
+models for embedded GPUs that have architectures similar to        it results in an instruction restart/reissue. LS instruction issues
+that of ARM-Mali GPUs.                                             counter counts the retry cycles due to misses in the data cache.
+   The GPU performance model is based on the execution             Thus we use the difference between L/S instructions and LS
+cycles of the workload on the underlying GPU architecture,         instruction issues counter to approximate the cycles incurred
+frequency and the workload characteristics. The ARM Mali-          due to cache misses (M issg ). The memory access latency
+T628 GPU consists of six shader cores (SC) and an inter-           cycles (M Lf g ) varies with GPU frequency(f g ). We use global
+core task management unit (T M U ). The T M U is responsible       latency benchmark similar to [37] to obtain M Lf g of our
+for distributing the tasks to shader cores for execution. As       hardware platform. For a given application kernel, the impact
+depicted in Figure 6, Each SC in the Midgard architecture          of variation of M Lf g on M issg is dependent on the intensity
+is made up of three different pipelines: Arithmetic pipeline,      and distribution of L2 misses. We use L2 miss rate (L2M R ) to
+Load/Store (L/S) pipeline and Texture pipeline. The three          quantify the miss intensity and we assume uniform distribution
+pipelines are collectively known as the tripipe. Each thread       of the L2 misses over the all tripipe cycles. L2T P represents
+uses only one of the Arithmetic or Load-Store execution            L2 misses per Tripipe Cycle. W in Eqn.( 16) is modeled as
+pipes at any point in time. Two instructions from the same         function of L2M R and L2T P .
+thread execute in sequence. The cycles for which the tripipe is
+active is determined by the slowest among the three pipelines.             Lgmem (f g ) = L/S instructions + M Lf g × W × M issg   (16)
+General purpose OpenCL applications typically only use the           With the corresponding Lgcomp and Lgmem at f g , we can
+Arithmetic or Load-Store pipelines. The texture pipeline used      calculate the GPU Active Cycles by Eqn. (14) and (15). The
+for reading image data types is not often engaged. Thus, the       GPU runtime Efgg can therefore be calculated by Eqn. (17).
+tripipe active cycles is usually determined by the slowest
+of the Arithmetic and the L/S pipelines, as shown in Eqn.                              Efgg = GPU Active Cycles/f g                (17)
+(14). OHT P and OHT M denote the overheads associated with            2) Power Model: The power values of the devices are
+driving the tripipe and TMU.                                       required for an accurate thermal behavior and therefore better
+           Tripipe Cycles = MAX(Lgcomp , Lgmem ) + OHT P    (14)   throttling prediction as discussed in Section IV-B. Research
+           GPU Active Cycles = Tripipe Cycles + OHT M       (15)
+                                                                   on processor power modeling is usually based on instruc-
+                                                                   tions [38], hardware-counters [39], [40] and utilization [41].
+  From the GPU profile run of the kernel at one frequency f g ,    Instruction-level models require massive information including
+we collect the following hardware performance counters : GPU       the power of each instructions and overheads of all instruction
+Active cycles, Tripipe cycles, LS instructions, LS                 pairs, making it impractical to be implemented. There have
+instruction issues, Arith. instructions, L2 cache                  been substantial are focused around the hardware-counter-
+counters. In Midgard architecture, arithmetic instructions are     based models, where the counters are selected manually [39]
+single cycle throughput, thus we use Arith. instructions counter   or automatically by machine learning [40] for specific plat-
+to approximate the Arithmetic cycles (Lgcomp ). Similar to         forms. The identification of such counters is largely dependent
+arithmetic instructions, a single load/store can be executed in    on the processor architecture and benchmark characteristics.
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                        9
+
+
+
+In addition, the number of counters to be collected concur-             TABLE III: Benchmark Configurations for Polybench.
+rently are usually restricted, resulting in a long profiling time.     Name           2DCONV          2MM         3MM         ATAX
+Utilization-based models, on the other hand, use one profile           Input Size    4096x4096     512x512      512x512   4096x4096
+                                                                       Iterations          100           30          15          75
+run to capture the activity in order to approximately predict the
+                                                                       Name              BICG        CORR       COVAR        GEMM
+power. In this work, we implement an utilization-based power
+                                                                       Input Size    4096x4096   2048x2048    2048x2048   1024x1024
+model to predict the power of all other frequency levels from          Iterations           60            1           1           5
+one profile run. Few hardware counters are collected to achieve        Name         GESUMMV           MVT        SYR2K        SYRK
+better prediction.                                                     Input Size         4096         4096   2048x2048   1024x1024
+   The total power comprises of dynamic power and static               Iterations          250           50           1          30
+power and is defined as P = Ac ∗ V 2 f + Pstat . Here V and f
+are the operating voltage and frequency respectively, Ac is the      denoted as CPU-alone execution. Similarly, we execute the
+activity factor times capacitance factor. As Ac value remains        same kernel on the 4 shader cores of Mali GPU, denoted as
+constant across frequency levels, we combine these two factors       GPU-alone execution. These executions are performed for
+into one for easier notation. The static power is application        all possible A15 and GPU frequency configurations. Table IV
+agnostic and depends on the voltage/frequency settings. Thus         shows the best execution time achievable for the kernel on a
+it can be obtained through profiling at each frequency level         single device. We observe that some kernels benefit greatly
+(Pstat )f c . We note that in our mobile system, the stringent       from GPU executions while others do not.
+temperature constraints (75◦ C) ensure that additional leakage          This behavior encourages us to explore the benefits of co-
+power due to high temperature is negligible.                         execution that utilize both the CPU and the GPU concurrently.
+   We profile the kernel at frequency f c and collect the power      We use the configuration (frequency and workload partition)
+value (P c f c ) from the on-chip sensors. The Ac value remains      provided by our OPTiC framework for each kernel and execute
+unchanged across frequency levels because in our co-execution        the kernels on our experimental platform. The execution time
+the CPU is never idle. The power for another frequency level         for the benchmarks are listed in comparison to the minimum
+P c f c is estimated as shown in Eqn. (18).                          of the standalone execution time, as shown in Table IV. We
+                                                                     can see that by co-executing the kernel on CPU and GPU with
+                 P c f c = Ac ∗ Vf2 ∗ f c + (Pstat )f c       (18)   the configuration provided by our OPTiC framework, we are
+                                                                     able to achieve better performance than executing the kernel
+For GPU, a similar utilization based model is implemented.
+                                                                     on a single computing device (CPU/GPU). The performance
+GPU power P g f g is calculated similar to Eqn. (18).
+                                                                     benefit can be as high as 35% when compared to the best
+   3) Portability of OPTiC: The analytical models in OPTiC
+                                                                     possible single device execution. We obtain on an average
+are parameterizable but need to be instantiated with platform-
+                                                                     13.8% performance improvement over standalone execution.
+specific values. To port OPTiC onto a new platform, profiling
+and micro-benchmarking are required to identify the parameter
+values for thermal throttling, memory contention, and power-         B. Importance of Thermal Consideration
+performance models. The models can then be applied with the             We then evaluate the importance of considering the thermal
+new parameter values as discussed in Section IV-A to obtain          constraints in co-execution. We compare OPTiC with [2],
+co-execution performance.                                            which enables co-execution of the kernel and partitions the
+                                                                     workload using load balancing strategy for each kernel based
+              V. E XPERIMENTAL E VALUATION                           on its runtime for CPU-alone and GPU-alone executions.
+   We conduct the evaluation of the OPTiC framework on the           The model in [2] does not consider the effects of thermal
+Odroid XU3 platform [6]. The Polybench benchmark suite [5]           constraints and always runs at the highest possible CPU and
+is used, from which twelve benchmarks that are suitable to be        GPU frequency for the co-execution.
+partitioned to run on CPU and GPU concurrently are chosen.              Table IV in addition shows the actual execution times on
+The benchmarks are configured with appropriate input sizes as        the platform for the predicted configuration without thermal
+shown in Table III, in order to minimize the interferences of        consideration [2]. OPTiC shows an average of 13.7% (and
+OpenCL API overheads and reveal the pure kernel execution            as high as 25%) improvement in performance compared to
+portion.                                                             [2] by taking into account thermal behavior. Furthermore, for
+   In addition, to minimize the measurement error as well we         benchmarks 2DCON V , AT AX, BICG, SY R2K , [2] per-
+emphasize the effect of thermal throttling, multiple iterations      forms worse than the corresponding best possible single device
+are used for benchmarks with short execution time. We later          execution. For 2DCON V kernel, there is a 33% increase in the
+show in Section V-G the evaluation of OPTiC with end-to-             co-execution runtime compared to the single device runtime.
+end performance results and thermal throttling behavior for          This observation clearly emphasizes the need for considering
+real-world applications using some of these kernels.                 the thermal constraints while enabling co-execution.
+
+A. Performance evaluation of Co-execution                            C. Optimal Configuration Prediction
+  To quantify the effectiveness of kernel co-execution, we first       We perform exhaustive runtime measurement of all design
+obtain the performance of the OpenCL kernel on a single              points by executing each kernel at all frequency settings and
+device. We execute the OpenCL kernel on 4 A15 cores,                 workload partitions. 12 CPU frequencies, 7 GPU frequencies
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                                                   10
+
+
+
+TABLE IV: Execution times with single-device, OPTiC predicted co-execution configuration, and predicted co-execution config
+from [2] with no thermal consideration.
+                                                                        Execution Time (Sec)                                Benefits of         Benefits of
+                                  Benchmark
+                                               CPU-alone    GPU-alone      Min of CPU-                [2] (no thermal     OPTiC due to         OPTiC due to
+                                    Names                                                    OPTiC
+                                               Execution    Execution     and GPU-alone                consideration)    Co-execution (%)    Thermal Con. (%)
+                                  2DCONV          100.92         7.98                7.98      7.95             10.61                 0.38               25.07
+                                  2MM              22.41        14.68               14.68      9.52             11.76                35.15               19.05
+                                  3MM              30.72        11.05               11.05      9.03              9.16                18.28                1.42
+                                  ATAX             41.57        12.48               12.48     12.27             15.32                 1.68               19.91
+                                  BICG             32.87         9.95                9.95      9.65             11.72                 3.02               17.66
+                                  CORR             53.18       129.01               53.18     41.93             50.64                21.15               17.20
+                                  COVAR            47.63        99.57               47.63     38.12             45.51                19.97               16.24
+                                  GEMM             86.19         9.97                9.97      9.13              9.75                 8.43                6.36
+                                  GESUMMV          21.53        73.84               21.53     21.32             21.95                 0.98                2.87
+                                  MVT              29.29        11.26               11.26      9.42                9.6               16.34                1.88
+                                  SYR2K            29.75        58.63               29.75     26.92              30.9                 9.51               12.88
+                                  SYRK             31.63        56.81               31.63     21.98              28.8                30.51               23.68
+                                                                                                             Average               13.78%              13.68%
+
+                                                                                                D. Influence of the Co-execution Model
+                                     Optimal    OPTiC      ref-nMC      ref-nTMC
+                                                                                                   We use two simplified co-execution models to evaluate
+Normalized Execution Time
+
+
+
+
+                            1.6
+                            1.4                                                                 the effectiveness of OPTiC’s memory contention and thermal
+                            1.2                                                                 throttling models. Starting with OPTiC as reference, the model
+                              1                                                                 ref-nMC considers thermal throttling effects but removes the
+                            0.8                                                                 memory contention model as discussed in Section IV-A3. The
+                            0.6
+                            0.4
+                                                                                                model ref-nTMC removes the thermal throttling considera-
+                            0.2                                                                 tion as discussed in Section IV-A2 in addition to the memory
+                              0                                                                 contention model. We have already shown in Section V-B, the
+                                                                                                need for thermal consideration. Model ref-nTMC is included
+                                                                                                here for comprehensive comparison.
+                                                                                                   Figure 7 shows the runtime comparison of the predicted
+Fig. 7: Execution time of exhaustively searched optimal config                                  optimal configuration by OPTiC, ref-nMC and ref-nTMC
+with OPTiC, ref-nMC and ref-nTMC predicted configs.                                             normalized to the actual optimal execution time. The execution
+                                                                                                time of the predicted configurations is on an average 14.33%
+                                                                                                higher for ref-nMC and 22.74% higher for ref-nTMC than
+                                                                                                the optimal. When compared to OPTiC, the execution time is
+and 20 different workload partition point make up the design                                    on an average 8.85% higher for ref-nMC and 16.83% higher
+space with 1680 points. The experiments take on average 1.5                                     for ref-nTMC.
+days per benchmark, mainly because after each execution, one-                                      For most of the kernels, ref-nMC predicts the same fre-
+minute cooling down period is applied to ensure a consistent                                    quency configuration as OPTiC as shown in Table V but with
+ambient thermal condition. In contrast, with only two profile                                   more workload allocated to the CPU. As memory contention
+runs, OPTiC is able to perform the prediction of all design                                     only affects the CPU runtime, the CPU time is stretched
+points within 5 minutes on an average for a kernel. This leads                                  while the GPU time remains the same. Thus for benchmarks
+to 432X speedup in the design space exploration time with the                                   like ATAX and BICG, ignoring memory contention results in
+OPTiC framework compared to an exhaustive search.                                               suboptimal workload allocation. OPTiC is able to capture the
+                                                                                                effect and predict the delay in CPU runtime, and therefore
+   The configuration with the minimum execution time from                                       allocates less workload to the CPU and achieves better per-
+exhaustive execution of all design points is the actual optimal                                 formance. ref-nTMC ignores the effect of thermal throttling
+configuration. This optimal runtime is compared against the                                     and thus predicts the optimal frequency configurations to be
+runtime of the configuration obtained from OPTiC. We pick                                       at the highest frequency settings with corresponding workload
+the configuration suggested by OPTiC and execute it on the                                      partition. The predicted configurations are near optimal for
+platform to obtain the runtime. Table V shows the comparison.                                   benchmarks that do not suffer much from thermal throttling,
+The Frequency shown in the table are the CPU frequencies.                                       such as 3MM, GEMM and MVT. But for other benchmarks
+The GPU frequency choices are at 600MHz for all the bench-                                      like 2DCONV, such configuration can yield 40% more runtime
+marks and therefore omitted. For benchmarks 2M M , 3M M ,                                       compared to the optimal.
+CORR, GESU M M V and SY RK , OPTiC chooses accurately
+the best frequency setting with minimal workload-partition                                      E. Accuracy of Individual Models
+difference. For other benchmarks, the OPTiC predicted con-
+                                                                                                   1) Performance and Power Models: Figure 8 and 9 shows
+figurations still provide near-optimal runtime. The runtime of
+                                                                                                the estimation error of the CPU, GPU power-performance
+the predicted configuration is on average 5.1% higher than the
+                                                                                                estimations in Section IV-D1 and IV-D2 for all the benchmarks
+optimal achievable runtime.
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                                         11
+
+
+
+   TABLE V: Execution time for exhaustively searched optimal configuration and OPTiC predicted optimal configuration.
+                                        Optimal Configuration                       OPTiC Predicted Optimal                             Error
+                  Benchmark
+                                      through Exhaustive Search                          Configuration                                   (%)
+                               Frequency                    Execution        Frequency                   Execution
+                    Names                   CPU Portion                                  CPU Portion
+                                 (MHz)                      Time (Sec)         (MHz)                    Time (Sec)
+                 2DCONV             1600          6.15%           7.54            1500         6.82%          7.95                       5.46
+                 2MM                1700         39.06%           9.16            1700        37.60%          9.52                       3.97
+                 3MM                1900         26.56%           8.80            1900        24.68%          9.03                       2.13
+                 ATAX               1800         15.23%          11.69            1900        16.05%         12.27                       4.94
+                 BICG               1900         14.06%           9.10            2000        15.22%          9.65                       6.02
+                 CORR               1700         66.92%          40.58            1700        66.21%         41.93                       3.32
+                 COVAR              1700         66.92%          34.48            1800        66.61%         38.12                      10.57
+                 GEMM               1900         10.35%           9.00            1600        10.38%          9.13                       1.48
+                 GESUMMV            1700         78.10%          19.88            1700        72.97%         21.32                       7.28
+                 MVT                1700         25.10%           8.91            2000        26.72%          9.42                       5.78
+                 SYR2K              1600         66.02%          25.25            1700        62.63%         26.92                       6.65
+                 SYRK               1500         63.67%          21.43            1500        63.12%         21.98                       2.57
+                                                                                                           Average                       5.06
+
+averaged across all frequency settings. Note that the power-                                       12
+
+
+
+
+                                                                            Prediction Error (%)
+performance estimation models (Section IV-D1 and IV-D2)                                            10
+                                                                                                    8
+evaluated in this subsection individually do not consider the
+                                                                                                    6
+increase in execution time or change in power consumption                                           4
+due to thermal throttling. The effect of thermal throttling                                         2
+
+on CPU and GPU independently as well as on CPU-GPU                                                  0
+
+co-execution are modeled separately (Section IV-B) starting
+with non-disrupted power and execution time estimations
+                                                                                                   18
+obtained from individual models and we present the evaluation
+                                                                            Prediction Error (%)
+
+                                                                                                   16
+                                                                                                   14
+of the model in the next subsection. Therefore, in this set                                        12
+                                                                                                   10
+of experiments, we apply additional active fan cooling to                                           8
+                                                                                                    6
+minimize the effects of thermal throttling when measuring                                           4
+                                                                                                    2
+the execution time/power at different frequencies and obtain                                        0
+
+accurate evaluation of the estimated execution time/power.                                                          5
+                                                                                                                    0
+However, the executions of some benchmarks at the highest                                                                   1
+
+CPU frequency setting (2.0 GHz) still suffer from thermal                                                                   CPU   GPU
+throttling. The non-throttled execution times at the highest                                            Fig. 8: Accuracy of performance predictions.
+CPU frequency setting are not obtainable and thus omitted
+for the evaluation.                                                                                8
+                                                                           Prediction Error (%)
+
+
+
+
+                                                                                                   7
+   The bars in Figure 8 and 9 show the average prediction                                          6
+                                                                                                   5
+error of the performance and power model across all frequency                                      4
+                                                                                                   3
+settings (with the exclusion of 2.0 GHz for some benchmarks                                        2
+where non-throttled performance could not be measured as                                           1
+                                                                                                   0
+discussed in the previous paragraph). The blue bars represent
+average prediction errors for the CPU and the green bars
+represent average prediction error for the GPU. The maximum                                        9
+                                                                                                   8
+and minimum prediction error are shown as the vertical line
+                                                                            Prediction Error (%)
+
+
+
+
+                                                                                                   7
+and the median error is denoted as yellow dashes on the line                                       6
+                                                                                                   5
+for each benchmark across all possible frequency settings. On                                      4
+                                                                                                   3
+an average, the individual models are able to predict within                                       2
+                                                                                                   1
+3.55% for performance and 2.15% for power. The inaccuracy                                          0
+                                                                                                                    5
+in performance and power prediction can affect the overall pre-                                                     0
+                                                                                                                        1
+diction of co-execution performance, but such effects are not
+directly correlated. For example, for benchmarks 2DCONV                                                                     CPU   GPU
+and 2MM, although the individual prediction errors of 2MM                                                  Fig. 9: Accuracy of power predictions.
+are higher than 2DCONV, OPTiC is still able to find the
+optimal configuration for 2MM and achieves less prediction               Figure 10 shows the estimated runtime without thermal consid-
+error, as shown in Table V.                                              eration, the second column shows the revised estimation with
+   2) Thermal Throttling Model: The individual A15 perfor-               the thermal consideration as discussed in Section IV-B, and
+mance model predicts runtime at different frequency without              the third column shows the actual runtime measured on the
+thermal consideration. The actual runtime at higher frequency            system. Our throttling model brings down the prediction error
+is stretched due to thermal throttling. The first column in              for SYRK from 9.18% to 5.80%. At lower frequencies (below
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                                               12
+
+
+
+                                                                                               power governors, which is different from the linux kernel
+                      Estimation Time (Section IV-B(a))    Estimation Considering Throttling
+                                                                                               3.10.72 used in the previous experiments. Hence the runtime
+                      Actual Measured Time
+                                                                                               reported are different from Table IV.
+                      45                                                                          For most of the benchmarks, GPU has better performance
+ Execution Time (s)
+
+
+
+
+                      40
+                      35                                                                       than CPU execution. Thus dynamic DVFS on CPU does
+                      30                                                                       not have much impact on the minimum time of the single
+                      25
+                      20                                                                       device execution (Min(C,G)) as the GPU execution time is
+                      15                                                                       not affected by the CPU frequency settings. As CPU-miser
+                      10
+                       5                                                                       [42] introduces degradation in performance for CPU, increase
+                       0                                                                       in Min(C,G) are observed for GESU M M V , SY R2K and
+                           2000    1900     1800    1700      1600    1500     1400    1300
+                                                                                               SY RK , where minimum single device executions are on CPU.
+                                            CPU A15 Frequency (MHz)
+                                                                                               However, the degradation in performance is not as high as 10%
+Fig. 10: CPU runtime estimation with thermal throttling con-                                   as we configured, because CPU-miser helped to some extent
+sideration for SYRK.                                                                           with the thermal throttling by adjusting the CPU to a lower
+                                                                                               frequency. For a naive co-execution configuration [2], co-
+1400 MHz), as there are few or no throttling, the estimation                                   execution of CPU and GPU achieves better performance com-
+error is dominated by the CPU performance model.                                               pared to single device execution for most of the benchmarks
+                                                                                               with dynamic DVFS. CPU-miser helps with the thermal throt-
+                                                                                               tling problem by reducing the CPU frequency based on the
+F. Influence of DVFS                                                                           IPC achievable, gives better performance than the workload
+   The aim of OPTiC framework is to minimize the co-                                           based interactive performance governor. However, CPU-miser
+execution time of the kernel and hence both the CPU and                                        is not designed to be thermal-aware, causing unpredictable
+the GPU run at close to 100% utilization. This leads to                                        performance drops for some benchmarks. On the contrary,
+thermal emergencies and we quantify its effect on performance                                  OPTiC, which is thermal aware, is designed to predict the
+in OPTiC. As OPTiC carefully chooses the CPU and GPU                                           runtime thermal behaviours of the benchmark and further
+frequencies by taking care of the thermal constraints, dynamic                                 improves the co-execution performance.
+voltage and frequency scaling (DVFS) is therefore not enabled
+during kernel execution except for thermal throttling and hence
+we use Linux performance governor. However, one may won-                                       G. Application Case Studies
+der whether other existing Linux power governors (interactive,                                    To illustrate the effectiveness of OPTiC, we use two of
+ondemand, conservative) and other IPC (Instructions Per Cy-                                    the benchmarks kernels, matrix multiplication (GEMM) and
+cle) based DVFS schemes would have been equally effective                                      convolution (2DCONV), in two full-fledged real-world appli-
+as OPTiC. Here we choose one workload based DVFS scheme                                        cations. These two applications are Tiny YOLOv3, an object
+(Linux interactive governor) and an IPC based scheme (CPU-                                     detection model in Darknet [44] neural network and a simple
+miser) [42] for comparison purposes. CPU-miser [42] is a run-                                  128 labels, image-classification convolutional neural network
+time DVFS scheme that aims to reduce power consumption                                         (CNN) from ARM Compute Library [45].
+given a specific constraint on the performance degradation. It                                    A continuous stream of images are used in both applica-
+specifies an index of CPU-intensiveness from the measured                                      tions. We profile the dominant kernels of the application and
+instructions per cycles achieved by the running workload in                                    use the profiling results to obtain the parameters necessary for
+the current time interval, predicts the index for the next time                                OPTiC to determine the optimal partitioning and frequency
+interval and adjusts the frequency. We implemented CPU-                                        settings for these dominant kernels. The rest of the application
+miser for our platform. In this set of experiment, CPU-miser is                                (non-kernel portions) executes on the CPU only. There are
+invoked with 100 ms time interval and the degradation factor is                                13 convolution layers out of the 23 layers in Tiny YOLOv3.
+set to 10%. Considering the slow varying nature for Polybench                                  Darknet transforms the convolution operations into matrix
+benchmarks, the index for the current interval is used as the                                  multiplications (GEMM), which comprises 76.35% of the
+prediction for the next time interval [43].                                                    runtime of the application. The OPTiC-predicted partitioning
+   Table VI shows the performance improvement of OPTiC                                         and frequency selection are then applied to the GEMM kernels
+when compared to the best of CPU-alone and GPU-alone con-                                      for co-execution. Similarly, convolution (2DCONV) is the
+figurations as well as the co-execution configuration suggested                                dominant computation (74.21% of runtime) in the image-
+by [2] under the two DVFS schemes. In general, OPTiC (with                                     classification CNN, and we apply OPTiC-based partitioning,
+fixed frequency settings) is more effective than the existing                                  frequency selection for co-execution of the 2DCONV kernels.
+power governors and the IPC-based DVFS scheme in the                                              GPU-accelerated (GPU-acc) execution where 2DCONV and
+presence of thermal throttling during co-execution across all                                  GEMM kernels are executed on GPU with the performance
+the benchmarks. The average performance improvement of                                         DVFS governor is used as the baseline. Furthermore, the
+OPTiC compared to CPU-GPU co-execution + dynamic DVFS                                          co-execution of CPU and GPU with the partition selected
+with Linux interactive governor is 10.56% and CPU-GPU co-                                      by [2] which neglects the thermal behaviour are presented
+execution + dynamic DVFS CPU-miser is 5.44% respectively.                                      for comparison. The non-kernels are executed on CPU in all
+Note that we use Linux kernel 3.10.106 to enable the Linux                                     cases. The CPU-alone, GPU-acc and Model [2] executions are
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                               13
+
+
+
+                                               TABLE VI: Influence of dynamic DVFS.
+                                                               Performance improvement                            Performance improvement
+                    Execution time      Execution time (s) of                              Execution time (s) of
+   Benchmark                                                          of OPTiC over                                     of OPTiC over
+                  of OPTiC (s) (with
+     Names                                     the execution with dynamic DVFS                    the execution with dynamic DVFS
+                  Linux performance
+                                                  Linux interactive governor +                            CPU-miser [42] +
+                      governor)
+                                        Min(C,G)      [2]      Min(C,G)          [2]       Min(C,G)      [2]      Min(C,G)         [2]
+   2MM                         11.09       17.78      12.44       37.61%         10.83%       17.65      11.51       37.14%          3.60%
+   3MM                         10.81       13.73      12.03       21.31%         10.19%       13.70      11.81       21.11%          8.51%
+   ATAX                        12.09       12.33      12.85         1.93%          5.87%      11.85      12.97       -2.04%          6.76%
+   BICG                         9.40        9.71      10.75         3.17%        12.48%        9.43      12.65        0.29%        25.63%
+   GEMM                        11.39       12.69      11.35       10.22%          -0.42%      12.55      11.53        9.19%          1.21%
+   GESUMMV                     22.23       20.86      24.99        -6.58%        11.05%       22.61      22.95        1.69%          3.11%
+   MVT                          9.58       11.48      10.86       16.58%         11.78%       11.42      10.18       16.11%          5.90%
+   SYR2K                       25.54       33.76      32.35       24.34%         21.06%       33.50      23.19       23.75%       -10.16%
+   SYRK                        23.90       31.95      27.23       25.19%         12.24%       32.67      25.00       26.85%          4.41%
+   Average                         -            -          -      14.86%         10.56%            -          -     14.90%          5.44%
+
+                                       TABLE VII: Image classification case study evaluation.
+                        Normalized Execution Time         Avg. CPU Temp               Avg. GPU Temp               % CPU Throttling
+        Configuration
+                        Performance    Interactive   Performance   Interactive   Performance   Interactive    Performance  Interactive
+        GPU-acc                   1           1.02      69.16 ◦ C   67.80 ◦ C       62.40 ◦ C   59.86 ◦ C         22.29 %    18.44 %
+        CPU                     3.9           3.97      72.65 ◦ C   72.85 ◦ C       60.69 ◦ C   61.04 ◦ C         77.51 %    79.55 %
+        [2]                    1.05           1.06      71.68 ◦ C   72.10 ◦ C       63.50 ◦ C   63.29 ◦ C         52.39 %    56.07 %
+        OPTiC                  0.95              -      63.56 ◦ C            -      54.77 ◦ C            -              0            -
+
+                                          TABLE VIII: Tiny YOLOv3 case study evaluation.
+                        Normalized Execution Time         Avg. CPU Temp               Avg. GPU Temp              % CPU Throttling
+       Configuration
+                        Performance    Interactive   Performance   Interactive   Performance   Interactive   Performance  Interactive
+       GPU-acc                    1           1.01      65.09 ◦ C   62.10 ◦ C       59.61 ◦ C   57.28 ◦ C              0            0
+       CPU                      5.3           5.53      70.97 ◦ C   71.38 ◦ C       61.52 ◦ C   62.74 ◦ C         32.8 %    42.88 %
+       [2]                     1.10           1.12      68.33 ◦ C   64.48 ◦ C       60.79 ◦ C   56.95 ◦ C        12.32 %      7.57 %
+       OPTiC                   0.93              -      53.15 ◦ C            -      47.67 ◦ C            -             0            -
+
+configured to be at the highest CPU, GPU frequency with the              hence temperature/thermal throttling. However, for the GPU-
+performance and interactive governor, while OPTiC runs at the            accelerated executions, the interactive governor reduces the
+frequency selected by the framework without dynamic DVFS                 CPU frequency during low CPU utilization, resulting in an
+(with performance governor only).                                        average of 2◦ C reduction in the CPU temperature. Note that
+   Tables VII and VIII show the end-to-end latency of the                the CPU gets throttled even in GPU-acc configuration (though
+entire applications including the sequential non-kernel com-             much lower than CPU-only execution) for the image classi-
+putations under different DVFS governors, the average CPU                fication application as the non-convolutional layers executing
+and GPU temperature during the application execution and the             on CPU are quite power-hungry
+percentage of time CPU is at lower frequency due to thermal
+throttling. The execution times reported are normalized to the           H. Limitation
+baseline (GPU-acc with performance governor), i.e., lower
+                                                                            As a static analysis framework, OPTiC estimates through
+value is better.
+   It can be clearly seen that OPTiC achieves performance                profiling the performance of a computational kernel for CPU-
+gain: 5–7% improvement in end-to-end latency compared to                 GPU co-execution on platforms with stringent thermal con-
+GPU-only accelerated execution. Note that this performance               straints. For unknown kernels, OPTiC requires two profile runs
+gain of OPTiC is measured on a real platform with applica-               (one execution on CPU and one execution on GPU) to identify
+tions that have substantial sequential code (which becomes               the optimal settings. It is well suited for applications like
+performance bottleneck with parallelization). Moreover, the              Polybench as we demonstrated, for which the execution char-
+performance gains are achieved w.r.t. a highly-optimized GPU-            acteristics of the OpenCL kernels can be fully captured by the
+accelerated version. More importantly, OPTiC significantly               profile runs, enabling an accurate estimation of the run-time
+lowers the average core temperature by 4 –9◦ C and in addition           behaviour. However, for applications that present variability at
+completely eliminates thermal throttling. Such temperature               runtime depending on the input, careful profiling needs to be
+control exhibits the potential of OPTiC in extending system              performed to capture the dominant execution characteristics in
+lifetime without compromising performance with the help of               order for OPTiC to locate the optimal execution configuration
+accelerators and co-execution.                                           at compile time.
+   A slight degradation (< 2%) in performance can be ob-
+served for the execution with the interactive governor, compar-                                  VI. C ONCLUSION
+ing to the performance governor. This is because for CPU-only              Partitioned co-execution of computation kernels on CPU-
+execution with high utilization rates, the interactive DVFS              GPU systems can significantly reduce the execution time.
+governor does not get a chance to lower the frequency and                Identifying the optimal configuration that results in minimum
+IEEE TRANSACTIONS ON COMPUTER-AIDED DESIGN OF INTEGRATED CIRCUITS AND SYSTEMS, SEPTEMBER, 2018                                                                14
+
+
+
+execution time is quite challenging due to thermal throttling                      [32] J. Shen, J. Fang, H. Sips, and A. Varbanescu, “Performance Traps in
+and memory contention. We present OPTiC, a framework                                    OpenCL for CPUs,” in PDP, 2013.
+                                                                                   [33] S. Hong et al, “An Analytical Model for a GPU Architecture with
+that predicts the co-execution performance through analytical                           Memory-level and Thread-level Parallelism Awareness,” in ISCA, 2009.
+modeling of CPU and GPU performance, power, impact of                              [34] Y. Zhang, Y. Hu, B. Li, and L. Peng, “Performance and Power Analysis
+thermal throttling and memory contention. OPTiC achieves                                of ATI GPU: A Statistical Approach,” in IEEE NAS, 2011.
+                                                                                   [35] J. Sim et al, “A Performance Analysis Framework for Identifying
+an average 13.68% performance gain over existing schemes                                Potential Benefits in GPGPU Applications,” in PPoPP, 2012.
+attempting co-execution without thermal considerations.                            [36] Q. Wang and X. Chu, “GPGPU Performance Estimation with Core and
+                                                                                        Memory Frequency Scaling,” CoRR, 2017.
+                                                                                   [37] X. Mei and X. Chu, “Dissecting GPU Memory Hierarchy Through
+                               R EFERENCES                                              Microbenchmarking,” TPDS, 2017.
+                                                                                   [38] V. Tiwari and S. Malik et al, “Instruction level power analysis and
+ [1] “OpenCL: The open standard for parallel programming of heterogeneous               optimization of software,” in Technologies for wireless computing, 1996.
+     systems.” https://goo.gl/A9wXRJ.                                              [39] W. Huang, C. Lefurgy, W. Kuk, A. Buyuktosunoglu, and M. Floyd et
+ [2] A. Prakash et al, “Energy-efficient execution of data-parallel applications        al, “Accurate Fine-Grained Processor Power Proxies,” in MICRO, 2012.
+     on heterogeneous mobile platforms,” in ICCD, 2015.                            [40] M. J. Walker and S. Diestelhorst et al, “Accurate and Stable Run-Time
+ [3] Y. Wen and M. O’Boyle, “Merge or Separate?: Multi-job Scheduling                   Power Modeling for Mobile and Embedded CPUs,” TCAD, 2017.
+     for OpenCL Kernels on CPU/GPU Platforms,” in GPGPU, 2017.                     [41] W. Dargie, “A Stochastic Model for Estimating the Power Consumption
+ [4] A. K. Singh, A. Prakash, K. R. Basireddy, and G. V. Merrett et                     of a Processor,” TC, 2015.
+     al, “Energy-Efficient Run-Time Mapping and Thread Partitioning of             [42] R. Ge and X. Feng et al, “CPU MISER: A Performance-Directed, Run-
+     Concurrent OpenCL Applications on CPU-GPU MPSoCs,” TECS, 2017.                     Time System for Power-Aware Clusters,” in ICPP, 2007.
+ [5] S. Grauer-Gray, L. Xu, R. Searles, and S. Ayalasomayajula et al, “Auto-       [43] M. Weiser, B. Welch, A. Demers, and S. Shenker, “Scheduling for
+     tuning a High-level Language Targeted to GPU Codes,” in InPar, 2012.               reduced CPU energy,” in Mobile Computing, 1994.
+ [6] “Odroid-XU3,” http://goo.gl/Nn6z3O.                                           [44] J. Redmon, “Darknet: Open source neural networks in c,” http://pjreddie.
+ [7] “Exynos 5 Octa (5422),” www.samsung.com/exynos/.                                   com/darknet/, 2013–2016.
+ [8] “FreeOCL: Multi-platform implementation of OpenCL 1.2 targeting               [45] “ARM Compute Library,” https://developer.arm.com/technologies/
+     CPUs.” https://goo.gl/qWL1Eg.                                                      compute-library.
+ [9] S. Mittal and J. Vetter, “A Survey of CPU-GPU Heterogeneous Com-
+     puting Techniques,” ACM Comput. Surv., 2015.
+[10] S. Wang, A. Prakash, and T. Mitra, “Software Support for Heterogeneous
+     Computing,” in SVLSI, 2018.
+[11] H. J. Choi, D. O. Son, S. G. Kang, J. M. Kim, H.-H. Lee, and C. H. Kim,                                Siqi Wang received the B. Eng. (Hons) degree in
+     “An Efficient Scheduling Scheme Using Estimated Execution Time for                                     Electrical Engineering from the National University
+     Heterogeneous Computing Systems,” J. Supercomput., 2013.                                               of Singapore in 2014. She is currently a research
+[12] C. Bolchini et al, “A Runtime Controller for OpenCL Applications on                                    assistant and is working toward the Ph.D. degree in
+     Heterogeneous System Architectures,” in ESWEEK, 2016.                                                  the department of Computer Science at the School
+[13] K. Dev and S. Reda, “Scheduling Challenges and Opportunities in                                        of Computing, the National University of Singa-
+     Integrated CPU+GPU Processors,” in ESTIMedia, 2016.                                                    pore. Her current research interests include per-
+[14] S. Wang, G. Zhong, and T. Mitra, “CGPredict: Embedded GPU Perfor-                                      formance and energy optimization, task scheduling
+     mance Estimation from Single-Threaded Applications,” TECS, 2017.                                       and general-purpose GPUs on heterogeneous multi-
+[15] C. Luk and S. Hong et al, “Qilin: Exploiting Parallelism on Heteroge-                                  processor embedded systems.
+     neous Multiprocessors with Adaptive Mapping,” in MICRO, 2009.
+[16] A. Vilches and R. Asenjo et al, “Adaptive Partitioning for Irregular
+     Applications on Heterogeneous CPU-GPU Chips,” in PCS, 2015.
+[17] F. Paterna and T. v. Rosing, “Modeling and Mitigation of Extra-SoC
+     Thermal Coupling Effects and Heat Transfer Variations in Mobile
+     Devices,” in ICCAD, 2015.                                                                              Gayathri Ananthanarayanan received the B.Eng.
+[18] A. Prakash et al, “Improving Mobile Gaming Performance Through                                         (Hons) degree in Electronics and Instrumentation
+     Cooperative CPU-GPU Thermal Management,” in DAC, 2016.                                                 Engineering and Masters degree in Embedded Sys-
+[19] G. Bhat and G. S. et al, “Algorithmic Optimization of Thermal and                                      tems from Birla Institute of Technology and Science,
+     Power Management for Heterogeneous Mobile Platforms,” VLSI, 2018.                                      Pilani in 2008 and 2010. She obtained her Ph.D.
+[20] O. Sahin and A. Coskun, “QScale: Thermally-efficient QoS Management                                    degree from Indian Institute of Technology Delhi in
+     on Heterogeneous Mobile Platforms,” in ICCAD, 2016.                                                    2017. She is a Post-doctoral researcher at the School
+[21] E. W. Wächter et al, G. V. Merrett, B. M. Al-Hashimi, and A. K. Singh,                                of Computing, National University of Singapore.
+     “Reliable mapping and partitioning of performance-constrained openCL                                   Her research interests lie in the broad areas of
+     applications on CPU-GPU MPSoCs,” in ESTImedia, 2017.                                                   computer architecture and embedded systems, with
+[22] W. Bao and C. Hong et al, “Static and Dynamic Frequency Scaling on                                     specific focus on Power, Thermal and Performance
+     Multicore CPUs,” ACM Trans. Archit. Code Optim., 2016.                        modeling, characterization and management.
+[23] T. Deakin, J. Price, and M. Martineau et al, “GPU-STREAM v2. 0:
+     benchmarking the achievable memory bandwidth of many-core proces-
+     sors across diverse parallel programming models,” in HiPC, 2016.
+[24] “ARM DS-5,” http://ds.arm.com/ds-5/.
+                                                                                                           Tulika Mitra is a Professor of computer science
+[25] “Generalized additive Model of R,” https://stat.ethz.ch/R-manual/
+                                                                                                           at the School of Computing, National University of
+     R-devel/library/mgcv/html/gam.html.
+                                                                                                           Singapore, Singapore. Her research interests include
+[26] J. H. Lee, N. Nigania, H. Kim, and K. Patel et al, “OpenCL Performance
+                                                                                                           the design automation of embedded real-time sys-
+     Evaluation on Modern Multicore CPUs,” Sci. Program., 2015.
+                                                                                                           tems with particular emphasis on software timing
+[27] A. Butko et al, “Full-System Simulation of big.little Multicore Archi-
+                                                                                                           analysis/optimizations, application-specific proces-
+     tecture for Performance and Energy Exploration,” in MCSoC, 2016.
+                                                                                                           sors, energy-efficient computing, and heterogeneous
+[28] K. Van Craeynest et al, “Understanding Fundamental Design Choices in
+                                                                                                           computing. She received a BE degree in computer
+     single-ISA Heterogeneous Multicore Architectures,” TACO, 2013.
+                                                                                                           science from Jadavpur University, Kolkata, India,
+[29] S. Williams and A. Waterman et al, “Roofline: An Insightful Visual
+                                                                                                           in 1995, an ME degree in computer science from
+     Performance Model for Multicore Architectures,” Commun. ACM, 2009.
+                                                                                                           the Indian Institute of Science, Bengaluru, India, in
+[30] M. Pricopi, T. S. Muthukaruppan, and V. Venkataramani et al, “Power-
+                                                                                   1997, and a PhD degree from the State University of New York, Stony Brook,
+     performance modeling on asymmetric multi-cores,” in CASES, 2013.
+                                                                                   NY, USA, in 2000.
+[31] M. Walker, S. Bischoff, S. Diestelhorst, and G. Merrett et al, “Hardware-
+     validated CPU performance and energy modelling,” in ISPASS, 2018.
+

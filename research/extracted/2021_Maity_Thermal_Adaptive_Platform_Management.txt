@@ -1,0 +1,1396 @@
+[PDF page 1]
+97
+Thermal-aware Adaptive Platform Management for
+Heterogeneous Embedded Systems
+SRIJEETA MAITY, ANIRBAN GHOSE, and SOUMYAJIT DEY,Indian Institute of Technology
+Kharagpur, India
+SWARNENDU BISWAS,Indian Institute of Technology Kanpur, India
+Recent trends in real-time applications have raised the demand for high-throughput embedded platforms
+with integrated CPU-GPU based Systems-On-Chip (SoCs). The enhanced performance of such SoCs, how-
+ever,comesatthecostofincreasedpowerconsumption,resultinginsignificantheatdissipationandhighon-
+chip temperatures. The prolonged occurrences of high on-chip temperature can cause accelerated in-circuit
+ageing, which severely degrades the long-term performance and reliability of the chip. Violation of thermal
+constraints leads to on-board dynamic thermal management kicking-in, which may result in timing unpre-
+dictability for real-time tasks due to transient performance degradation. Recent work in adaptive software
+design have explored this issue from a control theoretic stand-point, striving for smooth thermal envelopes
+by tuning the core frequency.
+Existing techniques do not handle thermal violations for periodic real-time task sets in the presence of
+dynamiceventslikechangeoftaskperiodicity,moresointhecontextofheterogeneousSoCswithintegrated
+CPU-GPUs.ThisworkpresentsanOpenCLruntimeextensionforthermal-awareschedulingofperiodic,real-
+time tasks on heterogeneous multi-core platforms. Our framework mitigates dynamic thermal violations by
+adaptively tuning task mapping parameters, with the eventual control objective of satisfyingboth platform-
+level thermal constraints and task-level deadline constraints. We consider multiple platform-level control
+actions like task migration, frequency tuning and idle slot insertion as the task mapping parameters. To the
+best of our knowledge, this is the first work that considers such a variety of task mapping control actions in
+the context of heterogeneous embedded platforms. We evaluate the proposed framework on an Odroid-XU4
+board using OpenCL benchmarks and demonstrate its effectiveness in reducing thermal violations.
+CCSConcepts:• Computersystemsorganization →Real-timesystems;Parallelarchitectures;•Hard-
+ware→Thermal issues;
+Additional Key Words and Phrases: Heterogeneous computing, thermal violation, adaptive thermal manage-
+ment
+This article appears as part of the ESWEEK-TECS special issue and was presented in the International Conference on Em-
+bedded Software (EMSOFT), 2021. The authors acknowledge generous grant received from “IHUB NTIHAC Foundation -
+IIT Kanpur” for partially supporting this work.
+Authors’ addresses: S. Maity, A. Ghose, and S. Dey, Department of Computer Science and Engineering, Indian Insti-
+tute of Technology Kharagpur, West Bengal, 721302, India; emails: srijeeta.maity@iitkgp.ac.in, {anirban.ghose, soumya}@
+cse.iitkgp.ac.in;S.Biswas,DepartmentofComputerScienceandEngineering,IndianInstituteofTechnologyKanpur,Uttar
+Pradesh, 208016, India; email: swarnendu@cse.iitk.ac.in.
+Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee
+provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and
+the full citation on the first page. Copyrights for components of this work owned by others than ACM must be honored.
+Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires
+prior specific permission and/or a fee. Request permissions frompermissions@acm.org.
+© 2021 Association for Computing Machinery.
+1539-9087/2021/09-ART97 $15.00
+https://doi.org/10.1145/3477028
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 2]
+97:2 S. Maity et al.
+ACM Reference format:
+Srijeeta Maity, Anirban Ghose, Soumyajit Dey, and Swarnendu Biswas. 2021. Thermal-aware Adaptive Plat-
+formManagementforHeterogeneousEmbeddedSystems. ACMTrans.Embedd.Comput.Syst. 20,5s,Article97
+(September 2021), 28 pages.
+https://doi.org/10.1145/3477028
+1 INTRODUCTION
+Modern embedded platforms like automotive systems, mobile platforms, and gaming consoles
+often need to execute a variety of workloads with different computational characteristics under
+stringentpowerandtimingbudgets.Duetothis,MultiprocessorSystem-on-Chips(MPSoCs),com-
+monly used for low-power but high-performance embedded systems, have become increasingly
+heterogeneous in nature. Such MPSoCs are comprised of multiple processing elements (PEs) like
+generalpurposeCPUcores,acceleratorssuchasgraphicprocessingunits(GPUs),andspecialfunc-
+tioncoreslikedigitalsignalprocessors(DSPs)andneuralprocessingunits(NPUs).Co-existenceof
+suchcoreswithcomplexfunctionalities,coupledwiththefactthatshrinkingtechnologiesincrease
+chip density, results in higher chip-level power density leading to high on-chip temperatures in
+modern MPSoCs. Repeated occurrences of high on-chip temperatures (i.e., a thermal violation)
+shorten the lifetime of such MPSoCs and accelerate in-circuit ageing [2]. Also, this may severely
+degrade the performance and reliability of the chip, sometimes even risking the safety of the sys-
+tem leading to catastrophic consequences for driving, medical and wearable applications, where
+such embedded heterogeneous MPSoCs are extensively used.
+The problem: Dynamic Thermal Management (DTM) methods provide different power cap-
+pingcapabilitiestotheMPSoCs.WhenthetemperatureofanyPEexceedssomepredefinedthresh-
+old,thepowerconsumptionofthePEisforciblyreducedbyDTMtechniques[ 49].CommonDTM
+methods include processor level techniques like clock or fetch gating [44] and software-directed
+DynamicFrequency/VoltageScaling(DVFS)[ 5,21,28].Suchtechniquesaresupportedatthehard-
+ware level by almost all modern processors having multiple power domains and the ability to
+operateat different frequency/voltagesettings.DVFS supportisan intrinsicfeatureofall popular
+operatingsystemdistributionsforserver,desktopaswellasmobilesystems.Henceforth,werefer
+to this as default DTM. However, for such default DTM techniques, the focus remains solely on
+reducingthechiptemperaturewhichcanaffecttheapplicationperformanceresultingindegraded
+Quality of Service (QoS). This is also true for other high-level DTM techniques like temperature-
+orientedtaskmigrationapproachesproposedformany-coresystems[ 13,26].Forlatency-sensitive
+applicationssuchasreal-timetasks,latency-unawareDTMcanthusbefatal.Hence,thereisaneed
+forplatformresourcemanagersthatallocatecomputeresourceswithsuitablytunedconfigurations
+such thatboth application level latency and platform level thermal requirements are met.
+There is an increasing demand for supporting dynamic task scheduling primitives in adaptive
+software systems. This essentially requires accommodating new tasks (e.g., task injection) or new
+instances of existing tasks with reduced periodicity (i.e., job injection) in the current schedule. As
+an example, the real-time workloads executing in an automotive platform can be a mix of time-
+driven periodic tasks and event-driven sporadic tasks. Automobiles that implement perception
+systems consist of inferencing pipelines for detecting traffic signs and pedestrians [16]. The peri-
+ods of such tasks need to be adjusted to accommodate dynamic frame sampling rates so that the
+detection accuracy remains above a threshold irrespective of the lighting condition and the local-
+ity[45].Alternatively,theframeresolutionsmaybeadaptiveleadingtovaryingexecutiontimeof
+theinferencepipelinewhentheperiodiskeptconstant[ 48].Vehicularcontrolloopscanalsohave
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 3]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:3
+scenario-basedmodificationinsamplingratesbasedoncontrolperformanceandco-schedulingre-
+quirements [18]. Monitoring tasks can also get triggered by correlating multiple sensor values in
+aneventdrivenmannerforattackdetection,mitigation,generaldiagnostics,andprognostics[ 17].
+Dynamic modification of executing task sets, changes in periodicity and execution time
+demand adaptive resource management strategies for satisfying both thermal and real-time
+constraints. The problem of task-to-core allocation under such multi-dimensional constraints
+is complex. Firstly, the task-to-core mapping configuration space is overly large due to the
+heterogeneous nature of modern embedded multi-cores [46]. Also, the nonlinear relationship
+among the performance of concurrent tasks due to the interference created by shared resource
+accesses (e.g., shared L2 cache) makes performance modeling complex [47]. Trying to figure
+out resource mappings which ensure schedulability at peak system load can lead to thermal
+envelope violation causing reliability issues in the long-term [6]. Another solution is to calculate
+suitable resource mapping options for all possible changes in the workload scenario in an offline
+phase and applying it online. But such static resource mapping fails to scale for large scale
+dynamic systems with multiple applications with different occurrence rate, mapping choices and
+multiple constraints. Such static scheduling solutions are also overly pessimistic [36]. So, there
+is an inherent need for adaptive, lightweight scheduling mechanisms that can perform dynamic
+mapping by online resource analysis and re-configure scheduling decisions as and when required
+in a thermally aware manner for heterogeneous many-cores.
+Our Approach: Designing an efficient thermal-aware, adaptive resource manager, that is cog-
+nizant of the application performance, as well as the thermal profile, is a challenging problem
+forheterogeneousmulti-cores.DifferentdynamicresourcemappingmethodologiesforCPU-GPU
+platforms have been explored that optimize performance mainly in terms of latency and power.
+Theseapproachesemployheuristicbased,greedy,MLandcontroltheoretictechniques[ 34,35,39,
+46].However,mostapproachesignorepotentialthermalviolationsinthesystemandtheeffectsof
+thermalthrottling.Priorworkdoesnotaddresstheissueofreal-timetaskschedulinginCPU-GPU
+integrated systems while handling thermal violations in case of dynamic workload modifications.
+Ourworkprovidesarun-timeplatformmanagerwhichaimspreciselyatfillinguptheselacunae.
+Wetrytoaddresstheaforementionedproblembyformulatinglightweightheuristic-guidedsched-
+ulingsolutionswhichperformonlinethermalmanagementofheterogeneousCPU-GPUplatforms
+executingmultiplereal-timetasks.Weconsideracombinationofruntimetaskpartitioning,migra-
+tion, idleness insertion, and control theoretic DVFS as scheduling moves. Existing work consider
+only one of these approaches for CPU-GPU systems [38, 42], or a subset of these approaches but
+for homogeneous multi-cores [30].
+We have implemented an adaptive framework capable of supporting dynamic workload sce-
+narios that keep on changing the scheduling status-quo of an existing real-time task set. The
+framework is generic and can be extended to any heterogeneous multi-core platform equipped
+with core level temperature sensors and OpenCL programming support. The efficacy of the pro-
+posed heuristics used by the framework is established on a real embedded CPU-GPU platform
+(Section7.1)throughextensiveexperimentationinvolvingavarietyofworkloadscenarioswithdif-
+ferentchoicesofperiodicandevent-drivenjobinjectionsanddifferentarrivalratesofconstituent
+tasks.Wehaveobservedthatourapproachexhibitspositiveresultsintermsofdynamicallyreduc-
+ing peak temperature and deadline violations in comparison to other existing approaches.
+2 BACKGROUND
+In the following, we briefly discuss concepts that are relevant to this work.
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 4]
+97:4 S. Maity et al.
+Heterogeneous Computing: Modern embedded computing platforms have seen a paradigm
+shift in their architectures and have become increasingly heterogeneous. For example, recent mo-
+bile and automotive platforms consist of multiple processing elements, such as high-throughput
+power-consuming ‘big’ CPU cores, low-power low-throughput ‘LITTLE’ CPU cores, and GPU
+cores integrated on the same die with a shared memory unit. Instead of using fixed (i.e., static)
+roles for each kind of device (e.g., CPUs for sequential and management tasks and GPUs for par-
+allel work), heterogeneous programming models, such as OpenCL (by Khronos [37]), oneAPI (by
+Intel),andHetCompute(byQualcomm),allowforefficientexecutionofasingledataparallelkernel
+using all the available devices.
+OpenCL Programming Model: OpenCL(OpenComputingLanguage)isaframeworkforwrit-
+ing programs that execute across heterogeneous platforms [37]. It provides a standard interface
+for parallel computing using task and data level parallelism on different compute devices such as
+CPU, GPU, FPGA and DSP. An OpenCL program typically consists of two distinct entities: (i) the
+host code which is a single-threaded serial program that executes on the host device (a CPU) and
+orchestrates the entire process of data transfer and issuing directives for parallel execution, and
+(ii)kernel code which executes the actual data parallel computation on compute devices.
+Eachcomputedevicecomprisesmultiplecomputeunits(e.g.,shadercoresincaseofGPUs)and
+each compute unit consists of multiple processing elements (e.g., arithmetic pipelines). A process-
+ing element executes a kernel instance called work-item that operates on a single data point. A
+group of work-items form a work-group and these items execute concurrently on the processing
+elements of a single compute unit. The OpenCL memory model demands memory consistency
+among work-items within the same work-group but not across different work-groups. Different
+work-groups of the same kernel can be launched on different devices without worrying about
+maintaining memory consistency among compute devices. This allows scheduling of tasks on a
+heterogeneous platform to be done asynchronously at the granularity of work-groups.
+OpenCL Task partitioning: Partitioning tasks in the context of OpenCL applications entail
+splitting the data space to be processed by the task/kernel into segments and processing the seg-
+ments concurrently using the devices of the heterogeneous system. In contrast to the traditional
+approach of executing tasks on a single accelerator device in its entirety, partitioning allows for
+optimum resource utilization of the different processing elements in a heterogeneous platform
+leadingtoreducedexecutiontimes.Severalpartitioningbasedmethodologieshavebeenproposed
+over the years that advocate such collaborative execution of data parallel tasks on CPU/GPU plat-
+forms[14,15,20,27,29,46].Suchapproachestypicallydecideuponapartitioningratiothatwould
+determine how the data space can be distributed for processing across the CPU and GPU devices
+concurrently such that overall execution time is minimized.
+Task partitioning in this context occurs at the work-group granularity and is orchestrated by
+the host program. The host is configured to launch a subset of the total number of work-groups
+on the CPU device while the remaining work-groups are launched on the GPU device. As an
+illustrative example consider the OpenCL vector addition kernel depicted in Figure1 executing
+on a CPU-GPU platform. The kernel takes as input two buffersinput1 and input2, performs
+elementwiseadditionandreturnstheresultin output.W eassumethenumberofelementsofthe
+buffers to ben = 256. The total number of work-items launched would be thus 256 where each
+work-item i is designated with a single addition operation:output[i]=input1[i]+input2[i].
+Assuming a work-group size of 4, the total number of work-groups required for executing the
+kernel is 256/4 = 64. The example depicted in Figure1 considers a partitioning ratio of 1 : 3,
+i.e., 1/4∗64 = 16 out of 64 work-groups (work-groups with ids 0−15) are mapped to the CPU
+device. The remaining 48 (work-groups with ids 16−63) are mapped to the GPU device. We note
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 5]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:5
+Fig. 1. Partitioning OpenCL Vector Addition.
+that partitioning OpenCL tasks only require configuring the kernel launch commands from the
+host program and does not require modifying the source code of the kernels. The overhead of
+partitioning is thus in issuing extra kernel launch directives, which is negligible when compared
+to the overall execution time of the kernel. However, kernels with inter-threaddata dependencies
+(e.g., reduction kernels) may require more careful choice of partitioning ratio and extra merging
+steps in the host program.
+3 MOTIV ATING EXAMPLE
+We first conduct experiments that analyse the performance of different thermal management
+schemes which involve scheduling moves/actions like DVFS, task migration, and idle slot inser-
+tion.OurexperimentsconstituteiterativelyexecutingmultipleinstancesofthedataparallelSIMD
+style OpenCL task,GESUMMV (Scalar Vector and Matrix Multiplication), on the heterogeneous
+Odroid XU-4 platform. Figure2(a) illustrates the working principle of different thermal manage-
+ment schemes that leverage the aforementioned moves/actions (both task and device level) for
+scheduling OpenCL tasks on CPU-GPU platforms.
+Eachsmallsub-figureinFigure 2(a)pictoriallydepictsthelatencyofthetasksubjecttodifferent
+schemes used in our experiments. The OpenCL taskGESUMMV is represented as a collection
+of multiple threads, where the thread length is proportional to the task latency. The rectangular
+blocks represent the device to which the task is mapped (red for CPU and green for GPU). The
+impactofthesedifferentschemesonthechiptemperature(peakandaverage)andthetasklatency
+isillustratedinFigure 2(b).Here,thex-axisshowsthelatencyandthey-axisplotsthetemperature.
+TheorangecrossesinFigure 2(b)representthepeaktemperatureversusthelatencyplot.Theblue
+circles represent the average temperature versus the latency plot for each case.
+We first describe our observations on three DVFS-based DTM schemes (top row of Figure2(a)).
+Aggressive thermal throttling (Case A): In our platform, if the peak temperature of the CPU
+exceeds90◦C(trippoint),theOSappliesthermalthrottling[ 46]thatautomaticallyunderclocksthe
+processor.Thefrequencyreducesfrom2GHzto0.9GHzandstaysthereuntilthetemperaturedrops
+to 82◦C. The frequency is raised to 2GHz thereafter. This action is irrespective of task deadline
+characteristics. In the figure, the high/low frequency regions of thread execution are denoted by
+corresponding frequency modulation of the threads.
+Constant low frequency (Case B): Given a (task, device) pair, this scheme sets the processor
+frequency to a constant low value (1.2GHz in our experiments) for the entire lifetime of the appli-
+cationsothatdefaultthermalthrottlingisnottriggered.Inthefigure,threadexecutionisdenoted
+byaconstantfrequencymodulationwithincreasedlengthofthethreadsduetoincreasedlatency.
+Online frequency tuner (Case C): In this scheme, a simple control logic observes the core-
+level temperatures at regular intervals while executing tasks on the CPU. If the peak temperature
+reaches 88◦C, it decreases the frequency in steps of 0.2 GHz in each sensor sampling interval. If
+the temperature goes below a threshold 84◦C, the frequency is increased in steps of 0.1 GHz. For
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 6]
+97:6 S. Maity et al.
+Fig. 2. Variation in task mapping and their effect on temperature and latency.
+our example, the task executes on the CPU initially set at frequency 2GHz and gradually reduces
+and remains in the range 1.5–1.8GHz.
+In Figure2(b), we observe the peak CPU temperature in Case A reaches 95◦C and then drops
+quicklyleadingtoincreasedlatencyduetothermalthrottling,whereastheaveragetemperatureis
+82◦C. For Case B and Case C, the peak temperature reaches 84◦Ca n d8 8◦C (below the trip point)
+respectively, whereas the average temperatures are 77and 79◦C. Even though the task is mapped
+at the highest frequency on the CPU for Case A, its observed latency is more than Case C (12%)
+where the task executes at a comparatively lower frequency. The reason is, once the temperature
+reaches the trip point, the frequency drops drastically due to thermal throttling in Case A.
+Next, we summarise some of the schemes that exploit task level actions like device choice, task
+partitioning, and tuning of idle slots as depicted in the bottom row of Figure2(a).
+Whole task migration (Case D): This scheme explores task migration by launching all SIMD
+threads pertaining to the task computation on a cooler device and keeping the hotter device idle.
+Thus, the chip temperature can be reduced without relying on DVFS. In our example, the task is
+initially mapped to the CPU, and then mapped to the cooler GPU in the next iteration of the task.
+Partitioned task migration (Case E): This scheme partitions a data parallel task into smaller
+sub-tasks by appropriately distributing SIMD threads of the data parallel task across multiple het-
+erogeneous processors. In this example, the task is partitioned into two sub-tasks, one executing
+ontheCPUandtheotherontheGPU,intwopossibleways.In CaseE(i),thepartitionedsub-tasks
+are executed serially but on different devices. Once the first sub-task finishes its execution on the
+CPU, the second sub-task starts execution on the GPU. InCase E(ii), the two sub-tasks are exe-
+cuted concurrently on CPU and GPU devices. The frequency setting is set to maximum for both
+devices.
+Idleness insertion (Case F): Instead of executing the task continuously on a device, the scheme
+partitions the task into sub-tasks and inserts an idle slot between consecutive sub-tasks. Idle slots
+refertotimeintervalswhenthedeviceiskeptidle.Inourexample,thetaskispartitionedintotwo
+sub-tasks and both execute on the CPU serially with an idle slot of 1 second between them.
+NotefromFigure 2(b)thatCaseDandCaseE(ii)exhibittwoextremecases.Thepeakandaverage
+temperatures in Case D are the least and latency is maximum compared to all other cases. Case
+E(ii) exhibits the minimum latency but maximum average temperature and second-highest peak
+temperature. It has both cores occupied during task execution, leading to lesser latency but high
+powerdissipationduetothermalcouplingofcores.Inourtargetplatform,ARMCortexA15cores
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 7]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:7
+Fig. 3. Peak temperatures for different scenarios.
+havegreatercomputecapabilitythanARMMaliGPUandthemaximumallowedfrequencyforthe
+CPU and GPU are 2GHz and 0.6 GHz respectively. Case D is the only mapping option where we
+havetheCPUcompletelyleftidleasthetaskinstancehasbeenmigratedtotheGPU.Thisexplains
+the increased execution time. In Case B also, due to continuous use of low operating frequency,
+execution time is quite high. Case C, E(i) and F have similar performance in terms of both latency
+and reducing peak temperature, and also have better trade-offs between these two parameters.
+We observe Case E(i) and F have similar average temperature characteristics also. So, we consider
+thesethreeschemesinourproposedframeworkascontrolactionsforreducingthermalviolations.
+Given the promising results for Case C (frequency tuning), Case E (task migration) and Case
+F (idle slot insertion), we next investigate how synergistically executing combinations of these
+three schemes impact the reduction of peak temperatures. For this, we construct three relevant
+scheduling scenarios, each with different initial chip temperature, device utilization and target
+latencygoals.Foreachscenario,ourobjectiveistomaintainthepeaktemperaturebelowanupper
+threshold (85◦C). If temperature is above 85◦C (thermal violation), the schemes discussed should
+reduce the temperature below the threshold without violating the target latency goal. The peak
+temperaturesachievedbydifferentcombinationsoftheschemesineachscenarioishighlightedin
+Figure3where the x-axis plots the three scenarios and y-axis plots the peak temperature.
+Scenario 1:We map the task to the CPU at the highest frequency setting while keeping the GPU
+idle. The target latency goal is relaxed. In such a scenario, frequency tuning (Case C) alone can
+reduce the peak temperature below the given threshold, as depicted in Figure3.
+Scenario 2:We map the task to the CPU at the highest frequency setting while keeping the GPU
+idle. The target latency goal is highly conservative. In such a scenario, sufficient frequency reduc-
+tion(CaseC)ortaskshifting(CaseF)inisolationarenotfeasibleformeetingdeadlineconstraints.
+Incontrast,partitionedtaskmigrationtoGPU(CaseE)andthenapplyingfrequencytuning(Case
+C) results in lower peak temperatures compared to individual schemes as depicted in Figure3.
+Scenario 3: We map the task to CPU at the highest frequency setting while keeping the GPU
+heavily engaged. The target latency goal is relaxed, but the initial chip temperature before the
+starting of the CPU bound task is high. Here, migration (Case E) is not an option since the GPU
+is busy. We observe from Figure3, that rather than applying frequency tuning (Case C) alone, a
+combination of idle slot insertion (Case F) and frequency tuning (Case C) ensures better thermal
+management. This is because the idle slot inserted before executing the CPU task helps to reduce
+the initial high chip temperature such that it is manageable by frequency reduction.
+The above scheduling experiments thus motivate scenario-based usage of DTM schemes for
+thermal-aware scheduling while maintaining target latency goals.
+4 PROBLEM FORMULATION
+In the following, we discuss the platform model, the task model, and the thermal model for our
+proposed framework, and then present our problem statement.
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 8]
+97:8 S. Maity et al.
+Platform Model: There exist multiple processing elements or devices with different compute
+capabilitiesinaheterogeneousintegratedprocessingplatform P.Eachdevice δi ∈Pispotentially
+distinct from another deviceδj ∈P,j /nequali, in terms of the architecture, computational power, and
+memory structure. The devices reside on the same die and share a common DRAM. Without loss
+ofgenerality,wehaveconsideredoneCPUandoneGPUdeviceonourplatform,i.e., P ={δC ,δG},
+whereδC andδG denote the CPU and the GPU devices, respectively. The trip point at which OS-
+governed thermal throttling takes place for the deviceδj is denoted asTδj . In our work, the trip
+point for bothδC andδG are considered the same and denoted byTtrip .
+Task Model: Weassumetheinputtaskset T =Tp∪Ts comprisesbothtime-triggeredperiodic
+tasks (Tp) and event-triggered sporadic tasks (Ts). Once started, any sporadic task executes for
+a bounded number of instances with some periodicity. Each periodic taskτi ∈Tp executes with
+some period∈[pl
+i ,ph
+i ] depending on the dynamic performance requirement of the subsystems
+(e.g.,detectionpipelinesandcontrolmodulespertainingtovariousvehicledomains).Atanypoint
+oftime,thecurrentlyexecutingjobset J thuscomprisesmultipleinstances(jobs)ofbothperiodic
+and sporadic tasks inside a hyper-period following their respective specification of period values.
+Anewscheduling epochstartsduetopossiblemodificationsin J.Thecurrentlyexecutingjobset
+J can get modified to someJ′ in a new scheduling epoch in the following ways.
+(1) Theperiodspecificationforsomeperiodictask τi ∈Tp canchangefromperiod pi tosome p′
+i
+as dictated by the performance requirements of the underlying subsystems. Note that both
+pi , p′
+i ∈[pl
+i ,ph
+i ].
+(2) The set of sporadic tasksT′
+s ⊆Ts to be run may change. Job instances corresponding to
+each new sporadic taskτi ∈T′
+s are then added toJ′ following their period specification,
+and sporadic tasks that expire are removed from the job set.
+A real-time data parallel OpenCL taskτi is characterized by the tuple (Wi, wi, Ei,[ pl
+i ,ph
+i ], di).
+Thequantities Wi andwi representthenumberofOpenCLwork-groupsandthenumberofwork-
+items per work-group to be launched, respectively. The setEi represents the set of worst-case
+execution times (WCET) ofτi for all possible combinations of devices inP and their respective
+frequency settings. An elementei,j,f ∈Ei represents the maximum time to completeτi on device
+δj at frequencyf. In our framework, each elementei,j,f is measured offline over multiple runs
+while running suitable tasks in other devices so that maximum possible memory interference is
+created forτi. We maintain a data structure denoted byWCET lookup tablefor all the OpenCL
+tasks considered in the framework in an offline stage such that for any executing OpenCL task,
+thecorrespondingsetofworst-caseexecutiontimes(WCET)canbereadilyaccessedduringonline
+scheduling. For any task, a choice of periodp ∈[pl
+i ,ph
+i ] is associated with a related choice of
+deadlined (d≤p).
+We note that these periodic OpenCL tasks (new or existing) are non-preemptive in nature, i.e.
+oncethetaskisdispatchedtothecommandqueue,thedevicechoicecannotbechangedbyissuing
+directivesfromthehostprogram.Theproblemofnon-preemptioncanbehandledbypartitioning
+dataparallelOpenCLtasksintosuitablesmallersized sub-tasks.Each sub-task isasubsetofwork-
+groups used in the original task, operating on a subset of the input data space. Letτk
+ip denotes
+the kth sub-task of thepth job instance of the taskτi. If the number of sub-tasks for a taskτi
+is denoted byKi where 1≤Ki ≤Wi, then the value ofKi decides how frequently scheduling
+decisions for a task can be modified. Thelocal deadlineof each such sub-taskτk
+ip is denoted asdk
+ip .
+Thisisestimatedfromtherelativedeadline di ofthewholetask τi andthefraction( frac k
+ip )oftotal
+work-groups inτi present in the sub-task (dk
+ip = frac k
+ip ×di). Letek
+i,j,f denote the maximum time
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 9]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:9
+for executing sub-taskτk
+ip on the deviceδj at frequencyf.T h i si se s t i m a t e df r o mei,j,f and the
+fraction of work-groups present inτk
+ip .
+Definition 4.1. The task mappingtripletmk
+ip = (δj ,f ,ts ) denotes the sub-taskτk
+ip is mapped to
+the deviceδj at frequencyf wherets is the relative start time of the sub-task, i.e. after the arrival
+ofτk
+ip , the execution starts after timets. By default, it is set to 0. The mapping isvalid ifts +ek
+i,j,f
+≤di whereek
+i,j,k is the estimated worst-case execution time for finishing sub-taskτk
+ip .
+Definition 4.2. The scheduleS for the job setJ in some hyper-periodH on the platformP is
+the set of all task mappings for all sub-tasks of all jobs inJ.S is said to bevalid if the mapping
+decisionmk
+ip is valid for every sub-task in every job inJ.
+The mapping triplet for a (sub)task can be altered by the following well-defined control actions.
+(1) Frequency tuningof sub-taskτk
+ip can change the core frequency fromf to somef′ resulting
+in a modified mapping,mk
+ip = (δj ,f ,ts )→m′k
+ip = (δj ,f′,ts ).
+(2) Taskmigration ofsub-task τk
+ip canaltertheassigneddevice δj tosomecoolerdevice δ′
+j result-
+ing in a modified mapping,mk
+ip = (δj ,f ,ts )→m′k
+ip = (δ′
+j ,f ,ts ).
+(3) Idle slot insertionfor sub-taskτk
+ip can alter the start time by inserting some delayt resulting
+in a modified mapping,mk
+ip = (δj ,f ,ts )→m′k
+ip = (δj ,f ,t′
+s ) such thatt′
+s =ts +t.
+Wehaveuseddeviceutilizationasaquantitativemeasureoftheidlenesspresentatagiventime
+interval during a schedule. It gives a fair idea about the amount and type of computation handled
+by each device. For any given time intervalIa, we have classified the utilization (U (Ia ,j))o fa
+deviceδj as either low (Lo)i fU (Ia ,j) < αj or high (Hi)i fαj ≤U (Ia ,j)≤1, whereαj ∈[0,1] is
+an experimentally derived threshold parameter for device utilization calculated offline. Similarly,
+we have also defined a threshold parameterβj by conducting extensive experimentation, which
+would dictate whether the frequency setting is high (Hi)o rl o w(Lo) for the deviceδj.
+Thermal Model: Wehavesettwodifferentthermalthresholdsforeachdevice:(i) major thresh-
+old (Tmajor < Tδj )w h e r eTδj is the trip point of the deviceδj and (ii)minor threshold (Tminor <
+Tmajor ). For simplicity, we have considered the same value forTmajor for bothδC andδG and the
+same value forTminor for both devices. The values ofTmajor ,Tminor andTδj considered for our
+platformisspecifiedinSection 7.1.Duringruntime,thetemperatureofboththedevicesaremoni-
+toredatregularintervalsoftime( h)usingtheon-boardtemperaturesensorstocheckwhethercore
+temperatures exceed the thermal thresholds. Whenever the temperature exceedsTminor but not
+Tmajor ,i ti sc o n s i d e r e da saminor thermal violation. In case the temperature exceedsTmajor ,i ti s
+considered as amajor thermal violation. A sub-task is markedunstable ifmajor thermal violation
+is detected during its execution.
+Our proposed framework targets to reduce the operating temperature for both kinds of vio-
+lations. The primary reason for setting a range of lower values for thermal thresholds instead
+of considering the OS specified trip point is to ensure that immediate recovery actions can be
+taken before reaching the trip point. This would prevent the OS-governed thermal throttling rou-
+tine from kicking in which would drastically alter core frequency leading to potential deadline
+violations.
+In the steady state of system operations, we assume that the platform is thermally stable until
+thermal violations are detected due to some change(s) in the current job setJ.Ap l a t f o r mP
+is said to bethermally stablewith respect to a given job setJ iff for a valid scheduleS for a
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 10]
+97:10 S. Maity et al.
+Fig. 4. Workflow overview.
+hyper-period H, the peak temperature in all the devices inP remains below a given threshold
+valueTmajor throughout the schedule.
+Problem Statement: Ourobjectiveistosolvethefollowingdesignprobleminthiswork: Given
+a job setJ running on a heterogeneous embedded platformP equipped with thermal sensors and
+followingafeasiblethermallystableschedule S,incaseofthermalviolationscausedduetochangein
+J toJ′ at run time, our proposed framework decides how a new feasible thermally stable schedule
+S′ can be reached adaptively.
+Weproposethedesignofanintelligentschedulerthatrunsperiodicallyandminimizesthermal
+violationsadaptivelyusingcontroltheoreticapproachesandheuristics.Thethermal-awarecontrol
+actions executed by the scheduler are task migration, frequency tuning and idle slot insertion,
+performed iteratively in a feedback loop.
+5 METHODOLOGY OVERVIEW
+Figure 4 depicts the workflow involved in both offline and online phases of our proposed frame-
+work.Intheofflinephase,ourobjectiveistopopulatetheWCETlookuptableforthesetoftasksin
+T.Thisisdonebyprofilingevery kth sub-taskof τi ∈Tforeverypossiblecombinationofdevice
+j and frequency settingf to yieldek
+i,j,f . To determine what should be a suitable task-size for each
+sub-taskandconsequentlythenumberofsub-tasksforanygiventask,asinglework-groupof τi is
+initially profiled in all the devices at both the highest and lowest frequency settings. The average
+executiontime( exavд)forasinglework-groupiscomputedaftermultipleprofilingruns.Basedon
+exavд,τi is suitably partitioned intoKi sub-tasks. We setKi =Wi /((z·h)/exavд) whereWi is the
+numberofOpenCLwork-groupsin τi,histhesamplingperiodofthermalsensorsfortheplatform
+andz∈Z+.N o t et h a tf o rz = 1,Kn will be such that each sub-task will take (approximately) one
+sensor sampling period to execute. For largerz (i.e., smallerKi), sub-tasks will be lesser but each
+sub-task will take aroundz·h amount of time to execute, empirically speaking. Since individual
+sub-taskstakelongertimetoexecute,controlactionsintherecoverymodecannotbeappliedfast
+enough for avoiding thermal violation. For smallerz (i.e. largerKi), the system will have higher
+task dispatch overhead. After partitioning, sub-tasks are profiled on each device at all possible
+frequencies. We follow the co-degradation-based approach [50] that ensures maximum memory
+interference while profiling thekth sub-task ofτi on devicej at frequencyf to obtainek
+i,j,f .T h e
+profiling information thus derived is used in populating the WCET lookup table discussed earlier
+andareleveragedinsubsequenthyper-periodsforrefiningthetaskmappingofthetasksetwhen
+required.
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 11]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:11
+In the online phase, let us consider that the currently executing job setJ gets modified to
+J′ in a new scheduling epoch. LetJrel andJnew denote the job instances released and added
+in the system so thatJ′ =J∖Jrel ∪Jnew .I fJrel is nonempty, device utilization is reduced,
+thus allowing jobs inJnew more resource bandwidth to exploit. As depicted in Figure4,a ninitial
+mapping is first constructed to update the schedule of the job setJ′.
+For each job instancejobi inJnew , the initial mapping is chosen greedily using the Worst-Fit
+Decreasing(WFD)algorithm[ 7].Thisisdonebymapping jobi inthehyper-period H tothedevice
+(δl) with the lowest device utilization in the time interval between the arrival and deadline of the
+jobi. The frequency of the device under consideration is then greedily chosen as the maximum
+value (fM) to minimize the latency requirement so that the deadline of the job is satisfied. If the
+deadline constraint is not satisfied at the maximum frequency, then it cannot be scheduled at any
+lower configuration.
+Therelativestarttime( ts)ofthe jobi issetto0bydefault,i.e., jobi canbedispatchedrightafter
+its arrival. Here, start times of consecutive sub-tasks of the same task mapped to the same device
+andfrequencysettingaresetwiththeassumptionthatthevariationinlatencyofsuchsub-tasksis
+negligible.Forallsub-tasksof jobi ,theinitialtaskmappingneedstobesettothegreedilychosen
+device and frequency setting.
+Theinitialtaskmapping( mk
+job i
+)foreachsub-task( jobk
+i )isdenotedbythetriplet( δl ,fM , (ts +k·
+ek
+n,l,fM
+))where k istheindexofthesub-taskand ek
+n,l,fM
+istheestimatedworst-caseexecutiontime
+to finishkth sub-task ofjobi onδl at frequencyfM.I fM denotes the set of the initial mappings
+of all sub-tasks of all job instances inJnew in a hyper-periodH, the updated scheduleS′ over
+each hyper-period is given asS′ =S∖Srel ∪MwhereS∖Srel is the schedule at the end of
+last epoch without the mapping of each job inJrel . The framework will nextdispatch sub-tasks
+followingS
+′
+and monitor the thermal profile at the end of executing each sub-task. In case of
+thermal violations, our proposed framework triggers arecovery controllerwhich adaptively tries
+to mitigate the thermal violations. The recovery controller chooses appropriate thermal recovery
+actions (discussed in the next section) that modify the task mapping to reduce peak temperature
+while satisfying the deadline constraints of the tasks with the help of the WCET lookup table
+created offline. The new mappings are updated in the schedule and the process continues for the
+whole epoch or until the platform is thermally stable again.
+6 THERMAL VIOLATION AND RECOVERY MECHANISM
+The work flow of the thermal recovery mechanism is depicted in Figure5. Let us consider that in
+agivenhyper-periodasub-task τk
+ip isdispatchedwithtaskmapping mk
+ip =(δj, f,ts)inplatform P
+following scheduleS. The thermal profile during the execution of the sub-taskτk
+ip is analysed to
+identify the peak temperatureTj in the deviceδj. If there is no thermal violation, i.e.Tj ≤Tminor ,
+theframeworkdoesnottakeanyactionandcontinueswiththeexistingtaskmappingdecisionsin
+S. If there is any kind of thermal violation, the temperature is reduced by the recovery controller
+that work in two distinct modes - local and global recovery mode.
+If a major thermal violation is observed (i.e.,Tj >Tmajor ), theglobal recoverymode is activated
+and the sub-task is markedunstable. A closed feedback loop is used to adaptively change the
+task mapping of the unstable sub-taskτk
+ip by taking suitable control actions discussed earlier in
+Section4.Inthiscontext,feedbackreferstothedifferenceinexpectedandtheactualperformance
+with respect to peak temperature and latency ofτk
+ip . Based on the observed feedback, the current
+thermal behaviour and the resource availability of the platformP, a control action is selected
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 12]
+97:12 S. Maity et al.
+Fig. 5. Thermal Recovery Mechanism.
+such that the peak temperature drops belowTmajor while ensuring there is no deadline violation.
+The resultant task mappingm′k
+ip is updated in scheduleS to yield a new scheduleS′ which is
+followed in the next hyper-period. We note that while such task mapping modification decisions
+areadaptiveandaccurateinmitigatingthermalviolation,thechangesarereflectedatanintervalof
+onehyper-period.Inthecaseofaminorthermalviolation(i.e, Tmajor ≥Tj >Tminor ),therecovery
+controlleractivatesthe localrecovery modeinthedevice δj.Itchangesthetaskmappingofthenext
+sub-task(τk′
+ip )scheduledin δj afterτk
+ip .Incontrasttoglobalrecoverymode,changesmadeinlocal
+recovery mode are reflected immediately in the same hyper-period, i.e., it does not get updated
+in the existing scheduleS. We note that such task mapping modification decisions may not be
+accurate in mitigating thermal violation. However, this mode is lightweight when compared to
+global recovery and initiates an instantaneous cooling effect on the relevant device. The recovery
+controllerthuschooseslocalrecoverymodewhenthepeaktemperatureishighbutnotattherisk
+of overshooting the trip point that will trigger OS induced thermal throttling leading to increase
+in deadline violations.
+6.1 Global Recovery Mode
+The following three steps are performed in global recovery mode to reduce the peak temperature
+in the upcoming hyper-period.
+Interval detection: At the end of a hyper-periodH, the operating regions of the recovery con-
+trolleringlobalrecoverymodeisidentifiedbyconstructingasetofintervals IH asfollows.Initially,
+foreachunstablesub-taskidentified,an interval Iq = (sq ,eq ) iscreatedwhere sq denotesthestart-
+ing time andeq denotes the local deadline of the sub-task. A pair of intervalsIq = (sq ,eq ) and
+Ir = (sr ,er ) canbeoverlappedif sr ≤eq.Sincetherecanexistmultiplesuchintervalsfordifferent
+sub-tasks that can overlap, we merge such intervals so that the number of operating regions is
+reduced. The setIH contains the set of such merged intervals only.
+Resource Analysis: In the resource analysis phase, the resource availability, device utilization,
+frequency settings and peak temperatures are analysed for each identified interval inIH. Device
+utilization gives a fair idea about the amount and type of computation handled by the device, and
+a quantitative measure of idleness present in the given interval. For each intervalIa = (sa ,ea ),
+we denote device utilization for each deviceδj as U (Ia ,j). This represents the fraction of time
+δj was busy executing sub-tasks in the duration ofIa. For any given intervalIa, the utilization
+and frequency setting of a deviceδj is classified as either low (Lo) depending on experimentally
+derivedthresholdparameters αandβj calculatedoffline.Thisbinaryclassificationwithrespectto
+frequency and utilization is done to simplify run-time decisions. Each device in the platform can
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 13]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:13
+Table 1. Recovery Action Selection
+Thermal
+violation in
+(Utilization,
+Frequency) inδG
+(Utilization, Frequency) inδC
+(Lo, Lo ) (Lo,Hi ) (Hi ,Lo ) (Hi ,Hi )
+δC
+(Lo,Lo )
+No action Frequency tuning inδC
+Migrate task toδG(Lo,Hi )
+(Hi , Lo ) Insert idle slot inδC Frequency tuning inδC(Hi ,Hi )
+δG
+(Lo,Lo ) No action
+(Lo,Hi ) Frequency tuning inδG
+(Hi , Lo ) Migrate task toδC
+Insert idle slot inδC
+(Hi ,Hi ) Frequency tuning inδG
+Both
+(Lo,Lo ) No action Frequency tuning inδC Migrate task toδG
+(Lo,Hi ) Frequency tuning inδG Frequency tuning in bothFrequency tuning inδG Frequency tuning in both
+(Hi , Lo ) Migrate task toδC
+Insert idle slot in bothInsert idle slot inδG,
+Frequency tuning inδC
+(Hi ,Hi ) Insert idle slot inδC
+Frequency tuning inδG
+Insert idle slot in both
+have a total of 2× 2 possible configurations of device utilization and frequency settings. For our
+case, since there are two devices, we require examining 22×2 = 16 different scenarios.
+Control action selection: We design a controller routine that takes control theoretic schedul-
+ingdecisionstochooseappropriate recoveryactions tobeappliedforthe next hyper-period.These
+are chosen based on the observed values of device utilization and frequency settings identified by
+theresourceanalysisphaseineachoftheintervalsin IH.T able1summarisestherecoveryactions
+takenbythecontrollerforeachofthesixteendifferentscenariosdiscussedabove.Thetablelayout
+isdesignedsuchthateachcontrolactionwillbechosendependingonthedevicewherethemajor
+thermal violation is detected. There can be three possible thermal violation options, occurring in
+δC or δG or both. They are given in the first column of the table. For each of the three possible
+Utilizationviolationscenarios,theGPUconfigurationcanbeselectedfromsub-rowsinColumn2,
+fourpossibilitiesof(Utilization,Frequency)foreachviolationscenario.ThecorrespondingCPUvi-
+olationscenario(againfourpossibilities)canbeselectedfromtherestofcolumns.Thus,foranyof
+thethreethermalviolationconditions(inColumn1),eachintermediatecellinthetablerepresents
+a recovery action taken for a pair of possible configurations pertaining to the devicesδG andδC.
+In all scenarios, the final objective is to reduce the peak temperature and thus mitigate thermal
+violations whilerespectingdeadline constraints.We next explain theintuitionsbehindthechoice
+of each recovery action taken. If both device utilization and frequency settings in intervalI are
+low for a devicewherea major thermalviolation hasoccurred,wedo not changethecurrenttask
+mapping, since its effect on the peak temperature would be negligible.
+Ifonedevicehashighutilizationwhereasanotherdevicehaslowutilizationi.e.theloaddistribu-
+tionisnotuniform,thenirrespectiveofthefrequencysettingthecontrolleroptsfortaskmigration
+and suitably changes the task mapping to balance the device utilization across devices. Task mi-
+gration is preferred over frequency tuning in this case, since there is an opportunity of sharing
+theloadonthedeviceintheintervalwheretheutilizationislow.Decreasingthefrequencyofthe
+device in this case might result in a potential deadline violation.
+If the device utilization is high in all available devices, i.e., we cannot perform task migration,
+we either perform frequency tuning or idle slot insertion. If the frequency setting is high for the
+device where thermal violation occurred, the controller applies frequency tuning. The choice of
+frequencytuningoveridleslotinsertionheremaybeattributedtothefactthatreducingfrequency
+leadstomoretemperaturereductioncomparedtotaskshiftingforsimilarlatencyperformance.If
+the frequency setting is already low, anidle slotis inserted, allowing the heated device some time
+for cooling down.
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 14]
+97:14 S. Maity et al.
+ALGORITHM 1:Frequency Tuning Mode
+1 Input:τk
+ip ,mk
+ip = (δj ,f ,ts ),ex_timecur
+2 Output:m′k
+ip
+3 speedдoal←size (τk
+ip
+)/(local_deadline (τk
+ip
+)−ts )
+4 speedcur ←(size (τk
+ip )/ex_timecur )
+5 error←speedдoal−speedcur
+6 speedupcur ←speedcur /speedbase
+7 speedupnxt ←speedupcur + ((1−ρ)/speedbase )×error
+8 f2←дet_frequency (speedupnxt ,τi ,δj)
+9 if f2 < f1 then
+10 m′k
+ip = (δj ,f′,ts )
+Next, we describe how these three recovery actions have been designed.
+A. Frequency Tuning: Foreachunstablesub-task τk
+ip inglobalrecoverymodewherefrequency
+tuning is chosen as the recovery action, the frequency tuner runs once at the end of each hyper-
+period. It chooses a suitable alternate frequency for the demarcated sub-task to be used in the
+next hyper-period. It again iterates in the immediate next hyper-period and continues untilτk
+ip
+is marked stable. The algorithm used for frequency tuning uses the well known pole-placement
+based self-tuning control techniques [23, 35] which dynamically modelspeedup of a task as a
+functionoftasklatencyatdifferentclockfrequencyvalues.ThisisdepictedinAlgorithm 1which
+takes as input an unstable sub-taskτk
+ip , its mappingmk
+ip = (δj ,f1,ts ) and the actual execution
+time (ex_timecur ) recorded forτk
+ip in the current hyper-period. The output is the modified task
+mappingm′k
+ip which would be used in the next hyper-period. We define speed of a taskτi as the
+ratiobetweenthetotalnumberofwork-items( size (τi ) =Wi·wi)forthetaskandthetimetakento
+executethattask,where Wi isthetotalnumberofwork-groupsand wi isthenumberofwork-items
+perwork-groupforthetask τi asdefinedearlier.Since,wewantthesub-task τk
+ip tofinishwithinits
+local deadline, the required speed i.e.speedдoalis calculated by considering the number of work-
+items launched for the sub-task (size (τk
+ip )) and the time left to finish the sub-task since it arrived
+withintherequiredlocaldeadline(line#3ofAlgorithm 1).Thecurrentspeedupof τk
+ip iscalculated
+by considering the actual time it took for execution, i.e.ex_timecur (line# 4). The difference in
+requiredandactualspeedsindicatetheterm error thatneedstobeadjusted(line#5).Sincespeedup
+of a task is an abstraction of the relative changes in the performance with respect to frequency
+variation, we define it as the ratio between the speed of the task at frequencyf and the speed of
+the task when it is executing at the minimum frequency (base speed). Based on this, the current
+speedup is calculated consideringspeedcur and speedbase (line# 6). Our objective is to calculate
+speedupnxt which is the required speedup for executing the sub-task in the next hyper-period.
+Thisisobtainedbyusingthecontroltheoreticspeedupequation speedupnxt ←speedupcur + ((1−
+ρ)/speedbase )×error whereρisthepoleofthecontroller.GiventhatwehaveaccesstotheWCET
+lookup table, the required frequencyf′ for attainingspeedupnxt is then obtained. If we observe
+that f′ is less thanf, the task mapping is modified to,m′k
+ip = (δj ,f′,ts ) which would be used for
+executingthesub-taskinthenexthyper-period.Thisprocessofcalculatingspeedupandobtaining
+the required processor frequency setting is repeated iteratively for consecutive hyper-periods in
+order to minimize the difference in expected and actual performance, i.e.error .
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 15]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:15
+Fig. 6. Example of Global Controller actions.
+B. Task Migration: The algorithm used for task migration ascertains whether it is possible to
+reduce the device utilization of the hotter device facing thermal violation so that the peak tem-
+perature could be reduced. For each unstable sub-taskτk
+ip in global recovery mode where task
+migration is chosen as the recovery action, the task migration algorithm runs once at the end
+of each hyper-period to modify the device choice ofτk
+ip . Let the current task mapping ofτk
+ip be
+mk
+i,p = (δhot ,f ,ts ).L e tδcool be the device with the lowest peak temperature during the time be-
+tween start time (ts) and local deadline (dk
+ip )o fτk
+ip . The algorithm allows migrating an unstable
+sub-taskτk
+ip from deviceδhot toδcool ifδcool can accommodate it. We greedily choose frequency
+setting forδcool as the maximum frequency (fM) to increase the possibility of task migration. Let
+avail be the available time slot between the local deadlinedk
+ip and start timets when the device
+δcool isidle.TheestimatedWCETof τk
+ip onδcool atfrequency fM i.e.ek
+i,cool ,fM
+isobtainedfromthe
+WCET lookup table. Ifek
+i,cool ,fM
+≤avail, the task mappingmk
+ip is changed to (δcool ,fM ,ts).
+C. Idle slot insertion: The algorithm used for idle slot insertion introduces idle slots between
+consecutive tasks in a device to allow the device to cool down when the device is idle. For each
+unstable sub-taskτk
+ip in global recovery mode where idle slot insertion is chosen as the recovery
+action, the idle slot insertion algorithm runs once at the end of each hyper-period to modify the
+s t a r tt i m eo fτk
+ip . Let the task mapping ofτk
+ip be mk
+ip = (δj ,f ,ts ) and the algorithm for idle slot
+insertion modifiests for the next hyper-period. The finish time (te)o fτk
+ip is calculated from the
+WCET lookup table asts + ek
+i,j,f where ek
+i,j,f is the estimated WCET for the sub-task executed
+with task mappingmk
+ip . The time the deviceδj is idle afterτk
+i,p finishes is denoted byslack.H e r e ,
+slack = dk
+i,p −te where dk
+i,p is the local deadline ofτk
+ip . The sub-task is shifted by offsetting its
+startingtimebythisquantity slack,resultinginanewtaskmapping m′k
+i,p=(δj ,f ,ts +slack ).Such
+a choice of modified start time works as our WCET estimateek
+i,j,f bounds the maximum possible
+time taken byτk
+i,p.
+As an example, let us consider the partial schedule for three periodic tasks illustrated in
+Figure6fortwoconsecutivehyper-periodsintheschedulingepoch.Thelengthsofeachcoloured
+rectangular box represents the execution time for each sub-task of some job of any task. The
+temperature monitor samples the platform temperature at a regular interval ofh.A tt h ee n d
+of each sub-task execution, the peak temperature over the execution period is compared with
+Tmajor andTminor . We observe that peak temperature during the execution of the three sub-tasks
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 16]
+97:16 S. Maity et al.
+ALGORITHM 2:Local recovery
+1 Input:τk′
+ip ,mk′
+ip = (δj ,f ,ts ) Output:m′k′
+ip
+2 slot←dk′
+ip −ts //dk′
+ip is local deadline
+3 P′←sort_dev (P,slot )
+4 for δa inP′ do
+5 ifutil_dev (δa ,slot ) = Lo then
+6 for f′ inF (δa ) do
+7 ek′
+a,f′,ts
+←WCET (τk′
+ip ,δa ,f′)
+8 if ts +ek′
+a,f′,ts
+<dk′
+ip then
+9 m′k′
+ip ←(δa ,f′,ts ) returnm′k′
+ip
+τ3
+21,τ4
+21 andτ6
+31 exceedsTmajor . These three sub-tasks are marked unstable and the corresponding
+working intervalI′ (depicted in Figure6) is determined from their start and finishing times. The
+resource analysis phase for the identified intervalI′ marks the device utilization in both CPU and
+GPU asHi. The frequency setting isLo for CPU andHi for GPU. Based on these values of device
+utilization and frequency setting, one can observe from the rule set in Table1 that the recovery
+actions are idle slot insertion in CPU and frequency tuning in GPU. Hence, for unstable tasks
+τ3
+21 andτ4
+21 executing on the CPU, idle slots are inserted. Forτ6
+31 executing on the GPU, frequency
+tuning is applied. The task mappings are changed and applied in the next hyper-period (depicted
+by orange arrows in Figure6). The temperature is successfully reduced belowTmajor .
+The global recovery mode runs for multiple hyper-periods until thermal stability is attained.
+In the worst-case, it may happen that the recovery controller in global recovery mode continues
+re-configuring the task mappings indefinitely without reaching any thermal stability, leading to
+an infinite many iterations of global controller. To manage such scenarios of non-convergence,
+the recovery controller has a permissible upper limit of applying recovery actions on an unstable
+sub-taskintermsofthenumberofhyper-periods.Incasethisisexceededwithoutanyobservable
+positive effect on the peak temperature, the global recovery mode is exited and new jobs which
+are part ofJnew are not admitted.
+6.2 Local Recovery Mode
+Thelocalrecoverymodealtersthetaskmappinggreedilyinordertomitigateminorthermalviola-
+tions.Letaminorviolationbedetectedin δj duringtheexecutionofsub-task τk
+ip .Theimmediately
+next sub-task afterτk
+ip executing onδj is identified asτk′
+ip . The local recovery algorithm depicted
+in Algorithm2 takes as input this sub-task, its existing mappingmk′
+ip =(δj ,f ,ts ) and outputs its
+updatedtaskmapping m′k′
+ip .Weconsiderthetimeinterval slot betweenthelocaldeadlineandthe
+starting time of the sub-task ofτk′
+ip as the working interval for the sub-task in the local recovery
+mode(line2).The sort_dev (P,slot )functionsortsdevicesin P inascendingorderofpeaktemper-
+aturerecordedduringtheinterval slot andreturnsthesortedlist P′ (line3).Let F (δa ) denotethe
+listofavailablefrequencysettingsforeachdevice δa sortedinascendingorderoffrequencyvalue.
+For each deviceδa ∈P′ starting with the coolest device, the expected device utilization in the in-
+tervalslot is computed byutil_dev (δa ,slot ) (line 5). If it isLo, each frequency settingf′∈F(δa )
+starting from the lowest frequency setting is checked to see if the finishing time (ts +ek′
+i,a,f′) after
+modifying its mapping decision is within the local deadline of the sub-task (line 8). Note,ek′
+i,a,f′
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 17]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:17
+Fig. 7. Local Controller actions.
+represents the WCET time for the task obtained from the WCET lookup table(line 7). The mod-
+ified mapping decisionm′k′
+ip = (δa ,f′,ts ) is finally returned (line 9) and the local recovery mode
+is exited. We note that unlike the global recovery mode, the modified task mappingm′k′
+ip is valid
+for the current hyper-period and is not propagated to the next hyper-period. If no relevant cooler
+device is found, the mapping remains unchanged.
+Asanexample,letusconsiderthepartialscheduleforsome Nth hyper-periodofthreeperiodic
+tasks in Figure7. Similar to Figure6, the lengths of each coloured rectangular box represent the
+executiontimeforeachsub-taskofeveryjob.Foreveryjobofataskmarkedwithaspecificcolour,
+we have dotted vertical lines of the same colour representing their deadlines. The temperature
+monitor samples the platform temperature at a regular interval ofTs. At the end of each sub-task
+execution, the peak temperature over the execution period is compared withTmajor andTminor .
+We observe thatminor thermal violations are detected during the execution of sub-tasksτ1
+21 and
+τ1
+22 on the deviceCPU in theNth hyper-period of the current scheduling epoch. For the sub-task
+τ1
+21,thetaskmappingoftheimmediatenextsub-task τ2
+21 ismodifiedinlocalrecoverymode.Inthis
+case, even though the GPU device is relatively cooler, it has high device utilization. Hence, there
+is not enough bandwidth available to facilitate migration of the sub-task. So, the local controller
+decidestousefrequencytuningontheCPUdeviceforsub-task τ2
+21 inthiscontext.Forthesub-task
+τ1
+22, the device utilization is less in cooler GPU device. Hence, the immediate next sub-taskτ2
+22 is
+migrated from CPU to GPU device.
+7 EV ALUATION
+This section evaluates the effectiveness of our proposed framework in reducing the occurrence
+and intensity of thermal violations in heterogeneous embedded CPU-GPU platforms.
+7.1 Test-bed Description
+The target heterogeneous platform: We have performed our evaluations on an Odroid XU-4
+embeddedplatform.1 TheplatformusestheExynosSoCwhichcomprisesthefollowingthreetypes
+ofcomputeunits:(i)aquad-coreARMCortex-A7(LITTLECPU),(ii)aquad-coreARMCortex-A15
+(big CPU), and (iii) an ARM Mali-T628 GPU with 6 Streaming Multiprocessors (SMs).
+The Odroid XU-4 platform supports a set of discrete operating clock frequencies for each com-
+puteelement (18 forbig CPU, 14for LITTLE CPU, and7 forthe GPU).Thereare five temperature
+sensors in the platform: one for each of the 4 cores in the big CPU and one sensor for the GPU.
+Runtime Framework: Our proposed framework has approximately 7000 LOC and leverages
+the asynchronous event driven programming model supported in OpenCL to (i) dispatch tasks
+to the big CPU and the GPU based on the respective arrival time of the tasks, and (ii) ascertain
+deviceavailabilitythroughasynchronouscallbackfunctionswhichareinstantiatedwhenadevice
+becomes free. For an OpenCL application executing on the CPU, the role of the CPU cores switch
+betweenhostandcomputedevices.TheCPUcanactasahostorasanOpenCLcomputedeviceas
+1https://magazine.odroid.com/wp-content/uploads/odroid-xu4-user-manual.pdf .
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 18]
+97:18 S. Maity et al.
+Fig. 8. Our runtime framework on Odroid XU-4.
+Table 2. Candidate OpenCL Kernels
+Task name Description
+2DCONV (τ1) 2D Convolution
+2MM (τ2) 2 Matrix Multiplications
+3MM (τ3) 3 Matrix Multiplications
+ATAX (τ4) Matrix Transpose and Vector Multiplication
+GESUMMV (τ5) Scalar Vector and Matrix Multiplication
+GEMM (τ6) General Matrix-multiply
+required. This introduces certain limitations in the OpenCL runtime system. For example, in case
+ofexecutinganOpenCLkernelonCPU,thehostprogramwaitsfortheCPUtobereleasedfromthe
+kernelexecutionandcannotdispatchanotherkernelontheGPUeveniftheGPUisavailable.The
+GPU has to wait till the CPU cores have completed the current kernel execution. This unwanted
+overhead cannot be tolerated in real-time scheduling. This is handled by limiting the OpenCL
+computedeviceforCPUstotheA-15coresoftheARMbigCPUandusingtheLITTLECPUsforall
+otherservicessuchasschedulingandtemperaturemonitoring.WebindtheOS(Ubuntu18.04LTS)
+to the first two cores of the quad-core ARM LITTLE CPU by modifying the OS boot file settings.
+We map our proposed scheduler (a complex host program) exclusively on the fourth core of the
+LITTLE CPU by setting the thread affinity during execution. We implement an additional thread
+thatcontinuouslymonitorsthechiptemperatures.ItexecutesonthethirdcoreoftheLITTLECPU
+anddiscretelysamplesthetemperaturereadingsfromthesensorswithasamplingperiodof250ms.
+In the rest of the paper, we use the terms CPU device, A15 cluster, or big CPU interchangeably.
+Initial framework setup: Thethermalthresholdvaluesformajorandminorthermalviolation
+are set to 87◦Ca n d8 4◦C respectively. For the platform under question, the trip point for CPU
+and GPU is 90◦C. The value ofαand βused for binary classification of device utilization and
+frequency setting in the framework for CPU are set to 0.7 and 1.5 GHz respectively and that of
+GPU are set to 0.55 and 0.5 GHz respectively. This is obtained by extensively running different
+task sets and considering only those cases where the peak temperature of the deviceδj exceeds
+Tminor .Thequantity αj representstheaveragedeviceutilizationobservedforthosecases.Foreach
+oftheexperiments,thedropinpeaktemperatureisrecordedwheneverwedecreasethefrequency
+setting of the device from a particular value to its immediately next lower value. This is done
+for all consecutive pairs of available frequency setting values. The lower frequency value for the
+pair which is responsible for the maximum drop in temperature is recorded for that experiment.
+In such a way, these representative frequency setting values are computed for each experiment.
+The representative frequency setting that was observed the maximum number of times across
+all experiments was selected as the value ofβj. We have used representative kernels (depicted
+in Table2) from the popular OpenCL benchmark suite Polybench [19] with different input sizes.
+Thetasksetcontainscandidatekernelsrepresentativeoftypicalreal-timecomputationperformed
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 19]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:19
+Fig. 9. Mapping schedule for different schemes.
+as part of perception systems in automotive domain (neural network pipelines, signal estimators,
+etc.).
+Ourproposedframeworkcanautomaticallydesignthehostcodeforlaunchingthekernelswith
+the support of a specification file that contains necessary attribute information such as input/out-
+put buffers, variables passed as arguments, dimension size, work-group size for each kernel. The
+specification file has provisions for specifying the arrival time, period and deadline for each task.
+7.2 Experimental Results
+We compare the following scheduling approaches in our evaluation.
+(1) BASE: This approach refers to the default Dynamic Thermal Management (DTM) technique
+[4]employedbytheOSwheretheprocessorfrequencyisdrasticallyreducedbythermalthrottling
+without considering its effect on the performance of the executing tasks. If the CPU temperature
+goes beyond 90◦C on the Odroid XU-4, the CPU frequency setting drops from 2 GHz to 0.9 GHz.
+(2) Online (O)-DVFS:Inthisapproach,DTMisdonebyanonlinefrequencytuningalgorithm[ 25].
+The approach initially profiles each task in the task set at the maximum frequency setting in the
+target platform. The task mapping option for each task that results in minimum latency is com-
+puted offline from the profiled data. During online scheduling, the approach always chooses the
+task mapping with minimum latency for each task. If it is observed that the peak temperature
+at runtime overshoots 87◦C, the frequency level of the A15 cores in the big CPU is reduced by
+0.2 GHz. This process of stepwise frequency reduction continues if the peak temperature is still
+equal to or greater than the threshold, but not below the lowest frequency setting that ensures
+deadline constraint.
+(3) Adaptive (A)-DTM: This is our proposed DTM scheme described in Sections5–6 that uses
+different thermal recovery actions discussed earlier to mitigate thermal violations.
+Wepictoriallydescribe,withthehelpofGanttChartsdepictedinFigure 9,howtask-scheduling
+decisions are taken for BASE and O-DVFS schemes. We consider the first hyper-period in a given
+epoch for the case where thermal violation occurs due to modification in the current job set
+fromJ toJ′.T h ej o b - s e tJ comprises the following jobs - OpenCL tasks GESUMMV(4096)
+and 2DCONV(1024× 1024) arriving with period values of 6 seconds and 15 seconds respectively.
+The platform was thermally stable for the scheduleS corresponding toJ in the previous epoch.
+In the current epoch, no job is removed fromJ and the new job setJ′, has three additional jobs
+from OpenCL task GEMM(1024×1024) arriving with task period of 10 seconds along withJ.A s
+depicted in the top sub-figure of Figure9, each job of GESUMMV and GEMM is mapped to CPU,
+while each job of 2DCONV is mapped to GPU. Each job of a task is represented by a coloured
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 20]
+97:20 S. Maity et al.
+Fig. 10. O-DVFS vs A-DTM : for ADTM, the first hyper-period at start of the current epoch and an eventual
+thermally stable hyper-period are depicted.
+rectangle. The correspondingperiodis depictedwith the help of a verticaldotted line of the same
+colour. The coloured rectangle pertaining to thepth job of a task is annotated with the numberp.
+WeobserveforBASEinFigure 9thatthedefaultthermalthrottlinggetstriggeredwhenthepeak
+temperature reaches 90◦C leading to deadline violation of the third job of GESUMMV. In case of
+O-DVFS, the frequency is gradually reduced in a stepwise manner when the temperature reaches
+88◦C.Whenthetemperaturegoesbelow88 ◦C,O-DVFSdoesnotreducethefrequencyanyfurther.
+We next describe how our proposed A-DTM scheme compares with respect to O-DVFS in
+Figure 10. The CPU-GPU schedule in the top row of the figure reproduces the O-DVFS output
+for comparison. The middle row provides a snapshot of the first hyper-period of the new epoch
+started with job injection under A-DTM scheme. The bottom row shows a snapshot of the even-
+tual thermally stable hyper-period in the same epoch as achieved by A-DTM. Also, since A-DTM
+operates at the granularity of sub-tasks, we represent each constituent sub-task of every job by
+dotted rectangles. We observe that for A-DTM, in the first hyper-period of the scheduling epoch,
+both local and global recovery modes get activated. This is indicated by the grey arrows in Fig-
+ure10. In case of global recovery, the unstable sub-tasks are marked with red dotted lines and the
+task mappings are changed in next hyper-periods. We observe that different recovery actions in
+A-DTM scheme managed to reduce the peak temperature, leading to a thermally stable state.
+For this experiment, Figure11 illustrates the highest peak temperatures the platform reached
+per hyper-period over a scheduling epoch for each of the three schemes. In the BASE case, the
+highest temperature in all subsequent hyper-periods is above 90◦C. This is because tasks are al-
+ways mapped to devices at the highest frequency setting, and the default thermal throttling gets
+triggered when the peak temperature reaches 90◦C. In O-DVFS, the frequency is gradually re-
+duced whenever the temperature reaches 88◦C. However, the O-DVFS scheme is unable to bring
+the temperature below 88◦Ci nt h i sc a s e .
+In contrast, for our proposed A-DTM approach, the highest temperature reduces per hyper-
+period after applying different recovery actions and the updated task mapping is propagated to
+the next hyper-period. We observe from Figure11, that the maximum temperature recorded for
+A-DTM is 90◦Ci nt h eNth hyper-period (beginning of scheduling epoch forJ′). This is because
+no recovery actions are applied in the first hyper-period while accommodating the new jobs in
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 21]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:21
+Fig. 11. Peak temperature per hyper-period.
+J′ using our greedy mapping policy discussed earlier. In the(N +1)th hyper-period, both global
+and local recovery actions are active, and the local recovery actions manage to reduce the peak
+temperature to 88◦C(>Tmajor ). In the next hyper-period, the global recovery actions change the
+task mapping of the unstable sub-tasks. The updated task mappings are reflected in the(N +2)th
+hyper-period (see Figure11). Eventually, as can be seen from further hyper-periods depicted in
+Figure11, with A-DTM scheme the peak temperature drops to 85◦C.
+Performance comparison for individual control actions: Our next set of experiments char-
+acterizetherelativemeritsanddemeritsofeachrecoveryactioninourproposedframeworkacross
+asetofdiversetaskscenarios.Thisisdonebyrunningourframeworkwithdifferentcombinations
+of control actions in the global controller. Given our choice of three possible control actions, we
+have a total of seven different combinations considering all possible subsets of three recovery ac-
+tion choices. Our experimental setup comprises five test cases each with a different initial job set
+J inathermallystablestateandamodifiedset J′ inathermalunstablestateatthebeginningof
+anewschedulingepoch.Wehave J′ =J∪Jnew andJnew containsmultiple(orsingle)instances
+ofasingletask.Noexistingjobexitsthesystem.Table 3describesthedetailsforeachofthefivetest
+cases in each row. The second column of the table describes each task (SIMD kernel name, input
+sizes, task period and device mapping) present in the initial job setJ whereas column 6 contains
+the same details of the task inJnew which is added to the modified job set. The peak temperature
+Tpeak and initial CPU and GPU device utilization parameters (U (H ,δC ) andU (H ,δG )) for the job
+setJ at the end of the previous scheduling epoch are represented in the third and fourth column
+of Table3. Column 5 contains the hyper-periodH length. For simplicity, we have considered that
+thehyper-periodremainsthesameforboth J andJ′.W econsidertheepochlengthtobe10 ×H.
+Thepeaktemperature T′
+peak ,and(CPU,GPU)deviceutilizationparameters (U′(H ,δC ),U′(H ,δG ))
+at thebeginning ofthe current epochforJ′ are representedin the seventhand eighth column of
+Table3.
+Foreachtestcase,wecreate5differentschedulingscenarios,bymodifyingthedeadlinerequire-
+ment of job instances of the new task added inJ′. We model such relative deadline requirements
+as throughput constraints of individual jobs inJnew . The throughput is calculated by the follow-
+ingexpressionof throughputindex TI = (#FLOPstotal
+new /dnew ) where#FLOPstotal
+new anddnew arethe
+totalnumbersofFloatingPointOperationsandthedeadlineofthenewtaskrespectively.Fivedis-
+creteTI valuesrangingfrom6to12(intheorderof1 e7)areselectedforourexperiments.Alower
+TI value indicates that the deadline is relaxed, whereas a higherTI value indicates the deadline is
+stricter.
+In each experiment, i.e., for a test case and new task along with job level relative deadline/TI
+requirement, the global controller is executed in seven possible modes, each representing a
+combination of recovery actions to reduce the peak temperature over multiple hyper-periods in
+the epoch. The peak temperature obtained in the last hyper period of the epoch is recorded in
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 22]
+97:22 S. Maity et al.
+Table 3. Test Case Scenarios
+Test
+Cases
+Job setJ Job setJ′
+Kernel inJ with mapped
+device and task period Tpeak U (H,δC ),U (H,δG H Kernel inJnew with mapped
+device and task period T′peak U′ (H,δC ),U′ (H,δG
+1 2DCONV(512×512)->CPU (10s),
+GESUMMV(2048)->GPU(6s) 79◦C 0.25,0.16 30s GEMM(1024×1024)->CPU (30s) 91◦C 0.65,0.16
+2 GEMM(1024×1024)->CPU (20s),
+GESUMMV(4096)->CPU(8s) 83◦C 0.8, 0.17 40s GEMM(512×512)->CPU (20s) 91◦C 0.92, 0.17
+3
+2DCONV(512×512)->CPU (10s),
+GEMM(128×128)->GPU (2s),
+GESUMMV(4096)->GPU(6s)
+81◦C 0.25, 0.45 30s 2MM(512× 512)->CPU (10s) 88◦C 0.5, 0.45
+4
+2DCONV(512×512)->CPU (5s),
+GEMM(256× 256)->CPU (3s),
+GESUMMV(4096)->GPU(5s),
+2MM(64×64)->CPU(3s),
+ATAX(64×64)->CPU(6s)
+85◦C 0.54, 0.5 30s 3MM(512× 512)->CPU (10s) 91◦C 0.81, 0.45
+5
+LeNet(32×32)->CPU (5s),
+3MM(512×512)->CPU (10s),
+ATAX(256× 256)->GPU(2s)
+82◦C 0.35, 0.15 10s LeNet(32×32)->CPU (5s) 90◦C 0.45, 0.15
+each case as an indication of thermal performance achieved through the recovery scheme. We
+summarize our results in the subplots of Figure12. Each subplot contains multiple line plots that
+depict the thermal performance variation of each test case with respect to different TI values. For
+example, in the top-left sub-plot, we provide peak temperature in last hyper-period (Y axis) as
+recorded for test case 1, with different recovery schemes and varying TI values forJnew (X axis).
+Inthe firsttestcase ,theinitialdeviceutilizationvaluesforinitialjobset J depictedinTable 3
+are low. When the job set is modified toJ′, major thermal violations are detected. For aTI value
+of 6, we observe that task migration alone was able to reduce the peak temperature from 91◦C
+at the beginning of the epoch to 86◦C at the end of the epoch. For the same scenario, idle slot
+insertionwasabletoreducethetemperaturetoonly89 ◦C.Also,withfrequencytuningasthesole
+recovery action, the peak temperature reduced to 83◦C. We observe that the performance of idle
+slot insertion and frequency tuning degrades asTI value increases, i.e. the headspace available
+for a potentially thermally unstable task reduces. For highTI values, the scope for idle slot inser-
+tion becomes limited, and the frequency tuner always sets the frequency value to a high setting
+in order to meet the target throughput. In contrast, we observe that if the cooler device has low
+deviceutilization,taskmigrationisabletoreducethepeaktemperaturemorethanfrequencytun-
+ingevenathigher TI values.Thisisbecausethetask(GEMM)in Jnew executesfasterintheGPU
+at the highest frequency setting than in the CPU at its highest frequency setting. Task migration
+only fails when the throughput of the new task is set so high that it is greater than the maximum
+throughput achievable in the highest frequency setting of the GPU. We observe that the combi-
+nation of frequency tuning and migration performs better than the other schemes and almost as
+goodastheschemewhereallrecoveryactionsareusedtogether.For TI valueof6,weobservethat
+applyingallrecoveryactionstogether(i.e.ourproposedscheme,markedby‘All’infigurelegend)
+resulted in even lower peak temperatures.
+In thesecond test case, the CPU has high device utilization whereas GPU has low device
+utilization. Due to the difference in terms of utilization values between the devices, we observe
+thatathigher TI values,combinationsofrecoveryactionsthathavemigrationperformbetterthan
+idle slot insertion and frequency tuning. Another observation in test case 2 is that temperature
+reduction by any of the recovery actions is comparatively lower than that of test case 1 for the
+same scheme. This is due to the higher CPU device utilizationU (H ,δC)a n dT′
+peak values. In the
+thirdtestcase ,theGPUhashigherdeviceutilizationcomparedtoCPUandthushaslessresource
+bandwidth for accommodating new tasks. We observe that here frequency tuning outperforms
+both migration and idle slot insertion even at highTI values. Task migration performs poorly in
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 23]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:23
+Fig. 12. Peak temperature at different choices of thermal recovery actions and TI value.
+this case, as migration from GPU to CPU is not a thermal friendly move in the platform. This is
+because the CPU is typically always hotter than the GPU due to OS, temperature monitor thread
+andourschedulerthreadcontinuouslyrunninginthelittlecoresalongwithtasksinthebigcores.
+Also,migrationfromGPUtoCPUisnotpossibleasGPUisalreadyheavilyutilizedhere.Hence,in
+this case, combinations of recovery actions that contain frequency tuning naturally perform well
+in reducing peak temperature, except for combination of migration and frequency tuning. In the
+fourthtestcase ,thedeviceutilizationforbothdevicesarecomparativelyhigher.Here,weobserve
+that the thermal performance of all the seven possible combinations of recovery actions is lower
+comparedtothatofthefirstthreetestcases.Thisisbecauseduetohighdeviceutilizationinboth
+C P Ua n dG P U(U (H ,δC),U (H ,δG ))a n dh i g hT′
+peak values, the headspace to apply any recovery
+actioniscomparativelysmaller.Inthiscase,frequencytuningistheprimaryactionresponsiblefor
+thermalmanagement.Ourproposedschemewithallactionsandtheschemewithfrequencytuning
+andidlenessinsertionperformsmarginallybetterthanusingonlyfrequencytuningfor TI value6.
+The primary objective of our framework is to reduce the peak temperature below the thermal
+thresholdbytakingsuitableactionsonunstabletasks,ensuringthatdeadlineconstraintsaresatis-
+fied. It may happen the recovery actions chosen fail to reduce the peak temperature. For example,
+i nt e s tc a s e2f o rTI value 12, we observe that the peak temperature could not be reduced be-
+low trip point even after applying all combination of recovery actions. In such cases, when the
+peak temperature goes beyond the trip point, the default OS governed thermal throttling kicks in
+and reduces the frequency drastically to 900MHz. Table4 summarizes the maximum throughput
+achievable for O-DVFS and A-DTM schemes that manage to avoid invoking OS induced default
+thermalthrottlingscheme(BASE).Werecordthe TI valuesforeachtestcaseatwhichA-DTMand
+O-DVFS fail to mitigate thermal violation and populate Table4. We observe from the table that
+theperformanceofA-DTMcansustainmorethroughputindexcomparedtoO-DVFSfortestcase
+1 and 2. Whereas, for test case 3 and 4, both O-DVFS and A-DTM can sustain same value ofTI.
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 24]
+97:24 S. Maity et al.
+Table 4. Trip Point Limit
+Test
+Cases
+TI leading
+to trip point
+O-DVFS A-DTM
+1 12 13.5
+2 9 15
+3 12 13.5
+4 10.5 10.5
+Fig. 13. Peak temperature w.r.t. TI value.
+Observing all the four test scenarios each with multiple job insertion constraints in Figure12
+and Table4, we can conclude that our framework with the combination of three recovery actions
+perform better than the widely used standalone frequency tuning scheme in terms of reducing
+peak temperature when GPU device utilization is low. In case of high GPU device utilization, the
+improvement is naturally lesser.
+Insight with Real application:For the fifth test case, we have usedLeNet, a real-life Con-
+volution Neural Network (CNN) inference pipeline based on the popular LeNet architecture [41].
+Each job of the inference task processes an input image of size 32× 32. As depicted in Table3,
+the initial job setJ comprises jobs of LeNet pipeline along with other standard OpenCL kernels
+selected from Polybench. The job setJ is modified toJ′ by adding new job instances of the
+LeNetpipelineduetohalvingofperiod.InTable 3,thisismodelledasadditionofanotherperiodic
+LeNet instance with older period. The results as depicted in Figure13 clearly establish that the
+proposedschemewithallthreecontrolactionsisabletosustaindifferentTIrequirementsforthis
+job injection scenario with comparatively smaller peak temperature w.r.t. the other combinations
+having one or two control actions.
+Sensitivity with respect to hyper-period length:The performance of our proposed frame-
+workissensitivetothelengthofhyper-period.Inourframework,whenamajorthermalviolation
+is detected in a hyper-period, the relevant thermal recovery actions are applied in the next hyper-
+period. The violation mitigation can consume multiple hyper-periods. For large hyper-periods,
+such actions may thus be slow, thus increasing the time the platform sustains higher temper-
+atures. For same task set, if the hyper-period length is reduced too much due to smaller peri-
+odicity, the device utilizations increase. This may reduce the performance of the framework as
+headspace to apply any recovery action decreases. As a quantitative experiment, we modify test
+case1fromTable 3withchangedvaluesofperiodsofthetasksinjobset J andJnew suchthatthe
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 25]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:25
+hyper-period length is 15 seconds instead of 30 seconds. The initial device utilisation for CPU at
+the start of the new epoch becomes 0.96 and the peak temperature overshoots platform trip point
+90◦Cafternewjobinjection,thusinducingOSleveldefaultthermalthrottlingovermultiplehyper-
+periods.
+8 RELATED WORK
+Thermal-aware Scheduling without GPU: . There exist a myriad of thermal-aware schedul-
+ing techniques for single-core and multi-core CPU systems that primarily use frequency scaling
+to reducepowerconsumptionandtemperature.Priorresearchinthefieldofschedulingreal-time
+tasks focused on DVFS tuning for thermal management while meeting timing constraints for uni-
+processor [30] and multiprocessor platforms [5, 28]. Apart from DVFS, mechanisms like thermal
+aware core mapping [40] and inserting idle periods [5] have also gained traction for dynamically
+regulating runtime chip temperatures. However, these solutions did not consider the presence of
+GPUs or their thermal effect on CPUs in integrated heterogeneous platforms.
+Thermal A ware Scheduling in CPU-GPU platform: Intherecentpast,severalGPUthermal
+managementtechniqueshaveemerged,butmostlyfornon-real-timesystems.Devetal.[ 10]high-
+lighted challenges and opportunities in scheduling OpenCL kernels on CPU-GPU platforms by
+characterizing the thermal coupling effect between CPU and GPU devices. A proactive Dynamic
+ThermalManagement(DTM)policythatusesathermalmodelformitigatingthermalviolationson
+a CPU/GPU mobile platform has been reported in [43]. The framework in [46] can automatically
+selectthepartitioningpointandtheoperatingfrequenciesforoptimalCPU-GPUco-executionun-
+derthermalconstraintsforagivenkernel.Prakashetal.[ 38]proposedCPU-GPUcooperativefre-
+quencyscalingformobilegamingtomeetthermalconstraintswithminimumlossinperformance.
+Theworkin[ 25]performsonlinethermalmanagementinCPU-GPUbasedmobileMPSoCsbypar-
+titioningtheworkloadacrossavailabledevicesandchoosingsuitablefrequencysettings.However,
+such work do not consider deadline constraints for real-time systems while applying core-level
+DVFS.
+Thermal A ware real-time Scheduling in CPU-GPU platform:Thereexistfewworkthatex-
+plore thermal aware real-time task scheduling in CPU-GPU integrated systems. These are mostly
+for static scheduling and do not take care of dynamic scenarios. In [31], the authors proposed a
+thermal aware CPU-GPU co-scheduling policy that i) performs thermally-balanced task-to-core
+assignmentinCPUcores,ii)preventspowerdissipationburstsarisingduetothermalcouplingbe-
+tweenCPUandGPUandiii)maintainstimingconstraintsoftasksunderagivenchiptemperature
+limit. Isuwa et al. [25] proposed a thermal and energy management mechanism which achieves
+reduction in thermal gradient through energy efficient resource mapping by thread partitioning
+of tasks and online frequency tuning in heterogeneous MPSoCs.
+Dynamic Scheduling: Giventheintricatedependenceofapplicationlevelpowerconsumption
+andlatencyperformanceonarchitecturalparameters,thereexistdifferentoptimizationtechniques,
+heuristics, machine learning (ML), and control theoretic techniques for finding the valid mapping
+of applications to architectures at runtime. Model-based [9] and rule-based heuristics [12]h a v e
+been explored for architecture tuning in CPU systems. Such heuristic approaches are usually fast
+and lightweight, but are not robust in nature. Other approaches use ML techniques for predicting
+an optimal energy or power efficient configuration within a complicated configuration space [11,
+25,42].SuchMLbasedapproacheshandlecomplexmodernprocessors,modelinganapplication’s
+latency and power consumption as a function of resource configurations. Based on such models,
+different scheduling schemes [3, 8] are designed to meet different performance goals. However,
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 26]
+97:26 S. Maity et al.
+addingafeedbacklooptofactorinerrorsduetodynamicchangesinthesystemisdifficultinsuch
+models. Reinforcement Learning (RL) approaches can learn dynamically and perform adaptive
+schedulingbutarecomputationallyveryexpensiveandnotsuitableforreal-timesystems[ 16,24].
+Control theoretic approaches use feedback to learn system dynamics automatically at run time
+andareabletoadjustresourceusagebasedontheerror,i.e.,thedifferencebetweenmeasuredand
+expected behaviour of system resource usage statistics [22, 23, 33]. Self-adaptive systems based
+on control theoretic foundations can also provide the user with quantitative guarantees on the
+time to convergence and robustness in the face of errors and noise. Such approaches have been
+usedtodevelopadaptivecontrollersandself-tuningregulatorsforhandlingthetrade-offbetween
+performance and power consumption on heterogeneous SoCs [1, 23, 32]. In this regard, several
+well known control schemes like Model Predictive Control (MPC) [34], Supervisory control [39]
+and simple state-space based control [23, 35] have been employed. However, existing approaches
+are oblivious to the thermal behaviour of the platform.
+9 CONCLUSION
+We believe the proposed work is the first comprehensive analysis of thermal aware scheduling
+on heterogeneous CPU/GPU embedded architectures where tasks considered are data parallel in
+nature. While existing work mostly consider DVFS as the only thermal-aware control action, we
+extend the OpenCL runtime framework with the flexibility of performing DVFS as well as task
+migration and task shifting as platform-level control actions. Given the increased complexity of
+theproblemwithrespecttocontrolactionsaswellassupportforheterogeneity,designingasound
+scheduling framework with performance guarantees risks the possibility of increasing the sched-
+uling overhead itself. We thus envision this lightweight heuristic guided approach for generating
+real-time scheduling decisions. Future work includes generalizing lookup table based methods
+with a combination of control theoretic and online learning techniques proposed in recent work
+for heterogeneous scheduling [35]. Integrating other low level platform power domain control
+methods under this scheduling umbrella is also a promising avenue.
+REFERENCES
+[1] Tarek F. Abdelzaher, John A. Stankovic, Chenyang Lu, Ronghua Zhang, and Ying Lu. 2003. Feedback performance
+control in software services.IEEE Control Systems Magazine23, 3 (2003), 74–90.
+[2] HussamAmrouch,SeyedBornaEhsani,AndreasGerstlauer,andJörgHenkel.2019.Ontheefficiencyofvoltageover-
+scaling under temperature and aging effects.IEEE Trans. Comput.68, 11 (2019), 1647–1662.
+[3] RamazanBitirgen,EnginIpek,andJoseF.Martinez.2008.Coordinatedmanagementofmultipleinteractingresources
+in chip multiprocessors: A machine learning approach. InMICRO. IEEE, 318–329.
+[4] David Brooks and Margaret Martonosi. 2001. Dynamic thermal management for high-performance microprocessors.
+InHPCA. IEEE, 171–182.
+[5] Thidapat Chantem, X. Sharon Hu, and Robert P. Dick. 2011. Temperature-aware scheduling and assignment for hard
+real-timeapplicationsonMPSoCs. IEEETransactionsonVeryLargeScaleIntegrationSystems 19,10(2011),1884–1897.
+[6] Ting-Hsuan Chien and Rong-Guey Chang. 2016. A thermal-aware scheduling for multicore architectures.Journal of
+Systems Architecture62 (2016), 54–62.
+[7] Edward G. Coffman, Gabor Galambos, Silvano Martello, and Daniele Vigo. 1999. Bin packing approximation algo-
+rithms: Combinatorial analysis. InHandbook of combinatorial optimization. Springer, 151–207.
+[8] Christina Delimitrou and Christos Kozyrakis. 2013. Paragon: QoS-aware scheduling for heterogeneous datacenters.
+IEEE Transactions on Computer Systems48, 4 (2013), 77–88.
+[9] Qingyuan Deng, David Meisner, Abhishek Bhattacharjee, Thomas F. Wenisch, and Ricardo Bianchini. 2012. Coscale:
+Coordinating cpu and memory system dvfs in server systems. InMICRO. IEEE, 143–154.
+[10] Kapil Dev and Sherief Reda. 2016. Scheduling challenges and opportunities in integrated CPU+GPU processors. In
+ESTIMedia. IEEE, 78–83.
+[11] SomdipDey,EnriqueZaragozaGuajardo,KarunakarReddyBasireddy,XiaohangWang,AmitKumarSingh,andKlaus
+McDonald-Maier. 2019. EdgeCoolingMode: An Agent based Thermal Management Mechanism for DVFS enabled
+Heterogeneous MPSoCs. InVLSID. 19–24.
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 27]
+Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems 97:27
+[12] Ashutosh S. Dhodapkar and James E. Smith. 2002. Managing multi-configuration hardware via dynamic working set
+analysis. InISCA. IEEE, 233–244.
+[13] Yang Ge, Parth Malani, and Qinru Qiu. 2010. Distributed task migration for thermal management in many-core sys-
+tems. InDAC. IEEE, 579–584.
+[14] AnirbanGhose,SoumyajitDey,PabitraMitra,andMainakChaudhuri.2016.Divergenceawareautomatedpartitioning
+of OpenCL workloads. InISEC. 131–135.
+[15] Anirban Ghose, Lokesh Dokara, Soumyajit Dey, and Pabitra Mitra. 2017. A framework for OpenCL task scheduling
+on heterogeneous multicores.Parallel Processing Letters27, 03n04 (2017), 1750008.
+[16] Anirban Ghose, Srijeeta Maity, Arijit Kar, and Soumyajit Dey. 2021. Orchestration of perception systems for reliable
+performance in heterogeneous platforms. InDATE. IEEE.
+[17] JairoGiraldo,DavidUrbina,AlvaroCardenas,etal.2018.Asurveyofphysics-basedattackdetectionincyber-physical
+systems. Comput. Surveys51, 4 (2018), 1–36.
+[18] Dip Goswami, Alejandro Masrur, Reinhard Schneider, Chun Jason Xue, and Samarjit Chakraborty. 2013. Multirate
+controller design for resource-and schedule-constrained automotive ECUs. InDATE. 1123–1126.
+[19] Scott Grauer-Gray, Lifan Xu, Robert Searles, Sudhee Ayalasomayajula, and John Cavazos. 2012. Auto-tuning a high-
+level language targeted to GPU codes. InInPar. IEEE, 1–10.
+[20] DominikGreweandMichaelF.P.O’Boyle.2011.Astatictaskpartitioningapproachforheterogeneoussystemsusing
+OpenCL. InCC. Springer, 286–305.
+[21] Heather Hanson, Stephen W. Keckler, Soraya Ghiasi, Karthick Rajamani, Freeman Rawson, and Juan Rubio. 2007.
+Thermal response to DVFS: Analysis with an Intel Pentium M. InISLPED. IEEE, 219–224.
+[22] Joseph L. Hellerstein, Yixin Diao, Sujay Parekh, and Dawn M. Tilbury. 2004.Feedback control of computing systems.
+John Wiley & Sons.
+[23] ConnorImes,DavidH.K.Kim,MartinaMaggio,andHenryHoffmann.2015.POET:Aportableapproachtominimizing
+energy under soft real-time constraints. InRTAS. IEEE, 75–86.
+[24] Engin Ipek, Onur Mutlu, José F. Martínez, and Rich Caruana. 2008. Self-optimizing memory controllers: A reinforce-
+ment learning approach. InISCA. IEEE, 39–50.
+[25] SamuelIsuwa,SomdipDey,AmitKumarSingh,andKlausMcDonald-Maier.2019.TEEM:Onlinethermal-andenergy-
+efficiency management on CPU-GPU MPSoCs. InDATE. IEEE, 438–443.
+[26] YoungGeunKim,MinyongKim,JaeMinKim,andSungWooChung.2015.M-DTM:Migration-baseddynamicthermal
+management for heterogeneous mobile multi-core processors. InDATE. IEEE, 1533–1538.
+[27] Klaus Kofler, Ivan Grasso, Biagio Cosenza, and Thomas Fahringer. 2013. An automatic input-sensitive approach for
+heterogeneous task partitioning. InICS. 149–160.
+[28] KaiLampkaandBjörnForsberg.2016.Keepitslowandintime:OnlineDVFSwithhardreal-timeworkloads.In DATE.
+IEEE, 385–390.
+[29] Janghaeng Lee, Mehrzad Samadi, Yongjun Park, and Scott Mahlke. 2013. Transparent CPU-GPU collaboration for
+data-parallel kernels on heterogeneous systems. InPACT. IEEE, 245–255.
+[30] Youngmoon Lee, Hoon Sung Chwa, Kang G. Shin, and Shige Wang. 2018. Thermal-aware resource management for
+embedded real-time systems.IEEE Trans. on Computer-Aided Design of Integrated Circuits and Systems37, 11 (2018),
+2857–2868.
+[31] Youngmoon Lee, Kang G. Shin, and Hoon Sung Chwa. 2019. Thermal-aware scheduling for integrated CPUs-GPU
+platforms. ACM Transactions on Embedded Computing Systems18, 5s (2019), 78–83.
+[32] ChenyangLu,JohnA.Stankovic,SangH.Son,andGangTao.2002.Feedbackcontrolreal-timescheduling:Framework,
+modeling, and algorithms.Real-Time Systems23, 1–2 (2002), 85–126.
+[33] SrijeetaMaity,AnirbanGhose,SoumyajitDey,andSwarnenduBiswas.2020.Thermalload-awareadaptivescheduling
+for heterogeneous platforms. InVLSID. IEEE, 125–130.
+[34] AbhinandanMajumdar,LeonardoPiga,IndraniPaul,JosephL.Greathouse,WeiHuang,andDavidH.Albonesi.2017.
+Dynamic GPGPU power management using adaptive model predictive control. InHPCA. IEEE, 613–624.
+[35] NikitaMishra,ConnorImes,JohnD.Lafferty,andHenryHoffmann.2018.CALOREE:Learningcontrolforpredictable
+latency and low energy. InASPLOS. ACM, 184–198.
+[36] Malcolm S. Mollison, Jeremy P. Erickson, James H. Anderson, Sanjoy K. Baruah, and John A. Scoredos. 2010. Mixed-
+criticality real-time scheduling for multicore systems. InCIT. IEEE, 1864–1871.
+[37] Aaftab Munshi. 2009. The opencl specification. InHCS. IEEE, 1–314.
+[38] Alok Prakash, Hussam Amrouch, Muhammad Shafique, Tulika Mitra, and Jörg Henkel. 2016. Improving mobile gam-
+ing performance through cooperative CPU-GPU thermal management. InDAC. IEEE, 1–6.
+[39] Amir M. Rahmani, Bryan Donyanavard, Tiago Mück, et al. 2018. SPECTR: Formal supervisory control and coordina-
+tion for many-core systems resource management. InASPLOS. ACM, 169–183.
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.
+
+[PDF page 28]
+97:28 S. Maity et al.
+[40] Andrea Rudi, Andrea Bartolini, Andrea Lodi, and Luca Benini. 2014. Optimum: Thermal-aware task allocation for
+heterogeneous many-core devices. InHPCS. IEEE, 82–87.
+[41] Pierre Sermanet and Yann LeCun. 2011. Traffic sign recognition with multi-scale Convolutional Networks. InIJCNN.
+2809–2813.
+[42] Gaurav Singla, Gurinderjit Kaur, Ali K. Unver, and Umit Y. Ogras. 2015. Predictive dynamic thermal and power man-
+agement for heterogeneous mobile platforms. InDATE. IEEE, 960–965.
+[43] Gaurav Singla, Gurinderjit Kaur, Ali K. Unver, and Umit Y. Ogras. 2015. Predictive dynamic thermal and power man-
+agement for heterogeneous mobile platforms. InDATE. IEEE, 960–965.
+[44] Kevin Skadron. 2004. Hybrid architectural dynamic thermal management. InDATE. IEEE, 10–15.
+[45] Khalid Tahboub, David Güera, Amy R. Reibman, and Edward J. Delp. 2017. Quality-adaptive deep learning for pedes-
+trian detection. InICIP. IEEE, 4187–4191.
+[46] Siqi Wang, Gayathri Ananthanarayanan, and Tulika Mitra. 2018. OPTiC: Optimizing collaborative CPU–GPU com-
+puting on mobile devices with thermal constraints.IEEE Trans. on Computer-Aided Design of Integrated Circuits and
+Systems 38, 3 (2018), 393–406.
+[47] Chi Xu, Xi Chen, Robert P. Dick, and Zhuoqing Morley Mao. 2010. Cache contention and application performance
+prediction for multi-core systems. InISPASS. IEEE, 76–86.
+[48] JunjieYan,XucongZhang,ZhenLei,ShengcaiLiao,andStanZ.Li.2013.Robustmulti-resolutionpedestriandetection
+in traffic scenes. InCVPR. IEEE, 3033–3040.
+[49] Huazhe Zhang and Henry Hoffmann. 2016. Maximizing performance under a power cap: A comparison of hardware,
+software, and hybrid techniques. InASPLOS. ACM, 545–559.
+[50] Qi Zhu, Bo Wu, Xipeng Shen, Li Shen, and Zhiying Wang. 2017. Co-run scheduling with power cap on integrated
+CPU-GPU systems. InIPDPS. IEEE, 967–977.
+Received April 2021; revised June 2021; accepted July 2021
+ACM Transactions on Embedded Computing Systems, Vol. 20, No. 5s, Article 97. Publication date: September 2021.

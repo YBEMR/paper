@@ -43,6 +43,52 @@ def near(pair, reference, tolerance):
     return a-tolerance <= D(reference) <= b+tolerance
 
 
+def aggregate_energy(probe, traces):
+    """Only aggregate complete valid paths; rejection deliberately has no energy_J."""
+    out = {'status': 'not_aggregatable', 'scope': 'synthetic U1 arithmetic probe only; not savings comparison',
+           'reasons': []}
+    ids, weights = probe.get('trace_ids', []), probe.get('weights', [])
+    if not ids or len(ids) != len(weights) or len(set(ids)) != len(ids):
+        out['reasons'].append({'reason': 'invalid_path_weight_lists'})
+        return out
+    try:
+        weight_intervals = [I(w) for w in weights]
+        if any(w.lo < 0 for w in weight_intervals) or sum(F(w) for w in weights) != 1:
+            raise ValueError('weights must be nonnegative and sum exactly to one')
+    except (ValueError, TypeError, ArithmeticError) as exc:
+        out['reasons'].append({'reason': 'invalid_weights', 'detail': str(exc)})
+        return out
+    for tid in ids:
+        r = traces.get(tid)
+        if r is None:
+            out['reasons'].append({'trace_id': tid, 'reason': 'missing_path'})
+            continue
+        h = r.get('thermal', {})
+        required = {'input_status': r.get('input_status') == 'valid',
+                    'execution_status': r.get('execution_status') == 'valid',
+                    'energy_scope': r.get('energy_scope') == 'complete_window',
+                    'rankable_energy': r.get('rankable_energy') is True,
+                    'thermal_status': h.get('status') == 'safe',
+                    'thermal_complete': h.get('complete') is True,
+                    'precision_met': h.get('precision_met') is True}
+        failed = [field for field, passed in required.items() if not passed]
+        if failed:
+            out['reasons'].append({'trace_id': tid, 'reason': 'path_not_complete_valid', 'failed_fields': failed})
+    if out['reasons']:
+        return out  # Never read or multiply any prefix energy; do not drop paths or renormalize.
+    try:
+        if any(not isinstance(traces[tid]['thermal'].get('energy_J'), list)
+               or len(traces[tid]['thermal']['energy_J']) != 2 for tid in ids):
+            raise ValueError('energy_J must contain two interval endpoints')
+        energies = [I(*traces[tid]['thermal']['energy_J']) for tid in ids]
+        weighted = sum((energy*w for energy, w in zip(energies, weight_intervals)), I(0))
+    except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+        out['reasons'].append({'reason': 'invalid_energy_enclosure', 'detail': str(exc)})
+        return out
+    return {'status': 'valid', 'energy_J': weighted.data(), 'trace_ids': ids,
+            'weights': weights, 'scope': out['scope']}
+
+
 def precheck(output):
     output.mkdir(parents=True, exist_ok=False)
     snapshot = output/'source'; snapshot.mkdir()
@@ -216,9 +262,23 @@ def precheck(output):
         ode.append({'status':'not_available','required_for_certificate':False})
     save(output/'ode_crosscheck.json',ode)
 
-    weighted=sum((I(*traces[t]['thermal']['energy_J'])*I(w) for t,w in zip(x['usage_aggregation_probe']['trace_ids'],x['usage_aggregation_probe']['weights'])),I(0))
-    check('加权能量只接纳完整有效路径', lambda:all(traces[t]['rankable_energy'] for t in x['usage_aggregation_probe']['trace_ids']))
-    save(output/'weighted_energy.json',{'energy_J':weighted.data(),'scope':'synthetic U1 arithmetic probe only; not savings comparison'})
+    weighted = aggregate_energy(x['usage_aggregation_probe'], traces)
+    check('加权能量只接纳完整有效路径', lambda:weighted['status']=='valid')
+    save(output/'weighted_energy.json', weighted)
+    rejected = {}
+    for label, tid in [('deadline_prefix', 'F3'), ('invalid_window', 'F4'), ('missing_path', 'missing')]:
+        probe = {'trace_ids':['F1',tid], 'weights':[D('.5'),D('.5')]}
+        rejected[label] = aggregate_energy(probe, traces)
+        check('加权拒绝 '+label, lambda r=rejected[label]:r['status']=='not_aggregatable' and 'energy_J' not in r and bool(r['reasons']))
+    interrupted = deepcopy(traces)
+    interrupted['F2']['thermal'] = {'status':'unresolved','complete':False}
+    # Even a stale rankable flag cannot authorize aggregation of incomplete output.
+    rejected['interrupted_stale_flag'] = aggregate_energy(x['usage_aggregation_probe'], interrupted)
+    check('加权拒绝中断且不信任陈旧标志', lambda:rejected['interrupted_stale_flag']['status']=='not_aggregatable' and 'energy_J' not in rejected['interrupted_stale_flag'])
+    zero_probe = {'trace_ids':['F1','F3'], 'weights':[1,0]}
+    rejected['zero_weight_invalid_path'] = aggregate_energy(zero_probe,traces)
+    check('零权重不掩盖声明路径违规', lambda:rejected['zero_weight_invalid_path']['status']=='not_aggregatable' and 'energy_J' not in rejected['zero_weight_invalid_path'])
+    save(output/'aggregation_rejections.json', rejected)
     for tid,r in traces.items():
         if 'schedule' in r:
             keys=['mode','request_id','stage','unit','opp','release_us','deadline_us','start_us','end_us']

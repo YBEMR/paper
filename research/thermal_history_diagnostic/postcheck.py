@@ -11,7 +11,7 @@ from precheck import rk4,midpoint
 
 def postcheck(folder,out):
     folder=Path(folder); out=Path(out); out.mkdir(parents=True,exist_ok=False)
-    checks=[]; numerics={}
+    checks=[]; numerics={}; unavailable={}
     def check(name,ok): checks.append(dict(name=name,pass_=bool(ok)))
     x=d.load(); sources=d.read(folder/'sources.json'); locals_=d.read(folder/'locals.json')
     summary=d.read(folder/'summary.json')
@@ -22,6 +22,12 @@ def postcheck(folder,out):
         # JSON serialization identity; saved rational fields are intentionally strings.
         encoded=json.loads(json.dumps(b,default=d.v1.encode,ensure_ascii=False),parse_float=d.D)
         check(label+'方案与原冻结选择一致',encoded==saved['bundle'])
+        if r.get('certified_candidate_energy',{}).get('status')!='available':
+            unavailable[label]=dict(status=r.get('status'),budget_status=r.get('budget_status'),
+                                   reason=r.get('reason','no complete certified energy'))
+            check(label+'未决不生成安全能量或排序值',not r.get('certified_candidate_energy',{}).get('energy_J') and 'J_J' not in summary['rows'][label])
+            # An incomplete receipt is a valid outcome, not a complete safe schedule.
+            continue
         check(label+'持续安全绑定和完整能量可用',r['status']=='certified_candidate' and r['certified_candidate_energy']['status']=='available')
         check(label+'证据预算内形成',r['budget_status']=='within_limit' and float(r['diagnostic']['elapsed_s'])<=20)
         check(label+'持续证书覆盖8片段',r['sustained_safety']['status']=='sustained_safe' and r['sustained_safety']['thermal_certificate']['coverage_complete'])
@@ -57,21 +63,30 @@ def postcheck(folder,out):
         energies[label]=d.box(summary['rows'][label]['J_J'])
     baseline=[a+b for a in d.retained({k:d.box(v) for k,v in locals_['S_A_J'].items()}) for b in d.retained({k:d.box(v) for k,v in locals_['S_B_J'].items()})]
     check('逐模式保留集合独立复算',baseline==summary['local_cartesian'])
-    check('共同保留集合独立复算',d.retained(energies)==summary['joint_retained'])
+    comparison_complete=len(energies)==4
+    if comparison_complete:
+        check('共同保留集合独立复算',d.retained(energies)==summary['joint_retained'])
+    else:
+        check('部分证据不形成四点最优／收益结论',summary['conclusion']=='unresolved_or_invalid' and not summary['joint_retained'])
     for a in ['a0','a1']:
         for tid in ['F1','F2']:
+            if tid not in locals_.get('A',{}).get(a,{}):
+                check(a+tid+'局部转换状态缺失',False); continue
             state=locals_['A'][a][tid]['boundary']
             check(a+tid+'转换共同非温度状态',not state['unfinished'] and state['held_opps']=={'C0':'L','N0':'H'})
-    delta=energies['a1b1']-energies['a1b0']-energies['a0b1']+energies['a0b0']
-    check('四点交互量独立复算',d.overlap(delta,d.box(summary['delta_J'])))
-    report=dict(material_passport={'id':'HT1-postcheck','type':'saved output validation','status':'VERIFIED' if all(c['pass_'] for c in checks) else 'FAILED'},
+    if comparison_complete:
+        delta=energies['a1b1']-energies['a1b0']-energies['a0b1']+energies['a0b0']
+        check('四点交互量独立复算',d.overlap(delta,d.box(summary['delta_J'])))
+    report=dict(material_passport={'id':'HT1-postcheck','type':'saved output validation','status':('VERIFIED' if comparison_complete else 'VERIFIED_PARTIAL') if all(c['pass_'] for c in checks) else 'FAILED'},
                 all_pass=all(c['pass_'] for c in checks),checks=checks,numerics=numerics,
                 sources=sources,postcheck_source_sha256=d.cp.sha(Path(__file__)),
-                no_search_or_repair=True)
+                no_search_or_repair=True,comparison_complete=comparison_complete,
+                available_candidate_count=len(energies),unavailable=unavailable)
     d.write(out/'postcheck.json',report)
     with (out/'energy_summary.csv').open('x',encoding='utf-8-sig',newline='') as f:
         w=csv.writer(f); w.writerow(['combination','J_lower_mJ','J_upper_mJ','R_lower_mJ','R_upper_mJ','sustained_safe'])
-        for label,row in summary['rows'].items(): w.writerow([label]+[str(d.D(v)*1000) for field in ['J_J','R_J'] for v in row[field]]+['yes'])
+        for label,row in summary['rows'].items():
+            w.writerow([label]+([str(d.D(v)*1000) for field in ['J_J','R_J'] for v in row[field]]+['yes'] if 'J_J' in row else ['','','','','unavailable']))
     print(json.dumps(dict(all_pass=report['all_pass'],checks=len(checks)),ensure_ascii=False))
     return report
 

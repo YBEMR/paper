@@ -124,6 +124,23 @@ def run(folder):
             return failed and preserved and final['phase']=='diagnostic_failed_review_required' and final['formal_run_count']==1
     for kind in ['directory','load','snapshot']:
         check('准备失败状态闭合／不覆盖历史：'+kind,lambda kind=kind:preparation_failure(kind))
+    def unresolved_postcheck():
+        import postcheck
+        probe=folder/'unresolved_output_fixture'; probe.mkdir()
+        local=dict(sources=d.identities(),S_A_J={'a0':['0','0'],'a1':['1','1']},
+                   S_B_J={'b0':['0','0'],'b1':['1','1']},A={})
+        for a in ['a0','a1']:
+            local['A'][a]={tid:{'boundary':{'unfinished':[],'held_opps':{'C0':'L','N0':'H'}}} for tid in ['F1','F2']}
+        summary=dict(conclusion='unresolved_or_invalid',local_cartesian=['a0b0'],joint_retained=[],rows={})
+        d.write(probe/'sources.json',d.identities()); d.write(probe/'locals.json',local)
+        for a,b in [('a0','b0'),('a0','b1'),('a1','b0'),('a1','b1')]:
+            result=deepcopy(exhausted); result['id']=a+b
+            d.write(probe/(a+b+'.json'),dict(bundle=d.candidate(x,a,b),result=result))
+            summary['rows'][a+b]=dict(status='unresolved')
+        d.write(probe/'summary.json',summary)
+        report=postcheck.postcheck(probe,folder/'unresolved_postcheck')
+        return report['all_pass'] and not report['comparison_complete'] and report['available_candidate_count']==0 and len(report['unavailable'])==4
+    check('四组合全未决仍保存核查报告，不读取缺失安全字段',unresolved_postcheck)
     check('旧源与依赖未改',lambda:before==d.identities())
     report=dict(material_passport={'id':'HT1-precheck','type':'implementation fixture checks','status':'VERIFIED' if all(c['pass_'] for c in checks) else 'FAILED'},
                 all_pass=all(c['pass_'] for c in checks),checks=checks,sources=d.identities(),

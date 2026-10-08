@@ -2,7 +2,7 @@
 
 ## Material Passport
 
-ID：HT-1；ARS experiment-agent/run与实现核查；2026-10-08。正式诊断仅一次，目录results/diagnostic01；来源／代码／输入哈希见sources.json。输入审查三次、实质修订两轮；最终独立结果审查尚待写入reviews/result_review01.md。63/63预检、76/76事后核对通过。状态：RESULTS_READY。
+ID：HT-1；ARS experiment-agent/run与实现核查；2026-10-08。正式诊断仅一次，目录results/diagnostic01；来源／代码／输入哈希见sources.json。输入审查三次、实质修订两轮；[最终独立结果审查](reviews/result_review01.md)确认无阻断项，可关闭阶段。63/63预检、76/76事后核对通过。状态：COMPLETE。
 
 **本组结论：热历史使后续B能量受到前序A方案影响，四点能量不能完全拆为独立的A评分与B评分；但这种修正不足以改变本组选择。逐模式与共同评价都保留a₁b₀，没有共同选择的额外节能收益。**
 
@@ -58,4 +58,4 @@ ID：HT-1；ARS experiment-agent/run与实现核查；2026-10-08。正式诊断�
 - [事后检查](results/postcheck01/postcheck.json)、[CSV汇总](results/postcheck01/energy_summary.csv)。
 - [输入审查与采纳](reviews/adoption01.md)、[未决分流修订](reviews/adoption02.md)、[修订通过](reviews/input_review03.md)。
 
-完成独立结果审查后关闭K.23，暂停自动续接；下一研究问题由用户决定。
+独立结果审查未重跑研究诊断，核查的是保存证据、哈希与精确区间关系；结论范围相符。诊断后补存的environment.json为描述性归档，不属于该次审查认证内容。已关闭K.23并暂停自动续接，下一研究问题由用户决定。

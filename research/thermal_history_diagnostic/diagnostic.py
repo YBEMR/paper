@@ -27,7 +27,7 @@ def write(path, data):
 
 
 def identities():
-    paths = [HERE/'input.json', HERE/'diagnostic.py', HERE/'precheck.py', HERE/'README.md', SOURCE,
+    paths = [HERE/'input.json', HERE/'diagnostic.py', HERE/'precheck.py', HERE/'postcheck.py', HERE/'README.md', SOURCE,
              HERE.parent/'continuous_planner/planner.py'] + list(joint.sources().values())
     return {str(p.relative_to(REPO)): cp.sha(p) for p in paths}
 
@@ -93,6 +93,7 @@ def prefix_score(b, path):
 
 
 def b_reference(b, horizon_us):
+    start=time.monotonic()
     x = deepcopy(b['candidate']); x['accuracy']=b['evaluation']['accuracy']
     tr = dict(id='B_reference_'+str(horizon_us), initial_mode='B', initial_release_us=0,
               initial_temperature_C=[30,30], initial_opps={'C0':'L','N0':'H'},
@@ -103,7 +104,8 @@ def b_reference(b, horizon_us):
     r=v1.thermal(x['platform'], tr['initial_temperature_C'], segments, x['accuracy'],budget)
     budget.check()
     if not r['complete'] or r['status']!='safe': raise ValueError('B_reference_unresolved')
-    return dict(result=r, segments=segments, trace=tr, g_J_per_K=sensitivity(x['platform'],segments,budget))
+    g=sensitivity(x['platform'],segments,budget); budget.check()
+    return dict(result=r, segments=segments, trace=tr, g_J_per_K=g, seconds=time.monotonic()-start)
 
 
 def sensitivity(platform, segments, budget):
@@ -197,10 +199,10 @@ def formal(precheck_folder):
     # Claim the one run before evaluating; crash cannot silently retry.
     state.update(phase='diagnostic_running',formal_run_count=1)
     (HERE/'state.json').write_text(json.dumps(state,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    folder=HERE/'results'/'diagnostic01'; folder.mkdir(parents=True,exist_ok=False)
-    x=load(); write(folder/'sources.json',identities()); write(folder/'input_snapshot.json',x)
-    all_results={}
+    folder=HERE/'results'/'diagnostic01'; folder_created=False; all_results={}
     try:
+        folder.mkdir(parents=True,exist_ok=False); folder_created=True
+        x=load(); write(folder/'sources.json',identities()); write(folder/'input_snapshot.json',x)
         locals_=score_locals(x); write(folder/'locals.json',locals_)
         for a,b in [('a0','b0'),('a0','b1'),('a1','b0'),('a1','b1')]:
             bundle=candidate(x,a,b); budget=Budget(seconds=20)
@@ -213,8 +215,12 @@ def formal(precheck_folder):
         summary=summarize(x,locals_,all_results); write(folder/'summary.json',summary)
         state.update(phase='results_ready_for_review',results_folder=str(folder.relative_to(REPO)))
     except BaseException as exc:
-        write(folder/'failure.json',dict(type=type(exc).__name__,message=str(exc)))
-        state.update(phase='diagnostic_failed_review_required',failure=str(exc))
+        # Update the durable state even when output preparation itself fails.
+        # Never write a failure receipt into a pre-existing run directory.
+        state.update(phase='diagnostic_failed_review_required',failure_type=type(exc).__name__,failure=str(exc))
+        if folder_created:
+            try: write(folder/'failure.json',dict(type=type(exc).__name__,message=str(exc)))
+            except (OSError,ValueError) as receipt_error: state['failure_receipt_error']=str(receipt_error)
         raise
     finally:
         (HERE/'state.json').write_text(json.dumps(state,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')

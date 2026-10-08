@@ -95,6 +95,35 @@ def run(folder):
     joint=d.joint.evaluate_bundle(bundle,d.Budget(seconds=20)); artifacts['one_joint_interface']=joint
     check('单组合预检联合安全证书和能量接线',lambda:joint['status']=='certified_candidate' and joint['certified_candidate_energy']['status']=='available')
     check('安全输入完整同源身份',lambda:d.joint.binding(bundle)==joint['binding'])
+    def preparation_failure(kind):
+        # Isolated state/receipts only: no research evaluation or real stage mutation.
+        root=folder/('preparation_probe_'+kind); root.mkdir()
+        # Preserve small probe receipts in the workspace instead of relying on OS temp ACLs.
+        if root.exists():
+            gate=root/'gate'; gate.mkdir()
+            (gate/'precheck.json').write_text(json.dumps({'all_pass':True,'sources':{}}),encoding='utf-8')
+            initial={'phase':'ready_for_diagnostic','formal_run_count':0}
+            (root/'state.json').write_text(json.dumps(initial),encoding='utf-8')
+            target=root/'results'/'diagnostic01'
+            if kind=='directory':
+                target.mkdir(parents=True); (target/'sentinel').write_text('retain',encoding='utf-8')
+            original_write=d.write
+            def fail_snapshot(path,data):
+                if Path(path).name=='sources.json': raise OSError('injected_snapshot_failure')
+                return original_write(path,data)
+            with patch.object(d,'HERE',root), patch.object(d,'identities',return_value={}):
+                if kind=='load':
+                    with patch.object(d,'load',side_effect=ValueError('injected_load_failure')):
+                        failed=raises(lambda:d.formal(gate),'injected_load_failure')
+                elif kind=='snapshot':
+                    with patch.object(d,'load',return_value=x),patch.object(d,'write',side_effect=fail_snapshot):
+                        failed=raises(lambda:d.formal(gate),'injected_snapshot_failure')
+                else: failed=raises(lambda:d.formal(gate),'diagnostic01')
+            final=d.read(root/'state.json')
+            preserved=(target/'sentinel').read_text(encoding='utf-8')=='retain' and not (target/'failure.json').exists() if kind=='directory' else (target/'failure.json').exists()
+            return failed and preserved and final['phase']=='diagnostic_failed_review_required' and final['formal_run_count']==1
+    for kind in ['directory','load','snapshot']:
+        check('准备失败状态闭合／不覆盖历史：'+kind,lambda kind=kind:preparation_failure(kind))
     check('旧源与依赖未改',lambda:before==d.identities())
     report=dict(material_passport={'id':'HT1-precheck','type':'implementation fixture checks','status':'VERIFIED' if all(c['pass_'] for c in checks) else 'FAILED'},
                 all_pass=all(c['pass_'] for c in checks),checks=checks,sources=d.identities(),

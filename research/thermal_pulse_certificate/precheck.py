@@ -2,6 +2,8 @@
 from copy import deepcopy
 from fractions import Fraction as F
 from unittest.mock import patch
+import hashlib
+import json
 
 import certificate as c
 a = c.a
@@ -121,5 +123,30 @@ def run():
     with patch.object(a.v2,'verify',return_value=witnessed):
         r=c.evaluate_safety_bundle(b,budget_at('safety_receiver'))
     ck('committed_violation_survives_timeout',r['status']=='candidate_violation' and r['safety_receipt']['result']['witness']['real_violation'])
+    # R1: bind the exact reviewed dependencies and the sealed review/gate bytes.
+    hashes=c.identities()
+    gate=dict(passed=True,checks=[dict(passed=True)],hashes=hashes)
+    text='K33_REVIEW: PASS\nK33_HASHES_SHA256: '+c.hashes_digest(hashes)+'\nfixture_only\n'
+    def rejects(fn):
+        try:fn()
+        except (a.v1.Invalid,ValueError,KeyError,TypeError):return True
+        return False
+    c.check_gate(gate,text)
+    ck('matching_review_version_accepts',True)
+    ck('PASS_without_version_rejected',rejects(lambda:c.check_gate(gate,'K33_REVIEW: PASS\nold review\n')))
+    ck('old_review_new_sources_rejected',rejects(lambda:c.check_gate(gate,'K33_REVIEW: PASS\nK33_HASHES_SHA256: '+'0'*64)))
+    stale=deepcopy(gate);stale['hashes']['stale']='1'
+    ck('stale_precheck_rejected',rejects(lambda:c.check_gate(stale,text)))
+    ck('REVISE_rejected',rejects(lambda:c.check_gate(gate,text.replace('PASS','REVISE'))))
+    bad=deepcopy(gate);bad['checks'][0]['passed']=False
+    ck('failed_check_even_if_flag_true_rejected',rejects(lambda:c.check_gate(bad,text)))
+    raw=json.dumps(gate).encode();rb=text.encode()
+    ready=dict(hashes=hashes,gate_sha256=hashlib.sha256(raw).hexdigest(),review_sha256=hashlib.sha256(rb).hexdigest())
+    c.check_ready(ready,raw,rb)
+    ck('sealed_gate_review_accepts',True)
+    ck('review_file_edit_rejected',rejects(lambda:c.check_ready(ready,raw,rb+b'changed')))
+    ck('gate_file_edit_rejected',rejects(lambda:c.check_ready(ready,raw+b' ',rb)))
+    stale=deepcopy(ready);stale['hashes']['stale']='1'
+    ck('sealed_old_sources_rejected',rejects(lambda:c.check_ready(stale,raw,rb)))
     return dict(passed=all(z['passed'] for z in checks),checks=checks,evidence=evidence,
                 hashes=c.identities(),scope='K33 necessary prechecks only; no trajectory propagation or energy rerun')

@@ -25,7 +25,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('mode', choices=['precheck', 'certify'])
     p.add_argument('--output', required=True)
-    p.add_argument('--gate'); p.add_argument('--review')
+    p.add_argument('--ready')
     arg = p.parse_args()
     folder = resolve_local(arg.output)
     if arg.mode == 'precheck':
@@ -37,12 +37,9 @@ def main():
         save(folder / 'result.json', result)
         print(json.dumps({'passed': result['passed'], 'checks': len(result['checks'])}))
         return 0 if result['passed'] else 1
-    gate = json.loads(resolve_local(arg.gate).read_text(encoding='utf-8'))
-    review = resolve_local(arg.review)
-    if not gate['passed'] or gate['hashes'] != c.identities():
-        raise ValueError('precheck_or_hash_mismatch')
-    if not review.read_text(encoding='utf-8').splitlines()[0] == 'K33_REVIEW: PASS':
-        raise ValueError('independent_review_not_passed')
+    ready = json.loads(resolve_local(arg.ready).read_text(encoding='utf-8'))
+    gate = resolve_local(ready['gate_path']); review = resolve_local(ready['review_path'])
+    c.check_ready(ready, gate.read_bytes(), review.read_bytes())
     folder.mkdir(parents=True, exist_ok=False)
     # Input assembly and every proof check are charged to this same 20-second budget.
     budget = c.a.v2.Budget(seconds=20)
@@ -52,8 +49,8 @@ def main():
         result.update(status='unresolved', budget_status='exhausted', reason='outer_wall_clock_limit')
         result.pop('safety_receipt', None)
     save(folder / 'result.json', result)
-    save(folder / 'provenance.json', dict(hashes=c.identities(), review_path=str(review),
-                                       review_sha256=c.a.cp.sha(review), gate_path=arg.gate,
+    save(folder / 'provenance.json', dict(hashes=c.identities(), readiness=ready,
+                                       ready_path=arg.ready, ready_sha256=c.a.cp.sha(resolve_local(arg.ready)),
                                        stage='K33 sustained certificate only; zero new energy calls'))
     print(json.dumps({'status': result['status'], 'elapsed_s': result['elapsed_s']}))
     return 0 if result['status'] == 'certified_safety_only' else 1

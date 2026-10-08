@@ -5,6 +5,8 @@ from math import factorial
 from pathlib import Path
 import sys
 import time
+import hashlib
+import json
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / 'thermal_pressure_precheck'))
@@ -30,6 +32,42 @@ def identities():
 
 def binding(b):
     return dict(a.joint.binding(b), pulse_sources=identities())
+
+
+def hashes_digest(hashes):
+    return hashlib.sha256(json.dumps(hashes, ensure_ascii=False, sort_keys=True,
+                                     separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def check_gate(gate, review_text):
+    """Review must explicitly approve exactly the prechecked dependencies."""
+    a.v1.require(gate.get('passed') is True and bool(gate.get('checks'))
+                 and all(row.get('passed') is True for row in gate['checks']), 'precheck_not_passed')
+    a.v1.require(gate['hashes'] == identities(), 'precheck_or_hash_mismatch')
+    lines = review_text.splitlines()
+    a.v1.require(bool(lines) and lines[0] == 'K33_REVIEW: PASS', 'independent_review_not_passed')
+    a.v1.require('K33_HASHES_SHA256: ' + hashes_digest(gate['hashes']) in lines,
+                 'review_source_identity_mismatch')
+
+
+def make_ready(gate_path, review_path):
+    """Seal only a current passed review; later review/gate edits invalidate it."""
+    gate_path, review_path = Path(gate_path).resolve(), Path(review_path).resolve()
+    for p in [gate_path, review_path]:
+        a.v1.require(p.is_relative_to(HERE.resolve()), 'readiness_path_outside_package')
+    gate = json.loads(gate_path.read_text(encoding='utf-8'))
+    review = review_path.read_bytes()
+    check_gate(gate, review.decode('utf-8'))
+    return dict(hashes=gate['hashes'], gate_path=gate_path.relative_to(HERE).as_posix(),
+                gate_sha256=a.cp.sha(gate_path), review_path=review_path.relative_to(HERE).as_posix(),
+                review_sha256=hashlib.sha256(review).hexdigest())
+
+
+def check_ready(ready, gate_bytes, review_bytes):
+    a.v1.require(ready['hashes'] == identities(), 'ready_source_identity_mismatch')
+    a.v1.require(hashlib.sha256(gate_bytes).hexdigest() == ready['gate_sha256'], 'gate_file_changed')
+    a.v1.require(hashlib.sha256(review_bytes).hexdigest() == ready['review_sha256'], 'review_file_changed')
+    check_gate(json.loads(gate_bytes), review_bytes.decode('utf-8'))
 
 
 def rational_tree(x):

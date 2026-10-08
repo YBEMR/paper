@@ -14,8 +14,8 @@ CPU精确上界为25＋3255/206°C，比较包络为41°C；NPU上界为9996419/
 
 ## 可复跑入口
 
-在项目根目录使用 `F:\Anaconda3\python.exe research/thermal_pulse_certificate/run.py precheck --output precheck01`。输出目录不可已存在，失败记录不覆盖。
+在项目根目录使用 `F:\Anaconda3\python.exe research/thermal_pulse_certificate/run.py precheck --output precheck_new`。每次选择尚不存在的目录；precheck01是保留的入口失败，不可重用。当前复审凭据为precheck03/result.json，旧precheck02属于修订前版本。
 
-主线6审查通过后，`run.py certify --output certificate01 --gate precheck01/result.json --review reviews/review01.md` 只执行一次当前输入的持续证书，不重新运行F1/F2能耗。准入凭据绑定必要预检和全部依赖哈希，要求独立审查首行为 `K33_REVIEW: PASS`。
+主线6审查通过后，由主线用`make_ready`与create-only保存函数封存ready01.json，再运行`run.py certify --output certificate01 --ready ready01.json`，只执行当前输入的持续证书，不重新运行F1/F2能耗。准入要求：必要预检全部通过且哈希匹配；审查首行为`K33_REVIEW: PASS`，并单列`K33_HASHES_SHA256: <全部依赖映射的摘要>`；ready同时绑定预检和审查文件的字节SHA256。旧PASS配新源码、审查文字变动或旧预检均拒绝，且拒绝发生在创建输出目录与输入装配之前。
 
 预检只展开合法时序并进行有理数核对及中断／资源注入；不调用热传播。有限切换夹具用于验证执行实现，不承担无限域证明。四组合旧状态及K.31工件保持原样；新增安全证书不自动改写历史安全U或排名。本阶段不宣称新的共同节能收益。

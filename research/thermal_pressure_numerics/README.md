@@ -42,4 +42,4 @@ F:/Anaconda3/python.exe research/thermal_pressure_numerics/precheck.py --out res
 
 只解决数值内核这一小目标，尚未将新内核接入正式四组合的完整路径、局部分数和归因。下一项只做这些接线及预算／失败状态预检；通过并完成独立审查后，再依已定协议执行一次正式诊断，不新增参数或扩大研究案例。
 
-独立审查待完成。当前不能将本页当作正式诊断准入凭据。
+[独立审查](reviews/review01.md)通过，无必要修订；[逐项采纳](reviews/adoption01.md)已归档。本阶段结束，正式诊断仍待接线预检，不将本页作为完整准入凭据。

@@ -61,8 +61,15 @@ def run(output):
     # Isolated fake state and directory; never claims the real diagnostic.
     with nullcontext(output/'gate_fixture') as root:
         root.mkdir();folder=root/'run';state_path=root/'state.json';state={'phase':'ready','formal_run_count':0}
+        a.old.write(state_path,state)
         r.claim(folder,state_path,state)
         ck('claim_before_execution',a.old.read(state_path)['formal_run_count']==1)
+        state.update(phase='results_awaiting_review',completed_calls=28)
+        r.save_state(state_path,state)
+        ck('existing_state_final_update',a.old.read(state_path)==state and not state_path.with_name('state.json.tmp').exists())
+        state.update(phase='failed_no_automatic_retry',completed_calls=4)
+        r.save_state(state_path,state)
+        ck('existing_state_failure_update',a.old.read(state_path)==state and state['formal_run_count']==1)
         try:r.claim(folder,state_path,state)
         except FileExistsError:ck('duplicate_claim_rejected',True)
         else:ck('duplicate_claim_rejected',False)
@@ -81,7 +88,7 @@ def run(output):
 
 
 if __name__=='__main__':
-    folder=r.HERE/'precheck03';folder.mkdir(exist_ok=False)
+    folder=r.HERE/'precheck04';folder.mkdir(exist_ok=False)
     out=run(folder);a.old.write(folder/'result.json',out)
     print(sum(c['passed'] for c in out['checks']),len(out['checks']))
     raise SystemExit(0 if out['passed'] else 1)

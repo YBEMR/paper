@@ -148,15 +148,23 @@ def check_gate(gate,ready,state):
     if state.get('phase')!='ready' or state.get('formal_run_count')!=0:raise ValueError('not_ready_or_already_run')
 
 
+def save_state(path,state):
+    """Only this mutable control file is replaced; evidence stays create-only."""
+    path=Path(path);temporary=path.with_name(path.name+'.tmp')
+    with temporary.open('x',encoding='utf-8',newline='\n') as handle:
+        json.dump(state,handle,ensure_ascii=False,indent=2);handle.write('\n')
+    temporary.replace(path)
+
+
 def claim(folder,state_path,state):
     folder.mkdir(parents=True,exist_ok=False)
     state.update(phase='running',formal_run_count=1)
-    a.old.write(state_path,state)
+    save_state(state_path,state)
 
 
 def formal():
     state_path=HERE/'state.json';state=a.old.read(state_path)
-    gate=a.old.read(HERE/'precheck03/result.json');ready=a.old.read(HERE/'ready.json')
+    gate=a.old.read(HERE/'precheck04/result.json');ready=a.old.read(HERE/'ready02.json')
     check_gate(gate,ready,state)
     folder=HERE/'results/diagnostic01';claim(folder,state_path,state)
     records=[]
@@ -171,7 +179,7 @@ def formal():
     except BaseException as exc:
         state.update(phase='failed_no_automatic_retry',error=type(exc).__name__+': '+str(exc),completed_calls=len(records))
         raise
-    finally:a.old.write(state_path,state)
+    finally:save_state(state_path,state)
 
 
 if __name__=='__main__':

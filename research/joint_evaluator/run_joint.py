@@ -161,6 +161,108 @@ def precheck(output):
     r = j.evaluate_bundle(b12, j.v2.Budget(hook=hook_at('before_path')))
     check('verified_violation_retained_on_interrupt', r['status'] == 'candidate_violation'
           and r['safety_receipt']['result']['status'] == 'violation' and 'energy_J' not in r['certified_candidate_energy'])
+
+    # The inner verifier has committed its witness, but the receiving layer has
+    # not yet accepted the return. Exercise real inner code, not a fake violation.
+    def receiving_boundary(name, bundle, inner_point=None, outer_error=None):
+        budget = j.v2.Budget(); observed = {}
+        def boundary_hook(point):
+            if point == inner_point:
+                budget.start -= 1000
+            if point == 'safety_returned' and outer_error:
+                raise outer_error('injected_receiving_boundary')
+        budget.hook = boundary_hook
+        actual = j.v2.verify
+        def capture(*args):
+            inner = actual(*args)
+            observed.update(status=inner['status'], budget_status=inner['budget_status'],
+                            has_witness=bool((inner.get('witness') or {}).get('real_violation')))
+            if inner_point is None and outer_error is None:
+                budget.start -= 1000  # Delivery delay after an on-time inner return.
+            return inner
+        with patch.object(j.v2, 'verify', side_effect=capture), patch.object(
+                j.v1, 'evaluate_trace', side_effect=AssertionError('energy evaluation after interruption')):
+            r = j.evaluate_bundle(bundle, budget)
+        kept = (r.get('safety_receipt') or {}).get('result', {})
+        check(name, observed.get('has_witness') and r['status'] == 'candidate_violation'
+              and kept.get('transfer_scope') == 'committed_counterexample_only'
+              and kept.get('witness', {}).get('real_violation') is True
+              and 'energy_J' not in json.dumps(kept, default=j.v1.encode)
+              and 'energy_J' not in r['certified_candidate_energy']
+              and not r.get('energy_receipt') and not r.get('partial_traces'))
+        derived[name] = dict(inner=observed, outer=r)
+        return r
+    boundary = receiving_boundary('inner_deadline_commit_then_expiry', b12, 'witness_committed')
+    check('deadline_witness_details_survive_receiving_boundary',
+          boundary['safety_receipt']['result']['witness']['failure']['lateness_us'] == 1000
+          and boundary['budget_status'] == 'exhausted')
+    receiving_boundary('deadline_on_time_return_then_delivery_expiry', b12)
+    receiving_boundary('deadline_receiving_gate_interruption', b12, outer_error=j.v2.Exhausted)
+    receiving_boundary('deadline_receiving_gate_memory_error', b12, outer_error=MemoryError)
+
+    # Existing B3 thermal fixture; used only for the same evidence-transfer boundary.
+    v2package = j.v1.load(ROOT.parent / 'v2_precheck_draft/inputs.json')
+    c3 = next(c for c in v2package['fixtures'] if c['id'] == 'B3')
+    thermal_bundle = deepcopy(b14)
+    thermal_bundle['id'] = 'thermal_receiving_boundary'
+    thermal_bundle['candidate'] = {k: deepcopy(c3[k]) for k in ['platform', 'fixed_plans']}
+    thermal_bundle['candidate']['semantics'] = deepcopy(v2package['semantics'])
+    thermal_bundle['safety'] = {k: deepcopy(v) for k,v in c3.items()
+                                if k not in ['id', 'purpose', 'platform', 'fixed_plans']}
+    tr = j.v2.witness_trace(c3, v2package['semantics'])
+    entry = deepcopy(c3['initial_states'][0])
+    entry['temperature_box_C'] = [[t,t] for t in tr['initial_temperature_C']]
+    thermal_bundle['evaluation']['paths'] = [dict(entry_state=entry, trace=tr)]
+    thermal_bundle['evaluation']['weights'] = [1]
+    boundary = receiving_boundary('inner_thermal_commit_then_expiry', thermal_bundle, 'witness_committed')
+    check('thermal_witness_details_survive_without_energy', bool(
+          boundary['safety_receipt']['result']['witness']['thermal']['known_violations']))
+    derived['thermal_boundary_input'] = thermal_bundle
+
+    budget = j.v2.Budget(); actual = j.v2.verify
+    def late_safe(*args):
+        r = actual(*args); budget.start -= 1000; return r
+    with patch.object(j.v2, 'verify', side_effect=late_safe):
+        late = j.evaluate_bundle(b14, budget)
+    check('late_safe_return_not_promoted', late['status'] == 'unresolved'
+          and late['safety_receipt'] is None and 'energy_J' not in late['certified_candidate_energy'])
+    derived['late_safe_return'] = short(late)
+
+    def path_boundary(name, bundle, inside_thermal=False):
+        budget = j.v2.Budget()
+        actual_trace, actual_thermal = j.v1.evaluate_trace, j.v1.thermal
+        observed = {}
+        def delay_trace(*args):
+            r = actual_trace(*args)
+            observed.update(execution_status=r.get('execution_status'),
+                            has_deadline=bool(r.get('failure')),
+                            has_thermal=bool(r.get('thermal', {}).get('known_violations')))
+            budget.start -= 1000
+            return r
+        def delay_thermal(*args):
+            r = actual_thermal(*args); budget.start -= 1000; return r
+        if inside_thermal:
+            with patch.object(j.v1, 'thermal', side_effect=delay_thermal):
+                r = j.evaluate_bundle(bundle, budget)
+        else:
+            with patch.object(j.v1, 'evaluate_trace', side_effect=delay_trace):
+                r = j.evaluate_bundle(bundle, budget)
+        kept = r.get('path_violation_receipts', {})
+        check(name, r['status'] == 'candidate_violation' and r['budget_status'] == 'exhausted'
+              and bool(kept) and 'energy_J' not in json.dumps(kept, default=j.v1.encode)
+              and 'energy_J' not in r['certified_candidate_energy'] and not r.get('energy_receipt')
+              and not r.get('partial_traces'))
+        derived[name] = dict(input=bundle, observed_return=observed, outer=r)
+    no_hint12 = deepcopy(cases['J12_late']); no_hint12['safety']['witness_requests'] = []
+    no_hint3 = deepcopy(thermal_bundle); no_hint3['safety'].pop('thermal_witness')
+    path_boundary('finite_deadline_return_then_expiry', no_hint12)
+    path_boundary('finite_thermal_return_then_expiry', no_hint3)
+    path_boundary('finite_inner_thermal_committed_before_expiry', no_hint3, inside_thermal=True)
+    probe = dict(status='unresolved', safety_receipt=None)
+    j.retain_path_violation(probe, {}, b14['evaluation']['paths'][0]['trace'],
+                           dict(input_status='valid', execution_status='deadline_violation',
+                                rankable_energy=True, thermal={'status': 'violation'}))
+    check('labels_without_concrete_witness_not_retained', probe == dict(status='unresolved', safety_receipt=None))
     for exc in [MemoryError, ArithmeticError]:
         r = j.evaluate_bundle(b14, j.v2.Budget(hook=hook_at('before_path', exc)))
         check('resource_' + exc.__name__, r['status'] == 'unresolved' and 'energy_J' not in r['certified_candidate_energy'])

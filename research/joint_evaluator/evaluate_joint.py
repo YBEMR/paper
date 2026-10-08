@@ -124,6 +124,53 @@ def receipt(kind, bind, result):
     return dict(kind=kind, binding=deepcopy(bind), result=result)
 
 
+def retain_committed_violation(out, bind, result):
+    """Transfer V2's committed witness, never its late energy/certificate payload.
+
+    The internal verifier preserves only validated concrete violations across
+    interruption. A late return does not invalidate that already formed evidence.
+    This is an internal API contract, not an importer for arbitrary result files.
+    """
+    witness = result.get('witness') or {}
+    if (result.get('input_status') != 'valid' or result.get('status') != 'violation'
+            or witness.get('real_violation') is not True):
+        return
+    kept = {k: deepcopy(witness[k]) for k in
+            ['trace', 'schedule', 'requests', 'releases', 'kind', 'real_violation', 'failure']
+            if k in witness}
+    if witness.get('thermal', {}).get('known_violations'):
+        kept['thermal'] = {'known_violations': deepcopy(witness['thermal']['known_violations'])}
+    minimal = dict(status='violation', input_status='valid', witness=kept,
+                   transfer_scope='committed_counterexample_only',
+                   source_budget_status=result.get('budget_status'))
+    out['safety_receipt'] = receipt('sustained_safety', bind, minimal)
+    out['status'] = 'candidate_violation'
+
+
+def retain_path_violation(out, bind, trace, result):
+    """Keep V1's verified counterexample separately from its energy payload.
+
+    V1 publishes deadline failure only after power-segment budget checks, which
+    follow the exact schedule calculation. Its known thermal violations survive
+    interruption from committed propagation evidence. No rankable flag suffices.
+    """
+    if result.get('input_status') != 'valid':
+        return
+    deadline = result.get('execution_status') == 'deadline_violation' and result.get('failure')
+    thermal = result.get('thermal', {}).get('known_violations')
+    if not deadline and not thermal:
+        return
+    kept = {k: deepcopy(result[k]) for k in
+            ['input_status', 'execution_status', 'schedule', 'requests', 'releases', 'failure']
+            if k in result}
+    kept.update(trace=deepcopy(trace), transfer_scope='committed_counterexample_only')
+    if thermal:
+        kept['thermal'] = {'known_violations': deepcopy(thermal)}
+    out.setdefault('path_violation_receipts', {})[trace['id']] = receipt('finite_path_violation', bind, kept)
+    safe = (out.get('safety_receipt') or {}).get('result', {}).get('status') == 'sustained_safe'
+    out['status'] = 'evidence_conflict' if safe else 'candidate_violation'
+
+
 def assemble(b, bind, energy, safety, membership):
     """Private run receipts only; no disk cache or historical-result import."""
     rejected = dict(status='identity_mismatch', certified_candidate_energy={
@@ -168,6 +215,7 @@ def evaluate_bundle(bundle, budget=None):
         bind = binding(b); out.update(binding=bind, membership=membership)
         phase = 'evaluation'
         s = v2.verify(safety_input(b), b['candidate']['semantics'], budget)
+        retain_committed_violation(out, bind, s)
         budget.checkpoint('safety_returned')
         safety = receipt('sustained_safety', bind, s)
         out['safety_receipt'] = safety
@@ -178,11 +226,13 @@ def evaluate_bundle(bundle, budget=None):
         for p in b['evaluation']['paths']:
             budget.checkpoint('before_path')
             r = v1.evaluate_trace(x, p['trace'], budget)
+            retain_path_violation(out, bind, p['trace'], r)
             budget.checkpoint('path_returned')
             traces[p['trace']['id']] = r
             out['partial_traces'] = deepcopy(traces)
             if r.get('execution_status') == 'deadline_violation' or r.get('thermal', {}).get('known_violations'):
-                out['status'] = 'candidate_violation'
+                if out['status'] != 'evidence_conflict':
+                    out['status'] = 'candidate_violation'
         probe = dict(trace_ids=[p['trace']['id'] for p in b['evaluation']['paths']], weights=b['evaluation']['weights'])
         aggregate = aggregate_energy(probe, traces)
         aggregate['scope'] = 'specified U1 paths only; not steady-state or all-process mean energy'
@@ -198,7 +248,9 @@ def evaluate_bundle(bundle, budget=None):
     except (MemoryError, ArithmeticError) as exc:
         out.update(reason=type(exc).__name__ + ': ' + str(exc), numerical_or_resource_status='unresolved')
     except (v1.Invalid, KeyError, ValueError, TypeError) as exc:
-        out.update(reason=str(exc), status='input_invalid' if phase == 'input' else 'unresolved')
+        out['reason'] = str(exc)
+        if out['status'] not in ['candidate_violation', 'evidence_conflict']:
+            out['status'] = 'input_invalid' if phase == 'input' else 'unresolved'
     # Receipts retain verified evidence on interruption, but no candidate energy is issued.
     out['diagnostic'] = dict(elapsed_s=time.monotonic()-budget.start,
                              fragments=budget.fragments, panels=budget.panels,

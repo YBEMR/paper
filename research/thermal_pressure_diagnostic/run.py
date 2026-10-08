@@ -52,8 +52,17 @@ def late_guard(result,kind,elapsed):
     if elapsed<=20:return result
     ev=violations(result)
     status=('reference_violation' if kind in ['A_prefix','B_reference'] else 'candidate_violation') if ev else 'unresolved'
-    return dict(status=status,budget_status='exhausted',reason='outer_wall_clock_limit',
+    kept=dict(status=status,budget_status='exhausted',reason='outer_wall_clock_limit',
                 committed_evidence=ev,source_binding=result.get('binding'),certified_candidate_energy={'status':'unavailable'})
+    # Private joint outputs carry only already-received safety receipts; keep
+    # them for conflict detection, never to restore a late objective value.
+    if kind=='full':
+        for key in ['safety_receipt','sustained_safety']:
+            if result.get(key) is not None:kept[key]=deepcopy(result[key])
+        proof=kept.get('sustained_safety') or (kept.get('safety_receipt') or {}).get('result',{})
+        if result.get('status')=='evidence_conflict' or (proof.get('status')=='sustained_safe' and ev):
+            kept['status']='evidence_conflict'
+    return kept
 
 
 def invoke(task):
@@ -147,7 +156,7 @@ def claim(folder,state_path,state):
 
 def formal():
     state_path=HERE/'state.json';state=a.old.read(state_path)
-    gate=a.old.read(HERE/'precheck02/result.json');ready=a.old.read(HERE/'ready.json')
+    gate=a.old.read(HERE/'precheck03/result.json');ready=a.old.read(HERE/'ready.json')
     check_gate(gate,ready,state)
     folder=HERE/'results/diagnostic01';claim(folder,state_path,state)
     records=[]

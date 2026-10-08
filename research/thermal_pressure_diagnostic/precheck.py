@@ -40,6 +40,24 @@ def run(output):
     for item in tied:
         if item['task']['kind']=='full':item['result']=deepcopy(safe)
     ck('safe_equal_energy_retained',len(r.summarize(tied)['safe_retained'])==4)
+    # Full evidence flow: a late conflict must never become an exclusion.
+    conflict=deepcopy(safe);conflict.update(status='evidence_conflict',known_violations=deepcopy(bad['known_violations']))
+    guarded=r.late_guard(conflict,'full',21)
+    ck('late_conflict_kept',guarded['status']=='evidence_conflict' and guarded['certified_candidate_energy']['status']=='unavailable')
+    ck('late_conflict_classified',r.classify(guarded,[])['status']=='evidence_conflict')
+    delayed=dict(status='unresolved',binding={'fixture':'committed'},safety_receipt=dict(kind='sustained_safety',binding={'fixture':'committed'},result={'status':'sustained_safe'}))
+    late_receipt=r.late_guard(delayed,'full',21)
+    ck('late_receipt_identity_kept',late_receipt['safety_receipt']==delayed['safety_receipt'] and late_receipt['source_binding']==delayed['binding'])
+    ck('late_receipt_probe_conflict',r.classify(late_receipt,[bad])['status']=='evidence_conflict')
+    for name,full,probe in [('conflict',guarded,dict(status='finite_safe')),('later_probe',late_receipt,bad)]:
+        altered=deepcopy(excluded)
+        for item in altered:
+            t=item['task']
+            if (t['a'],t['b'])!=('a_n','b_n'):continue
+            if t['kind']=='full':item['result']=deepcopy(full)
+            elif t['kind']=='probe':item['result']=deepcopy(probe)
+        ss=r.summarize(altered)
+        ck(name+'_summary_unresolved',ss['rows']['a_nb_n']['status']=='evidence_conflict' and 'a_nb_n' in ss['unresolved_candidates'] and ss['four_point_optimality']=='unresolved')
     # Isolated fake state and directory; never claims the real diagnostic.
     with nullcontext(output/'gate_fixture') as root:
         root.mkdir();folder=root/'run';state_path=root/'state.json';state={'phase':'ready','formal_run_count':0}
@@ -63,7 +81,7 @@ def run(output):
 
 
 if __name__=='__main__':
-    folder=r.HERE/'precheck02';folder.mkdir(exist_ok=False)
+    folder=r.HERE/'precheck03';folder.mkdir(exist_ok=False)
     out=run(folder);a.old.write(folder/'result.json',out)
     print(sum(c['passed'] for c in out['checks']),len(out['checks']))
     raise SystemExit(0 if out['passed'] else 1)

@@ -2,7 +2,7 @@
 
 更新：2026-10-08。
 
-**当前K.28：TP-1参数已获用户确认，独立输入与必要预检已实施，正式诊断未准入（E466）。** [预检入口](research/thermal_pressure_precheck/README.md)：静态／状态检查73/73通过；全CPU取得持续证书，三含NPU组合仅证书未决。新细分包装解决旧积分步长边界异常，快单节点解析核对通过；80ms耦合空闲夹具在20秒内仅覆盖约28.855ms，保留未决与失败记录，不补跑。未运行正式四组合或能量排序。待独立审查后交付数值实现缺口；不修改输入、精度或预算。
+**当前K.28：TP-1参数已获用户确认，独立输入与必要预检已实施，正式诊断未准入（E466）。** [预检入口](research/thermal_pressure_precheck/README.md)：静态／状态检查73/73通过；全CPU取得持续证书，三含NPU组合仅证书未决。新细分包装解决旧积分步长边界异常，快单节点解析核对通过；80ms耦合空闲夹具在20秒内仅覆盖约28.855ms，保留未决与失败记录，不补跑。未运行正式四组合或能量排序。[独立审查](research/thermal_pressure_precheck/reviews/review01.md)已完成，无必要修订；本阶段结束。下一项只处理数值实现能力，保持输入、精度及预算不变。
 
 **历史K.27具体L3压力草案已独立审查通过（E465），新数值待用户批准：** [TP-1](research/thermal_validation_design/THERMAL_PRESSURE_DRAFT.md)提出NPU活动3→1 W，NPU环境导热0.10→0.015 W/K、耦合0.02→0.005 W/K，NPU热容0.02→0.000020 J/K；CPU环境导热、CPU热容和全部服务／入口／温限／U1不变。四方案已明确并消除F1排空等待混杂，最大轮长和8.75ms。全CPU可用50°C盒持续认证；含NPU候选不能由现有共同矩形盒认证，只能找合法真实违规，否则未决，不能据此宣布全CPU最优。一次性组合压力条件，没有现实平台标定或单因素因果意义。审查无必要修订，零实验／代码／原输入改动；[审查](research/thermal_validation_design/reviews/pressure_review01.md)与[收尾](research/thermal_validation_design/reviews/pressure_adoption01.md)。物理变化显著，批准后才进入必要预检，不自动运行。
 

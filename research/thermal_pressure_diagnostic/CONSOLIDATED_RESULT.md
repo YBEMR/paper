@@ -42,6 +42,8 @@ F:\Anaconda3\python.exe research/thermal_pressure_diagnostic/consolidate.py --ve
 
 [保存结果](consolidation01/result.json)含35项身份、状态及精确区间检查、输入证据SHA256和差值有理数。入口只用标准库读取记录、核哈希和作有理数代数，不导入评价器、搜索器或证明入口；没有重做旧预检。33项原诊断工件、47项历史来源、5项证书工件及17项证书依赖均与既有清单一致。
 
-主要入口：[原四组合及探针](results/diagnostic01/summary.json)、[原a_n b_c完整记录](results/diagnostic01/18.json)、[新持续证书](../thermal_pulse_certificate/certificate01/result.json)、[原独立审查](reviews/result01.md)、[新证书独立审查](../thermal_pulse_certificate/reviews/result01.md)。本轮综合结论另交主线（6）审查，完成后在此登记。
+主要入口：[原四组合及探针](results/diagnostic01/summary.json)、[原a_n b_c完整记录](results/diagnostic01/18.json)、[新持续证书](../thermal_pulse_certificate/certificate01/result.json)、[原独立审查](reviews/result01.md)、[新证书独立审查](../thermal_pulse_certificate/reviews/result01.md)。[本轮主线（6）独立审查](reviews/consolidation01.md)通过，无必要修订；独立核对新旧身份、共同条件、严格能量区间及B-only反例，认可结束TP-1诊断链。
 
 本项完成后结束TP-1诊断链，不加参找翻转、不扩展认证器、不恢复候选搜索。下一项建议仅收拢论文方案：保留已有热筛选与认证工作，明确共同节能主张尚缺什么；研究重心的取舍再与用户讨论。
+
+审查过程记录：首次派发返回旧K.32建议，未生成指定文件，未计为审查通过；重新明确K.34对象后完成上述有效审查。没有据旧答复开展证明、实现或实验，也没有实质修订。

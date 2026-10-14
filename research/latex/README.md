@@ -1,5 +1,23 @@
 # 论文正文LaTeX入口
 
+**当前版本（2026-10-14，K.67／D87）**：`chapter03.tex`按已确认八节结构重写为“多场景端侧推理的热约束节能联合规划”。3.1—3.6为符号模型与方法初稿，3.7仅留实验结构，3.8仅总结理论表达。当前不载入旧恒功率、两节点及四Stage实验结果。
+
+请打开[当前20页预览](build/main_multiscenario_draft.pdf)。正文仍只有一个主版本；`chapter03_new.tex`是用户批注参考，保持原样。当前编译链为`main.tex`→`chapter03.tex`→`chapter03_formal_details.tex`与`chapter03_symbols.tex`。旧`chapter03_properties.tex`原样保留供追溯，不参与当前编译。
+
+在本目录执行两次：
+
+```powershell
+xelatex -interaction=nonstopmode -halt-on-error -jobname=main_multiscenario_draft -output-directory=build main.tex
+```
+
+本版保留共享具体单元、独立场景入口、加权完整能耗、非统一响应、逐忙段DVFS、有限启动集合及本地温度／注热。章末补充固定片段温度和能量系数、有效变量界／残差界及对应关系；一般连续域与有限启动域、数学保证与浮点报告状态分开。后续先审阅正文，再确定配套输入、数值协议和实现预检，最后进行实验。编译只检查排版，不构成仿真。
+
+写作前的正文、用户修改、批注及相关文件快照保存在工作区`.runtime/chapter03_symbolic_20261014_215515/`；旧实验数据及结果文件未修改。当前参考文献表只列本稿实际引用的五项，原文定位沿已有证据E496、E505及本轮E507。
+
+## 以下为旧版入口和排版记录
+
+旧稿中的“当前”“本轮”均指对应历史日期；其模型、结果和PDF不代表上述新稿。
+
 **当前模型稿（2026-10-03，V1）**：`chapter03.tex`的3.2—3.5已按R86-v1改为端侧协同完整请求的一般模型，含工作点保持、温度漏电及逐CPU单元热状态，目标为E(m,s)。3.6—3.7及补充证明保留原恒功率、二聚合节点条件，不代表一般模型已验证。完整范围、接口及独立审查见[第三章模型与接口检查记录](../第三章模型与接口检查记录.md)。
 
 **本轮请打开`build/main_model_review.pdf`（37页）**。原`build/main.pdf`被外部程序占用，仍为旧版。新PDF由同一`main.tex`编译，仅使用不同输出名；不是第二套正文。重建命令为`xelatex -interaction=nonstopmode -halt-on-error -jobname=main_model_review -output-directory=build main.tex`，执行两遍。以下早期版本描述保留作历史记录，旧页数和章名不代表当前稿。

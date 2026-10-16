@@ -188,11 +188,21 @@ class _InitialSession:
         return self.session.solve(model, **kwargs)
 
 
-def solve_with_initial_witness(model, session, accuracy, budget, starts=None, max_attempts=3):
+def solve_with_initial_witness(model, session, accuracy, budget, starts=None, max_attempts=3,
+                               checkpoint=None):
     """Complete operational entry; all initialization uses this method's budget."""
     initial = prepare_initial_witness(model, accuracy, budget, starts, max_attempts)
     public = {k: v for k, v in initial.items() if k != 'x0'}
     witness = initial['witness']
+    checkpoint_status = {'requested': checkpoint is not None, 'completed': False}
+    if checkpoint is not None:
+        try:
+            with _phase(budget, 'initial_receipt_checkpoint'):
+                checkpoint(public)
+            checkpoint_status.update(completed=True, completed_at_s=budget.elapsed)
+        except Exception as error:
+            checkpoint_status.update(error=type(error).__name__+': '+str(error),
+                                     completed_at_s=budget.elapsed)
     result = {'state': 'UNRESOLVED', 'safe_candidate': None, 'safe_upper_bound_J': None,
               'evaluation': None, 'reason': initial['reason'], 'rounds': [], 'feedback': [],
               'independently_proven_optimal': False, 'independently_proven_infeasible': False,
@@ -218,6 +228,7 @@ def solve_with_initial_witness(model, session, accuracy, budget, starts=None, ma
                       safe_upper_bound_J=witness['evaluation']['safe_upper_bound_J'],
                       evaluation=witness['evaluation'], safe_solution_source='initial_constructor')
     result.update(initialisation=public, milp_safe_upper_bound_J=milp_upper,
+                  initial_checkpoint=checkpoint_status,
                   initial_safe_upper_bound_J=witness['evaluation']['safe_upper_bound_J'] if witness else None,
                   first_initial_safe_s=witness['evaluation']['completed_at_elapsed_s'] if witness else None,
                   elapsed_s=budget.elapsed,

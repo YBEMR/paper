@@ -23,6 +23,9 @@ from thermal import I, Budget, Exhausted, _q, evaluate_candidate
 from milp_coefficients import Coefficients
 
 
+_BINARY_BOUNDS = (F(0), F(1))
+
+
 def _digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                     separators=(',', ':'), default=str).encode('utf-8')).hexdigest()
@@ -70,6 +73,18 @@ class Model:
     def var(self, name, lower=0, upper=1, integer=False, cost=0):
         if len(self.names) % 128 == 0:
             self.report()
+        # The common binary box is exactly representable. Reuse only its
+        # immutable rational endpoints; all other bounds keep outward rounding.
+        if (integer and type(lower) is int and lower == 0
+                and type(upper) is int and upper == 1 and type(cost) is int and cost == 0):
+            index = len(self.names)
+            self.names.append(name)
+            self.lb.append(-0.0)
+            self.ub.append(1.0)
+            self.bounds.append(_BINARY_BOUNDS)
+            self.c.append(0.0)
+            self.integer.append(index)
+            return index
         lower, upper = F(lower), F(upper)
         if lower > upper:
             raise ValueError('incompatible variable bounds: '+name)
@@ -94,8 +109,17 @@ class Model:
             self.report()
         exported, allowance = {}, F(0)
         for index, value in row.items():
+            # Every integer in this range has an exact binary64 representation,
+            # so its conversion deviation is zero, irrespective of the box.
+            if type(value) is int and abs(value) <= 2**53:
+                if value:
+                    exported[index] = float(value)
+                continue
             value = _box(value)
             if value.lo == value.hi == 0:
+                continue
+            if value.lo == value.hi and (value.lo == 1 or value.lo == -1):
+                exported[index] = float(value.lo)
                 continue
             nominal = float((F(value.lo)+F(value.hi))/2)
             exact_nominal = F.from_float(nominal)
@@ -109,7 +133,8 @@ class Model:
 
     def eq(self, row, rhs, tag):
         self.le(row, rhs, tag+'/upper')
-        self.le({i: -_box(v) for i, v in row.items()}, -_box(rhs), tag+'/lower')
+        self.le({i: -v if type(v) is int and abs(v) <= 2**53 else -_box(v)
+                 for i, v in row.items()}, -_box(rhs), tag+'/lower')
 
     def conditional_le(self, row, rhs, gate, tag):
         # This M covers the full residual on the exported variable box, not a
@@ -173,57 +198,103 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         raise ValueError('explicit reduced start sets are fixture-only; production domain must not be trimmed')
     options = expand_options(instance, config, budget=budget)
     if starts is not None:
-        options = [o for o in options if F(o['start_ms']) in set(map(F, starts[o['scenario_id']][o['stage_instance_id']]))]
+        start_sets = {(sid, stage): set(map(F, values))
+                      for sid, stages in starts.items() for stage, values in stages.items()}
+        options = [o for o in options if F(o['start_ms']) in start_sets[o['scenario_id'], o['stage_instance_id']]]
     model.options = options
     model.report('mode_variables')
     model.option_vars = [model.var('y:'+o['option_id'], integer=True) for o in options]
+    # These indices retain the original option order and exact rational times.
+    # They replace repeated parsing/filtering, not any constraint or choice.
+    option_start, option_end, option_power = {}, {}, {}
+    options_by_scene = {scene['id']: [] for scene in instance['scenarios']}
+    for position, (option, y) in enumerate(zip(options, model.option_vars)):
+        if position % 128 == 0:
+            budget.check()
+        option_start[y] = F(option['start_ms'])/1000
+        option_end[y] = F(option['end_ms'])/1000
+        option_power[y] = F(option['activity_power_W'])
+        options_by_scene[option['scenario_id']].append((option, y))
+    unit_domain = {uid: unit['domain_id'] for uid, unit in units.items()}
+    unit_node = {uid: unit['thermal_node_id'] for uid, unit in units.items()}
     model.report('shared_mapping')
+    shared_by_stage = {}
     for shared, modes in instance['stage_modes'].items():
+        shared_by_stage[shared] = []
         for unit in sorted({m['unit_id'] for m in modes}):
             model.shared[shared, unit] = model.var('x:'+shared+':'+unit, integer=True)
-        model.eq({v: 1 for (stage, _), v in model.shared.items() if stage == shared}, 1, 'shared_unique')
+            shared_by_stage[shared].append((unit, model.shared[shared, unit]))
+        model.eq({v: 1 for _, v in shared_by_stage[shared]}, 1, 'shared_unique')
     for scene in instance['scenarios']:
         budget.check()
         model.report('scene_constraints', scene=scene['id'], interval=None)
-        sid = scene['id']; scene_options = [(o, y) for o, y in zip(options, model.option_vars) if o['scenario_id'] == sid]
-        stage_options = {s['id']: [(o, y) for o, y in scene_options if o['stage_instance_id'] == s['id']]
-                         for s in scene['stage_instances']}
+        sid = scene['id']; scene_options = options_by_scene[sid]
+        stage_options = {s['id']: [] for s in scene['stage_instances']}
+        starting_at, ending_at = {}, {}
+        for position, (o, y) in enumerate(scene_options):
+            if position % 128 == 0:
+                budget.check()
+            stage_options[o['stage_instance_id']].append((o, y))
+            starting_at.setdefault(option_start[y], []).append(position)
+            ending_at.setdefault(option_end[y], []).append(position)
+        deadlines = {r['id']: F(r['deadline_ms'])/1000 for r in scene['requests']}
         for stage in scene['stage_instances']:
             choices = stage_options[stage['id']]
             model.eq({y: 1 for o, y in choices}, 1, 'stage_unique')
-            for (shared, unit), x in model.shared.items():
-                if shared == stage['shared_stage_id']:
-                    model.eq({x: -1, **{y: 1 for o, y in choices if o['unit_id'] == unit}}, 0, 'shared_link')
+            for unit, x in shared_by_stage[stage['shared_stage_id']]:
+                model.eq({x: -1, **{y: 1 for o, y in choices if o['unit_id'] == unit}}, 0, 'shared_link')
             # Every Stage belongs to its request; all must finish by deadline.
-            deadline = F(next(r['deadline_ms'] for r in scene['requests'] if r['id'] == stage['request_id']))/1000
-            model.le({y: F(o['end_ms'])/1000 for o, y in choices}, deadline, 'request_deadline')
+            deadline = deadlines[stage['request_id']]
+            model.le({y: option_end[y] for o, y in choices}, deadline, 'request_deadline')
         for before, after in scene['dependencies']:
-            row = {y: F(o['end_ms'])/1000 for o, y in stage_options[before]}
+            row = {y: option_end[y] for o, y in stage_options[before]}
             for o, y in stage_options[after]:
-                _plus(row, y, -F(o['start_ms'])/1000)
+                _plus(row, y, -option_start[y])
             model.le(row, 0, 'dependency')
         model.report('event_topology')
         events = sorted({F(0), F(instance['window_ms'])/1000} |
-                        {F(o[k])/1000 for o, _ in scene_options for k in ('start_ms', 'end_ms')})
+                        set(starting_at) | set(ending_at))
         K = len(events)-1
         meta = {'events': events, 'rho': {}, 'joint': {}, 'theta': [], 'q': [], 'energy': [],
                 'active': [], 'options': scene_options, 'stage_options': stage_options,
                 'start_indicators': {}, 'states': []}
         model.scenes[sid] = meta
         model.report('control_state', intervals_total=K)
+        active_positions = set()
+        prefix_opps = {did: {scene['entry']['domain_opp'][did]} for did in domains}
+        active_nodes = []
         for l, (left, right) in enumerate(zip(events, events[1:])):
             model.report(interval=l)
-            active = [(o, y) for o, y in scene_options if F(o['start_ms'])/1000 <= left < F(o['end_ms'])/1000]
+            # Half-open execution: ends disappear before starts at the same
+            # instant. Sorting positions exactly preserves the old scan order.
+            active_positions.difference_update(ending_at.get(left, ()))
+            active_positions.update(starting_at.get(left, ()))
+            active = [scene_options[position] for position in sorted(active_positions)]
             meta['active'].append(active)
+            active_by_unit = {uid: [] for uid in units}
+            active_by_domain = {did: [] for did in domains}
+            active_by_node = {node: [] for node in nodes}
+            for pair in active:
+                o, y = pair
+                active_by_unit[o['unit_id']].append(pair)
+                active_by_domain[unit_domain[o['unit_id']]].append(pair)
+                active_by_node[unit_node[o['unit_id']]].append(pair)
+            active_nodes.append(active_by_node)
+            starts_by_domain = {did: [] for did in domains}
+            for position in starting_at.get(left, ()):
+                o, y = scene_options[position]
+                did = unit_domain[o['unit_id']]
+                starts_by_domain[did].append(y)
+                prefix_opps[did].add(o['opp_id'])
             for unit in units:
-                model.le({y: 1 for o, y in active if o['unit_id'] == unit}, 1, 'unit_mutex')
+                model.le({y: 1 for o, y in active_by_unit[unit]}, 1, 'unit_mutex')
             possible = []
             for domain_id, domain in domains.items():
                 for opp in domain['opps']:
                     meta['rho'][l, domain_id, opp] = model.var(f'rho:{sid}:{l}:{domain_id}:{opp}', integer=True)
                 rhos = {meta['rho'][l, domain_id, opp]: 1 for opp in domain['opps']}
                 model.eq(rhos, 1, 'domain_unique')
-                starting = [y for o, y in scene_options if units[o['unit_id']]['domain_id'] == domain_id and F(o['start_ms'])/1000 == left]
+                starting = starts_by_domain[domain_id]
                 trigger = model.var(f'J:{sid}:{l}:{domain_id}', upper=int(bool(starting)), integer=True)
                 meta['start_indicators'][l, domain_id] = trigger
                 for y in starting:
@@ -237,14 +308,11 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                         difference[meta['rho'][l-1, domain_id, opp]] = -1
                     model.le({**difference, trigger: -1}, previous, 'idle_hold_upper')
                     model.le({**{j: -a for j, a in difference.items()}, trigger: -1}, -previous, 'idle_hold_lower')
-                for o, y in active:
-                    if units[o['unit_id']]['domain_id'] == domain_id:
-                        model.le({y: 1, meta['rho'][l, domain_id, o['opp_id']]: -1}, 0, 'active_locks_opp')
+                for o, y in active_by_domain[domain_id]:
+                    model.le({y: 1, meta['rho'][l, domain_id, o['opp_id']]: -1}, 0, 'active_locks_opp')
                 # Necessary prefix reachability only: an OPP cannot be held
                 # before any possible Stage using it has started.
-                prefix_opps = {scene['entry']['domain_opp'][domain_id]} | {
-                    o['opp_id'] for o, y in scene_options if units[o['unit_id']]['domain_id'] == domain_id and F(o['start_ms'])/1000 <= left}
-                possible.append(sorted(prefix_opps))
+                possible.append(sorted(prefix_opps[domain_id]))
             states = list(product(*possible))
             meta['states'].append(states)
             for state in states:
@@ -266,20 +334,24 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         for i in range(n):
             model.eq({meta['theta'][0][i]: 1}, F(scene['entry']['temperature_degC'][i])-ambient, 'entry_temperature')
         model.report('thermal_energy_rows')
+        state_power = {}
         for l, (left, right) in enumerate(zip(events, events[1:])):
             model.report(interval=l)
             qmax = []
             meta['q'].append([])
             for node in nodes:
-                active_node = [(o, y) for o, y in meta['active'][l] if units[o['unit_id']]['thermal_node_id'] == node]
-                maximum = max([F(o['activity_power_W']) for o, _ in active_node]+[F(0)])
+                active_node = active_nodes[l][node]
+                maximum = max([option_power[y] for o, y in active_node]+[F(0)])
                 qmax.append(maximum)
                 qv = model.var(f'q:{sid}:{l}:{node}', 0, maximum)
                 meta['q'][l].append(qv)
-                model.eq({qv: 1, **{y: -F(o['activity_power_W']) for o, y in active_node}}, 0, 'activity_power')
+                model.eq({qv: 1, **{y: -option_power[y] for o, y in active_node}}, 0, 'activity_power')
             states = meta['states'][l]
+            for state in states:
+                if state not in state_power:
+                    state_power[state] = model.coefficients.power(state)
             power_upper = max(sum(base)+sum(qmax)+sum(lam*(upper-reference) for lam, upper in zip(slopes, temp_upper))
-                              +F(p['external_common_power_W']) for base, slopes in (model.coefficients.power(s) for s in states))
+                              +F(p['external_common_power_W']) for base, slopes in (state_power[s] for s in states))
             ev = model.var(f'energy:{sid}:{l}', 0, power_upper*(right-left), cost=F(scene['weight']))
             meta['energy'].append(ev)
             sources = meta['theta'][l]+meta['q'][l]

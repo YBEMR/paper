@@ -62,6 +62,9 @@ class Model:
         self.input_sha256 = _digest(self.instance)
         self.budget = budget
         self.names, self.lb, self.ub, self.integer, self.c = [], [], [], [], []
+        self.logical_binary = []
+        self.deadline_fixed_options = []
+        self.formulation = {}
         self.bounds, self.rows, self.scenes, self.shared = [], [], {}, {}
         self.options, self.option_vars, self.feedback_log = [], [], []
         self.coefficients = Coefficients(self.instance['platform'], budget)
@@ -113,8 +116,9 @@ class Model:
     def activity_export(self, index, power):
         """Both original signed coefficient conversions, including box error.
 
-        Bounds are immutable after var(). A returned tuple is valid only for
-        this power and box; identical powers on different boxes do not alias.
+        A returned tuple is valid only for this power and box; identical
+        powers on different boxes do not alias. Deadline fixing is applied
+        after all original physical rows have been exported.
         """
         self.budget.check()
         power = F(power)
@@ -155,8 +159,8 @@ class Model:
         self.append_exported(lower, I('-0'), al, tag+'/lower')
 
     def bound_signature(self, index):
-        # Avoid repeatedly hashing Fraction denominators. Bounds never change
-        # after var(); the four integers encode exactly the same rational box.
+        # Avoid repeatedly hashing Fraction denominators. Explicit tightening
+        # invalidates this cache; the tuple encodes the current rational box.
         if index not in self._bound_signatures:
             lo, hi = self.bounds[index]
             self._bound_signatures[index] = (lo.numerator, lo.denominator, hi.numerator, hi.denominator)
@@ -232,12 +236,12 @@ class Model:
         if self.progress is not None:
             self.progress(stage, self, detail)
 
-    def var(self, name, lower=0, upper=1, integer=False, cost=0):
+    def var(self, name, lower=0, upper=1, integer=False, cost=0, implied_binary=False):
         if len(self.names) % 128 == 0:
             self.report()
         # The common binary box is exactly representable. Reuse only its
         # immutable rational endpoints; all other bounds keep outward rounding.
-        if (integer and type(lower) is int and lower == 0
+        if ((integer or implied_binary) and type(lower) is int and lower == 0
                 and type(upper) is int and upper == 1 and type(cost) is int and cost == 0):
             index = len(self.names)
             self.names.append(name)
@@ -245,7 +249,9 @@ class Model:
             self.ub.append(1.0)
             self.bounds.append(_BINARY_BOUNDS)
             self.c.append(0.0)
-            self.integer.append(index)
+            if integer:
+                self.integer.append(index)
+            self.logical_binary.append(index)
             return index
         lower, upper = F(lower), F(upper)
         if lower > upper:
@@ -258,7 +264,25 @@ class Model:
         self.c.append(float(F(cost)))
         if integer:
             self.integer.append(index)
+        if integer or implied_binary:
+            self.logical_binary.append(index)
         return index
+
+    def fix_zero_option(self, index):
+        """Tighten a proven-late option after building the original rows.
+
+        Existing outward rows remain valid on this smaller box. Invalidate
+        per-variable bound caches so subsequent feedback uses current bounds.
+        No event, power maximum, physical coefficient, or existing row changes.
+        """
+        self.budget.check()
+        if self.bounds[index] != _BINARY_BOUNDS or not self.names[index].startswith('y:'):
+            raise ValueError('deadline fixing requires an original binary option')
+        self.ub[index] = 0.0
+        self.bounds[index] = (F(0), F(0))
+        for cache in (self._bound_boxes, self._bound_magnitudes, self._bound_signatures):
+            cache.pop(index, None)
+        self.deadline_fixed_options.append(index)
 
     def le(self, row, rhs, tag):
         """Necessary outer row for interval coefficients on a finite box.
@@ -447,14 +471,23 @@ class Model:
         return {'problem_id': self.instance['id'], 'variables': len(self.names),
                 'binary_variables': len(self.integer), 'rows': len(self.rows),
                 'options': len(self.options), 'coefficient_sets': self.coefficients.calls,
+                'formulation': dict(self.formulation),
+                'logical_binary_variables': len(self.logical_binary),
+                'deadline_fixed_options': len(self.deadline_fixed_options),
                 'events_per_scene': {sid: len(s['events']) for sid, s in self.scenes.items()},
                 'objective': 'weighted complete system energy including leakage and idle tail',
                 'coefficient_errors': 'outward interval rows; not solver arithmetic certification',
                 'optimality_level': 'solver-reported only; external SAFE supplies a feasible upper bound'}
 
 
-def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None):
-    """Build the unchanged finite-domain model with cooperative budget checks.
+def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None,
+                *, fix_late_options=True, aggregate_opp_locks=True,
+                relax_auxiliary_integrality=False):
+    """Build an equivalent finite-domain formulation with budget checks.
+
+    Exact deadline fixing and unit/OPP aggregation are enabled by default.
+    Auxiliary integrality relaxation remains an explicit independent variant.
+    The switches change representation, never the input option/event catalog.
 
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
@@ -463,6 +496,11 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     budget = budget if budget is not None else Budget()
     budget.check()
     model = Model(instance, budget, progress)
+    model.formulation = dict(fix_late_options=bool(fix_late_options),
+                             aggregate_opp_locks=bool(aggregate_opp_locks),
+                             relax_auxiliary_integrality=bool(relax_auxiliary_integrality))
+    auxiliary = dict(integer=not relax_auxiliary_integrality,
+                     implied_binary=relax_auxiliary_integrality)
     model.report('option_expansion')
     p = model.instance['platform']
     nodes = p['node_order']; n = len(nodes)
@@ -497,7 +535,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     for shared, modes in instance['stage_modes'].items():
         shared_by_stage[shared] = []
         for unit in sorted({m['unit_id'] for m in modes}):
-            model.shared[shared, unit] = model.var('x:'+shared+':'+unit, integer=True)
+            model.shared[shared, unit] = model.var('x:'+shared+':'+unit, **auxiliary)
             shared_by_stage[shared].append((unit, model.shared[shared, unit]))
         model.eq({v: 1 for _, v in shared_by_stage[shared]}, 1, 'shared_unique')
     for scene in instance['scenarios']:
@@ -566,11 +604,11 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             possible = []
             for domain_id, domain in domains.items():
                 for opp in domain['opps']:
-                    meta['rho'][l, domain_id, opp] = model.var(f'rho:{sid}:{l}:{domain_id}:{opp}', integer=True)
+                    meta['rho'][l, domain_id, opp] = model.var(f'rho:{sid}:{l}:{domain_id}:{opp}', **auxiliary)
                 rhos = {meta['rho'][l, domain_id, opp]: 1 for opp in domain['opps']}
                 model.eq(rhos, 1, 'domain_unique')
                 starting = starts_by_domain[domain_id]
-                trigger = model.var(f'J:{sid}:{l}:{domain_id}', upper=int(bool(starting)), integer=True)
+                trigger = model.var(f'J:{sid}:{l}:{domain_id}', upper=int(bool(starting)), **auxiliary)
                 meta['start_indicators'][l, domain_id] = trigger
                 for y in starting:
                     model.le({y: 1, trigger: -1}, 0, 'start_or_lower')
@@ -583,15 +621,23 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                         difference[meta['rho'][l-1, domain_id, opp]] = -1
                     model.le({**difference, trigger: -1}, previous, 'idle_hold_upper')
                     model.le({**{j: -a for j, a in difference.items()}, trigger: -1}, -previous, 'idle_hold_lower')
-                for o, y in active_by_domain[domain_id]:
-                    model.le({y: 1, meta['rho'][l, domain_id, o['opp_id']]: -1}, 0, 'active_locks_opp')
+                if aggregate_opp_locks:
+                    by_unit_opp = {}
+                    for o, y in active_by_domain[domain_id]:
+                        by_unit_opp.setdefault((o['unit_id'], o['opp_id']), []).append(y)
+                    for (unit, opp), indices in by_unit_opp.items():
+                        model.le({**{y: 1 for y in indices}, meta['rho'][l, domain_id, opp]: -1},
+                                 0, 'unit_opp_aggregate_lock')
+                else:
+                    for o, y in active_by_domain[domain_id]:
+                        model.le({y: 1, meta['rho'][l, domain_id, o['opp_id']]: -1}, 0, 'active_locks_opp')
                 # Necessary prefix reachability only: an OPP cannot be held
                 # before any possible Stage using it has started.
                 possible.append(sorted(prefix_opps[domain_id]))
             states = list(product(*possible))
             meta['states'].append(states)
             for state in states:
-                meta['joint'][l, state] = model.var(f'w:{sid}:{l}:{state}', integer=True)
+                meta['joint'][l, state] = model.var(f'w:{sid}:{l}:{state}', **auxiliary)
             model.eq({meta['joint'][l, state]: 1 for state in states}, 1, 'joint_unique')
             for di, (domain_id, domain) in enumerate(domains.items()):
                 for opp in domain['opps']:
@@ -646,6 +692,12 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                         model.affine_conditional_eq(meta['theta'][l+1][i], sources, row, gate, 'thermal_propagation')
                     row = coeff['energy']
                     model.affine_conditional_eq(ev, sources, row, gate, 'complete_energy')
+    if fix_late_options:
+        model.report('deadline_fixing', scene=None, interval=None, control_state=None)
+        for option, y in zip(model.options, model.option_vars):
+            model.budget.check()
+            if F(option['end_ms']) > F(option['request_deadline_ms']):
+                model.fix_zero_option(y)
     model.report('complete', scene=None, interval=None, control_state=None)
     return model
 
@@ -654,7 +706,7 @@ def decode(model, values, integer_tolerance=1e-6):
     values = np.asarray(values, dtype=float).reshape(-1)
     if len(values) != len(model.names) or not np.all(np.isfinite(values)):
         raise ValueError('invalid solver vector')
-    if any(abs(values[i]-round(values[i])) > integer_tolerance for i in model.integer):
+    if any(abs(values[i]-round(values[i])) > integer_tolerance for i in model.logical_binary):
         raise ValueError('nonintegral solver candidate')
     candidate = {'scenes': {s['id']: [] for s in model.instance['scenarios']}}
     for o, v in zip(model.options, model.option_vars):

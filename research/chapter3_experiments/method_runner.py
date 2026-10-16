@@ -5,6 +5,7 @@ evaluation and feedback share one budget. Cleanup and report never run search.
 The injected dependencies below are for deterministic timing prechecks only.
 """
 import hashlib
+from functools import partial
 import json
 from pathlib import Path
 import platform
@@ -179,7 +180,7 @@ def execute_milp(input_loader, workdir, *, seconds=60, construct_only=True,
 
 
 def run_milp_method(problem_id, workdir, *, config_path=None, construct_only=True,
-                    diagnostic_seconds=60):
+                    diagnostic_seconds=60, relax_auxiliary_integrality=False):
     """One isolated 60 s diagnostic; full route is explicitly requested."""
     if diagnostic_seconds not in (60, 900):
         raise ValueError('Only existing 60 s and user-authorized 900 s diagnostic protocols')
@@ -202,7 +203,10 @@ def run_milp_method(problem_id, workdir, *, config_path=None, construct_only=Tru
         from diagnostic_search import solve_diagnostic
         solve = solve_diagnostic
     result = execute_milp(loader, workdir, seconds=diagnostic_seconds,
-                          construct_only=construct_only, solve=solve)
+                          construct_only=construct_only, solve=solve,
+                          model_builder=partial(build_model, fix_late_options=True,
+                              aggregate_opp_locks=True,
+                              relax_auxiliary_integrality=relax_auxiliary_integrality))
     # Source snapshots are not algorithm inputs and are archived after stop.
     snapshot_started = time.monotonic()
     snapshot = Path(workdir)/'source_snapshot'

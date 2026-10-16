@@ -20,6 +20,7 @@ from thermal import Exhausted
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--out', required=True)
+    parser.add_argument('--relax-auxiliary-integrality', action='store_true')
     args = parser.parse_args()
     folder = Path(args.out)
     folder.mkdir(parents=True, exist_ok=False)
@@ -121,7 +122,8 @@ def main():
         loader.starts = starts
         return config, instance
     def builder(instance, config, budget, progress):
-        return build_model(instance, config, budget=budget, starts=loader.starts, progress=progress)
+        return build_model(instance, config, budget=budget, starts=loader.starts, progress=progress,
+                           relax_auxiliary_integrality=args.relax_auxiliary_integrality)
     actual = execute_milp(loader, folder/'native', seconds=180, construct_only=False,
                           model_builder=builder, solve=solve_diagnostic)
     check('native_solver_entry_received', actual['integer_solver_entered'] is True)
@@ -129,8 +131,12 @@ def main():
     check('native_callback_candidate_received', actual['diagnostic']['candidate_receipts'] >= 1 and any(':event' in e['source'] for e in actual['diagnostic']['evaluations']))
     check('native_complete_candidate_reused', actual['diagnostic']['duplicate_receipts'] >= 1)
     check('native_no_optimality_promotion', actual['independently_proven_optimal'] is False)
+    formulation = dict(fix_late_options=True, aggregate_opp_locks=True,
+                       relax_auxiliary_integrality=args.relax_auxiliary_integrality)
+    check('native_requested_formulation', actual['model_summary']['formulation'] == formulation)
     check('source_unchanged_during_precheck', before == source_hashes())
     result = {'all_passed': all(c['passed'] for c in checks), 'checks': checks,
+              'formulation': formulation,
               'source_hashes': before, 'scope': 'correctness fixtures, not research cases',
               'precheck_source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     (folder/'checks.json').write_text(json.dumps(result, indent=2), encoding='utf-8')

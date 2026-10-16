@@ -9,7 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from milp import decode, evaluate_model_candidate, add_thermal_feedback
+from milp import decode, evaluate_model_candidate, add_thermal_feedback, logical_candidate_diagnostics
 from thermal import Exhausted
 
 
@@ -27,6 +27,7 @@ class Recorder:
         self.first_candidate_s = self.first_legal_s = self.first_safe_s = None
         self.solver_entered_s = None
         self.event_count = self.candidate_count = self.duplicates = 0
+        self.decode_records = []
 
     def log(self, row):
         # Logging cost is charged; receipt time is never replaced by log time.
@@ -63,16 +64,36 @@ class Recorder:
             self.first_candidate_s = appeared
         self.candidate_count += 1
         self.log({'event': 'candidate_received', 'source': source, 'method_elapsed_s': appeared})
+        record = {'source': source, 'received_at_s': appeared}
         try:
             with self.budget.phase('decode_and_legality'):
+                if hasattr(self.model, 'logical_binary'):
+                    record['logical_values'] = logical_candidate_diagnostics(self.model, x)
+                    self.budget.check()
                 candidate = self.decoder(self.model, x)
         except ValueError as exc:
+            completed = self.budget.elapsed
+            record.update(state='REJECTED', reason=str(exc), completed_at_s=completed,
+                          within_budget=completed < self.budget.seconds)
+            self.decode_records.append(record)
             self.log({'event': 'invalid_candidate', 'source': source, 'error': str(exc),
-                      'method_elapsed_s': self.budget.elapsed})
+                      'method_elapsed_s': self.budget.elapsed, 'decode': record})
+            self.budget.check()
             return None, None
+        except Exhausted:
+            record.update(state='UNRESOLVED', reason='DECODE_BUDGET_EXHAUSTED',
+                          completed_at_s=self.budget.elapsed, within_budget=False)
+            self.decode_records.append(record)
+            self.log({'event': 'decode_unresolved', 'decode': record})
+            raise
+        completed = self.budget.elapsed
+        record.update(state='LEGAL' if completed < self.budget.seconds else 'LATE',
+                      completed_at_s=completed, within_budget=completed < self.budget.seconds)
+        self.decode_records.append(record)
+        if record['within_budget'] and self.first_legal_s is None:
+            self.first_legal_s = record['completed_at_s']
+        self.log({'event': 'candidate_decoded', 'decode': record})
         self.budget.check()
-        if self.first_legal_s is None:
-            self.first_legal_s = self.budget.elapsed
         identity = hashlib.sha256(json.dumps(candidate, sort_keys=True).encode()).hexdigest()
         if identity in self.cache:
             self.duplicates += 1
@@ -107,6 +128,8 @@ class Recorder:
                 'solver_entered_received_s': self.solver_entered_s,
                 'worker_events': self.event_count, 'candidate_receipts': self.candidate_count,
                 'duplicate_receipts': self.duplicates, 'evaluations': self.evaluations,
+                'decode_records': self.decode_records,
+                'decode_rejections': sum(r['state'] == 'REJECTED' and r['within_budget'] for r in self.decode_records),
                 'solver_progress': self.progress,
                 'time_semantics': 'Python complete receipt/decode/independent SAFE commit; native callback time recorded separately',
                 'solver_bounds_independently_certified': False}

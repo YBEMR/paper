@@ -25,6 +25,10 @@ def main():
             'solver_reported_numfeaspoints': values.get('numfeaspoints'),
             'independently_checked_U_J': None})
     safe = []
+    for receipt in diagnostic.get('decode_records', []):
+        rows.append({'method_elapsed_s': receipt['completed_at_s'],
+            'kind': 'candidate_decode', 'source': receipt['source'],
+            'decode_state': receipt['state'], 'decode_within_budget': receipt['within_budget']})
     for receipt in diagnostic.get('evaluations', []):
         if not receipt['accepted_safe']:
             continue
@@ -38,7 +42,8 @@ def main():
     rows.sort(key=lambda row: row['method_elapsed_s'])
     fields = ['method_elapsed_s', 'kind', 'phase', 'request', 'source',
               'solver_reported_lowerbound_J', 'solver_reported_fval_J',
-              'solver_reported_numfeaspoints', 'independently_checked_U_J']
+              'solver_reported_numfeaspoints', 'independently_checked_U_J',
+              'decode_state', 'decode_within_budget']
     with (folder/'timeline.csv').open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fields)
         writer.writeheader(); writer.writerows(rows)
@@ -57,7 +62,9 @@ def main():
         'safe_upper_bound_J', 'independently_proven_optimal', 'independently_proven_infeasible']}
     summary.update({k: diagnostic.get(k) for k in ['first_candidate_received_s',
         'first_legal_candidate_s', 'first_safe_receipt_s', 'solver_entered_received_s',
-        'worker_events', 'candidate_receipts', 'duplicate_receipts']})
+        'worker_events', 'candidate_receipts', 'duplicate_receipts', 'decode_rejections']})
+    summary['formulation'] = result.get('model_summary', {}).get('formulation')
+    summary['decode_records'] = diagnostic.get('decode_records', [])
     summary.update(method_elapsed_s=result['timing']['method_elapsed_s'],
         phases_exclusive_s=result['timing']['phases_exclusive_s'],
         cleanup_s=result['timing']['cleanup_s'],

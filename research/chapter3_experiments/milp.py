@@ -702,12 +702,48 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     return model
 
 
-def decode(model, values, integer_tolerance=1e-6):
-    values = np.asarray(values, dtype=float).reshape(-1)
+def logical_candidate_diagnostics(model, values, integer_tolerance=1e-6):
+    """Inspect every logical binary, including auxiliaries omitted from intcon.
+
+    This checks numerical binary membership, not the solver's physical state.
+    The decoded schedule and continuous trajectory are independently rebuilt.
+    """
+    report = {'vector_valid': False, 'accepted': False, 'reason': None,
+              'integer_tolerance': integer_tolerance, 'families': {}}
+    try:
+        values = np.asarray(values, dtype=float).reshape(-1)
+    except (ValueError, TypeError, OverflowError):
+        report['reason'] = 'invalid solver vector'; return report
     if len(values) != len(model.names) or not np.all(np.isfinite(values)):
-        raise ValueError('invalid solver vector')
-    if any(abs(values[i]-round(values[i])) > integer_tolerance for i in model.logical_binary):
-        raise ValueError('nonintegral solver candidate')
+        report['reason'] = 'invalid solver vector'; return report
+    report['vector_valid'] = True
+    for i in model.logical_binary:
+        name = model.names[i]
+        family = name.split(':', 1)[0]
+        item = report['families'].setdefault(family, {'count': 0,
+            'max_integrality_error': 0.0, 'worst_variable': None,
+            'outside_binary_count': 0, 'nonintegral_count': 0})
+        value = float(values[i]); rounded = round(value)
+        error = abs(value-rounded)
+        item['count'] += 1
+        if item['worst_variable'] is None or error > item['max_integrality_error']:
+            item.update(max_integrality_error=error, worst_variable=name)
+        item['nonintegral_count'] += int(error > integer_tolerance)
+        item['outside_binary_count'] += int(rounded not in (0, 1))
+    if any(x['outside_binary_count'] for x in report['families'].values()):
+        report['reason'] = 'logical solver value outside binary range'
+    elif any(x['nonintegral_count'] for x in report['families'].values()):
+        report['reason'] = 'nonintegral solver candidate'
+    else:
+        report['accepted'] = True
+    return report
+
+
+def decode(model, values, integer_tolerance=1e-6):
+    report = logical_candidate_diagnostics(model, values, integer_tolerance)
+    if not report['accepted']:
+        raise ValueError(report['reason'])
+    values = np.asarray(values, dtype=float).reshape(-1)
     candidate = {'scenes': {s['id']: [] for s in model.instance['scenarios']}}
     for o, v in zip(model.options, model.option_vars):
         if round(values[v]) == 1:

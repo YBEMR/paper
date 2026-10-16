@@ -1,5 +1,5 @@
 function solve_model(folder, guardSeconds)
-% One R2023b worker for small-domain correctness prechecks.  Every request is
+% One R2023b worker for correctness checks or one budgeted method call. Every request is
 % a new problem with no x0 or reused incumbent.  Thermal/energy acceptance is
 % performed by Python after this solver-reported result has been returned.
 workerClock = tic;
@@ -22,7 +22,10 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
     try
         req = jsondecode(fileread([prefix '.request.json']));
         p = load([prefix '.mat']);
-        remaining = min(req.remaining_s, guardSeconds-toc(workerClock));
+        % A relative timer cannot represent Python's monotonic epoch or all
+        % publication latency. Python's original absolute deadline governs
+        % acceptance; MATLAB MaxTime/callbacks provide best-effort stopping.
+        remaining = req.remaining_s;
         opts = optimoptions('intlinprog','Display','off', ...
             'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
             'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
@@ -33,7 +36,8 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         % IntegerPreprocess='none', where 'basic' reported infeasible despite
         % independent feasible lifts.  This preserves the mathematical model;
         % it does not establish a general MATLAB preprocessing defect.
-        opts.MaxTime = max(0,remaining-toc(requestClock));
+        opts.MaxTime = max(0,min(remaining-toc(requestClock), ...
+            guardSeconds-toc(workerClock)));
         result.options_text = evalc('disp(opts)');
         % All documented public option values, including defaults, are kept.
         names = properties(opts); optionValues = struct();
@@ -43,6 +47,11 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             optionValues.(names{k})=value;
         end
         result.options = optionValues;
+        % Options inspection and MAT loading belong to this same request.
+        opts.MaxTime = max(0,min(remaining-toc(requestClock), ...
+            guardSeconds-toc(workerClock)));
+        result.options.MaxTime = opts.MaxTime;
+        result.options_text = evalc('disp(opts)');
         if opts.MaxTime<=0 || isfile([prefix '.cancel'])
             result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
         else
@@ -65,6 +74,8 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
     result.matlab_request_wall_seconds=toc(requestClock);
     result.worker_elapsed_seconds=toc(workerClock);
     result.solver_information_is_independently_certified=false;
+    result.callback_candidates_independently_thermal_checked=false;
+    result.deadline_authority='Python absolute monotonic deadline';
     writejson([prefix '.response.json'],result);
     requestNumber=requestNumber+1;
 end

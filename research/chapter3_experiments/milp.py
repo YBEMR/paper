@@ -6,6 +6,7 @@ only the common evaluator supplies a safe schedule and system-energy upper
 bound. Small explicit start sets are permitted solely for named fixtures.
 """
 from bisect import bisect_right
+from contextlib import nullcontext
 from copy import deepcopy
 from fractions import Fraction as F
 from itertools import product
@@ -48,7 +49,7 @@ def _plus(row, index, value):
 
 
 class Model:
-    def __init__(self, instance, budget):
+    def __init__(self, instance, budget, progress=None):
         self.instance = deepcopy(instance)
         self.input_sha256 = _digest(self.instance)
         self.budget = budget
@@ -58,8 +59,17 @@ class Model:
         self.coefficients = Coefficients(self.instance['platform'], budget)
         self.excluded_schedules = set()
         self.feedback_identities = set()
+        self.progress = progress
+
+    def report(self, stage=None, **detail):
+        """Optional observation only; never modifies the encoded domain."""
+        self.budget.check()
+        if self.progress is not None:
+            self.progress(stage, self, detail)
 
     def var(self, name, lower=0, upper=1, integer=False, cost=0):
+        if len(self.names) % 128 == 0:
+            self.report()
         lower, upper = F(lower), F(upper)
         if lower > upper:
             raise ValueError('incompatible variable bounds: '+name)
@@ -80,6 +90,8 @@ class Model:
         <= upper(b)+sum(delta_a*maxabs(z)). Final rhs rounds upwards.
         """
         self.budget.check()
+        if len(self.rows) % 128 == 0:
+            self.report()
         exported, allowance = {}, F(0)
         for index, value in row.items():
             value = _box(value)
@@ -119,12 +131,18 @@ class Model:
     def as_solver_dict(self):
         ri, ci, data = [], [], []
         for i, row in enumerate(self.rows):
+            if i % 128 == 0:
+                self.report()
             for j, value in row['coef'].items():
+                if len(data) % 4096 == 0:
+                    self.budget.check()
                 ri.append(i); ci.append(j); data.append(value)
         n = len(self.names)
-        return {'c': np.array(self.c), 'A': coo_matrix((data, (ri, ci)), shape=(len(self.rows), n)).tocsr(),
+        exported = {'c': np.array(self.c), 'A': coo_matrix((data, (ri, ci)), shape=(len(self.rows), n)).tocsr(),
                 'b': np.array([r['rhs'] for r in self.rows]), 'Aeq': csr_matrix((0, n)), 'beq': np.empty(0),
                 'lb': np.array(self.lb), 'ub': np.array(self.ub), 'intcon': np.array(self.integer, dtype=int)}
+        self.budget.check()
+        return exported
 
     def summary(self):
         return {'problem_id': self.instance['id'], 'variables': len(self.names),
@@ -136,26 +154,37 @@ class Model:
                 'optimality_level': 'solver-reported only; external SAFE supplies a feasible upper bound'}
 
 
-def build_model(instance, config, starts=None, budget=None, include_physics=True):
+def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None):
+    """Build the unchanged finite-domain model with cooperative budget checks.
+
+    Optional ``progress(stage, model, detail)`` receives phase boundaries and
+    periodic counts; it must not mutate the model. Budget expiry propagates,
+    so a partially generated model is never returned as a solver-ready one.
+    """
     budget = budget if budget is not None else Budget()
-    model = Model(instance, budget)
+    budget.check()
+    model = Model(instance, budget, progress)
+    model.report('option_expansion')
     p = model.instance['platform']
     nodes = p['node_order']; n = len(nodes)
     units = {u['id']: u for u in p['units']}
     domains = p['domains']
     if starts is not None and not instance['id'].startswith('fixture_'):
         raise ValueError('explicit reduced start sets are fixture-only; production domain must not be trimmed')
-    options = expand_options(instance, config)
+    options = expand_options(instance, config, budget=budget)
     if starts is not None:
         options = [o for o in options if F(o['start_ms']) in set(map(F, starts[o['scenario_id']][o['stage_instance_id']]))]
     model.options = options
+    model.report('mode_variables')
     model.option_vars = [model.var('y:'+o['option_id'], integer=True) for o in options]
+    model.report('shared_mapping')
     for shared, modes in instance['stage_modes'].items():
         for unit in sorted({m['unit_id'] for m in modes}):
             model.shared[shared, unit] = model.var('x:'+shared+':'+unit, integer=True)
         model.eq({v: 1 for (stage, _), v in model.shared.items() if stage == shared}, 1, 'shared_unique')
     for scene in instance['scenarios']:
         budget.check()
+        model.report('scene_constraints', scene=scene['id'], interval=None)
         sid = scene['id']; scene_options = [(o, y) for o, y in zip(options, model.option_vars) if o['scenario_id'] == sid]
         stage_options = {s['id']: [(o, y) for o, y in scene_options if o['stage_instance_id'] == s['id']]
                          for s in scene['stage_instances']}
@@ -173,6 +202,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             for o, y in stage_options[after]:
                 _plus(row, y, -F(o['start_ms'])/1000)
             model.le(row, 0, 'dependency')
+        model.report('event_topology')
         events = sorted({F(0), F(instance['window_ms'])/1000} |
                         {F(o[k])/1000 for o, _ in scene_options for k in ('start_ms', 'end_ms')})
         K = len(events)-1
@@ -180,7 +210,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 'active': [], 'options': scene_options, 'stage_options': stage_options,
                 'start_indicators': {}, 'states': []}
         model.scenes[sid] = meta
+        model.report('control_state', intervals_total=K)
         for l, (left, right) in enumerate(zip(events, events[1:])):
+            model.report(interval=l)
             active = [(o, y) for o, y in scene_options if F(o['start_ms'])/1000 <= left < F(o['end_ms'])/1000]
             meta['active'].append(active)
             for unit in units:
@@ -224,6 +256,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                               **{meta['joint'][l, state]: 1 for state in states if state[di] == opp}}, 0, 'joint_marginal')
         if not include_physics:
             continue
+        model.report('physical_variables', interval=None)
         ambient = F(p['ambient_temperature_degC']); reference = F(p['reference_temperature_degC'])
         valid_low, valid_high = map(F, p['power_model_temperature_range_degC'])
         temp_upper = [min(valid_high, F(v)) for v in scene['maximum_temperature_degC']]
@@ -232,7 +265,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                                   for i, node in enumerate(nodes)])
         for i in range(n):
             model.eq({meta['theta'][0][i]: 1}, F(scene['entry']['temperature_degC'][i])-ambient, 'entry_temperature')
+        model.report('thermal_energy_rows')
         for l, (left, right) in enumerate(zip(events, events[1:])):
+            model.report(interval=l)
             qmax = []
             meta['q'].append([])
             for node in nodes:
@@ -249,12 +284,14 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             meta['energy'].append(ev)
             sources = meta['theta'][l]+meta['q'][l]
             for state in states:
+                model.report(control_state=list(state))
                 gate = meta['joint'][l, state]
                 coeff = model.coefficients.get(state, right-left)
                 for i, row in enumerate(coeff['temperature']):
                     model.conditional_eq({meta['theta'][l+1][i]: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'thermal_propagation')
                 row = coeff['energy']
                 model.conditional_eq({ev: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'complete_energy')
+    model.report('complete', scene=None, interval=None, control_state=None)
     return model
 
 
@@ -425,6 +462,7 @@ def evaluate_model_candidate(model, candidate, accuracy, budget=None):
 
 def solve_with_feedback(model, session, accuracy, budget=None, max_rounds=50):
     budget = budget if budget is not None else model.budget
+    phase = getattr(budget, 'phase', lambda name: nullcontext())
     authorized_seconds = budget.seconds
     result = {'state': 'UNRESOLVED', 'safe_candidate': None, 'safe_upper_bound_J': None,
               'evaluation': None, 'rounds': [], 'feedback': [], 'independently_proven_optimal': False,
@@ -432,7 +470,14 @@ def solve_with_feedback(model, session, accuracy, budget=None, max_rounds=50):
     try:
         for iteration in range(max_rounds):
             budget.check()
-            returned = session.solve(model.as_solver_dict(), remaining_s=max(0, budget.seconds-budget.elapsed))
+            with phase('matrix_export'):
+                solver_input = model.as_solver_dict()
+            budget.check()
+            with phase('solver_transport_and_solve'):
+                kwargs = {'remaining_s': max(0, budget.seconds-budget.elapsed)}
+                if hasattr(budget, 'deadline'):
+                    kwargs['budget'] = budget
+                returned = session.solve(solver_input, **kwargs)
             result['rounds'].append(returned)
             budget.check()
             if not returned.get('budget_valid', False):
@@ -443,13 +488,15 @@ def solve_with_feedback(model, session, accuracy, budget=None, max_rounds=50):
             if not returned.get('accepted_for_evaluation', False):
                 result['reason'] = 'SOLVER_INTERFACE_ERROR'; break
             try:
-                candidate = decode(model, returned['x'])
+                with phase('decode_and_legality'):
+                    candidate = decode(model, returned['x'])
             except ValueError as error:
                 result['reason'] = 'NUMERICAL_CANDIDATE_ANOMALY: '+str(error); break
-            evaluation = evaluate_model_candidate(model, candidate, accuracy, budget)
+            with phase('continuous_thermal_energy_evaluation'):
+                evaluation = evaluate_model_candidate(model, candidate, accuracy, budget)
             # Preserve evaluator evidence even if the deadline just elapsed.
             result['evaluation'] = evaluation
-            if evaluation['state'] == 'SAFE' and evaluation.get('rankable_energy') and evaluation['completed_at_elapsed_s'] <= authorized_seconds:
+            if evaluation['state'] == 'SAFE' and evaluation.get('rankable_energy') and evaluation['completed_at_elapsed_s'] < authorized_seconds:
                 result.update(state='SAFE', safe_candidate=candidate,
                               safe_upper_bound_J=evaluation['safe_upper_bound_J'],
                               reason='SAFE_ENGINEERING_CONVERGENCE' if returned.get('exitflag') == 1 else 'SAFE_INCUMBENT')
@@ -458,8 +505,15 @@ def solve_with_feedback(model, session, accuracy, budget=None, max_rounds=50):
             if evaluation['state'] != 'THERMAL_VIOLATION':
                 result['reason'] = 'EVALUATION_UNRESOLVED'; break
             budget.check()
-            feedback = add_thermal_feedback(model, candidate, evaluation)
-            result['feedback'].append(feedback)
+            with phase('thermal_feedback'):
+                feedback = add_thermal_feedback(model, candidate, evaluation)
+            feedback['completed_at_elapsed_s'] = budget.elapsed
+            feedback['within_budget'] = feedback['completed_at_elapsed_s'] < authorized_seconds
+            if feedback['within_budget']:
+                result['feedback'].append(feedback)
+            else:
+                result.setdefault('late_feedback_diagnostics', []).append(feedback)
+            budget.check()
             if not feedback['rows_added']:
                 result['reason'] = 'FEEDBACK_UNRESOLVED'; break
         else:

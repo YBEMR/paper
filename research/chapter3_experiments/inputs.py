@@ -200,7 +200,7 @@ def _expand_scenarios(config, sample, settings):
     return scenarios
 
 
-def build_instances(config):
+def build_instances(config, *, problem_id=None, budget=None):
     """Generate each declared single-factor condition paired with each sample.
 
     The complete physical platform is retained in every instance, including
@@ -210,6 +210,8 @@ def build_instances(config):
     instances = []
     seen_settings = set()
     for condition in config["conditions"]:
+        if budget is not None:
+            budget.check()
         settings = deepcopy(config["defaults"])
         unknown = set(condition["overrides"]) - set(settings)
         if unknown:
@@ -220,6 +222,10 @@ def build_instances(config):
             raise ValueError("Duplicate effective condition; shared baseline must run once")
         seen_settings.add(signature)
         for sample in config["samples"]:
+            if problem_id is not None and f"{condition['id']}__{sample['id']}" != problem_id:
+                continue
+            if budget is not None:
+                budget.check()
             stage_modes, means = _expand_modes(config, sample, settings)
             instances.append({
                 "schema_version": config["schema_version"],
@@ -241,10 +247,23 @@ def build_instances(config):
                 "ablation_input": condition["id"] in config["run_protocol"]["ablation_condition_ids"],
                 "status": "input_only_not_evaluated"
             })
+    if budget is not None:
+        budget.check()
+    if problem_id is not None and len(instances) != 1:
+        raise ValueError(f"Unknown or ambiguous problem identifier: {problem_id}")
     return instances
 
 
-def expand_options(instance, config):
+def build_instance(config, problem_id, budget=None):
+    """Expand exactly one declared case without materializing the other 94.
+
+    The same generator and validation rules are used by build_instances;
+    selection does not change the case's options or numerical parameters.
+    """
+    return build_instances(config, problem_id=problem_id, budget=budget)[0]
+
+
+def expand_options(instance, config, budget=None):
     """Return local Stage/mode/start choices, not complete arrangements.
 
     Start times satisfy the grid and request release; true rational finishes
@@ -273,6 +292,8 @@ def expand_options(instance, config):
                     raise ValueError("Stage duration must be positive")
                 last_index = min(maximum_index, (window - duration) // grid)
                 for index in range(first_index, last_index + 1):
+                    if budget is not None and len(options) % 32 == 0:
+                        budget.check()
                     start = index * grid
                     finish = start + duration
                     option = dict(mode)
@@ -288,4 +309,6 @@ def expand_options(instance, config):
                         "request_deadline_ms": request["deadline_ms"]
                     })
                     options.append(option)
+    if budget is not None:
+        budget.check()
     return options

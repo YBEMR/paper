@@ -14,6 +14,7 @@ import math
 import hashlib
 import json
 import time
+from sys import intern
 
 import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
@@ -80,6 +81,78 @@ class Model:
         self._bound_signatures = {}
         self._affine_templates = {}
         self.affine_stats = {'hits': 0, 'misses': 0, 'clears': 0}
+        self._row_rhs_exports = {}
+        self._activity_exports = {}
+
+    def row_rhs(self, rhs, allowance=0):
+        # Cache only immutable metadata. Text preserves signed zero/exponents;
+        # callers still own separate mutable rhs_interval lists and row dicts.
+        if type(rhs) is int:
+            key = (rhs, allowance)
+        else:
+            rhs = _box(rhs)
+            key = (str(rhs.lo), str(rhs.hi), allowance)
+        result = self._row_rhs_exports.get(key)
+        if result is None:
+            rhs = _box(rhs)
+            result = (_up(F(rhs.hi)+allowance), str(allowance), tuple(rhs.data()))
+            if len(self._row_rhs_exports) >= _EXPORT_CACHE_LIMIT:
+                self._row_rhs_exports.clear()
+            self._row_rhs_exports[key] = result
+        return result
+
+    def append_exported(self, exported, rhs, allowance, tag):
+        self.budget.check()
+        if len(self.rows) % 128 == 0:
+            self.report()
+        bound, error, interval = self.row_rhs(rhs, allowance)
+        self.rows.append({'coef': exported, 'rhs': bound, 'tag': intern(tag),
+                          'rounding_allowance': error, 'rhs_interval': list(interval)})
+        self.row_nonzeros += len(exported)
+
+    def activity_export(self, index, power):
+        """Both original signed coefficient conversions, including box error.
+
+        Bounds are immutable after var(). A returned tuple is valid only for
+        this power and box; identical powers on different boxes do not alias.
+        """
+        self.budget.check()
+        power = F(power)
+        key = (power, self.bound_signature(index))
+        result = self._activity_exports.get(key)
+        if result is None:
+            negative = -power
+            upper, du = self.fraction_export(negative)
+            lower, dl = self.coefficient_export(self.fraction_negative(negative))
+            magnitude = self.bound_magnitude(index)
+            result = (upper, lower, du*magnitude, dl*magnitude)
+            if len(self._activity_exports) >= _EXPORT_CACHE_LIMIT:
+                self._activity_exports.clear()
+            self._activity_exports[key] = result
+        return result
+
+    def activity_power_eq(self, target, indices, exports, tag='activity_power'):
+        # The target has exact coefficient +/-1. Retain every option column,
+        # even when several powers coincide; this is no constraint aggregation.
+        upper, lower = {target: 1.0}, {target: -1.0}
+        errors_upper, errors_lower = {}, {}
+        for position, index in enumerate(indices):
+            if position % 128 == 0:
+                self.budget.check()
+            if index == target:
+                raise ValueError('activity target must differ from option variables')
+            u, lo, eu, el = exports[index]
+            if u: upper[index] = u
+            if lo: lower[index] = lo
+            for error, groups in ((eu, errors_upper), (el, errors_lower)):
+                if error:
+                    key = id(error)
+                    if key in groups: groups[key][1] += 1
+                    else: groups[key] = [error, 1]
+        au = sum((error*count for error, count in errors_upper.values()), F(0))
+        al = sum((error*count for error, count in errors_lower.values()), F(0))
+        self.append_exported(upper, 0, au, tag+'/upper')
+        self.append_exported(lower, I('-0'), al, tag+'/lower')
 
     def bound_signature(self, index):
         # Avoid repeatedly hashing Fraction denominators. Bounds never change
@@ -196,14 +269,14 @@ class Model:
         self.budget.check()
         if len(self.rows) % 128 == 0:
             self.report()
-        exported, allowance = {}, F(0)
+        exported = {}
         error_groups = {}
         for index, value in row.items():
             # Every integer in this range has an exact binary64 representation,
             # so its conversion deviation is zero, irrespective of the box.
             if type(value) is int and abs(value) <= 2**53:
                 if value:
-                    exported[index] = float(value)
+                    exported[index] = 1.0 if value == 1 else -1.0 if value == -1 else float(value)
                 continue
             if isinstance(value, F):
                 nominal, deviation = self.fraction_export(value)
@@ -228,10 +301,10 @@ class Model:
                     error_groups[key] = [deviation, magnitude, 1]
             if nominal:
                 exported[index] = nominal
-        allowance = sum((error*magnitude*count for error, magnitude, count in error_groups.values()), F(0))
-        rhs = _box(rhs)
-        self.rows.append({'coef': exported, 'rhs': _up(F(rhs.hi)+allowance), 'tag': tag,
-                          'rounding_allowance': str(allowance), 'rhs_interval': rhs.data()})
+        allowance = sum((error*magnitude*count for error, magnitude, count in error_groups.values()), F(0)) if error_groups else 0
+        bound, error, interval = self.row_rhs(rhs, allowance)
+        self.rows.append({'coef': exported, 'rhs': bound, 'tag': intern(tag),
+                          'rounding_allowance': error, 'rhs_interval': list(interval)})
         self.row_nonzeros += len(exported)
 
     def eq(self, row, rhs, tag):
@@ -279,7 +352,7 @@ class Model:
             self.report()
         coefficients, metadata = template
         exported = {slots[position]: value for position, value in coefficients}
-        record = dict(metadata, coef=exported, tag=tag,
+        record = dict(metadata, coef=exported, tag=intern(tag),
                       rhs_interval=list(metadata['rhs_interval']))
         self.rows.append(record)
         self.row_nonzeros += len(exported)
@@ -418,6 +491,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         options_by_scene[option['scenario_id']].append((option, y))
     unit_domain = {uid: unit['domain_id'] for uid, unit in units.items()}
     unit_node = {uid: unit['thermal_node_id'] for uid, unit in units.items()}
+    activity_exports = None
     model.report('shared_mapping')
     shared_by_stage = {}
     for shared, modes in instance['stage_modes'].items():
@@ -535,6 +609,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         for i in range(n):
             model.eq({meta['theta'][0][i]: 1}, F(scene['entry']['temperature_degC'][i])-ambient, 'entry_temperature')
         model.report('thermal_energy_rows')
+        if activity_exports is None:
+            with model.measure_construction('activity_export_preparation'):
+                activity_exports = {y: model.activity_export(y, power) for y, power in option_power.items()}
         state_power = {}
         for l, (left, right) in enumerate(zip(events, events[1:])):
             model.report(interval=l)
@@ -547,7 +624,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                     qmax.append(maximum)
                     qv = model.var(f'q:{sid}:{l}:{node}', 0, maximum)
                     meta['q'][l].append(qv)
-                    model.eq({qv: 1, **{y: -option_power[y] for o, y in active_node}}, 0, 'activity_power')
+                    model.activity_power_eq(qv, (y for o, y in active_node), activity_exports)
             states = meta['states'][l]
             with model.measure_construction('power_upper_and_energy_variable'):
                 for state in states:

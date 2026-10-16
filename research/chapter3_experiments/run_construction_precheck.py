@@ -26,7 +26,7 @@ from thermal import Budget, I, Exhausted
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-REFERENCE = '7bbe999'
+REFERENCE = 'd870514'
 CONFIG_SHA = '615be096bfbcb3e7c53ba9b0810d888264d48adbc428f1f7d2f94a5c6a29a4fe'
 
 
@@ -540,6 +540,77 @@ def grouped_error_checks(old_module, new_module, instance, check):
     check('timing/nested_details_separate_and_survive_interruption',nested_timing)
 
 
+def row_reuse_checks(old_module, new_module, instance, check):
+    old = old_module.Model(instance, Budget(seconds=600))
+    new = new_module.Model(instance, Budget(seconds=600))
+    powers = [F(0), F(1), F(-1), F(1, 3), F(17, 10), F(2**53+1), F(1, 3)]
+    for model in (old, new):
+        model.var('target', -9, 30)
+        for j, _ in enumerate(powers):
+            model.var('choice'+str(j), 0, 1 if j != 6 else F(2, 3))
+    exports = {j+1: new.activity_export(j+1, p) for j, p in enumerate(powers)}
+    def activity():
+        for indices in ([], list(exports), [4, 7], list(reversed(exports))):
+            old.eq({0: 1, **{j: -powers[j-1] for j in indices}}, 0, 'activity')
+            new.activity_power_eq(0, indices, exports, 'activity')
+            equal(old.rows, new.rows)
+            equal(old.row_nonzeros, new.row_nonzeros)
+        compare_models(old, new, check, 'row_reuse/activity_matrix')
+    check('row_reuse/activity_signed_nonbinary_and_nonunit_bounds', activity)
+    def rhs():
+        for value in (0, 1, -1, 2**53+1, F(1, 3), I('-0'), I('0.00'), I('-0', '0'), I('-2.01', '3.17')):
+            for _ in range(2):
+                old.le({0: 1, 1: -1, 2: 0}, value, 'rhs')
+                new.le({0: 1, 1: -1, 2: 0}, value, 'rhs')
+                equal(old.rows[-1], new.rows[-1])
+                equal(np.asarray([old.rows[-1]['rhs']]).tobytes(), np.asarray([new.rows[-1]['rhs']]).tobytes())
+    check('row_reuse/rhs_text_signed_zero_and_float_bits', rhs)
+    def ownership():
+        new.activity_power_eq(0, [4, 7], exports)
+        saved = deepcopy(new.rows[-2:])
+        new.rows[-2]['coef'].clear()
+        new.rows[-1]['rhs_interval'][0] = 'mutation'
+        new.activity_power_eq(0, [4, 7], exports)
+        equal(new.rows[-2:], saved)
+        require(new.rows[-1]['rhs_interval'] is not new.rows[-3]['rhs_interval'], 'mutable RHS aliased')
+    check('row_reuse/row_storage_not_aliased', ownership)
+    def eviction():
+        previous = new_module._EXPORT_CACHE_LIMIT
+        try:
+            new_module._EXPORT_CACHE_LIMIT = 2
+            new._activity_exports.clear(); new._row_rhs_exports.clear()
+            for j, p in enumerate(powers): new.activity_export(j+1, p)
+            for value in (0, 1, 2, 0):
+                new.le({0: 1}, value, 'eviction'); old.le({0: 1}, value, 'eviction')
+                equal(new.rows[-1], old.rows[-1])
+            new.activity_power_eq(0, list(exports), exports, 'retained')
+            old.eq({0: 1, **{j: -powers[j-1] for j in exports}}, 0, 'retained')
+            equal(new.rows[-2:], old.rows[-2:])
+            require(len(new._activity_exports) <= 2 and len(new._row_rhs_exports) <= 2, 'unbounded cache')
+        finally: new_module._EXPORT_CACHE_LIMIT = previous
+    check('row_reuse/eviction_preserves_prepared_terms', eviction)
+    def interrupted():
+        m = new_module.Model(instance, Budget(seconds=600))
+        target=m.var('q', 0, 3); option=m.var('y', integer=True)
+        terms={option: m.activity_export(option,F(1,3))}
+        original=m.append_exported
+        def stop(*a, **kw):
+            original(*a, **kw)
+            raise Exhausted('complete upper row only')
+        m.append_exported=stop
+        try: m.activity_power_eq(target,[option],terms)
+        except Exhausted: pass
+        else: raise AssertionError('did not interrupt')
+        equal(len(m.rows),1)
+        ref=old_module.Model(instance,Budget(seconds=600))
+        ref.var('q',0,3);ref.var('y',integer=True)
+        ref.eq({target:1,option:-F(1,3)},0,'activity_power')
+        equal(m.rows[0],ref.rows[0])
+    check('row_reuse/activity_interrupt_preserves_complete_prefix', interrupted)
+    check('row_reuse/model_local', lambda: require(not new_module.Model(instance,Budget())._activity_exports,
+                                                  'cross-model activity reuse'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
@@ -639,6 +710,7 @@ def main():
         conditional_template_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
         affine_template_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
         grouped_error_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
+        row_reuse_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
     except Exception as error:
         checks.append({'name': 'suite_execution', 'passed': False, 'error': repr(error)})
     after = {relative: sha((REPO/relative).read_bytes()) for relative in sources}

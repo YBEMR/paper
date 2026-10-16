@@ -52,7 +52,7 @@ class WorkerExited(RuntimeError):
 
 
 def _read_json_until(path, deadline, clock=time.monotonic, process=None,
-                     sleep=time.sleep):
+                     sleep=time.sleep, on_poll=None):
     """Wait for a complete readable message without moving the deadline.
 
     Existence alone is insufficient on Windows: publication or a transient
@@ -64,6 +64,10 @@ def _read_json_until(path, deadline, clock=time.monotonic, process=None,
     while True:
         if clock() >= deadline:
             raise PublicationTimeout(path, diagnostics)
+        if on_poll is not None:
+            on_poll()
+            if clock() >= deadline:
+                raise PublicationTimeout(path, diagnostics)
         diagnostics['attempts'] += 1
         try:
             value = json.loads(path.read_text(encoding='utf-8-sig'))
@@ -83,6 +87,10 @@ def _read_json_until(path, deadline, clock=time.monotonic, process=None,
             raise PublicationTimeout(path, diagnostics)
         if not isinstance(value, dict):
             raise ValueError(f'MATLAB publication is not a JSON object: {path}')
+        if on_poll is not None:
+            on_poll()  # drain events published immediately before final response
+            if clock() >= deadline:
+                raise PublicationTimeout(path, diagnostics)
         return value, diagnostics
 
 
@@ -257,6 +265,10 @@ class MatlabSession:
                         lambda name: nullcontext())
         self.counter += 1
         prefix = self.workdir / f'request_{self.counter:06d}'
+        if getattr(self, 'event_consumer', None) is not None:
+            self.metadata['callback_candidates'] = 'immutable live publications; independently evaluated by diagnostic consumer'
+            self.metadata['external_evaluation'] = 'callback and final candidates within one absolute method deadline'
+            _json(self.workdir/'session.json', self.metadata)
         def expire_before_submission(phase):
             result = {'status': 'BUDGET_EXHAUSTED_BEFORE_PUBLICATION',
                       'phase': phase, 'budget_valid': False, 'x': [],
@@ -295,12 +307,17 @@ class MatlabSession:
             return expire_before_submission('mat_publication')
         # Separate JSON is written last so the worker never reads partial MAT.
         with phase('transport_request_publication'):
-            _json(prefix.with_suffix('.request.json'), {'remaining_s': allocated})
+            _json(prefix.with_suffix('.request.json'), {
+                'remaining_s': allocated,
+                'stream_events': bool(getattr(self, 'event_consumer', None))})
         response = prefix.with_suffix('.response.json')
         try:
             with phase('solver_wait_and_response_read'):
+                extra = {}
+                if getattr(self, 'event_consumer', None) is not None:
+                    extra['on_poll'] = lambda: self.event_consumer(prefix)
                 result, read_info = _read_json_until(
-                    response, deadline, self.clock, self.proc)
+                    response, deadline, self.clock, self.proc, **extra)
         except PublicationTimeout as exc:
             prefix.with_suffix('.cancel').write_text('budget\n', encoding='ascii')
             result = {'status': 'BUDGET_EXHAUSTED', 'budget_valid': False,

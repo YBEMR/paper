@@ -1,7 +1,7 @@
 function solve_model(folder, guardSeconds)
 % One R2023b worker for correctness checks or one budgeted method call. Every request is
 % a new problem with no x0 or reused incumbent.  Thermal/energy acceptance is
-% performed by Python after this solver-reported result has been returned.
+% performed by Python; optional live events permit in-budget incumbent checks.
 workerClock = tic;
 info = struct('version',version,'release',version('-release'), ...
     'intlinprog_path',which('intlinprog'),'license_test', ...
@@ -17,12 +17,14 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
     prefix = fullfile(folder,sprintf('request_%06d',requestNumber));
     if ~isfile([prefix '.request.json']), pause(.01); continue; end
     requestClock = tic; callbacks = {}; callbackFields = {}; callbackError = '';
+    streamEvents = false; eventNumber = 0;
     result = struct('status','ERROR','x',[],'fval',[],'exitflag',[], ...
         'output',struct(),'callbacks',{{}},'callback_fields',{{}}, ...
         'intlinprog_entered',false,'phase_seconds',struct());
     try
         phaseClock=tic;
         req = jsondecode(fileread([prefix '.request.json']));
+        streamEvents = isfield(req,'stream_events') && req.stream_events;
         p = load([prefix '.mat']);
         result.phase_seconds.request_and_mat_load=toc(phaseClock);
         phaseClock=tic;
@@ -61,6 +63,9 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
         else
             result.intlinprog_entered=true;
+            if streamEvents
+                publish(struct('kind','solver_entered','request_wall_seconds',toc(requestClock)));
+            end
             phaseClock=tic;
             [x,fval,exitflag,output] = intlinprog(p.c(:),p.intcon(:)', ...
                 p.A,p.b(:),p.Aeq,p.beq(:),p.lb(:),p.ub(:),[],opts);
@@ -96,6 +101,13 @@ end
             callbackFields=union(callbackFields,fieldnames(values));
             entry=struct('state',state,'request_wall_seconds',toc(requestClock), ...
                 'values',values,'x',x(:)');
+            if streamEvents
+                entry.kind='callback';
+                publish(entry);
+                % The immutable event file retains x; avoid duplicate large
+                % vectors in the final response. Historical path is unchanged.
+                entry.x=[]; entry.event_number=eventNumber;
+            end
             callbacks{end+1}=entry; %#ok<AGROW>
             stop = toc(requestClock)>=remaining || toc(workerClock)>=guardSeconds ...
                 || isfile([prefix '.cancel']) || isfile(fullfile(folder,'stop'));
@@ -103,6 +115,12 @@ end
             callbackError=getReport(err,'extended','hyperlinks','off');
             stop=true;
         end
+    end
+
+    function publish(entry)
+        eventNumber=eventNumber+1;
+        entry.event_number=eventNumber;
+        writejson(sprintf('%s.event_%06d.json',prefix,eventNumber),entry);
     end
 end
 

@@ -26,7 +26,7 @@ from thermal import Budget, I, Exhausted
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-REFERENCE = 'ae3c5d8'
+REFERENCE = 'bb53928'
 CONFIG_SHA = '615be096bfbcb3e7c53ba9b0810d888264d48adbc428f1f7d2f94a5c6a29a4fe'
 
 
@@ -114,6 +114,8 @@ def compare_rows(old, new):
     for index, (a, b) in enumerate(zip(old.rows, new.rows)):
         equal(numerical_row(a), numerical_row(b), 'row '+str(index))
         equal(a, b, 'raw row certificate '+str(index))
+    if hasattr(new, 'row_nonzeros'):
+        equal(new.row_nonzeros, sum(len(row['coef']) for row in new.rows), 'incremental nnz')
 
 
 def compare_sparse(old, new):
@@ -275,6 +277,72 @@ def observation_checks(old_module, new_module, config, source, check):
         check('budget/'+module.__name__+'/no_partial_ready_model', no_partial_model)
 
 
+def thermal_optimization_checks(old_module, new_module, instance, check):
+    old_exp = old_module.Coefficients.get.__globals__['exponential']
+    new_globals = new_module.Coefficients.get.__globals__
+    new_exp = new_globals['exponential']
+    matrices = [[[F(0)]], [[F(-3), F(1)], [F(2), F(-4)]]]
+    def data(matrix):
+        return [[v.data() for v in row] for row in matrix]
+    for i, matrix in enumerate(matrices):
+        for duration in map(F, ('0', '1/1000', '1/4', '4')):
+            check(f'kernel/matrix_{i}/duration_{duration}', lambda m=matrix, t=duration:
+                  equal(data(old_exp(m, t)), data(new_exp(m, t))))
+    state = tuple(next(iter(d['opps'])) for d in instance['platform']['domains'].values())
+    old = old_module.Coefficients(instance['platform'], Budget(seconds=600))
+    new = new_module.Coefficients(instance['platform'], Budget(seconds=600))
+    for duration in map(F, ('0', '1/3000', '1/1000', '2/5', '1/1000')):
+        a, b = old.get(state, duration), new.get(state, duration)
+        check('kernel/state_duration_'+str(duration), lambda a=a, b=b: equal(
+            (data(a['temperature']), [v.data() for v in a['energy']]),
+            (data(b['temperature']), [v.data() for v in b['energy']])))
+    check('kernel/one_state_many_durations', lambda: equal((len(new.kernel_cache), new.calls), (1, 4)))
+    other = new_module.Coefficients(instance['platform'], Budget(seconds=600))
+    check('kernel/no_cross_model_cache', lambda: require(not other.kernel_cache and
+          other.kernel_cache is not new.kernel_cache, 'shared kernel cache'))
+
+    class StopAfter:
+        def __init__(self, allowed): self.remaining = allowed
+        def check(self):
+            self.remaining -= 1
+            if self.remaining < 0: raise Exhausted('injected kernel interruption')
+    interrupted = new_module.Coefficients(instance['platform'], StopAfter(4))
+    def preparation_atomic():
+        try: interrupted.get(state, F('1/1000'))
+        except Exhausted: pass
+        else: raise AssertionError('kernel preparation did not stop')
+        equal((interrupted.kernel_cache, interrupted.cache, interrupted.calls), ({}, {}, 0))
+    check('kernel/interrupted_preparation_not_published', preparation_atomic)
+    saved_kernel = new.kernel_cache[state]
+    new.budget = StopAfter(1)
+    def evaluation_atomic():
+        try: new.get(state, F('1/1700'))
+        except Exhausted: pass
+        else: raise AssertionError('kernel evaluation did not stop')
+        require(new.kernel_cache[state] is saved_kernel, 'lost complete kernel')
+        require((state, F('1/1700')) not in new.cache, 'published partial coefficient')
+    check('kernel/interrupted_evaluation_not_published', evaluation_atomic)
+
+    old_m = old_module.Model(instance, Budget(seconds=600))
+    new_m = new_module.Model(instance, Budget(seconds=600))
+    for model in (old_m, new_m):
+        model.var('signed', F(-2, 3), F(5, 3))
+    limit = new_module._EXPORT_CACHE_LIMIT
+    def cache_eviction():
+        try:
+            new_module._EXPORT_CACHE_LIMIT = 4  # fixture-only eviction pressure
+            for q in [F(i, 37) for i in range(1, 12)]+[F(1, 37)]:
+                for model in (old_m, new_m): model.le({0: q}, F(2, 7), 'cache_probe')
+            compare_rows(old_m, new_m)
+            require(len(new_m._coefficient_exports) <= 4, 'cache bound exceeded')
+        finally:
+            new_module._EXPORT_CACHE_LIMIT = limit
+    check('row_cache/eviction_preserves_raw_rows', cache_eviction)
+    check('row_cache/no_cross_model_sharing', lambda: require(
+        new_module.Model(instance, Budget())._coefficient_exports is not new_m._coefficient_exports,
+        'shared conversion cache'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
@@ -370,6 +438,7 @@ def main():
         primitive_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check, records)
         feedback_checks(old_module, new_module, config, fixture_map['one_stage_energy'], check, records)
         observation_checks(old_module, new_module, config, fixture_map['one_stage_energy'], check)
+        thermal_optimization_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
     except Exception as error:
         checks.append({'name': 'suite_execution', 'passed': False, 'error': repr(error)})
     after = {relative: sha((REPO/relative).read_bytes()) for relative in sources}

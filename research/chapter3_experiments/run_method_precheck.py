@@ -81,9 +81,25 @@ def run(out):
             require(getattr(plain,attr)==getattr(observed,attr),attr)
         require((plain.as_solver_dict()['A']!=observed.as_solver_dict()['A']).nnz==0)
         observer.finish('MODEL_CONSTRUCTED'); first=observer.snapshot()
+        require(first['nonzeros_in_rows']==sum(len(row['coef']) for row in observed.rows))
         observed.as_solver_dict()
         require(observer.snapshot()['method_elapsed_seconds']==first['method_elapsed_seconds'])
     check('observer_preserves_encoded_model_and_freezes_construction_time',observer_equivalence)
+
+    def component_accounting():
+        from types import SimpleNamespace
+        config=load_config(); instance=build_instance(config,'base__R1')
+        progress=SimpleNamespace(observation_wall_seconds=0.0)
+        model=milp.Model(instance,MethodBudget(60),progress=progress)
+        with patch('milp.time.perf_counter',side_effect=[10.0,15.0]):
+            try:
+                with model.measure_construction('fixture_interrupted_rows'):
+                    progress.observation_wall_seconds=2.0
+                    raise Exhausted('fixture')
+            except Exhausted: pass
+        require(model.construction_costs['fixture_interrupted_rows']==
+            {'calls':1,'inclusive_s':5.0,'nested_observation_s':2.0,'exclusive_s':3.0})
+    check('component_costs_disjoint_and_preserved_on_interruption',component_accounting)
 
     def partial_observer():
         config=load_config(); base=build_instance(config,'base__R1')

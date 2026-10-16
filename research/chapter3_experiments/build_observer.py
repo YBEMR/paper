@@ -80,6 +80,7 @@ class BuildObserver:
         self.status = 'CONSTRUCTION_PENDING'
         self.observations = 0
         self.observation_wall_seconds = 0.0
+        self.observation_seconds_by_stage = {}
         self.finished_at = None
         self.initial_memory = process_memory()
 
@@ -100,7 +101,9 @@ class BuildObserver:
             if changed or now-self.last_emit >= self.interval_seconds:
                 self._emit(now)
         finally:
-            self.observation_wall_seconds += time.perf_counter()-measured_start
+            elapsed = time.perf_counter()-measured_start
+            self.observation_wall_seconds += elapsed
+            self.observation_seconds_by_stage[self.stage] = self.observation_seconds_by_stage.get(self.stage, 0.0)+elapsed
 
     def snapshot(self):
         now = self.finished_at if self.finished_at is not None else self.clock()
@@ -118,8 +121,12 @@ class BuildObserver:
             'variables': len(model.names) if model else 0,
             'binary_variables': len(model.integer) if model else 0,
             'rows': len(model.rows) if model else 0,
-            'nonzeros_in_rows': sum(len(row['coef']) for row in model.rows) if model else 0,
+            # Model rows are append-only; Big-M metadata does not change coef.
+            # Older/fake models retain the scan fallback used by prechecks.
+            'nonzeros_in_rows': (model.row_nonzeros if hasattr(model, 'row_nonzeros') else
+                                 sum(len(row['coef']) for row in model.rows)) if model else 0,
             'coefficient_sets_completed': model.coefficients.calls if model else 0,
+            'coefficient_state_kernels_completed': len(getattr(model.coefficients, 'kernel_cache', {})) if model else 0,
             'events_per_scene': {sid: len(scene['events']) for sid, scene in model.scenes.items()} if model else {},
             'scene_control_intervals_begun': {sid: len(scene['active']) for sid, scene in model.scenes.items()} if model else {},
             'scene_energy_variables_created': {sid: len(scene['energy']) for sid, scene in model.scenes.items()} if model else {},
@@ -127,6 +134,10 @@ class BuildObserver:
             'initial_memory': self.initial_memory,
             'observations': self.observations,
             'observation_callback_wall_s': self.observation_wall_seconds,
+            'observation_seconds_by_stage': dict(self.observation_seconds_by_stage),
+            'construction_components': {key: dict(value) for key, value in
+                                        getattr(model, 'construction_costs', {}).items()},
+            'component_scope': 'disjoint timed regions; inclusive includes nested observation; unfinished calls counted on exception unwind',
             'observation_cost_scope': 'callbacks including synchronous progress logging; budget checks excluded',
             'complete_model_only_when': 'status MODEL_CONSTRUCTED and successful build_model return',
             'partial_counts_are_not_solver_ready': self.status != 'MODEL_CONSTRUCTED',

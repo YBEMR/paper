@@ -6,13 +6,14 @@ only the common evaluator supplies a safe schedule and system-energy upper
 bound. Small explicit start sets are permitted solely for named fixtures.
 """
 from bisect import bisect_right
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
 from copy import deepcopy
 from fractions import Fraction as F
 from itertools import product
 import math
 import hashlib
 import json
+import time
 
 import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
@@ -24,6 +25,7 @@ from milp_coefficients import Coefficients
 
 
 _BINARY_BOUNDS = (F(0), F(1))
+_EXPORT_CACHE_LIMIT = 4096  # memory policy only; eviction changes no coefficient
 
 
 def _digest(value):
@@ -63,6 +65,57 @@ class Model:
         self.excluded_schedules = set()
         self.feedback_identities = set()
         self.progress = progress
+        self.construction_costs = {}
+        self.row_nonzeros = 0
+        self._bound_boxes = {}
+        self._bound_magnitudes = {}
+        self._coefficient_exports = {}
+
+    def bound_box(self, index):
+        """Cache the same outward endpoints, local to this model only."""
+        if index not in self._bound_boxes:
+            low, high = self.bounds[index]
+            self._bound_boxes[index] = (I.rational(low) if low == high else
+                                     I(I.rational(low).lo, I.rational(high).hi))
+        return self._bound_boxes[index]
+
+    def bound_magnitude(self, index):
+        if index not in self._bound_magnitudes:
+            self._bound_magnitudes[index] = max(abs(v) for v in self.bounds[index])
+        return self._bound_magnitudes[index]
+
+    def coefficient_export(self, value):
+        key = (value.lo, value.hi)
+        if key not in self._coefficient_exports:
+            low, high = F(value.lo), F(value.hi)
+            nominal = float((low+high)/2)
+            exact = F.from_float(nominal)
+            result = (nominal, max(abs(low-exact), abs(high-exact)))
+            if len(self._coefficient_exports) >= _EXPORT_CACHE_LIMIT:
+                self._coefficient_exports.clear()
+            self._coefficient_exports[key] = result
+        return self._coefficient_exports[key]
+
+    @contextmanager
+    def measure_construction(self, section):
+        """Diagnostic stopwatches only; never create or extend a budget.
+
+        Regions are disjoint. Nested observation is subtracted for exclusive
+        costs, while both costs remain charged to the method deadline.
+        """
+        start = time.perf_counter()
+        observed = getattr(self.progress, 'observation_wall_seconds', 0.0)
+        try:
+            yield
+        finally:
+            elapsed = time.perf_counter()-start
+            nested = getattr(self.progress, 'observation_wall_seconds', 0.0)-observed
+            item = self.construction_costs.setdefault(section,
+                {'calls': 0, 'inclusive_s': 0.0, 'nested_observation_s': 0.0, 'exclusive_s': 0.0})
+            item['calls'] += 1
+            item['inclusive_s'] += elapsed
+            item['nested_observation_s'] += nested
+            item['exclusive_s'] += max(0.0, elapsed-nested)
 
     def report(self, stage=None, **detail):
         """Optional observation only; never modifies the encoded domain."""
@@ -121,15 +174,14 @@ class Model:
             if value.lo == value.hi and (value.lo == 1 or value.lo == -1):
                 exported[index] = float(value.lo)
                 continue
-            nominal = float((F(value.lo)+F(value.hi))/2)
-            exact_nominal = F.from_float(nominal)
-            deviation = max(abs(F(value.lo)-exact_nominal), abs(F(value.hi)-exact_nominal))
-            allowance += deviation*max(abs(v) for v in self.bounds[index])
+            nominal, deviation = self.coefficient_export(value)
+            allowance += deviation*self.bound_magnitude(index)
             if nominal:
                 exported[index] = nominal
         rhs = _box(rhs)
         self.rows.append({'coef': exported, 'rhs': _up(F(rhs.hi)+allowance), 'tag': tag,
                           'rounding_allowance': str(allowance), 'rhs_interval': rhs.data()})
+        self.row_nonzeros += len(exported)
 
     def eq(self, row, rhs, tag):
         self.le(row, rhs, tag+'/upper')
@@ -140,8 +192,7 @@ class Model:
         # This M covers the full residual on the exported variable box, not a
         # guessed scheduling horizon. Interval products include every sign.
         rhs = _box(rhs)
-        residual = sum((_box(a)*I.rational(self.bounds[j][0]) if self.bounds[j][0] == self.bounds[j][1]
-                        else _box(a)*I(I.rational(self.bounds[j][0]).lo, I.rational(self.bounds[j][1]).hi)
+        residual = sum((_box(a)*self.bound_box(j)
                         for j, a in row.items()), I(0))-rhs
         big_m = max(F(0), F(residual.hi))
         lifted = dict(row)
@@ -358,11 +409,13 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             for state in states:
                 model.report(control_state=list(state))
                 gate = meta['joint'][l, state]
-                coeff = model.coefficients.get(state, right-left)
-                for i, row in enumerate(coeff['temperature']):
-                    model.conditional_eq({meta['theta'][l+1][i]: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'thermal_propagation')
-                row = coeff['energy']
-                model.conditional_eq({ev: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'complete_energy')
+                with model.measure_construction('coefficient_lookup_and_generation'):
+                    coeff = model.coefficients.get(state, right-left)
+                with model.measure_construction('thermal_conditional_rows'):
+                    for i, row in enumerate(coeff['temperature']):
+                        model.conditional_eq({meta['theta'][l+1][i]: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'thermal_propagation')
+                    row = coeff['energy']
+                    model.conditional_eq({ev: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'complete_energy')
     model.report('complete', scene=None, interval=None, control_state=None)
     return model
 

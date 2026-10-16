@@ -12,6 +12,7 @@ settings are unchanged; this neither relaxes the model nor certifies bounds.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -213,10 +214,21 @@ class MatlabSession:
             if self.environment.get('release') != '2023b':
                 raise RuntimeError('This bridge is checked only against MATLAB R2023b')
             self.metadata['startup_wall_seconds'] = self.clock() - self.started
+            self.metadata['startup_outcome'] = 'READY'
             _json(self.workdir / 'session.json', self.metadata)
             if self.clock() >= self.deadline:
                 raise TimeoutError('Method budget exhausted before MATLAB startup receipt')
         except BaseException as exc:
+            # Startup evidence only, not a retry or an accepted solver result.
+            self.metadata['startup_outcome'] = 'FAILED_OR_DEADLINE'
+            self.metadata['startup_wall_seconds'] = self.clock()-self.started
+            self.metadata['startup_error'] = f'{type(exc).__name__}: {exc}'
+            if hasattr(exc, 'diagnostics'):
+                self.metadata['startup_publication_read'] = exc.diagnostics
+            try:
+                _json(self.workdir / 'session.json', self.metadata)
+            except Exception as archive_error:
+                self.metadata['startup_archive_error'] = repr(archive_error)
             self.close()
             # A failed constructor has no session handle for the caller's
             # finally block. Expose cleanup separately from startup timing.
@@ -241,6 +253,8 @@ class MatlabSession:
             return {'status': 'BUDGET_EXHAUSTED', 'budget_valid': False,
                     'x': [], 'accepted_for_evaluation': False}
         method_bound = budget is not None or self.budget is not None
+        phase = getattr(budget if budget is not None else self.budget, 'phase',
+                        lambda name: nullcontext())
         self.counter += 1
         prefix = self.workdir / f'request_{self.counter:06d}'
         def expire_before_submission(phase):
@@ -251,7 +265,8 @@ class MatlabSession:
                       'absolute_deadline': deadline}
             _json(prefix.with_suffix('.python.json'), result)
             return result
-        payload = _prepare(model)
+        with phase('transport_numerical_conversion'):
+            payload = _prepare(model)
         if self.clock() >= deadline:
             return expire_before_submission('numerical_conversion')
         request_info = {
@@ -261,26 +276,31 @@ class MatlabSession:
             'model_metadata': model.get('metadata', {}),
             'intcon_convention': 'Python_zero_based_converted_to_MATLAB_one_based',
         }
-        _json(prefix.with_suffix('.input.json'), request_info)
+        with phase('transport_input_metadata'):
+            _json(prefix.with_suffix('.input.json'), request_info)
         if self.clock() >= deadline:
             return expire_before_submission('input_metadata')
         # The numerical conversion, sparse serialization, and publication are
         # inside the request budget.  MATLAB receives only the time still left.
         temporary = prefix.with_suffix('.mat.tmp')
         payload['remaining_s'] = max(0.0, deadline - self.clock())
-        savemat(str(temporary), payload, appendmat=False, oned_as='column')
+        with phase('transport_mat_serialization'):
+            savemat(str(temporary), payload, appendmat=False, oned_as='column')
         if self.clock() >= deadline:
             return expire_before_submission('mat_serialization')
-        temporary.replace(prefix.with_suffix('.mat'))
+        with phase('transport_mat_publication'):
+            temporary.replace(prefix.with_suffix('.mat'))
         allocated = deadline - self.clock()
         if allocated <= 0:
             return expire_before_submission('mat_publication')
         # Separate JSON is written last so the worker never reads partial MAT.
-        _json(prefix.with_suffix('.request.json'), {'remaining_s': allocated})
+        with phase('transport_request_publication'):
+            _json(prefix.with_suffix('.request.json'), {'remaining_s': allocated})
         response = prefix.with_suffix('.response.json')
         try:
-            result, read_info = _read_json_until(
-                response, deadline, self.clock, self.proc)
+            with phase('solver_wait_and_response_read'):
+                result, read_info = _read_json_until(
+                    response, deadline, self.clock, self.proc)
         except PublicationTimeout as exc:
             prefix.with_suffix('.cancel').write_text('budget\n', encoding='ascii')
             result = {'status': 'BUDGET_EXHAUSTED', 'budget_valid': False,

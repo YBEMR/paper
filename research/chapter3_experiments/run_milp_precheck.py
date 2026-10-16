@@ -443,6 +443,13 @@ def full_checks(config, fixture_map, legal, models, check, folder):
             r["options"]["AbsoluteGapTolerance"] == 0 and
             r["options"]["RelativeGapTolerance"] == 0
             for r in solver_records.values()), "unexpected solver compatibility options"))
+        check("solver/entry_and_disjoint_native_phase_records", lambda: require(all(
+            r.get("intlinprog_entered") is True and
+            set(r.get("phase_seconds", {})) == {'request_and_mat_load', 'options_preparation',
+                'intlinprog_call', 'native_result_archive'} and
+            all(t >= 0 for t in r['phase_seconds'].values()) and
+            sum(r['phase_seconds'].values()) <= r['matlab_request_wall_seconds']+1e-6
+            for r in solver_records.values()), "missing or overlapping MATLAB phase evidence"))
         feedback_checks(config, fixture_map, check, folder, session)
     save(folder/"solver_results.json", solver_records)
 

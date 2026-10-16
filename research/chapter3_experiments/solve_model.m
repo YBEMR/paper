@@ -18,10 +18,14 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
     if ~isfile([prefix '.request.json']), pause(.01); continue; end
     requestClock = tic; callbacks = {}; callbackFields = {}; callbackError = '';
     result = struct('status','ERROR','x',[],'fval',[],'exitflag',[], ...
-        'output',struct(),'callbacks',{{}},'callback_fields',{{}});
+        'output',struct(),'callbacks',{{}},'callback_fields',{{}}, ...
+        'intlinprog_entered',false,'phase_seconds',struct());
     try
+        phaseClock=tic;
         req = jsondecode(fileread([prefix '.request.json']));
         p = load([prefix '.mat']);
+        result.phase_seconds.request_and_mat_load=toc(phaseClock);
+        phaseClock=tic;
         % A relative timer cannot represent Python's monotonic epoch or all
         % publication latency. Python's original absolute deadline governs
         % acceptance; MATLAB MaxTime/callbacks provide best-effort stopping.
@@ -52,11 +56,15 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             guardSeconds-toc(workerClock)));
         result.options.MaxTime = opts.MaxTime;
         result.options_text = evalc('disp(opts)');
+        result.phase_seconds.options_preparation=toc(phaseClock);
         if opts.MaxTime<=0 || isfile([prefix '.cancel'])
             result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
         else
+            result.intlinprog_entered=true;
+            phaseClock=tic;
             [x,fval,exitflag,output] = intlinprog(p.c(:),p.intcon(:)', ...
                 p.A,p.b(:),p.Aeq,p.beq(:),p.lb(:),p.ub(:),[],opts);
+            result.phase_seconds.intlinprog_call=toc(phaseClock);
             result.x=x(:)'; result.fval=fval; result.exitflag=exitflag;
             result.output=output; result.status='SOLVED';
             if ~isempty(callbackError)
@@ -64,7 +72,9 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             end
             % MAT retains NaN/Inf and all native solver fields independently
             % of JSON's null representation.  This is raw solver evidence.
+            phaseClock=tic;
             save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks');
+            result.phase_seconds.native_result_archive=toc(phaseClock);
         end
     catch err
         result.error_identifier=err.identifier;

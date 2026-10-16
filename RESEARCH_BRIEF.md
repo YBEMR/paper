@@ -2,7 +2,15 @@
 
 更新：2026-10-16。
 
-**当前阶段K.79：控制状态与活动功率行等价复用完成；原基准完整模型及矩阵首次在60 s内完成（D104／E522）。** 复用精确右端与误差元数据、活动功率上下两行的系数转换及变量盒误差，共享不可变小数值／标签，保留全部行、独立可变记录和原顺序。数学表达、合法选择、参数与误差包络不变。[逐行07](research/chapter3_experiments/results/construction_precheck07/checks.json)198/198、[MILP11](research/chapter3_experiments/results/milp_precheck11/checks.json)81/81、[计时09](research/chapter3_experiments/results/method_precheck09/checks.json)24/24通过，对照`d870514`。
+**当前阶段K.80：同一原基准完整方法级核查完成，60 s停于MATLAB启动，未进入求解（D105／E523）。** [完整调用01](research/chapter3_experiments/results/base_method_diagnostic01/result.json)采用原串行顺序：输入读取／展开0.015 s、模型构造38.344 s、MATLAB启动等待21.641 s，共60.000 s。完整模型91844变量、1172563行、8331273非零元；本次矩阵尚未导出，提交请求0、求解器调用0、连续复核未到达，`UNRESOLVED / WALL_TIME_LIMIT`，安全能量为空。
+
+**改动与验证：** 仅增加完整诊断入口、Python交接分项记录、MATLAB内部计时及启动／求解状态区分，模型、输入、系数、评价器与`6b8edfd`逐字节相同。[计时10](research/chapter3_experiments/results/method_precheck10/checks.json)29/29、[桥接预算03](research/chapter3_experiments/results/bridge_budget_precheck03/checks.json)9/9、[实际MILP12](research/chapter3_experiments/results/milp_precheck12/checks.json)82/82通过。清理14.062 s、归档0.672 s和源码归档0.031 s单列；清理后虽有READY文件及许可成功记录，也不补认预算内就绪。详见[README §3.11](research/chapter3_experiments/README.md#311-原基准完整方法级调用核查)。正式对照未运行，本轮只作一次原基准调用。
+
+**下一小目标建议：核独立MATLAB启动与模型构造在同一绝对预算内重叠的可实施性。** 当前启动握手只检查环境与许可，不依赖候选矩阵；可考虑计时开始后启动本次专用进程，同时构造模型，统一截止、独立缓存和预算外清理仍保留。此项尚未实现或验证，不从预算外预热、不复用其他调用的进程，也不先改60 s预算、合法域或物理参数。原串行调用不足以完成，不说明模型不可行或求解器本身慢；求解与评价原规模成本仍未知。`formal_experiments_ready=false`。
+
+下方K.79及更早记录为历史，当前状态以K.80为准。
+
+**历史K.79：控制状态与活动功率行等价复用完成；原基准完整模型及矩阵首次在60 s内完成（D104／E522）。** 复用精确右端与误差元数据、活动功率上下两行的系数转换及变量盒误差，共享不可变小数值／标签，保留全部行、独立可变记录和原顺序。数学表达、合法选择、参数与误差包络不变。[逐行07](research/chapter3_experiments/results/construction_precheck07/checks.json)198/198、[MILP11](research/chapter3_experiments/results/milp_precheck11/checks.json)81/81、[计时09](research/chapter3_experiments/results/method_precheck09/checks.json)24/24通过，对照`d870514`。
 
 **唯一一次原基准核查：** [诊断06](research/chapter3_experiments/results/base_build_diagnostic06/result.json)保持6422选项、400 ms／5 ms与60 s预算，总计47.469 s，模型构造38.797 s、矩阵导出8.656 s。完整模型91844变量、1172563行、8331273非零元；两场景851／928个热区间均完成。控制状态4.891 s、活动行3.827 s、活动导出预备0.025 s、热条件行22.778 s、系数5.376 s。峰RSS1340.375 MiB包含矩阵导出阶段，不能与上轮部分模型直接作等规模内存比较。状态`CONSTRUCTION_COMPLETE`，求解器未启动，无安全解或最优性结论；详见[README §3.10](research/chapter3_experiments/README.md#310-控制状态与活动功率行的组装和存储复用)。
 
@@ -299,6 +307,8 @@
 **连续候选原型更新（2026-10-08，K.19／E452）：** S02已在CP1核两模式各3Stage分叉汇合DAG、14行跨设备／工作点选项和轮内并发；S09三代表协议已实现，有限覆盖限制不变。S01共享域和双CPU仅增加调度矩阵探针，S04仍为原计量接口；S03共同轮级期限、S05入口、S06给定盒、S07给定反例、S08诊断数据均保持。S10运行结果确认本包热筛选不活跃。76项运行预检、49项事后核对不等于这些一般平台及研究效果缺口已补齐。原型正式结果入口为research/continuous_planner/results/prototype02/search.json；未新增用户基础假设选择。
 
 ### 选择路径与变更记录（唯一维护入口）
+
+**D105（2026-10-16，用户授权同一原基准完整方法级调用核查）：** 承接D104，用户要求检查MATLAB启动、交接、求解及连续复核能否共同纳入60 s，保持数学表达、合法选择和当前参数，暂不正式对照。助手保留串行生命周期及独立新进程，仅加固定原基准完整入口和分项记录；29/29计时、9/9桥接、82/82实际MILP预检通过后仅调用一次。60 s内完成模型，但MATLAB未及时就绪，后续环节未到达；没有安全输出。建议下一步核预算内启动与构造重叠，此建议尚未实施；不自动放宽预算、跨调用复用进程或修改输入。
 
 **D104（2026-10-16，用户授权控制状态与活动功率行组装／存储的等价优化）：** 承接D103，用户要求保持数学表达、合法选择和参数不变，先通过小域逐行预检，再作一次原基准60 s构造核查，暂不正式对照。实现选择为右端不可变元数据复用、活动功率双向系数及误差预备、不可变数值／标签复用；全部约束、可变行记录及错误包络保留。198/198逐行、81/81回归、24/24计时通过后，唯一诊断06在47.469 s内完成模型和矩阵，无求解器调用。本轮不涉及新模型或参数选择；下一步完整方法级可实施性核查仅为建议，改变参数、合法域、安全要求或预算仍须讨论。
 

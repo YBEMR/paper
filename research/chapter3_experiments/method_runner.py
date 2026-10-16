@@ -22,7 +22,8 @@ from timing import MethodBudget
 HERE = Path(__file__).resolve().parent
 SOURCES = ['config_v01.json', 'inputs.py', 'schedules.py', 'thermal.py',
            'milp.py', 'milp_coefficients.py', 'matlab_bridge.py', 'solve_model.m',
-           'build_observer.py', 'timing.py', 'method_runner.py', 'run_build_diagnostic.py']
+           'build_observer.py', 'timing.py', 'method_runner.py', 'run_build_diagnostic.py',
+           'run_method_diagnostic.py']
 
 
 def _save(path, value):
@@ -46,7 +47,9 @@ def execute_milp(input_loader, workdir, *, seconds=60, construct_only=True,
               'independently_proven_infeasible': False,
               'remaining_domain': 'retained', 'formal_comparison': False,
               'construct_only': construct_only, 'model_complete': False,
-              'matrix_complete': False, 'solver_started': False}
+              'matrix_complete': False, 'solver_started': False,
+              'matlab_worker_ready': False,
+              'solver_started_semantics': 'legacy field means MATLAB worker ready, not intlinprog entry'}
     session = model = observer = config = instance = None
     active_stage = 'invocation_setup'
     constructor_cleanup_s = 0.0
@@ -85,6 +88,7 @@ def execute_milp(input_loader, workdir, *, seconds=60, construct_only=True,
                                           budget=budget)
             budget.check()
             result['solver_started'] = True
+            result['matlab_worker_ready'] = True
             active_stage = 'candidate_search'
             solved = solve(model, session, config['accuracy_targets'], budget=budget)
             result.update(solved)
@@ -135,6 +139,13 @@ def execute_milp(input_loader, workdir, *, seconds=60, construct_only=True,
         result['counted_energy_source'] = 'only complete independent evaluator receipt'
         result['callback_candidates_independently_thermal_checked'] = False
         result['candidate_and_cache_shared_between_calls'] = False
+        result['solver_request_attempts'] = getattr(session, 'counter', 0)
+        rounds = result.get('rounds', [])
+        known_solver_entries = [r.get('intlinprog_entered') for r in rounds]
+        result['integer_solver_entered'] = (True if True in known_solver_entries else
+            False if not result['solver_request_attempts'] or
+                (known_solver_entries and all(v is False for v in known_solver_entries)) else None)
+        result['integer_solver_entry_evidence'] = 'returned worker record only; null means unconfirmed'
         completed_exports = [f for f in budget.records if f['phase']=='matrix_export'
                              and 'exception' not in f and f['end_s']<budget.seconds]
         if completed_exports:
@@ -154,7 +165,7 @@ def execute_milp(input_loader, workdir, *, seconds=60, construct_only=True,
     if instance is not None:
         _save(workdir/'input_instance.json', instance)
     result['environment'] = {'python': sys.version, 'platform': platform.platform(),
-                             'scope': 'construction diagnostic or correctness precheck, not a formal result'}
+                             'scope': 'construction/full-method diagnostic or correctness precheck, not a formal comparison'}
     result['timing']['postprocess_before_serialization_s'] = clock()-report_start
     _save(workdir/'result.json', result)
     _save(workdir/'archive_timing.json', {
@@ -164,8 +175,8 @@ def execute_milp(input_loader, workdir, *, seconds=60, construct_only=True,
     return result
 
 
-def run_milp_method(problem_id, workdir, *, config_path=None):
-    """Public diagnostic: original case, 60 s, build/export only, no solver."""
+def run_milp_method(problem_id, workdir, *, config_path=None, construct_only=True):
+    """One isolated 60 s diagnostic; full route is explicitly requested."""
     config_path = Path(config_path) if config_path else HERE/'config_v01.json'
     source_paths = {name: HERE/name for name in SOURCES}
     source_paths['interval.py'] = HERE.parent/'v1_evaluator/interval.py'
@@ -178,7 +189,7 @@ def run_milp_method(problem_id, workdir, *, config_path=None):
             raise ValueError('This diagnostic is fixed to the current 60 s protocol')
         return config, build_instance(config, problem_id, budget)
 
-    result = execute_milp(loader, workdir, seconds=60, construct_only=True)
+    result = execute_milp(loader, workdir, seconds=60, construct_only=construct_only)
     # Source snapshots are not algorithm inputs and are archived after stop.
     snapshot_started = time.monotonic()
     snapshot = Path(workdir)/'source_snapshot'

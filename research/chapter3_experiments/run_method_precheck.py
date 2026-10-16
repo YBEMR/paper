@@ -241,6 +241,55 @@ def run(out):
                  'unresolved','feedback_expiry','feedback_late_return','safe_exact_deadline','two_rounds'):
         check(case,lambda case=case:feedback_flow(case))
 
+    def transport_timing(fail_at):
+        import matlab_bridge as bridge
+        c=Clock(); b=MethodBudget(10,clock=c); c.advance(2)
+        folder=out/('transport_'+str(fail_at)); folder.mkdir()
+        session=bridge.MatlabSession.__new__(bridge.MatlabSession)
+        session.clock=c; session.budget=b; session.deadline=b.deadline
+        session.started=b.start; session.workdir=folder; session.counter=0
+        session.closed=False; session.request_blocked=False; session.proc=None
+        original_prepare=bridge._prepare; original_json=bridge._json
+        payload={'c':np.array([1.]),'A':csr_matrix((0,1)), 'Aeq':csr_matrix((0,1)),
+                 'b':[], 'beq':[], 'lb':[0.], 'ub':[1.], 'intcon':np.array([0])}
+        def prepare(value):
+            c.advance(9 if fail_at=='conversion' else .2)
+            return original_prepare(value)
+        def serialize(path,*args,**kw):
+            c.advance(9 if fail_at=='serialization' else .3)
+            Path(path).write_bytes(b'fixture only; mocked MAT transport')
+        def read(path,deadline,*args):
+            require(deadline==b.deadline,'deadline reset')
+            if fail_at=='wait':
+                c.now=deadline
+                raise bridge.PublicationTimeout(path,{'fixture':True})
+            c.advance(.4)
+            return {'status':'SOLVED','x':[1.],'intlinprog_entered':True,'exitflag':1},{}
+        def archive(path,value):
+            original_json(path,value)
+            if path.name.endswith('.python.json') and fail_at=='archive': c.advance(9)
+            else: c.advance(.01)
+        with patch.object(bridge,'_prepare',prepare), patch.object(bridge,'savemat',serialize), \
+             patch.object(bridge,'_read_json_until',read), patch.object(bridge,'_json',archive):
+            returned=session.solve(payload,remaining_s=b.remaining,budget=b)
+        require(session.counter==1 and b.deadline==110)
+        phases=b.summary()['phases_exclusive_s']
+        require('transport_numerical_conversion' in phases)
+        require(sum(phases.values())<=b.elapsed+1e-9,'nested timing double counted')
+        if fail_at:
+            require(not returned['budget_valid'] and not returned['accepted_for_evaluation'])
+            if fail_at in ('conversion','serialization'):
+                require(not list(folder.glob('*.request.json')),'late work submitted')
+            if fail_at=='wait': require(session.request_blocked)
+        else:
+            require(returned['accepted_for_evaluation'] and returned['intlinprog_entered'])
+            require(set(['transport_mat_serialization','transport_request_publication',
+                         'solver_wait_and_response_read']) <= set(phases))
+        save(folder/'check.json',{'result':returned,'timing':b.summary(),
+                                 'scope':'mock transport accounting, no MATLAB execution'})
+    for point in (None,'conversion','serialization','wait','archive'):
+        check('transport_accounting_'+str(point),lambda point=point:transport_timing(point))
+
     hashes={name:hashlib.sha256((HERE/name).read_bytes()).hexdigest() for name in SOURCES}
     hashes['run_method_precheck.py']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     result={'status':'PASS' if all(r['passed'] for r in records) else 'FAIL',

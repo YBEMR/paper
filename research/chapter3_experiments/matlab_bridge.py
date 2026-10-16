@@ -111,7 +111,83 @@ def _matrix(value, name, n):
     return result
 
 
-def _prepare(model):
+class InitialPointRejected(ValueError):
+    """An explicit initial point failed the unchanged numerical contract."""
+
+    def __init__(self, diagnostics):
+        self.diagnostics = diagnostics
+        super().__init__('Initial point rejected: ' + '; '.join(diagnostics['reasons']))
+
+
+def _check_initial_point(payload, x0):
+    """Check, without rounding or repairing, the optional numerical x0.
+
+    These floating residuals are an admission check, not a thermal witness or
+    independent mathematical certificate.  The receiving solver still checks
+    x0 under its own implementation of the same declared tolerances.
+    """
+    info = {'provided': True, 'accepted_numerically': False,
+            'constraint_tolerance': 1e-9, 'integer_tolerance': 1e-6,
+            'reasons': [], 'thermal_safe_claim': False,
+            'independent_certificate': False,
+            'rounding_or_repair_performed': False}
+    if np.iscomplexobj(x0):
+        info['reasons'].append('x0 must be real; imaginary parts cannot be discarded')
+        raise InitialPointRejected(info)
+    try:
+        raw = np.asarray(x0, dtype=float)
+    except (TypeError, ValueError) as exc:
+        info['reasons'].append('x0 cannot be converted to a numerical vector')
+        raise InitialPointRejected(info) from exc
+    if raw.ndim > 2 or (raw.ndim == 2 and min(raw.shape) != 1):
+        info['reasons'].append('x0 must be a vector')
+        raise InitialPointRejected(info)
+    x = raw.reshape(-1)
+    info['length'] = int(len(x))
+    if len(x) != len(payload['c']):
+        info['reasons'].append('x0 length differs from model variable count')
+    if not np.isfinite(x).all():
+        info['reasons'].append('x0 contains nonfinite values')
+    if info['reasons']:
+        raise InitialPointRejected(info)
+    indices = payload['intcon'].astype(np.int64) - 1
+    with np.errstate(over='ignore', invalid='ignore'):
+        residual = np.asarray(payload['A'] @ x).reshape(-1) - payload['b']
+        equality = np.asarray(payload['Aeq'] @ x).reshape(-1) - payload['beq']
+        lower = payload['lb'] - x
+        upper = x - payload['ub']
+        integer = np.abs(x[indices] - np.rint(x[indices]))
+        objective = float(payload['c'] @ x)
+    if (not np.isfinite(residual).all() or not np.isfinite(equality).all()
+            or not math.isfinite(objective)):
+        info['reasons'].append('x0 produces nonfinite residuals or objective')
+    info.update({
+        'inequality_violation': float(max(0.0, np.max(residual, initial=0.0))),
+        'equality_violation': float(np.max(np.abs(equality), initial=0.0)),
+        'lower_bound_violation': float(max(0.0, np.max(lower, initial=0.0))),
+        'upper_bound_violation': float(max(0.0, np.max(upper, initial=0.0))),
+        'integer_violation': float(np.max(integer, initial=0.0)),
+        'initial_objective': objective if math.isfinite(objective) else None,
+    })
+    for key in ('inequality_violation', 'equality_violation',
+                'lower_bound_violation', 'upper_bound_violation'):
+        if info[key] > info['constraint_tolerance']:
+            info['reasons'].append(key + ' exceeds ConstraintTolerance')
+    if info['integer_violation'] > info['integer_tolerance']:
+        info['reasons'].append('integer_violation exceeds IntegerTolerance')
+    # Error diagnostics must remain valid JSON even for overflowed products.
+    for key in ('inequality_violation', 'equality_violation',
+                'lower_bound_violation', 'upper_bound_violation',
+                'integer_violation'):
+        if not math.isfinite(info[key]):
+            info[key] = None
+    if info['reasons']:
+        raise InitialPointRejected(info)
+    info['accepted_numerically'] = True
+    return x, info
+
+
+def _prepare(model, x0=None):
     """Convert numerical solver input; exact legality is checked by the caller."""
     c = _finite_vector(model['c'], 'c')
     n = len(c)
@@ -131,8 +207,11 @@ def _prepare(model):
     if ((indices != np.floor(indices)).any() or (indices < 0).any()
             or (indices >= n).any() or len(set(indices.tolist())) != len(indices)):
         raise ValueError('intcon must contain unique zero-based integer indices')
-    return {'c': c, 'A': A, 'b': b, 'Aeq': Aeq, 'beq': beq,
-            'lb': lb, 'ub': ub, 'intcon': indices.astype(float) + 1}
+    result = {'c': c, 'A': A, 'b': b, 'Aeq': Aeq, 'beq': beq,
+              'lb': lb, 'ub': ub, 'intcon': indices.astype(float) + 1}
+    if x0 is not None:
+        result['x0'], result['x0_validation'] = _check_initial_point(result, x0)
+    return result
 
 
 def _absolute_deadline(budget):
@@ -244,7 +323,7 @@ class MatlabSession:
             exc.matlab_workdir = str(self.workdir)
             raise
 
-    def solve(self, model, remaining_s=None, budget=None):
+    def solve(self, model, remaining_s=None, budget=None, x0=None):
         if self.closed or self.request_blocked:
             raise RuntimeError('Worker is closed or a timed-out request still needs cleanup')
         started = self.clock()
@@ -277,8 +356,15 @@ class MatlabSession:
                       'absolute_deadline': deadline}
             _json(prefix.with_suffix('.python.json'), result)
             return result
-        with phase('transport_numerical_conversion'):
-            payload = _prepare(model)
+        try:
+            with phase('transport_numerical_conversion'):
+                payload = _prepare(model) if x0 is None else _prepare(model, x0=x0)
+        except InitialPointRejected as exc:
+            _json(prefix.with_suffix('.initial.json'), exc.diagnostics)
+            raise
+        initial_point = payload.get('x0_validation', {'provided': False})
+        if x0 is not None:
+            _json(prefix.with_suffix('.initial.json'), initial_point)
         if self.clock() >= deadline:
             return expire_before_submission('numerical_conversion')
         request_info = {
@@ -287,6 +373,7 @@ class MatlabSession:
             'session_elapsed_at_entry_s': started - self.started,
             'model_metadata': model.get('metadata', {}),
             'intcon_convention': 'Python_zero_based_converted_to_MATLAB_one_based',
+            'initial_point': initial_point,
         }
         with phase('transport_input_metadata'):
             _json(prefix.with_suffix('.input.json'), request_info)

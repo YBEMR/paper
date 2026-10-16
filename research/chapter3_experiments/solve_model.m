@@ -1,6 +1,7 @@
 function solve_model(folder, guardSeconds)
 % One R2023b worker for correctness checks or one budgeted method call. Every request is
-% a new problem with no x0 or reused incumbent.  Thermal/energy acceptance is
+% a new problem with no reused incumbent. An explicitly supplied, independently
+% checked x0 belongs to this request only. Thermal/energy acceptance is
 % performed by Python; optional live events permit in-budget incumbent checks.
 workerClock = tic;
 info = struct('version',version,'release',version('-release'), ...
@@ -20,12 +21,23 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
     streamEvents = false; eventNumber = 0;
     result = struct('status','ERROR','x',[],'fval',[],'exitflag',[], ...
         'output',struct(),'callbacks',{{}},'callback_fields',{{}}, ...
-        'intlinprog_entered',false,'phase_seconds',struct());
+        'intlinprog_entered',false,'phase_seconds',struct(), ...
+        'initial_point',struct('provided',false));
     try
         phaseClock=tic;
         req = jsondecode(fileread([prefix '.request.json']));
         streamEvents = isfield(req,'stream_events') && req.stream_events;
         p = load([prefix '.mat']);
+        initialPoint=[];
+        if isfield(p,'x0')
+            initialPoint=p.x0(:);
+            result.initial_point=struct('provided',true, ...
+                'length',numel(initialPoint),'initial_objective',p.c(:)'*initialPoint, ...
+                'thermal_safe_claim',false,'solver_acceptance','not_independently_observed');
+            if isfield(p,'x0_validation')
+                result.initial_point.python_admission=p.x0_validation;
+            end
+        end
         result.phase_seconds.request_and_mat_load=toc(phaseClock);
         phaseClock=tic;
         % A relative timer cannot represent Python's monotonic epoch or all
@@ -67,8 +79,12 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
                 publish(struct('kind','solver_entered','request_wall_seconds',toc(requestClock)));
             end
             phaseClock=tic;
+            lastwarn('');
             [x,fval,exitflag,output] = intlinprog(p.c(:),p.intcon(:)', ...
-                p.A,p.b(:),p.Aeq,p.beq(:),p.lb(:),p.ub(:),[],opts);
+                p.A,p.b(:),p.Aeq,p.beq(:),p.lb(:),p.ub(:),initialPoint,opts);
+            [warningMessage,warningIdentifier]=lastwarn;
+            result.solver_warning_message=warningMessage;
+            result.solver_warning_identifier=warningIdentifier;
             result.phase_seconds.intlinprog_call=toc(phaseClock);
             result.x=x(:)'; result.fval=fval; result.exitflag=exitflag;
             result.output=output; result.status='SOLVED';
@@ -78,7 +94,7 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             % MAT retains NaN/Inf and all native solver fields independently
             % of JSON's null representation.  This is raw solver evidence.
             phaseClock=tic;
-            save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks');
+            save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks','initialPoint');
             result.phase_seconds.native_result_archive=toc(phaseClock);
         end
     catch err

@@ -64,6 +64,7 @@ class Model:
         self.names, self.lb, self.ub, self.integer, self.c = [], [], [], [], []
         self.logical_binary = []
         self.deadline_fixed_options = []
+        self.energy_bound_certificates = []
         self.formulation = {}
         self.bounds, self.rows, self.scenes, self.shared = [], [], {}, {}
         self.options, self.option_vars, self.feedback_log = [], [], []
@@ -480,13 +481,70 @@ class Model:
                 'optimality_level': 'solver-reported only; external SAFE supplies a feasible upper bound'}
 
 
+def add_energy_lower_bound(model, target, sources, gates, source_rows, onehot_rows,
+                           *, scene=None, interval=None):
+    """Add a disjunctive affine bound implied by exported integer-state rows.
+
+    Read binary64 rows/bounds as exact rationals, including their old outward
+    allowances. For -E+a_h*z+g_h*w_h<=b_h, w_h=1 implies E>=a_h*z+g_h-b_h.
+    A common slope beta and a signed box minimum give E>=beta*z+delta_h.
+    Integer one-hot states then imply E>=beta*z+sum(delta_h*w_h). Exporting
+    this inequality outwards preserves even the old enclosure's integer points.
+    It is a relaxation strengthening, not a certificate of solver arithmetic.
+    """
+    model.budget.check()
+    sources, gates, source_rows = list(sources), list(gates), list(source_rows)
+    if not gates or len(gates) != len(source_rows):
+        raise ValueError('one source energy row per state required')
+    if len({target, *sources, *gates}) != 1+len(sources)+len(gates):
+        raise ValueError('energy target, sources and gates must be distinct')
+    membership = getattr(model, '_energy_gate_membership', None)
+    if membership is None or membership[0] != len(model.logical_binary):
+        membership = (len(model.logical_binary), frozenset(model.logical_binary))
+        model._energy_gate_membership = membership
+    if any(j not in membership[1] or model.lb[j] != 0 or model.ub[j] != 1 for j in gates):
+        raise ValueError('logical binary gates on [0,1] required')
+    if len(onehot_rows) != 2:
+        raise ValueError('exact one-hot row pair required')
+    for row_index, sign in zip(onehot_rows, (1.0, -1.0)):
+        record = model.rows[row_index]
+        if record['coef'] != {j: sign for j in gates} or record['rhs'] != sign:
+            raise ValueError('state sum must equal one without row allowance')
+    coefficients, constants = [], []
+    for gate, row_index in zip(gates, source_rows):
+        model.budget.check()
+        record = model.rows[row_index]
+        row = record['coef']
+        if row.get(target) != -1.0 or set(row)-{target, gate, *sources}:
+            raise ValueError('expected exported lower energy row with coefficient -1')
+        coefficients.append([F.from_float(float(row.get(j, 0.0))) for j in sources])
+        constants.append(F.from_float(float(row.get(gate, 0.0)))-F.from_float(float(record['rhs'])))
+    boxes = [(F.from_float(float(model.lb[j])), F.from_float(float(model.ub[j]))) for j in sources]
+    beta = [min(row[k] for row in coefficients) for k in range(len(sources))]
+    offsets = []
+    for row, constant in zip(coefficients, constants):
+        model.budget.check()
+        offsets.append(constant+sum((min((a-b)*lo, (a-b)*hi)
+                       for a, b, (lo, hi) in zip(row, beta, boxes)), F(0)))
+    cut = {target: -1, **dict(zip(sources, beta)), **dict(zip(gates, offsets))}
+    row_index = len(model.rows)
+    model.le(cut, 0, 'energy_state_lower_bound')
+    model.energy_bound_certificates.append({
+        'scene': scene, 'interval': interval, 'target': target, 'sources': sources,
+        'gates': gates, 'source_rows': source_rows, 'onehot_rows': list(onehot_rows),
+        'cut_row': row_index, 'common_slopes': list(map(str, beta)),
+        'state_offsets': list(map(str, offsets)),
+        'scope': 'all old exported integer-state points on existing variable boxes; not original LP equivalence'})
+
+
 def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None,
                 *, fix_late_options=True, aggregate_opp_locks=True,
-                relax_auxiliary_integrality=False):
+                relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
     Auxiliary integrality relaxation remains an explicit independent variant.
+    Energy lower-bound cuts are a separate, default-off precheck variant.
     The switches change representation, never the input option/event catalog.
 
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
@@ -499,6 +557,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     model.formulation = dict(fix_late_options=bool(fix_late_options),
                              aggregate_opp_locks=bool(aggregate_opp_locks),
                              relax_auxiliary_integrality=bool(relax_auxiliary_integrality))
+    if strengthen_energy_lower_bounds:
+        model.formulation['energy_lower_bounds'] = True
+    energy_specs, energy_onehot_rows = [], {}
     auxiliary = dict(integer=not relax_auxiliary_integrality,
                      implied_binary=relax_auxiliary_integrality)
     model.report('option_expansion')
@@ -638,6 +699,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             meta['states'].append(states)
             for state in states:
                 meta['joint'][l, state] = model.var(f'w:{sid}:{l}:{state}', **auxiliary)
+            if strengthen_energy_lower_bounds:
+                energy_onehot_rows[sid, l] = (len(model.rows), len(model.rows)+1)
             model.eq({meta['joint'][l, state]: 1 for state in states}, 1, 'joint_unique')
             for di, (domain_id, domain) in enumerate(domains.items()):
                 for opp in domain['opps']:
@@ -682,6 +745,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 ev = model.var(f'energy:{sid}:{l}', 0, power_upper*(right-left), cost=F(scene['weight']))
                 meta['energy'].append(ev)
             sources = meta['theta'][l]+meta['q'][l]
+            energy_source_rows = []
             for state in states:
                 model.report(control_state=list(state))
                 gate = meta['joint'][l, state]
@@ -692,12 +756,23 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                         model.affine_conditional_eq(meta['theta'][l+1][i], sources, row, gate, 'thermal_propagation')
                     row = coeff['energy']
                     model.affine_conditional_eq(ev, sources, row, gate, 'complete_energy')
+                    if strengthen_energy_lower_bounds:
+                        energy_source_rows.append(len(model.rows)-1)
+            if strengthen_energy_lower_bounds:
+                energy_specs.append((sid, l, ev, sources,
+                    [meta['joint'][l, state] for state in states], energy_source_rows))
     if fix_late_options:
         model.report('deadline_fixing', scene=None, interval=None, control_state=None)
         for option, y in zip(model.options, model.option_vars):
             model.budget.check()
             if F(option['end_ms']) > F(option['request_deadline_ms']):
                 model.fix_zero_option(y)
+    if strengthen_energy_lower_bounds:
+        model.report('energy_lower_bounds', scene=None, interval=None, control_state=None)
+        with model.measure_construction('energy_lower_bounds'):
+            for sid, l, ev, sources, gates, rows in energy_specs:
+                add_energy_lower_bound(model, ev, sources, gates, rows, energy_onehot_rows[sid, l],
+                                       scene=sid, interval=l)
     model.report('complete', scene=None, interval=None, control_state=None)
     return model
 

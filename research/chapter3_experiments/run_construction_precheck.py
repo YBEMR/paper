@@ -26,7 +26,7 @@ from thermal import Budget, I, Exhausted
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-REFERENCE = 'bb53928'
+REFERENCE = '720194e'
 CONFIG_SHA = '615be096bfbcb3e7c53ba9b0810d888264d48adbc428f1f7d2f94a5c6a29a4fe'
 
 
@@ -343,6 +343,82 @@ def thermal_optimization_checks(old_module, new_module, instance, check):
         'shared conversion cache'))
 
 
+def conditional_template_checks(old_module, new_module, instance, check):
+    old = old_module.Model(instance, Budget(seconds=600))
+    new = new_module.Model(instance, Budget(seconds=600))
+    blocks = []
+    for model in (old, new):
+        local = []
+        for k in range(3):
+            local.append((model.var(f'x{k}', -2, 5 if k < 2 else 6),
+                          model.var(f'y{k}', F(-2, 3), F(7, 3)),
+                          model.var(f'g{k}', integer=True)))
+        blocks.append(local)
+    def insert(k, kind, rhs=I('0.99', '1.01')):
+        for model, local in zip((old, new), blocks):
+            x, y, gate = local[k]
+            row = {x: I('-0.123', '0.234'), y: F(-2, 7)}
+            if kind == 'gate_first': row = {gate: I('-0.2', '0.1'), **row}
+            if kind == 'reversed': row = dict(reversed(list(row.items())))
+            if kind == 'zero': row[x] = I('-0.00', '0.00')
+            model.conditional_eq(row, rhs, gate, kind+str(k))
+        compare_rows(old, new)
+        compare_sparse(old, new)
+    check('templates/first_complete_row', lambda: insert(0, 'plain'))
+    check('templates/renamed_variables_identical_rows', lambda: insert(1, 'plain'))
+    check('templates/renaming_hits_both_directions', lambda: equal(new.template_stats['hits'], 2))
+    before = new.template_stats['misses']
+    check('templates/changed_bounds_recomputed', lambda: insert(2, 'plain'))
+    check('templates/changed_bounds_cache_miss', lambda: equal(new.template_stats['misses'], before+2))
+    for kind in ('gate_first', 'reversed', 'zero'):
+        check('templates/'+kind, lambda kind=kind: (insert(0, kind), insert(1, kind)))
+    check('templates/rhs_signed_zero_and_exponent', lambda: (
+        insert(0, 'plain', I('-0.00')), insert(1, 'plain', I('0')), insert(1, 'plain', I('0.000'))))
+    def independent_records():
+        first = deepcopy(new.rows[0])
+        insert(1, 'plain')
+        # Alter a new output row to check it cannot change either the cached
+        # template or a previously emitted row. Restore before comparison.
+        new.rows[-2]['coef'].clear()
+        new.rows[-2]['rhs_interval'][0] = 'corrupted fixture only'
+        new.rows[-2] = deepcopy(old.rows[-2])
+        equal(new.rows[0], first)
+        insert(1, 'plain')
+    check('templates/no_mutable_aliases', independent_records)
+    limit = new_module._CONDITIONAL_CACHE_LIMIT
+    def eviction():
+        try:
+            new_module._CONDITIONAL_CACHE_LIMIT = 2
+            new._conditional_templates.clear()
+            for rhs in (1, 2, 3, 1): insert(0, 'plain', rhs)
+            require(len(new._conditional_templates) <= 2, 'unbounded template cache')
+            require(new.template_stats['clears'] > 0, 'eviction not exercised')
+        finally:
+            new_module._CONDITIONAL_CACHE_LIMIT = limit
+    check('templates/eviction_recomputes_same_rows', eviction)
+    check('templates/no_cross_model_cache', lambda: require(
+        not new_module.Model(instance, Budget())._conditional_templates, 'cross model cache'))
+    class StopAfter:
+        def __init__(self, n): self.n = n
+        def check(self):
+            self.n -= 1
+            if self.n < 0: raise Exhausted('template fixture stop')
+    def interrupted(hit):
+        model = new_module.Model(instance, Budget(seconds=600))
+        x = model.var('x', -1, 2)
+        gate = model.var('g', integer=True)
+        if hit: model.conditional_le({x: F(1, 3)}, 0, gate, 'seed')
+        old_rows, old_cache = deepcopy(model.rows), deepcopy(model._conditional_templates)
+        model.budget = StopAfter(1)  # pass entry, stop before row publication
+        try: model.conditional_le({x: F(1, 3)}, 0, gate, 'interrupted')
+        except Exhausted: pass
+        else: raise AssertionError('did not interrupt')
+        equal(model.rows, old_rows)
+        equal(model._conditional_templates, old_cache)
+    check('templates/interrupted_miss_not_published', lambda: interrupted(False))
+    check('templates/interrupted_hit_not_appended', lambda: interrupted(True))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
@@ -439,6 +515,7 @@ def main():
         feedback_checks(old_module, new_module, config, fixture_map['one_stage_energy'], check, records)
         observation_checks(old_module, new_module, config, fixture_map['one_stage_energy'], check)
         thermal_optimization_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
+        conditional_template_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
     except Exception as error:
         checks.append({'name': 'suite_execution', 'passed': False, 'error': repr(error)})
     after = {relative: sha((REPO/relative).read_bytes()) for relative in sources}

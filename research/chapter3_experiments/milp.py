@@ -26,6 +26,7 @@ from milp_coefficients import Coefficients
 
 _BINARY_BOUNDS = (F(0), F(1))
 _EXPORT_CACHE_LIMIT = 4096  # memory policy only; eviction changes no coefficient
+_CONDITIONAL_CACHE_LIMIT = 4096  # complete row templates; local to one model
 
 
 def _digest(value):
@@ -70,6 +71,8 @@ class Model:
         self._bound_boxes = {}
         self._bound_magnitudes = {}
         self._coefficient_exports = {}
+        self._conditional_templates = {}
+        self.template_stats = {'hits': 0, 'misses': 0, 'clears': 0}
 
     def bound_box(self, index):
         """Cache the same outward endpoints, local to this model only."""
@@ -189,6 +192,37 @@ class Model:
                  for i, v in row.items()}, -_box(rhs), tag+'/lower')
 
     def conditional_le(self, row, rhs, gate, tag):
+        # Canonical slots preserve insertion order (including zero entries).
+        # Keep textual Decimal endpoints: signed zero and exponent spelling
+        # can affect the archived interval certificate even when values agree.
+        # Bounds are part of the key: no reuse across different thermal/power
+        # boxes. Gate position also covers a gate already present in the row.
+        self.budget.check()
+        indices = tuple(row)
+        slots = indices if gate in row else indices+(gate,)
+        def token(value):
+            if type(value) is int:
+                return ('int', value)
+            value = _box(value)
+            return ('interval', str(value.lo), str(value.hi))
+        rhs = _box(rhs)
+        key = (tuple((token(value), self.bounds[index]) for index, value in row.items()),
+               token(rhs), slots.index(gate), self.bounds[gate])
+        template = self._conditional_templates.get(key)
+        if template is not None:
+            # Same budget/report checkpoints as le(); all copies are charged.
+            self.budget.check()
+            if len(self.rows) % 128 == 0:
+                self.report()
+            coefficients, metadata = template
+            exported = {slots[position]: value for position, value in coefficients}
+            record = dict(metadata, coef=exported, tag=tag,
+                          rhs_interval=list(metadata['rhs_interval']))
+            self.rows.append(record)
+            self.row_nonzeros += len(exported)
+            self.template_stats['hits'] += 1
+            return
+        self.template_stats['misses'] += 1
         # This M covers the full residual on the exported variable box, not a
         # guessed scheduling horizon. Interval products include every sign.
         rhs = _box(rhs)
@@ -199,6 +233,17 @@ class Model:
         _plus(lifted, gate, big_m)
         self.le(lifted, rhs+I.rational(big_m), tag)
         self.rows[-1]['big_M'] = str(big_m)
+        # Publish only a complete, independently owned template. A budget
+        # exception during residual/row construction cannot publish a prefix.
+        record = self.rows[-1]
+        positions = {index: position for position, index in enumerate(slots)}
+        coefficients = tuple((positions[index], value) for index, value in record['coef'].items())
+        metadata = {k: v for k, v in record.items() if k not in ('coef', 'tag')}
+        metadata['rhs_interval'] = tuple(metadata['rhs_interval'])
+        if len(self._conditional_templates) >= _CONDITIONAL_CACHE_LIMIT:
+            self._conditional_templates.clear()
+            self.template_stats['clears'] += 1
+        self._conditional_templates[key] = (coefficients, metadata)
 
     def conditional_eq(self, row, rhs, gate, tag):
         self.conditional_le(row, rhs, gate, tag+'/upper')

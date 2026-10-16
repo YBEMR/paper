@@ -137,6 +137,8 @@ class BuildObserver:
             'observation_seconds_by_stage': dict(self.observation_seconds_by_stage),
             'construction_components': {key: dict(value) for key, value in
                                         getattr(model, 'construction_costs', {}).items()},
+            'conditional_templates': {**getattr(model, 'template_stats', {}),
+                'retained': len(getattr(model, '_conditional_templates', {}))},
             'component_scope': 'disjoint timed regions; inclusive includes nested observation; unfinished calls counted on exception unwind',
             'observation_cost_scope': 'callbacks including synchronous progress logging; budget checks excluded',
             'complete_model_only_when': 'status MODEL_CONSTRUCTED and successful build_model return',

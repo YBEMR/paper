@@ -139,6 +139,11 @@ class BuildObserver:
                                         getattr(model, 'construction_costs', {}).items()},
             'conditional_templates': {**getattr(model, 'template_stats', {}),
                 'retained': len(getattr(model, '_conditional_templates', {}))},
+            'construction_details': {key: dict(value) for key, value in
+                                     getattr(model, 'construction_detail_costs', {}).items()},
+            'affine_templates': {**getattr(model, 'affine_stats', {}),
+                'retained': len(getattr(model, '_affine_templates', {}))},
+            'detail_scope': 'nested within thermal_conditional_rows; generic template details also nest in affine misses; never sum with parents',
             'component_scope': 'disjoint timed regions; inclusive includes nested observation; unfinished calls counted on exception unwind',
             'observation_cost_scope': 'callbacks including synchronous progress logging; budget checks excluded',
             'complete_model_only_when': 'status MODEL_CONSTRUCTED and successful build_model return',

@@ -27,6 +27,7 @@ from milp_coefficients import Coefficients
 _BINARY_BOUNDS = (F(0), F(1))
 _EXPORT_CACHE_LIMIT = 4096  # memory policy only; eviction changes no coefficient
 _CONDITIONAL_CACHE_LIMIT = 4096  # complete row templates; local to one model
+_AFFINE_CACHE_LIMIT = 2048  # pairs of complete rows, not a restriction on modes
 
 
 def _digest(value):
@@ -67,12 +68,42 @@ class Model:
         self.feedback_identities = set()
         self.progress = progress
         self.construction_costs = {}
+        self.construction_detail_costs = {}
         self.row_nonzeros = 0
         self._bound_boxes = {}
         self._bound_magnitudes = {}
         self._coefficient_exports = {}
         self._conditional_templates = {}
         self.template_stats = {'hits': 0, 'misses': 0, 'clears': 0}
+        self._fraction_exports = {}
+        self._fraction_negatives = {}
+        self._bound_signatures = {}
+        self._affine_templates = {}
+        self.affine_stats = {'hits': 0, 'misses': 0, 'clears': 0}
+
+    def bound_signature(self, index):
+        # Avoid repeatedly hashing Fraction denominators. Bounds never change
+        # after var(); the four integers encode exactly the same rational box.
+        if index not in self._bound_signatures:
+            lo, hi = self.bounds[index]
+            self._bound_signatures[index] = (lo.numerator, lo.denominator, hi.numerator, hi.denominator)
+        return self._bound_signatures[index]
+
+    def fraction_export(self, value):
+        if value not in self._fraction_exports:
+            result = self.coefficient_export(_box(value))
+            if len(self._fraction_exports) >= _EXPORT_CACHE_LIMIT:
+                self._fraction_exports.clear()
+            self._fraction_exports[value] = result
+        return self._fraction_exports[value]
+
+    def fraction_negative(self, value):
+        if value not in self._fraction_negatives:
+            result = -_box(value)
+            if len(self._fraction_negatives) >= _EXPORT_CACHE_LIMIT:
+                self._fraction_negatives.clear()
+            self._fraction_negatives[value] = result
+        return self._fraction_negatives[value]
 
     def bound_box(self, index):
         """Cache the same outward endpoints, local to this model only."""
@@ -100,11 +131,12 @@ class Model:
         return self._coefficient_exports[key]
 
     @contextmanager
-    def measure_construction(self, section):
+    def measure_construction(self, section, detail=False):
         """Diagnostic stopwatches only; never create or extend a budget.
 
-        Regions are disjoint. Nested observation is subtracted for exclusive
-        costs, while both costs remain charged to the method deadline.
+        Top-level regions are disjoint. Details are stored separately and can
+        nest; never add them to parent totals. Nested observation is subtracted
+        for exclusive costs; all costs remain charged to the method deadline.
         """
         start = time.perf_counter()
         observed = getattr(self.progress, 'observation_wall_seconds', 0.0)
@@ -113,7 +145,8 @@ class Model:
         finally:
             elapsed = time.perf_counter()-start
             nested = getattr(self.progress, 'observation_wall_seconds', 0.0)-observed
-            item = self.construction_costs.setdefault(section,
+            costs = self.construction_detail_costs if detail else self.construction_costs
+            item = costs.setdefault(section,
                 {'calls': 0, 'inclusive_s': 0.0, 'nested_observation_s': 0.0, 'exclusive_s': 0.0})
             item['calls'] += 1
             item['inclusive_s'] += elapsed
@@ -164,6 +197,7 @@ class Model:
         if len(self.rows) % 128 == 0:
             self.report()
         exported, allowance = {}, F(0)
+        error_groups = {}
         for index, value in row.items():
             # Every integer in this range has an exact binary64 representation,
             # so its conversion deviation is zero, irrespective of the box.
@@ -171,16 +205,30 @@ class Model:
                 if value:
                     exported[index] = float(value)
                 continue
-            value = _box(value)
-            if value.lo == value.hi == 0:
-                continue
-            if value.lo == value.hi and (value.lo == 1 or value.lo == -1):
-                exported[index] = float(value.lo)
-                continue
-            nominal, deviation = self.coefficient_export(value)
-            allowance += deviation*self.bound_magnitude(index)
+            if isinstance(value, F):
+                nominal, deviation = self.fraction_export(value)
+            else:
+                value = _box(value)
+                if value.lo == value.hi == 0:
+                    continue
+                if value.lo == value.hi and (value.lo == 1 or value.lo == -1):
+                    exported[index] = float(value.lo)
+                    continue
+                nominal, deviation = self.coefficient_export(value)
+            if deviation:
+                magnitude = self.bound_magnitude(index)
+                # Group repeated exact error products, not coefficients/rows.
+                # Holding deviation in the value prevents id reuse even if a
+                # conversion cache clears mid-row. Equal values in different
+                # objects may remain separate; that changes only work done.
+                key = (id(deviation), magnitude.numerator, magnitude.denominator)
+                if key in error_groups:
+                    error_groups[key][2] += 1
+                else:
+                    error_groups[key] = [deviation, magnitude, 1]
             if nominal:
                 exported[index] = nominal
+        allowance = sum((error*magnitude*count for error, magnitude, count in error_groups.values()), F(0))
         rhs = _box(rhs)
         self.rows.append({'coef': exported, 'rhs': _up(F(rhs.hi)+allowance), 'tag': tag,
                           'rounding_allowance': str(allowance), 'rhs_interval': rhs.data()})
@@ -188,16 +236,30 @@ class Model:
 
     def eq(self, row, rhs, tag):
         self.le(row, rhs, tag+'/upper')
-        self.le({i: -v if type(v) is int and abs(v) <= 2**53 else -_box(v)
+        self.le({i: -v if type(v) is int and abs(v) <= 2**53 else
+                 self.fraction_negative(v) if isinstance(v, F) else -_box(v)
                  for i, v in row.items()}, -_box(rhs), tag+'/lower')
 
     def conditional_le(self, row, rhs, gate, tag):
+        self.budget.check()
+        with self.measure_construction('template_key_and_lookup', detail=True):
+            slots, key = self.conditional_key(row, rhs, gate)
+            template = self._conditional_templates.get(key)
+        if template is not None:
+            with self.measure_construction('template_hit_assembly', detail=True):
+                self.append_template(template, slots, tag)
+            self.template_stats['hits'] += 1
+            return
+        self.template_stats['misses'] += 1
+        with self.measure_construction('template_miss_construction', detail=True):
+            self.construct_conditional_template(row, rhs, gate, tag, slots, key)
+
+    def conditional_key(self, row, rhs, gate):
         # Canonical slots preserve insertion order (including zero entries).
         # Keep textual Decimal endpoints: signed zero and exponent spelling
         # can affect the archived interval certificate even when values agree.
         # Bounds are part of the key: no reuse across different thermal/power
         # boxes. Gate position also covers a gate already present in the row.
-        self.budget.check()
         indices = tuple(row)
         slots = indices if gate in row else indices+(gate,)
         def token(value):
@@ -206,23 +268,23 @@ class Model:
             value = _box(value)
             return ('interval', str(value.lo), str(value.hi))
         rhs = _box(rhs)
-        key = (tuple((token(value), self.bounds[index]) for index, value in row.items()),
-               token(rhs), slots.index(gate), self.bounds[gate])
-        template = self._conditional_templates.get(key)
-        if template is not None:
-            # Same budget/report checkpoints as le(); all copies are charged.
-            self.budget.check()
-            if len(self.rows) % 128 == 0:
-                self.report()
-            coefficients, metadata = template
-            exported = {slots[position]: value for position, value in coefficients}
-            record = dict(metadata, coef=exported, tag=tag,
-                          rhs_interval=list(metadata['rhs_interval']))
-            self.rows.append(record)
-            self.row_nonzeros += len(exported)
-            self.template_stats['hits'] += 1
-            return
-        self.template_stats['misses'] += 1
+        key = (tuple((token(value), self.bound_signature(index)) for index, value in row.items()),
+               token(rhs), slots.index(gate), self.bound_signature(gate))
+        return slots, key
+
+    def append_template(self, template, slots, tag):
+        # Same budget/report checkpoints as le(); all copies are charged.
+        self.budget.check()
+        if len(self.rows) % 128 == 0:
+            self.report()
+        coefficients, metadata = template
+        exported = {slots[position]: value for position, value in coefficients}
+        record = dict(metadata, coef=exported, tag=tag,
+                      rhs_interval=list(metadata['rhs_interval']))
+        self.rows.append(record)
+        self.row_nonzeros += len(exported)
+
+    def construct_conditional_template(self, row, rhs, gate, tag, slots, key):
         # This M covers the full residual on the exported variable box, not a
         # guessed scheduling horizon. Interval products include every sign.
         rhs = _box(rhs)
@@ -248,6 +310,49 @@ class Model:
     def conditional_eq(self, row, rhs, gate, tag):
         self.conditional_le(row, rhs, gate, tag+'/upper')
         self.conditional_le({i: -_box(v) for i, v in row.items()}, -_box(rhs), gate, tag+'/lower')
+
+    def affine_conditional_eq(self, target, sources, coefficients, gate, tag):
+        """Bind a repeated interval affine propagation/energy equality.
+
+        All coefficients come from Coefficients.get and are interval objects.
+        The key snapshots their text, so a changed coefficient cannot reuse a
+        stale template. Both directions remain present, with separate budget
+        checks. Feedback and generic rows retain conditional_eq/conditional_le.
+        """
+        self.budget.check()
+        if len(coefficients) != len(sources)+1 or not all(isinstance(a, I) for a in coefficients):
+            raise ValueError('affine template requires an interval coefficient per source and constant')
+        slots = (target, *sources, gate)
+        if len(set(slots)) != len(slots):
+            # Preserve the original dictionary's overwrite semantics.
+            self.conditional_eq({target: 1, **{j: -a for j, a in zip(sources, coefficients[:-1])}},
+                                coefficients[-1], gate, tag)
+            return
+        with self.measure_construction('affine_key_and_lookup', detail=True):
+            key = (tuple((str(a.lo), str(a.hi)) for a in coefficients),
+                   tuple(self.bound_signature(j) for j in slots))
+            pair = self._affine_templates.get(key)
+        if pair is not None:
+            with self.measure_construction('affine_hit_assembly', detail=True):
+                self.append_template(pair[0], slots, tag+'/upper')
+                self.append_template(pair[1], slots, tag+'/lower')
+            self.affine_stats['hits'] += 1
+            return
+        self.affine_stats['misses'] += 1
+        with self.measure_construction('affine_miss_binding', detail=True):
+            self.conditional_eq({target: 1, **{j: -a for j, a in zip(sources, coefficients[:-1])}},
+                                coefficients[-1], gate, tag)
+            positions = {j: k for k, j in enumerate(slots)}
+            pair = []
+            for record in self.rows[-2:]:
+                values = tuple((positions[j], a) for j, a in record['coef'].items())
+                metadata = {k: v for k, v in record.items() if k not in ('coef', 'tag')}
+                metadata['rhs_interval'] = tuple(metadata['rhs_interval'])
+                pair.append((values, metadata))
+            if len(self._affine_templates) >= _AFFINE_CACHE_LIMIT:
+                self._affine_templates.clear()
+                self.affine_stats['clears'] += 1
+            self._affine_templates[key] = tuple(pair)
 
     def as_solver_dict(self):
         ri, ci, data = [], [], []
@@ -433,23 +538,26 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         state_power = {}
         for l, (left, right) in enumerate(zip(events, events[1:])):
             model.report(interval=l)
-            qmax = []
-            meta['q'].append([])
-            for node in nodes:
-                active_node = active_nodes[l][node]
-                maximum = max([option_power[y] for o, y in active_node]+[F(0)])
-                qmax.append(maximum)
-                qv = model.var(f'q:{sid}:{l}:{node}', 0, maximum)
-                meta['q'][l].append(qv)
-                model.eq({qv: 1, **{y: -option_power[y] for o, y in active_node}}, 0, 'activity_power')
+            with model.measure_construction('activity_power_variables_and_rows'):
+                qmax = []
+                meta['q'].append([])
+                for node in nodes:
+                    active_node = active_nodes[l][node]
+                    maximum = max([option_power[y] for o, y in active_node]+[F(0)])
+                    qmax.append(maximum)
+                    qv = model.var(f'q:{sid}:{l}:{node}', 0, maximum)
+                    meta['q'][l].append(qv)
+                    model.eq({qv: 1, **{y: -option_power[y] for o, y in active_node}}, 0, 'activity_power')
             states = meta['states'][l]
-            for state in states:
-                if state not in state_power:
-                    state_power[state] = model.coefficients.power(state)
-            power_upper = max(sum(base)+sum(qmax)+sum(lam*(upper-reference) for lam, upper in zip(slopes, temp_upper))
-                              +F(p['external_common_power_W']) for base, slopes in (state_power[s] for s in states))
-            ev = model.var(f'energy:{sid}:{l}', 0, power_upper*(right-left), cost=F(scene['weight']))
-            meta['energy'].append(ev)
+            with model.measure_construction('power_upper_and_energy_variable'):
+                for state in states:
+                    if state not in state_power:
+                        base, slopes = model.coefficients.power(state)
+                        state_power[state] = sum(base)+sum(lam*(upper-reference) for lam, upper in zip(slopes, temp_upper))+F(p['external_common_power_W'])
+                # qmax is common to all states; arithmetic is exact rational.
+                power_upper = max(state_power[s] for s in states)+sum(qmax)
+                ev = model.var(f'energy:{sid}:{l}', 0, power_upper*(right-left), cost=F(scene['weight']))
+                meta['energy'].append(ev)
             sources = meta['theta'][l]+meta['q'][l]
             for state in states:
                 model.report(control_state=list(state))
@@ -458,9 +566,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                     coeff = model.coefficients.get(state, right-left)
                 with model.measure_construction('thermal_conditional_rows'):
                     for i, row in enumerate(coeff['temperature']):
-                        model.conditional_eq({meta['theta'][l+1][i]: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'thermal_propagation')
+                        model.affine_conditional_eq(meta['theta'][l+1][i], sources, row, gate, 'thermal_propagation')
                     row = coeff['energy']
-                    model.conditional_eq({ev: 1, **{j: -a for j, a in zip(sources, row[:-1])}}, row[-1], gate, 'complete_energy')
+                    model.affine_conditional_eq(ev, sources, row, gate, 'complete_energy')
     model.report('complete', scene=None, interval=None, control_state=None)
     return model
 

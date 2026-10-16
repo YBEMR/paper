@@ -1,6 +1,7 @@
 """Two existing correctness fixtures; not an original-scale benchmark."""
 import argparse
 import cProfile
+from fractions import Fraction
 import hashlib
 import json
 from pathlib import Path
@@ -47,12 +48,39 @@ def run(out):
         results[name] = {'summary': model.summary(), 'observation': snapshot,
                          'construction_profiled_s': construction_s,
                          'profile_top_35': hot[:35]}
+    # Isolate repeated assembly using an already-built correctness fixture.
+    # These duplicate rows are not a workload, optimization run or new case.
+    meta = next(iter(model.scenes.values()))
+    l = max(range(len(meta['active'])), key=lambda j: len(meta['active'][j]))
+    state = meta['states'][l][0]
+    coeff = model.coefficients.get(state, meta['events'][l+1]-meta['events'][l])
+    source_vars = meta['theta'][l]+meta['q'][l]
+    target, gate = meta['theta'][l+1][0], meta['joint'][l, state]
+    row = coeff['temperature'][0]
+    # Exact stored activity powers from the selected fixture, not solver floats.
+    active = meta['active'][l]
+    activity = {y: -Fraction(o['activity_power_W']) for o, y in active}
+    before = {k: dict(v) for k, v in model.construction_detail_costs.items()}
+    def repeated():
+        with model.measure_construction('replay_thermal', detail=True):
+            for _ in range(2000):
+                if hasattr(model, 'affine_conditional_eq'):
+                    model.affine_conditional_eq(target, source_vars, row, gate, 'replay')
+                else:
+                    model.conditional_eq({target: 1, **{j: -a for j, a in zip(source_vars, row[:-1])}}, row[-1], gate, 'replay')
+        with model.measure_construction('replay_activity', detail=True):
+            for _ in range(2000): model.eq(activity, 0, 'replay_activity')
+    profiler = cProfile.Profile()
+    profiler.runcall(repeated)
+    results['assembly_replay'] = {'scope': '2000 repeated thermal equalities and activity rows from the chain fixture; no solve',
+        'details': {k: {field: value-before.get(k, {}).get(field, 0) for field, value in v.items()}
+                    for k, v in model.construction_detail_costs.items()}}
     after = {name: hashlib.sha256((HERE/name).read_bytes()).hexdigest() for name in sources}
     result = {'scope': 'two existing small correctness fixtures; profiler overhead included; not performance comparison',
               'results': results, 'source_sha256': hashes, 'source_sha256_after': after,
               'source_stable': hashes == after, 'formal_comparison': False}
     (out/'profile.json').write_text(json.dumps(result, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
-    print(json.dumps({name: row['observation']['construction_components'] for name, row in results.items()}, indent=2))
+    print(json.dumps({name: row.get('observation', {}).get('construction_components', row.get('details')) for name, row in results.items()}, indent=2))
     if hashes != after:
         raise RuntimeError('source changed during profile')
 

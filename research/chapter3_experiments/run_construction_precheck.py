@@ -26,7 +26,7 @@ from thermal import Budget, I, Exhausted
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-REFERENCE = '720194e'
+REFERENCE = '7bbe999'
 CONFIG_SHA = '615be096bfbcb3e7c53ba9b0810d888264d48adbc428f1f7d2f94a5c6a29a4fe'
 
 
@@ -332,9 +332,11 @@ def thermal_optimization_checks(old_module, new_module, instance, check):
         try:
             new_module._EXPORT_CACHE_LIMIT = 4  # fixture-only eviction pressure
             for q in [F(i, 37) for i in range(1, 12)]+[F(1, 37)]:
-                for model in (old_m, new_m): model.le({0: q}, F(2, 7), 'cache_probe')
+                for model in (old_m, new_m): model.eq({0: q}, F(2, 7), 'cache_probe')
             compare_rows(old_m, new_m)
             require(len(new_m._coefficient_exports) <= 4, 'cache bound exceeded')
+            require(len(new_m._fraction_exports) <= 4, 'rational export cache bound exceeded')
+            require(len(new_m._fraction_negatives) <= 4, 'negative conversion cache bound exceeded')
         finally:
             new_module._EXPORT_CACHE_LIMIT = limit
     check('row_cache/eviction_preserves_raw_rows', cache_eviction)
@@ -417,6 +419,125 @@ def conditional_template_checks(old_module, new_module, instance, check):
         equal(model._conditional_templates, old_cache)
     check('templates/interrupted_miss_not_published', lambda: interrupted(False))
     check('templates/interrupted_hit_not_appended', lambda: interrupted(True))
+
+
+def affine_template_checks(old_module, new_module, instance, check):
+    old = old_module.Model(instance, Budget(seconds=600))
+    new = new_module.Model(instance, Budget(seconds=600))
+    groups = []
+    for model in (old, new):
+        local = []
+        for k in range(3):
+            local.append((model.var(f'z{k}', -3, 20 if k < 2 else 21),
+                [model.var(f'x{k}', -2, 3), model.var(f'q{k}', 0, 5)], model.var(f'g{k}', integer=True)))
+        groups.append(local)
+    coeff = [I('0.1', '0.2'), I('-0.01', '0.04'), I('-0.1', '0.1')]
+    def insert(k, values):
+        target, sources, gate = groups[0][k]
+        old.conditional_eq({target: 1, **{j: -a for j, a in zip(sources, values[:-1])}}, values[-1], gate, 'affine')
+        target, sources, gate = groups[1][k]
+        new.affine_conditional_eq(target, sources, values, gate, 'affine')
+        compare_rows(old, new)
+        compare_sparse(old, new)
+    check('affine/first_pair', lambda: insert(0, coeff))
+    check('affine/renamed_pair', lambda: insert(1, coeff))
+    check('affine/hit_observed', lambda: equal(new.affine_stats['hits'], 1))
+    check('affine/changed_bounds', lambda: insert(2, coeff))
+    check('affine/changed_bounds_miss', lambda: equal(new.affine_stats['misses'], 2))
+    check('affine/signed_zero_rhs', lambda: (insert(0, coeff[:2]+[I('-0.00')]), insert(0, coeff[:2]+[I('0')])) )
+    def content_snapshot():
+        changed = deepcopy(coeff)
+        changed[0] = I('0.11', '0.21')
+        insert(0, changed)
+        changed[0] = deepcopy(coeff[0])
+        insert(0, changed)
+    check('affine/changed_coefficients_no_stale_identity', content_snapshot)
+    def no_alias():
+        insert(1, coeff)
+        new.rows[-2]['coef'].clear()
+        new.rows[-2]['rhs_interval'][0] = 'fixture mutation'
+        new.rows[-2] = deepcopy(old.rows[-2])
+        insert(1, coeff)
+    check('affine/mutable_output_isolated', no_alias)
+    def eviction():
+        limit = new_module._AFFINE_CACHE_LIMIT
+        try:
+            new_module._AFFINE_CACHE_LIMIT = 2
+            new._affine_templates.clear()
+            for k in (0, 1, 2, 0): insert(0, coeff[:2]+[I(k)])
+            require(len(new._affine_templates)<=2 and new.affine_stats['clears']>0, 'eviction not checked')
+        finally: new_module._AFFINE_CACHE_LIMIT = limit
+    check('affine/pair_eviction', eviction)
+    check('affine/model_local', lambda: require(not new_module.Model(instance, Budget())._affine_templates, 'shared pair cache'))
+    def interrupt_miss():
+        m = new_module.Model(instance, Budget(seconds=600))
+        t=m.var('t', -3, 20); xs=[m.var('x', -2, 3),m.var('q', 0, 5)]; g=m.var('g',integer=True)
+        original=m.conditional_le
+        def stop_after_upper(*a, **kw):
+            original(*a, **kw)
+            raise Exhausted('after complete upper row')
+        m.conditional_le=stop_after_upper
+        try: m.affine_conditional_eq(t,xs,coeff,g,'affine')
+        except Exhausted: pass
+        else: raise AssertionError('did not stop')
+        equal(len(m.rows),1)
+        equal(m.rows[0],old.rows[0])
+        require(not m._affine_templates,'incomplete pair published')
+    check('affine/miss_interrupted_between_directions', interrupt_miss)
+    def interrupt_hit():
+        m = new_module.Model(instance, Budget(seconds=600))
+        t=m.var('t', -3, 20); xs=[m.var('x', -2, 3),m.var('q', 0, 5)]; g=m.var('g',integer=True)
+        m.affine_conditional_eq(t,xs,coeff,g,'affine')
+        class Stop:
+            count=0
+            def check(self):
+                self.count+=1
+                if self.count==3: raise Exhausted('before lower row')
+        m.budget=Stop()
+        try: m.affine_conditional_eq(t,xs,coeff,g,'affine')
+        except Exhausted: pass
+        else: raise AssertionError('did not stop')
+        equal(len(m.rows),3)
+        equal(m.rows[2],m.rows[0])
+        equal(len(m._affine_templates),1)
+    check('affine/hit_interrupted_between_directions', interrupt_hit)
+
+
+def grouped_error_checks(old_module, new_module, instance, check):
+    def run(limit):
+        old = old_module.Model(instance, Budget(seconds=600))
+        new = new_module.Model(instance, Budget(seconds=600))
+        for model in (old, new):
+            for i in range(36):
+                model.var(str(i), F(-2, 3) if i%3 else 0, F(7, 3) if i%3 else 1)
+        saved = new_module._EXPORT_CACHE_LIMIT
+        try:
+            new_module._EXPORT_CACHE_LIMIT = limit
+            for sign in (1, -1):
+                row = {i: sign*F(i%7+1,37) for i in range(36)}
+                for model in (old,new): model.eq(row, F(2,7), 'grouped_errors')
+            compare_rows(old,new)
+            compare_sparse(old,new)
+        finally: new_module._EXPORT_CACHE_LIMIT = saved
+    check('rounding/repeated_products_mixed_boxes', lambda: run(4096))
+    check('rounding/cache_clear_mid_row_preserves_error_sum', lambda: run(4))
+    def nested_timing():
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        progress=SimpleNamespace(observation_wall_seconds=0.0)
+        model=new_module.Model(instance,Budget(seconds=600),progress=progress)
+        with patch('milp.time.perf_counter',side_effect=[10.,11.,14.,17.]):
+            try:
+                with model.measure_construction('parent'):
+                    with model.measure_construction('child',detail=True):
+                        progress.observation_wall_seconds=0.5
+                        raise Exhausted('nested detail')
+            except Exhausted: pass
+        equal(set(model.construction_costs),{'parent'})
+        equal(set(model.construction_detail_costs),{'child'})
+        equal(model.construction_costs['parent']['exclusive_s'],6.5)
+        equal(model.construction_detail_costs['child']['exclusive_s'],2.5)
+    check('timing/nested_details_separate_and_survive_interruption',nested_timing)
 
 
 def main():
@@ -516,6 +637,8 @@ def main():
         observation_checks(old_module, new_module, config, fixture_map['one_stage_energy'], check)
         thermal_optimization_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
         conditional_template_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
+        affine_template_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
+        grouped_error_checks(old_module, new_module, fixture_map['one_stage_energy'][0], check)
     except Exception as error:
         checks.append({'name': 'suite_execution', 'passed': False, 'error': repr(error)})
     after = {relative: sha((REPO/relative).read_bytes()) for relative in sources}

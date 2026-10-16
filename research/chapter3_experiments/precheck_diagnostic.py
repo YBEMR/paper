@@ -21,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--out', required=True)
     parser.add_argument('--relax-auxiliary-integrality', action='store_true')
+    parser.add_argument('--strengthen-energy-lower-bounds', action='store_true')
     args = parser.parse_args()
     folder = Path(args.out)
     folder.mkdir(parents=True, exist_ok=False)
@@ -122,8 +123,12 @@ def main():
         loader.starts = starts
         return config, instance
     def builder(instance, config, budget, progress):
-        return build_model(instance, config, budget=budget, starts=loader.starts, progress=progress,
-                           relax_auxiliary_integrality=args.relax_auxiliary_integrality)
+        model = build_model(instance, config, budget=budget, starts=loader.starts, progress=progress,
+                           relax_auxiliary_integrality=args.relax_auxiliary_integrality,
+                           strengthen_energy_lower_bounds=args.strengthen_energy_lower_bounds)
+        builder.energy_cut_count = len(model.energy_bound_certificates)
+        builder.segment_count = sum(len(s['energy']) for s in model.scenes.values())
+        return model
     actual = execute_milp(loader, folder/'native', seconds=180, construct_only=False,
                           model_builder=builder, solve=solve_diagnostic)
     check('native_solver_entry_received', actual['integer_solver_entered'] is True)
@@ -133,7 +138,12 @@ def main():
     check('native_no_optimality_promotion', actual['independently_proven_optimal'] is False)
     formulation = dict(fix_late_options=True, aggregate_opp_locks=True,
                        relax_auxiliary_integrality=args.relax_auxiliary_integrality)
+    if args.strengthen_energy_lower_bounds:
+        formulation['energy_lower_bounds'] = True
     check('native_requested_formulation', actual['model_summary']['formulation'] == formulation)
+    if args.strengthen_energy_lower_bounds:
+        check('native_energy_cut_per_segment',
+              0 < builder.energy_cut_count == builder.segment_count)
     check('source_unchanged_during_precheck', before == source_hashes())
     result = {'all_passed': all(c['passed'] for c in checks), 'checks': checks,
               'formulation': formulation,

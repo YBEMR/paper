@@ -2,8 +2,11 @@
 
 Only small-domain structural models and synthetic logical-vector stress
 fixtures are used. No MATLAB invocation, original-scale construction, physical
-parameter change or search run occurs here. Synthetic vectors test decoding;
-they are not claimed to satisfy the exported MILP or model solver roundoff.
+parameter change or search run occurs here. These models omit physics, so an
+enabled energy-bound flag records the requested route but introduces no cuts;
+cut validity is covered by the separate energy-bound precheck. Synthetic
+vectors test decoding; they are not claimed to satisfy the exported MILP or
+model solver roundoff.
 """
 import argparse
 import ast
@@ -77,6 +80,7 @@ def synthetic_holds(model, vector, count, step):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--strengthen-energy-lower-bounds', action='store_true')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
@@ -106,11 +110,13 @@ def main():
         regular = milp.build_model(instance, config, starts=starts,
             include_physics=False, budget=Budget(seconds=60),
             fix_late_options=True, aggregate_opp_locks=True,
-            relax_auxiliary_integrality=False)
+            relax_auxiliary_integrality=False,
+            strengthen_energy_lower_bounds=args.strengthen_energy_lower_bounds)
         model = milp.build_model(instance, config, starts=starts,
             include_physics=False, budget=Budget(seconds=60),
             fix_late_options=True, aggregate_opp_locks=True,
-            relax_auxiliary_integrality=True)
+            relax_auxiliary_integrality=True,
+            strengthen_energy_lower_bounds=args.strengthen_energy_lower_bounds)
         check(name+'/only_integer_declarations_change', lambda a=regular, b=model: equal(
             (a.names, a.options, a.rows, a.lb, a.ub, a.c, a.logical_binary),
             (b.names, b.options, b.rows, b.lb, b.ub, b.c, b.logical_binary)))
@@ -192,7 +198,16 @@ def main():
         'reproduced_after_fix_from_immutable_old_source': True, 'failures': old_failures})
     check('historical_outside_binary_defect_reproduced', lambda: require(
         all(x['same_schedule'] for x in old_failures), 'old defect reproduction failed'))
-    old_text = old_source.decode('utf-8')
+    # The historical decoder remains the defect reproduction above. Model
+    # identity now anchors the completed energy-bound precheck revision;
+    # comparing its new optional cut builder to 8bf2ba1 would reject the
+    # explicitly authorized mathematical change rather than test decoding.
+    build_revision = '5efaebd'
+    build_reference = subprocess.run(['git', 'show',
+        f'{build_revision}:research/chapter3_experiments/milp.py'],
+        cwd=HERE.parents[1], check=True, capture_output=True).stdout
+    (args.out/'build_reference_milp_5efaebd.py').write_bytes(build_reference)
+    old_text = build_reference.decode('utf-8')
     current_text = (HERE/'milp.py').read_bytes().decode('utf-8')
     def build_function(text):
         parsed = ast.parse(text)
@@ -200,7 +215,7 @@ def main():
         return ast.get_source_segment(text, node)
     old_build, current_build = build_function(old_text), build_function(current_text)
     details['build_model_source_identity'] = {
-        'reference_commit': '8bf2ba1', 'equal': old_build == current_build,
+        'reference_commit': build_revision, 'equal': old_build == current_build,
         'old_sha256': hashlib.sha256(old_build.encode()).hexdigest(),
         'current_sha256': hashlib.sha256(current_build.encode()).hexdigest(),
         'scope': 'exact build_model function source; numerical acceptance wrapper changes separately checked'}
@@ -337,13 +352,17 @@ def main():
     check('legal_receipt_survives_logging_cross_budget', logging_crosses_budget)
     check('source_unchanged_during_precheck', lambda: equal(hashes, source_hashes()))
     save(args.out/'details.json', details)
+    formulation = {'fix_late_options': True, 'aggregate_opp_locks': True,
+                   'relax_auxiliary_integrality': True}
+    if args.strengthen_energy_lower_bounds:
+        formulation['energy_lower_bounds'] = True
     result = {'all_passed': all(c['status'] == 'PASS' for c in checks),
         'checks': checks, 'source_hashes': hashes, 'precheck_source_sha256': own_hash,
-        'formulation': {'fix_late_options': True, 'aggregate_opp_locks': True,
-                        'relax_auxiliary_integrality': True},
+        'formulation': formulation,
         'elapsed_s': time.monotonic()-started,
         'scope': 'small correctness fixtures and synthetic decoder stress only; no MATLAB or original benchmark',
         'limitations': ['Does not certify floating MILP constraints or arbitrary solver roundoff.',
+            'Structural fixtures use include_physics=False; energy cuts require the separate matching energy-bound precheck.',
             'Binary auxiliary consistency is not independently certified; accepted schedules are reconstructed from y and undergo exact legality and full thermal-energy evaluation.',
             'Synthetic holding drift is not a physical or solver-feasible trajectory.']}
     save(args.out/'checks.json', result)

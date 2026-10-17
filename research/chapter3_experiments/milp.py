@@ -469,7 +469,7 @@ class Model:
         return exported
 
     def summary(self):
-        return {'problem_id': self.instance['id'], 'variables': len(self.names),
+        result = {'problem_id': self.instance['id'], 'variables': len(self.names),
                 'binary_variables': len(self.integer), 'rows': len(self.rows),
                 'options': len(self.options), 'coefficient_sets': self.coefficients.calls,
                 'formulation': dict(self.formulation),
@@ -479,6 +479,11 @@ class Model:
                 'objective': 'weighted complete system energy including leakage and idle tail',
                 'coefficient_errors': 'outward interval rows; not solver arithmetic certification',
                 'optimality_level': 'solver-reported only; external SAFE supplies a feasible upper bound'}
+        if hasattr(self, 'preprocessing'):
+            result['preprocessing'] = deepcopy(self.preprocessing)
+            if self.preprocessing['fixed_scene_id'] is not None:
+                result['objective'] = 'unweighted complete scene energy including leakage and idle tail'
+        return result
 
 
 def add_energy_lower_bound(model, target, sources, gates, source_rows, onehot_rows,
@@ -539,13 +544,19 @@ def add_energy_lower_bound(model, target, sources, gates, source_rows, onehot_ro
 
 def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None,
                 *, fix_late_options=True, aggregate_opp_locks=True,
-                relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False):
+                relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
+                fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
     Auxiliary integrality relaxation remains an explicit independent variant.
     Energy lower-bound cuts are a separate, default-off precheck variant.
-    The switches change representation, never the input option/event catalog.
+    The original switches leave the option/event catalog unchanged. New,
+    default-off preprocessing can filter proven-late choices before events.
+    A complete fixed_deployment retains every compatible OPP/start. Optional
+    fixed_scene_id then constructs one unweighted scene; it never changes the
+    original scenario weights or input. Rebuilt physics is freshly enclosed,
+    not claimed row-equivalent to the old numerical outer approximation.
 
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
@@ -553,12 +564,44 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     """
     budget = budget if budget is not None else Budget()
     budget.check()
-    model = Model(instance, budget, progress)
+    adapted = fixed_deployment is not None or prefilter_deadlines or fixed_scene_id is not None
+    if fixed_scene_id is not None and fixed_deployment is None:
+        raise ValueError('single-scene construction requires a complete fixed shared deployment')
+    normalized = None
+    view = instance
+    if fixed_deployment is not None:
+        from scene_adapter import validate_fixed_deployment, make_scene_instance
+        normalized = validate_fixed_deployment(instance, fixed_deployment)
+        view = (make_scene_instance(instance, fixed_scene_id, unweighted=True)
+                if fixed_scene_id is not None else deepcopy(instance))
+        view['stage_modes'] = {shared: modes for shared, modes in view['stage_modes'].items()
+                               if shared in normalized}
+        # Filter modes BEFORE local-option expansion; never enumerate complete
+        # arrangements or discard a compatible frequency/start preference.
+        for shared, modes in view['stage_modes'].items():
+            budget.check()
+            view['stage_modes'][shared] = [m for m in modes if m['unit_id'] == normalized[shared]]
+    budget.check()
+    model = Model(view, budget, progress)
     model.formulation = dict(fix_late_options=bool(fix_late_options),
                              aggregate_opp_locks=bool(aggregate_opp_locks),
                              relax_auxiliary_integrality=bool(relax_auxiliary_integrality))
     if strengthen_energy_lower_bounds:
         model.formulation['energy_lower_bounds'] = True
+    if adapted:
+        model.preprocessing = {
+            'source_input_sha256': _digest(instance),
+            'fixed_deployment': deepcopy(normalized),
+            'fixed_scene_id': fixed_scene_id,
+            'prefilter_deadlines': bool(prefilter_deadlines),
+            'objective_weights': {s['id']: s['weight'] for s in instance['scenarios']},
+            'numeric_scope': 'fresh outward enclosure of retained physical choices; not old-matrix equivalence',
+            'options_before_deadline_filter': None, 'deadline_removed_count': 0,
+            'empty_stage_option_sets': [], 'fixed_idle_domains': {},
+        }
+        model.formulation.update(prefilter_deadlines=bool(prefilter_deadlines),
+                                 fixed_deployment=normalized is not None,
+                                 fixed_scene_id=fixed_scene_id)
     energy_specs, energy_onehot_rows = [], {}
     auxiliary = dict(integer=not relax_auxiliary_integrality,
                      implied_binary=relax_auxiliary_integrality)
@@ -569,18 +612,29 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     domains = p['domains']
     if starts is not None and not instance['id'].startswith('fixture_'):
         raise ValueError('explicit reduced start sets are fixture-only; production domain must not be trimmed')
-    options = expand_options(instance, config, budget=budget)
+    options = expand_options(model.instance, config, budget=budget)
     if starts is not None:
         start_sets = {(sid, stage): set(map(F, values))
                       for sid, stages in starts.items() for stage, values in stages.items()}
         options = [o for o in options if F(o['start_ms']) in start_sets[o['scenario_id'], o['stage_instance_id']]]
+    if adapted:
+        model.preprocessing['options_before_deadline_filter'] = len(options)
+    if prefilter_deadlines:
+        retained = []
+        for position, option in enumerate(options):
+            if position % 128 == 0:
+                budget.check()
+            if F(option['end_ms']) <= F(option['request_deadline_ms']):
+                retained.append(option)
+        model.preprocessing['deadline_removed_count'] = len(options)-len(retained)
+        options = retained
     model.options = options
     model.report('mode_variables')
     model.option_vars = [model.var('y:'+o['option_id'], integer=True) for o in options]
     # These indices retain the original option order and exact rational times.
     # They replace repeated parsing/filtering, not any constraint or choice.
     option_start, option_end, option_power = {}, {}, {}
-    options_by_scene = {scene['id']: [] for scene in instance['scenarios']}
+    options_by_scene = {scene['id']: [] for scene in model.instance['scenarios']}
     for position, (option, y) in enumerate(zip(options, model.option_vars)):
         if position % 128 == 0:
             budget.check()
@@ -593,13 +647,13 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     activity_exports = None
     model.report('shared_mapping')
     shared_by_stage = {}
-    for shared, modes in instance['stage_modes'].items():
+    for shared, modes in model.instance['stage_modes'].items():
         shared_by_stage[shared] = []
         for unit in sorted({m['unit_id'] for m in modes}):
             model.shared[shared, unit] = model.var('x:'+shared+':'+unit, **auxiliary)
             shared_by_stage[shared].append((unit, model.shared[shared, unit]))
         model.eq({v: 1 for _, v in shared_by_stage[shared]}, 1, 'shared_unique')
-    for scene in instance['scenarios']:
+    for scene in model.instance['scenarios']:
         budget.check()
         model.report('scene_constraints', scene=scene['id'], interval=None)
         sid = scene['id']; scene_options = options_by_scene[sid]
@@ -614,6 +668,10 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         deadlines = {r['id']: F(r['deadline_ms'])/1000 for r in scene['requests']}
         for stage in scene['stage_instances']:
             choices = stage_options[stage['id']]
+            if adapted and not choices:
+                # Keep the exact contradictory one-hot rows. An empty local
+                # set is not an input/thermal error and is never silently lost.
+                model.preprocessing['empty_stage_option_sets'].append(stage['id'])
             model.eq({y: 1 for o, y in choices}, 1, 'stage_unique')
             for unit, x in shared_by_stage[stage['shared_stage_id']]:
                 model.eq({x: -1, **{y: 1 for o, y in choices if o['unit_id'] == unit}}, 0, 'shared_link')
@@ -626,13 +684,18 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 _plus(row, y, -option_start[y])
             model.le(row, 0, 'dependency')
         model.report('event_topology')
-        events = sorted({F(0), F(instance['window_ms'])/1000} |
+        events = sorted({F(0), F(model.instance['window_ms'])/1000} |
                         set(starting_at) | set(ending_at))
         K = len(events)-1
         meta = {'events': events, 'rho': {}, 'joint': {}, 'theta': [], 'q': [], 'energy': [],
                 'active': [], 'options': scene_options, 'stage_options': stage_options,
                 'start_indicators': {}, 'states': []}
         model.scenes[sid] = meta
+        fixed_idle = ({did: scene['entry']['domain_opp'][did] for did in domains
+                       if not any(unit_domain[o['unit_id']] == did for o, y in scene_options)}
+                      if adapted else {})
+        if adapted:
+            model.preprocessing['fixed_idle_domains'][sid] = fixed_idle
         model.report('control_state', intervals_total=K)
         active_positions = set()
         prefix_opps = {did: {scene['entry']['domain_opp'][did]} for did in domains}
@@ -665,7 +728,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             possible = []
             for domain_id, domain in domains.items():
                 for opp in domain['opps']:
-                    meta['rho'][l, domain_id, opp] = model.var(f'rho:{sid}:{l}:{domain_id}:{opp}', **auxiliary)
+                    held = int(opp == fixed_idle[domain_id]) if domain_id in fixed_idle else None
+                    bounds = {} if held is None else {'lower': held, 'upper': held}
+                    meta['rho'][l, domain_id, opp] = model.var(f'rho:{sid}:{l}:{domain_id}:{opp}', **bounds, **auxiliary)
                 rhos = {meta['rho'][l, domain_id, opp]: 1 for opp in domain['opps']}
                 model.eq(rhos, 1, 'domain_unique')
                 starting = starts_by_domain[domain_id]

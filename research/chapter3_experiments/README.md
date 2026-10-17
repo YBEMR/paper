@@ -696,6 +696,37 @@ F:/Anaconda3/python.exe research/chapter3_experiments/run_milp_precheck.py --out
 
 **下一项建议：接入固定部署单场景的MATLAB候选求解、原连续反馈与统一计时，先做小域端到端核查。** 尚未验证该新表达的求解器实际接纳；不因本轮正确性通过就运行原规模、确定外层算法、增加预算或启动正式比较。
 
+### 3.12k 固定部署的MATLAB小域端到端接通
+
+K.96／D118新增[scene_method.py](scene_method.py)，将单场景模型、原`solve_with_feedback`、原输入下的场景复核及加权汇总接通。完整调用从输入读取前启动一个`MethodBudget`，覆盖所有场景构模、一次新MATLAB工作进程、每轮传输／求解／原连续反馈、原输入复核及汇总。没有实现外层部署搜索，未增加初始解、修复或新算法，也未修改原方法入口、构模器、评价器、桥接或研究参数。
+
+旧模型视图内的评价用于原温限反馈；其SAFE候选再由`evaluate_scene`核原完整输入，全部匹配SAFE才按原权重汇总。两次评价均计费。模型视图证据、原输入回执及全局U分别保存；视图SAFE后若原输入复核未完成，不补造场景回执或全局U。两份评价不一致时保留证据并报告未决。求解器内部目标／界按单场景未加权J记录，不合成为认证全局界。当前仅核每轮最终返回候选，首次时间不是实时callback首个整数解时间。
+
+**门槛与实际调用：** [纯Python预检02](results/scene_method_precheck02/summary.json)37/37通过并冻结源码；随后严格按[预声明协议](scene_method_protocol.md)，运行三项既有小域，各一次180秒完整调用。[实际预检](results/scene_method_native01/summary.json)28/28通过，三次独立方法调用共7次求解请求，R2023b及Optimization Toolbox许可均实际确认；没有研究原规模构模／求解或正式比较。
+
+| 小域 | 预算内结果 | 方法耗时／MATLAB启动 | 请求／温限反馈 | 安全U |
+|---|---|---:|---:|---:|
+| 双场景共享部署 | 两场景均SAFE，原权重汇总成功 | 75.813／64.000 s | 2／0 | 0.722710506574 J |
+| 真正重分段链式 | 依赖、工作点及完整连续评价通过 | 17.204／10.156 s | 1／0 | 0.762629388463 J |
+| 解析内部峰 | 连续违规→三条条件温限反馈→solver-reported无解；无独立无解证明 | 16.281／9.454 s | 4／3 | 无 |
+
+双场景均将A.pre固定CPU1，实际返回L档0—14 ms；链式返回CPU1的A.pre在0—14 ms，NPU0的A.main在15—57 ms。其他合法工作点及其非整数结束仍在模型中，未为取得候选删去。以上均为正确性夹具结果，不属于论文工作负载上的能耗收益。
+
+解析夹具继承已有闭式定义，不是新温限扫描。已保存的严格违规见证例如CPU1在422.5 ms的温度下界25.5608075°C，高于25.55°C上限。实际三条反馈分别作用于L／M／H状态，第四次请求报告`exitflag=-2`；包装结果保持`UNRESOLVED`、U为空、`independently_proven_infeasible=false`。本次实际未触发完整赋值删除，该路径只在模拟预检中覆盖，不能混写为原生已验证。
+
+**计费与证据。** 所有原生请求均未提供`x0`，方法间未共享候选或热缓存；每轮仅取同一绝对截止下的剩余时间。三次方法均在180秒内结束；清理20.281／3.406／2.969秒另列，事后只复核已保存方案，不补搜索或预算内U。首次启动64秒包含在方法耗时中，不能把这三次单次时间横向解释为算法快慢。原生入口、内部界、首次已复核返回候选／视图SAFE／场景SAFE／全局SAFE时间分列；迟到原生信息不升级为预算内接通证据。
+
+输入、部署、源码／协议快照、环境、原生回执、完整方案、反馈和分阶段计时见[实际记录](results/scene_method_native01/native_results.json)及[声明](results/scene_method_native01/declaration.json)；[独立内部终审](results/scene_method_native01/review.json)通过，非主线⑥跨会话审查。原始MAT按`.gitignore`留本机。开发预检01曾30/32通过：非整数断言误选H档整数结束，且开发期间源码修改使哈希失配；失败与快照保留，修正并冻结后的02是当前门槛，没有原生补跑。
+
+可复跑入口如下；新的原生调用须先确认相应阶段范围，不能覆盖旧结果或借复跑扩展本次预算：
+
+```powershell
+F:/Anaconda3/python.exe research/chapter3_experiments/run_scene_method_precheck.py --out research/chapter3_experiments/results/scene_method_precheck_NEW
+F:/Anaconda3/python.exe research/chapter3_experiments/run_scene_method_precheck.py --out research/chapter3_experiments/results/scene_method_native_NEW --with-matlab --precheck-record research/chapter3_experiments/results/scene_method_precheck_NEW
+```
+
+**阶段结论与下一项建议：** 小域的“候选—连续评价—温限反馈—重求解”及多场景同预算安全汇总已实际接通。还没有原规模可实施性、加速、额外节能或全局最优证据。下一项可讨论一次固定部署下的原规模可实施性诊断，事前明确部署来源及总预算，先核结构缩减是否转化为可用输出；本轮不自动执行，也不先确定外层分解算法。
+
 ### 3.13 正式计费协议的剩余工作
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。

@@ -189,7 +189,7 @@ class _InitialSession:
 
 
 def solve_with_initial_witness(model, session, accuracy, budget, starts=None, max_attempts=3,
-                               checkpoint=None):
+                               checkpoint=None, *, diagnostic_solver=None):
     """Complete operational entry; all initialization uses this method's budget."""
     initial = prepare_initial_witness(model, accuracy, budget, starts, max_attempts)
     public = {k: v for k, v in initial.items() if k != 'x0'}
@@ -208,9 +208,11 @@ def solve_with_initial_witness(model, session, accuracy, budget, starts=None, ma
               'independently_proven_optimal': False, 'independently_proven_infeasible': False,
               'remaining_domain': 'retained', 'solver_diagnostic': None}
     if initial['state'] == 'SAFE_POINT_READY' and budget.remaining > 0:
-        from diagnostic_search import solve_diagnostic
+        if diagnostic_solver is None:
+            from diagnostic_search import solve_diagnostic
+            diagnostic_solver = solve_diagnostic
         try:
-            solved = solve_diagnostic(model, _InitialSession(session, initial['x0']), accuracy, budget)
+            solved = diagnostic_solver(model, _InitialSession(session, initial['x0']), accuracy, budget)
         except Exception as error:
             solved = {'state': 'UNRESOLVED', 'safe_upper_bound_J': None,
                       'reason': 'INITIALISED_SOLVER_INTERRUPTED' if isinstance(error, Exhausted)

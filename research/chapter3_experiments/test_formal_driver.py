@@ -314,5 +314,30 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(approval['manifest_sha256'], driver.canonical_hash(self.proposed))
             self.assertFalse(list(out.glob('*.used.json')))
 
+    def test_atomic_publication_preserves_existing_evidence_if_replace_fails(self):
+        with self.temporary() as temp:
+            target=Path(temp)/'result.json'
+            original=b'{"state":"SAFE","old_receipt":true}\n'
+            target.write_bytes(original)
+            replacement={'state':'SAFE','call_id':'fixture_only'}
+            with patch.object(Path,'replace',side_effect=OSError(22,'injected publication failure')):
+                with self.assertRaises(OSError): driver.save(target,replacement)
+            self.assertEqual(target.read_bytes(),original)
+            pending=list(Path(temp).glob('.result.json.pending-*'))
+            self.assertEqual(len(pending),1)
+            self.assertEqual(json.loads(pending[0].read_text(encoding='utf-8')),replacement)
+
+    def test_atomic_publication_replaces_only_after_complete_serialization(self):
+        with self.temporary() as temp:
+            target=Path(temp)/'result.json'
+            driver.save(target,{'old':True})
+            before=target.read_bytes()
+            with self.assertRaises(ValueError): driver.save(target,{'invalid':float('nan')})
+            self.assertEqual(target.read_bytes(),before)
+            self.assertFalse(list(Path(temp).glob('.result.json.pending-*')))
+            driver.save(target,{'complete':['new','receipt']})
+            self.assertEqual(json.loads(target.read_text(encoding='utf-8')),{'complete':['new','receipt']})
+            self.assertFalse(list(Path(temp).glob('.result.json.pending-*')))
+
 
 if __name__=='__main__': unittest.main(verbosity=2)

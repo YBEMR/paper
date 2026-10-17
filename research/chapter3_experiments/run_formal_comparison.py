@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import unittest
+import uuid
 
 from inputs import load_config, build_instance
 from q1_case import independent_lower_bound, CONFIG_SHA
@@ -29,8 +30,18 @@ PROTOCOL = HERE/'formal_comparison_protocol.json'
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def save(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, ensure_ascii=False,
-        allow_nan=False, default=str)+'\n', encoding='utf-8')
+    """Publish complete JSON atomically, retaining old evidence on I/O failure.
+
+    Never open the existing target for truncation. A failed publication leaves
+    the previous target and the distinct pending file available for diagnosis;
+    it is still an error, never an implicit retry or a successful invocation.
+    """
+    path=Path(path)
+    data=(json.dumps(value,indent=2,ensure_ascii=False,allow_nan=False,default=str)+'\n').encode('utf-8')
+    pending=path.with_name('.'+path.name+'.pending-'+uuid.uuid4().hex)
+    with pending.open('xb') as stream:
+        stream.write(data)
+    pending.replace(path)
 
 
 def protocol():

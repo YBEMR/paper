@@ -17,6 +17,8 @@ from fractions import Fraction
 import json
 from pathlib import Path
 
+from start_domain import explicit_start_sets
+
 
 def _fraction(value):
     """Reject float inputs instead of silently treating rounding as exact."""
@@ -279,6 +281,7 @@ def expand_options(instance, config, budget=None):
     if grid <= 0 or window < 0:
         raise ValueError("Start grid must be positive and window nonnegative")
     maximum_index = window // grid
+    explicit_starts = explicit_start_sets(instance, budget)
     options = []
     for scenario in instance["scenarios"]:
         requests = {request["id"]: request for request in scenario["requests"]}
@@ -291,7 +294,10 @@ def expand_options(instance, config, budget=None):
                 if duration <= 0:
                     raise ValueError("Stage duration must be positive")
                 last_index = min(maximum_index, (window - duration) // grid)
-                for index in range(first_index, last_index + 1):
+                indices = (range(first_index, last_index + 1) if explicit_starts is None else
+                           (value // grid for value in explicit_starts[scenario["id"]][stage["id"]]
+                            if release <= value and value + duration <= window))
+                for index in indices:
                     if budget is not None and len(options) % 32 == 0:
                         budget.check()
                     start = index * grid

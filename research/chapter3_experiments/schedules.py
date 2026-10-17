@@ -16,6 +16,8 @@ physical scalars use reduced rational strings and times remain milliseconds.
 
 from fractions import Fraction
 
+from start_domain import explicit_start_sets
+
 
 class InvalidSchedule(ValueError):
     def __init__(self, reason, **details):
@@ -101,7 +103,8 @@ def _check_rules(instance):
         _require(_fraction(rules[name]) == 0, "UNSUPPORTED_NONZERO_OVERHEAD", rule=name)
 
 
-def _scene_rows(instance, scene, supplied, units, domains, shared_deployment, window, grid):
+def _scene_rows(instance, scene, supplied, units, domains, shared_deployment, window, grid,
+                explicit_starts=None):
     _require(isinstance(supplied, list), "SCENE_ROWS_MUST_BE_LIST", scenario=scene["id"])
     stages = _unique(scene["stage_instances"], "id", "DUPLICATE_INPUT_STAGE")
     requests = _unique(scene["requests"], "id", "DUPLICATE_INPUT_REQUEST")
@@ -148,6 +151,8 @@ def _scene_rows(instance, scene, supplied, units, domains, shared_deployment, wi
         power = _fraction(mode["activity_power_W"])
         _require(duration > 0 and power >= 0, "INVALID_MODE_COST", stage=stage_id)
         _require(start >= 0 and (start / grid).denominator == 1, "START_OUTSIDE_GRID", stage=stage_id)
+        _require(explicit_starts is None or start in explicit_starts[scene["id"]][stage_id],
+                 "START_OUTSIDE_DECLARED_DOMAIN", stage=stage_id, start_ms=str(start))
         finish = start + duration
         request = requests[stage["request_id"]]
         release, deadline = _fraction(request["release_ms"]), _fraction(request["deadline_ms"])
@@ -250,6 +255,7 @@ def validate_schedule(instance, candidate):
         _check_rules(instance)
         window, grid = _fraction(instance["window_ms"]), _fraction(instance["start_grid_ms"])
         _require(window > 0 and grid > 0, "INVALID_WINDOW_OR_GRID")
+        explicit_starts = explicit_start_sets(instance)
         nodes, units, domains = _check_platform(instance["platform"])
         scenes = _unique(instance["scenarios"], "id", "DUPLICATE_SCENARIO")
         _require(bool(scenes), "EMPTY_SCENARIO_SET")
@@ -259,7 +265,7 @@ def validate_schedule(instance, candidate):
         shared_deployment, result_scenes = {}, {}
         for scene_id, scene in scenes.items():
             rows = _scene_rows(instance, scene, candidate["scenes"][scene_id], units, domains,
-                               shared_deployment, window, grid)
+                               shared_deployment, window, grid, explicit_starts)
             segments = _power_segments(instance["platform"], scene, rows, nodes, units, domains, window)
             completions = {request["id"]: str(max(row["end_ms"] for row in rows
                            if row["request_id"] == request["id"])) for request in scene["requests"]}

@@ -14,6 +14,7 @@ remaining templates. One supplied method budget covers all attempts.
 from fractions import Fraction
 
 from schedules import validate_schedule
+from start_domain import explicit_start_sets
 
 
 RULE_VERSION = "deterministic-initial-schedule-v1"
@@ -93,8 +94,9 @@ def _templates(instance, max_attempts, budget):
 
 
 def _start_sets(instance, starts, grid, window, budget):
+    declared = explicit_start_sets(instance, budget)
     if starts is None:
-        return None
+        return declared
     if not instance["id"].startswith("fixture_"):
         raise ValueError("Explicit reduced start sets are fixture-only")
     expected = {scene["id"]: {stage["id"] for stage in scene["stage_instances"]}
@@ -112,6 +114,8 @@ def _start_sets(instance, starts, grid, window, budget):
             values = sorted(set(map(_fraction, starts[scene_id][stage_id])))
             if any(value < 0 or value > window or (value / grid).denominator != 1 for value in values):
                 raise ValueError("Explicit start lies outside the declared grid/window")
+            if declared is not None and not set(values).issubset(declared[scene_id][stage_id]):
+                raise ValueError("Fixture starts must be a subset of the declared start domain")
             out[scene_id][stage_id] = values
     return out
 

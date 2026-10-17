@@ -14,6 +14,7 @@ from pathlib import Path
 import uuid
 
 from schedules import validate_schedule
+from start_domain import explicit_start_sets
 from thermal import Budget, Exhausted, I, _accuracy, _energy_accuracy, _q, evaluate_piecewise
 
 PROTOCOL = 'fixed-deployment-unweighted-scene-v1'
@@ -76,8 +77,12 @@ def make_scene_instance(instance, scene_id, *, unweighted=True):
     scene = _scenes(instance).get(scene_id)
     if scene is None:
         raise ValueError('unknown scene: ' + str(scene_id))
+    explicit_start_sets(instance)  # Validate complete source identity before projection.
     out = deepcopy(instance)
     out['scenarios'] = [deepcopy(scene)]
+    if 'start_domain' in out:
+        out['start_domain']['by_scene_stage_ms'] = {
+            scene_id: deepcopy(instance['start_domain']['by_scene_stage_ms'][scene_id])}
     if unweighted:
         out['scenarios'][0]['weight'] = '1'
     used = {stage['shared_stage_id'] for stage in scene['stage_instances']}
@@ -100,7 +105,7 @@ def _budget_identity(budget):
 def _source_identity():
     folder = Path(__file__).resolve().parent
     sources = [Path(__file__), folder / 'schedules.py', folder / 'thermal.py',
-               folder.parent / 'v1_evaluator' / 'interval.py']
+               folder / 'start_domain.py', folder.parent / 'v1_evaluator' / 'interval.py']
     return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
 
 

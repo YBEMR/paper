@@ -48,17 +48,23 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
             'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
             'IntegerPreprocess','none', ...
+            'LPPreprocess','none', ...
             'OutputFcn',@callback);
         % Engineering compatibility setting, fixed before formal runs:
         % numeric_diagnostic04 solved the unchanged small physical model with
         % IntegerPreprocess='none', where 'basic' reported infeasible despite
         % independent feasible lifts.  This preserves the mathematical model;
         % it does not establish a general MATLAB preprocessing defect.
+        % K.106's fixed-logic feasibility pair also requires LPPreprocess='none'
+        % for this R2023b numerical representation. The original matrices,
+        % variable domain and tolerances are unchanged. Full free-schedule
+        % optimization speed is not established by that compatibility check.
         opts.MaxTime = max(0,min(remaining-toc(requestClock), ...
             guardSeconds-toc(workerClock)));
         result.options_text = evalc('disp(opts)');
-        % All documented public option values, including defaults, are kept.
-        names = properties(opts); optionValues = struct();
+        % LPPreprocess is documented for R2023b but hidden from properties().
+        % Archive it explicitly; IntegerPreprocess='none' does not disable it.
+        names = [properties(opts); {'LPPreprocess'}]; optionValues = struct();
         for k=1:numel(names)
             value=opts.(names{k});
             if isa(value,'function_handle'), value=func2str(value); end

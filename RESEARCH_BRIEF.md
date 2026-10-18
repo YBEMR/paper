@@ -2,6 +2,10 @@
 
 更新：2026-10-18。
 
+**K.106／D130：MILP数值状态异常已完成工程修正（E551）。** 见[诊断与修复](research/chapter3_experiments/results/infeasible_audit01/summary.md)。同一原逻辑选择、原物理矩阵和容差的零目标子问题，`LPPreprocess=basic`于2.359秒报告无解，`none`于26.066秒返回原x0本身；独立原行／界复核通过原数值接纳标准。今后两版MILP显式采用LP none，Integer none及其余设置保持，并补存隐藏LP选项。当前数值接纳x0与内部无解仍冲突时，保留原始回执及既有SAFE/U，标数值一致性未决，不排除或自动重试。[公共预检115/115](research/chapter3_experiments/results/infeasible_audit01/final_common_precheck/checks.json)、[原生接口13/13](research/chapter3_experiments/results/infeasible_audit01/native_interface_precheck/checks.json)通过，绑定71项当前源码／规则。
+
+**修复范围与下一步：** 原完整自由调度矩阵关闭LP预处理的隔离诊断仍超时、无候选，返回跨外部300秒界，不补作预算内结果；固定子问题通过不证明完整模型性能改善或精确数学可行。三次原矩阵诊断及唯一两变量接口检查均留存，无正式方法补跑、新热评价或新研究U。原115项档案及统计不改，旧源码快照／批准保留。[独立审查](research/chapter3_experiments/results/infeasible_audit01/independent_review.md)另存，非主线⑥跨会话审查。下一项回到第三章现有结果与可写结论整理，不继续增加数值诊断、自动重跑或调参；未来比较须使用匹配新源码的凭据。下方K.105“异常待核”为修复前历史。
+
 **K.105／D129：110项续行完成，原115项均已调用，114项技术通过且有SAFE（E550）。** 用户“继续”接受仅执行原未启动110项、各300秒；原5项不重跑，SA103仍为技术失败且仅保留审计SAFE。续行[115/115预检及独立审查](research/chapter3_experiments/results/formal_continuation_precheck01/independent_review.md)、[新批准](research/chapter3_experiments/results/formal_protocol02/approval_record.json)绑定70项源码与manifest `ab212b5038fa3ff5086cfe48d58eb7d97ffdb73a5ffce3bd3b1328e2a31cdc31`，新110项全部退出0、技术通过，无重试、补跑或扩时。源码前后相同、旧24份档案哈希不变；首3项只验续行入口，不把原8项技术验收的7/8改成全通过。[只读合并结果及逐题详表](research/chapter3_formal_analysis/results02/summary.md)保留两批来源与源码指纹。
 
 **首批结果：** 15题均有MILP、HEFT及SA安全输出；正式SA为74/75次，base R1仅4/5成功种子。SA成功种子能量中位数在14/15题低于HEFT，`initial_78__R4`为反例（SA 1.003226 J，HEFT 0.969888 J）。MILP15次及完整赋值反馈消融10次都未严格改善初始SAFE，全部0条反馈；不能称MILP优化或连续反馈节能已获验证。已有HEFT记录中找到26个同一完整候选、35个严格超温点：除入口温度外输入相同，50°C全窗SAFE而78°C违规，支持热约束参与筛查。该证据不要求新压力实验，也不等于最优配置变化或反馈收益。[运行终审](research/chapter3_experiments/results/formal_comparison02/independent_review.md)及[分析终审](research/chapter3_formal_analysis/results02/independent_review.md)已保存，后处理44/44合成检查通过；均非主线⑥跨会话审查。
@@ -467,6 +471,8 @@
 **连续候选原型更新（2026-10-08，K.19／E452）：** S02已在CP1核两模式各3Stage分叉汇合DAG、14行跨设备／工作点选项和轮内并发；S09三代表协议已实现，有限覆盖限制不变。S01共享域和双CPU仅增加调度矩阵探针，S04仍为原计量接口；S03共同轮级期限、S05入口、S06给定盒、S07给定反例、S08诊断数据均保持。S10运行结果确认本包热筛选不活跃。76项运行预检、49项事后核对不等于这些一般平台及研究效果缺口已补齐。原型正式结果入口为research/continuous_planner/results/prototype02/search.json；未新增用户基础假设选择。
 
 ### 选择路径与变更记录（唯一维护入口）
+
+**D130（2026-10-18，用户要求先解决MILP异常）：** 用户“嗯，那先把这个异常解决掉”授权核查K.105内部无解与数值接纳初始点的冲突，进行必要修正和预检。三次预声明、各自有界的隔离诊断后，助手依据固定原逻辑子问题的直接配对，将LP预处理显式设为none，并加本次x0／内部无解冲突保护；这是工程兼容决策，不是用户改变模型假设。原物理参数、任务、合法安排、矩阵容差和热标准保持；不据诊断改写原115项、补研究U或自动补跑。原自由调度诊断仍未取得候选，后续若出现新冲突或性能问题，应重新核查，不能把本项外推为所有模型数值正确或优化有效。公共115项与原生13项通过后本项结束，返回结果整理。
 
 **D129（2026-10-18，用户接受仅续行未启动110项）：** 用户“继续”承接“下一步仅续行尚未启动的110项，已执行5项不重跑”。沿原顺序、各300秒／最多33000秒；不重跑MILP、HEFT、SA101—103，不修正103技术失败为成功。原批次只读，续行独立目录／批准／凭据及一次消费，允许必要的入口和只读汇总适配，不改变算法规则、物理参数、工作负载或热安全标准。续行若出现技术错误或源码变化仍停止，不临时加时或自动再续行；没有收益可完成阶段。此为新的续行确认，不把原115次批准重新激活。
 

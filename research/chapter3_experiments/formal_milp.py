@@ -11,7 +11,8 @@ import time
 
 from diagnostic_search import Recorder
 from initial_point import solve_with_initial_witness
-from matlab_bridge import MatlabSession
+from matlab_bridge import (MatlabSession, NUMERICAL_CONSISTENCY_CONFLICT,
+                           NUMERICAL_CONSISTENCY_UNRESOLVED)
 from milp import (_digest, add_thermal_feedback, build_model, selected_options)
 from run_warm_diagnostic import execute_warm
 from schedules import validate_schedule
@@ -119,6 +120,10 @@ def solve_formal_diagnostic(model, session, accuracy, budget, *,
             budget.check()
             if not returned.get('budget_valid'):
                 result['reason'] = 'SOLVER_RETURN_AFTER_BUDGET'; break
+            if (returned.get('numerical_consistency') or {}).get('state') == NUMERICAL_CONSISTENCY_CONFLICT:
+                result.update(reason=NUMERICAL_CONSISTENCY_UNRESOLVED,
+                              numerical_consistency=returned['numerical_consistency'])
+                break
             if not returned.get('x'):
                 result['reason'] = ('SOLVER_REPORTED_INFEASIBLE' if returned.get('exitflag') == -2
                                     else 'NO_INTEGER_CANDIDATE'); break

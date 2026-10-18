@@ -181,7 +181,7 @@ def precheck(out):
     import importlib
     suite=unittest.TestSuite()
     for name in ('test_heuristic_common','test_heft_method','test_sa_method','test_formal_milp',
-                 'test_formal_driver','test_q1_domain'):
+                 'test_formal_driver','test_q1_domain','test_solver_consistency'):
         suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(name)))
     log=io.StringIO()
     tested=unittest.TextTestRunner(stream=log,verbosity=2,resultclass=RecordedResult).run(suite)

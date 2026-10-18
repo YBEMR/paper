@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from matlab_bridge import NUMERICAL_CONSISTENCY_CONFLICT, NUMERICAL_CONSISTENCY_UNRESOLVED
 from milp import decode, evaluate_model_candidate, add_thermal_feedback, logical_candidate_diagnostics
 from thermal import Exhausted
 
@@ -154,6 +155,10 @@ def solve_diagnostic(model, session, accuracy, budget, max_rounds=50):
             budget.check()
             if not returned.get('budget_valid'):
                 result['reason'] = 'SOLVER_RETURN_AFTER_BUDGET'; break
+            if (returned.get('numerical_consistency') or {}).get('state') == NUMERICAL_CONSISTENCY_CONFLICT:
+                result.update(reason=NUMERICAL_CONSISTENCY_UNRESOLVED,
+                              numerical_consistency=returned['numerical_consistency'])
+                break
             if not returned.get('x'):
                 result['reason'] = 'SOLVER_REPORTED_INFEASIBLE' if returned.get('exitflag') == -2 else 'NO_INTEGER_CANDIDATE'; break
             if not returned.get('accepted_for_evaluation'):

@@ -7,12 +7,14 @@ session binds the caller's absolute deadline before startup, so repeated solves
 never replenish model construction, transport, or evaluation time.
 No incumbent, constraint, or cache is shared between solve requests.
 The worker fixes IntegerPreprocess='none' after the isolated small-model
-compatibility check in results/milp_numeric_diagnostic04. Other gap/tolerance
-settings are unchanged; this neither relaxes the model nor certifies bounds.
+compatibility check in results/milp_numeric_diagnostic04, and LPPreprocess='none'
+after the fixed-logic numerical check in results/infeasible_audit01. The domain,
+objective and gap/tolerance settings are unchanged; no bound is certified here.
 """
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -29,6 +31,8 @@ from scipy.io import savemat
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 DEFAULT_MATLAB = Path('F:/Matlab2023/Program_Files/MATLAB_R2023b/bin/matlab.exe')
+NUMERICAL_CONSISTENCY_CONFLICT = 'NUMERICAL_ADMISSION_STATUS_CONFLICT'
+NUMERICAL_CONSISTENCY_UNRESOLVED = 'SOLVER_NUMERICAL_CONSISTENCY_UNRESOLVED'
 
 
 def _json(path, value):
@@ -214,6 +218,33 @@ def _prepare(model, x0=None):
     return result
 
 
+def _initial_point_status_conflict(initial_point, returned, *, explicit_x0,
+                                   request_number, within_budget):
+    """Same-request engineering diagnostic, never an exact feasibility proof.
+
+    Python's tolerance admission and native infeasibility can disagree without
+    establishing a mathematical contradiction. Do not infer admission from a
+    previous request or from the worker merely reporting that x0 was received.
+    """
+    if not (explicit_x0 and initial_point.get('provided') is True
+            and initial_point.get('accepted_numerically') is True
+            and returned.get('status') == 'SOLVED' and returned.get('exitflag') == -2):
+        return None
+    native_initial = returned.get('initial_point') or {}
+    return {'state': NUMERICAL_CONSISTENCY_CONFLICT,
+            'request_number': request_number,
+            'explicit_x0_in_this_request': True,
+            'python_x0_admission': deepcopy(initial_point),
+            'worker_reported_x0_received': native_initial.get('provided'),
+            'worker_solver_x0_acceptance': native_initial.get('solver_acceptance', 'not_independently_observed'),
+            'solver_reported_status': returned.get('status'),
+            'solver_reported_exitflag': returned.get('exitflag'),
+            'formed_within_request_budget': bool(within_budget),
+            'independent_certificate': False, 'thermal_safe_claim': False,
+            'retry_performed': False,
+            'scope': 'current numerical payload admission versus solver-reported status only; no exact contradiction or solver-defect claim'}
+
+
 def _absolute_deadline(budget):
     """Accept a caller budget using the same monotonic clock as the bridge."""
     deadline = float(budget.deadline)
@@ -268,6 +299,8 @@ class MatlabSession:
             'engineering_compatibility': {
                 'IntegerPreprocess': 'none',
                 'basis': 'results/milp_numeric_diagnostic04',
+                'LPPreprocess': 'none',
+                'LPPreprocess_basis': 'results/infeasible_audit01/fixed_logic_no_lp_preprocess_probe',
                 'mathematical_model_unchanged': True,
                 'general_solver_defect_claim': False,
             },
@@ -434,8 +467,16 @@ class MatlabSession:
                        np.asarray(raw_x, dtype=float).reshape(-1).tolist())
         result['wall_seconds'] = self.clock() - started
         result['budget_valid'] = bool(self.clock() < deadline)
+        consistency = _initial_point_status_conflict(initial_point, result,
+            explicit_x0=x0 is not None, request_number=self.counter,
+            within_budget=result['budget_valid'])
+        if consistency is not None:
+            # Keep native status/exitflag/output intact. The loop consumes the
+            # separate diagnostic only after its original budget checks.
+            result['numerical_consistency'] = consistency
         result['accepted_for_evaluation'] = bool(
-            result['budget_valid'] and result.get('status') == 'SOLVED' and result['x'])
+            result['budget_valid'] and result.get('status') == 'SOLVED'
+            and result['x'] and consistency is None)
         result['request_number'] = self.counter
         result['evidence_scope'] = 'solver_reported_only_no_thermal_or_optimality_certificate'
         result['solver_response_complete_at_monotonic'] = self.clock()

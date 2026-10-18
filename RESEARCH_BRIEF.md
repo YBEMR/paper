@@ -1,12 +1,18 @@
 # 研究状态
 
-更新：2026-10-17。
+更新：2026-10-18。
+
+**K.105／D129：110项续行完成，原115项均已调用，114项技术通过且有SAFE（E550）。** 用户“继续”接受仅执行原未启动110项、各300秒；原5项不重跑，SA103仍为技术失败且仅保留审计SAFE。续行[115/115预检及独立审查](research/chapter3_experiments/results/formal_continuation_precheck01/independent_review.md)、[新批准](research/chapter3_experiments/results/formal_protocol02/approval_record.json)绑定70项源码与manifest `ab212b5038fa3ff5086cfe48d58eb7d97ffdb73a5ffce3bd3b1328e2a31cdc31`，新110项全部退出0、技术通过，无重试、补跑或扩时。源码前后相同、旧24份档案哈希不变；首3项只验续行入口，不把原8项技术验收的7/8改成全通过。[只读合并结果及逐题详表](research/chapter3_formal_analysis/results02/summary.md)保留两批来源与源码指纹。
+
+**首批结果：** 15题均有MILP、HEFT及SA安全输出；正式SA为74/75次，base R1仅4/5成功种子。SA成功种子能量中位数在14/15题低于HEFT，`initial_78__R4`为反例（SA 1.003226 J，HEFT 0.969888 J）。MILP15次及完整赋值反馈消融10次都未严格改善初始SAFE，全部0条反馈；不能称MILP优化或连续反馈节能已获验证。已有HEFT记录中找到26个同一完整候选、35个严格超温点：除入口温度外输入相同，50°C全窗SAFE而78°C违规，支持热约束参与筛查。该证据不要求新压力实验，也不等于最优配置变化或反馈收益。[运行终审](research/chapter3_experiments/results/formal_comparison02/independent_review.md)及[分析终审](research/chapter3_formal_analysis/results02/independent_review.md)已保存，后处理44/44合成检查通过；均非主线⑥跨会话审查。
+
+**异常与完成边界：** `response_R__R2`的MILP于233.047秒报告无解，但独立SAFE种子U=1.626668 J仍保留；无严格改善截断／反馈行，请求x0与原生初始点相同且通过数值接纳。这是表示／数值一致性待核，不是普通超时或模型无解证明。全部正式U与L0未闭合，0独立最优／无解。当前完成的是原首批15个完整三Stage问题，不是五组实验全部完成；Q1、物理参数、工作负载与安全标准保持，未追加案例。下一项建议只核这条内部无解与已保存初始点的关系，再收拢第三章可写结论；不自动增加算法组件、热条件或预算。下方K.104及更早“待批／未启动”为历史。
 
 **K.104／D128：正式批次在第5次归档故障后按约停止，4次技术通过，110次未启动（E549）。** 用户已确认115次／各300秒，实际批准及一次消费记录均保存。首例`base__R1`的MILP、HEFT、SA101／102通过：U分别约1.632465、0.985107、0.869718／0.873164 J。MILP仅保留初始构造见证，无后续MILP安全候选或热反馈；SA五种子未齐、首8次技术验收未完成，不形成15问题总体比较。[完整状态与汇总](research/chapter3_formal_analysis/results01/summary.md)、[独立运行审查](research/chapter3_experiments/results/formal_comparison01/independent_review.md)已保存，非主线⑥跨会话审查。
 
 **停止原因与修正：** SA103已完成搜索并将SAFE结果完整保存；随后worker补写身份标签时，`Path.write_text`打开同一`result.json`发生`OSError: [Errno 22] Invalid argument`，退出1触发控制器停止。原24 MB JSON可完整解析，SAFE于281.391秒形成、U约0.871736 J，按审计证据保留，**不补认技术完成或计入正式SA统计**。隔离字节写入未复现，具体系统原因未定。仅将driver归档改为临时文件写完再原子替换，失败保留旧证据／pending文件；未改算法、参数或安全标准。[修正后98/98预检](research/chapter3_experiments/results/formal_precheck02/checks.json)通过，与原运行快照分开。旧结果、退出码及调用均未改，无研究补跑／自动续跑。
 
-**下一步提案：** [110项未启动清单](research/chapter3_experiments/results/formal_comparison01/remaining_scope_proposal.json)仅保留原顺序／原300秒，各次合计最多33000秒＝9小时10分；已经调用的5项（包括103）不重跑。此为续行范围提案，尚无续行授权／入口冻结，不再次消费原115次批准。当前`batch_stopped_on_technical_error=true`、`continuation_authorized=false`；Q1／新DAG／新热条件均未新增。下方K.103待批状态为历史。
+**K.104结束时的历史提案（已由上方D129接受并执行）：** [110项清单](research/chapter3_experiments/results/formal_comparison01/remaining_scope_proposal.json)保留原顺序／原300秒，各次合计最多33000秒＝9小时10分；原5项包括103不重跑。原批准不重置，后续另立续行入口与批准。本段的未授权状态不代表当前状态。
 
 **K.103／D127：完整链首批比较方法已实现，96项必要预检通过，具体批量预算待确认（E548）。** 新增共享部署HEFT、SA、两版MILP共同包装及[正式协议](research/chapter3_experiments/formal_comparison_protocol.md)，复用原资源／期限检查与完整连续热能耗评价。HEFT继承向上排序／最早完成插入，适配跨场景部署、工作点及一轮节能调整；SA搜索部署、频点、优先级和等待，其退火参数是对照前自设算法常数。反馈消融只将条件温限反馈换为可靠违规场景的完整赋值删除，原种子／x0、主模型、四项强化与统一时钟保持。
 
@@ -461,6 +467,8 @@
 **连续候选原型更新（2026-10-08，K.19／E452）：** S02已在CP1核两模式各3Stage分叉汇合DAG、14行跨设备／工作点选项和轮内并发；S09三代表协议已实现，有限覆盖限制不变。S01共享域和双CPU仅增加调度矩阵探针，S04仍为原计量接口；S03共同轮级期限、S05入口、S06给定盒、S07给定反例、S08诊断数据均保持。S10运行结果确认本包热筛选不活跃。76项运行预检、49项事后核对不等于这些一般平台及研究效果缺口已补齐。原型正式结果入口为research/continuous_planner/results/prototype02/search.json；未新增用户基础假设选择。
 
 ### 选择路径与变更记录（唯一维护入口）
+
+**D129（2026-10-18，用户接受仅续行未启动110项）：** 用户“继续”承接“下一步仅续行尚未启动的110项，已执行5项不重跑”。沿原顺序、各300秒／最多33000秒；不重跑MILP、HEFT、SA101—103，不修正103技术失败为成功。原批次只读，续行独立目录／批准／凭据及一次消费，允许必要的入口和只读汇总适配，不改变算法规则、物理参数、工作负载或热安全标准。续行若出现技术错误或源码变化仍停止，不临时加时或自动再续行；没有收益可完成阶段。此为新的续行确认，不把原115次批准重新激活。
 
 **D128（2026-10-17，首批正式比较范围与预算确认）：** 用户“我确认，你继续吧”承接本会话明确提交的15问题／115次／各300秒清单。选择完整执行115次，而非仅首例8次；按原顺序逐次独立计费，先验首例技术正确性，不要求取得SAFE、改善种子、触发反馈或证明最优。沿D127原规则、原完整链及功热参数；批准绑定manifest `ce240771dea8fbadd4b8ec28b91699d3f4c4d80ebee66e3070d39eb1ac69f56b`，只消费一次。技术错误或源码变化停止后续，已完成调用不重跑；资源／预算／数值未决如实保留，不以无收益追加运行。此项仅冻结既有首批范围与预算，不授权新物理输入、DAG变化、Q1重跑或调参。
 

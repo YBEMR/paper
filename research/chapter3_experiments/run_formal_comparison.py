@@ -273,12 +273,20 @@ def worker(job,out,declaration):
 
 def run(precheck_record,approval_record,out):
     current=validate_gate(precheck_record,approval_record)
+    return execute_batch(current,precheck_record,approval_record,out)
+
+
+def execute_batch(current,precheck_record,approval_record,out):
+    """Execute a manifest already validated by the full or continuation gate."""
     out=Path(out).resolve()
     if out.exists(): raise FileExistsError(str(out))
     claim_approval(approval_record,current,out)
     out.mkdir(parents=True,exist_ok=False)
     frozen={'manifest':current,'source_sha256':signature(),'approval_record_sha256':digest(approval_record),
         'precheck_record_sha256':digest(precheck_record),'started_at':time.strftime('%Y-%m-%dT%H:%M:%S%z')}
+    if current.get('continuation_only'):
+        frozen.update(prior_batch_identity=current['prior_batch_identity'],
+            source_version_change='Archival atomic publication and continuation selection only; algorithms, input and safety unchanged.')
     save(out/'declaration.json',frozen)
     for key,path in source_paths().items():
         target=out/'source_snapshot'/key;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
@@ -310,8 +318,10 @@ def run(precheck_record,approval_record,out):
             save(out/'stop.json',{'reason':'TECHNICAL_CHECK_FAILED','call':call});break
         first_jobs=[j for j in current['jobs'] if j['problem_id']==first]
         if len(calls)==len(first_jobs):
-            save(out/'first_pair_technical_check.json',{'passed':True,'calls':len(calls),
-                'scope':'technical acceptance only; no SAFE/energy advantage required'})
+            name='continuation_entry_technical_check.json' if current.get('continuation_only') else 'first_pair_technical_check.json'
+            save(out/name,{'passed':True,'calls':len(calls),
+                'scope':('current continuation entries only; original eight-call failure unchanged'
+                    if current.get('continuation_only') else 'technical acceptance only; no SAFE/energy advantage required')})
     save(out/'source_integrity.json',{'unchanged':signature()==frozen['source_sha256']})
     summarize(out)
 

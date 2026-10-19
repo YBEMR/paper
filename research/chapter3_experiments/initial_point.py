@@ -11,7 +11,7 @@ from fractions import Fraction as F
 import numpy as np
 from scipy.linalg import expm
 
-from control_policy import require_legacy_control
+from control_policy import AUTO_LOW_IMMEDIATE_V1, resolve_idle_policy
 from initial_schedule import iter_initial_candidates
 from matlab_bridge import _prepare, InitialPointRejected
 from milp import decode, selected_options, evaluate_model_candidate, _digest
@@ -30,7 +30,7 @@ def _key(candidate):
 
 def _propose_vector(model, candidate, budget):
     """Budgeted nominal physical lift, followed by separate admission checks."""
-    require_legacy_control(model.instance, 'MILP initial physical point')
+    auto_low = resolve_idle_policy(model.instance) == AUTO_LOW_IMMEDIATE_V1
     p = model.instance['platform']; nodes = p['node_order']; n = len(nodes)
     units = {u['id']: u for u in p['units']}
     vector = np.zeros(len(model.names))
@@ -61,7 +61,10 @@ def _propose_vector(model, candidate, budget):
             for domain_id, domain in p['domains'].items():
                 starting = [o for o, _ in choices if units[o['unit_id']]['domain_id'] == domain_id
                             and F(o['start_ms'])/1000 == left]
-                if starting:
+                if auto_low:
+                    occupied = [o for o in active if units[o['unit_id']]['domain_id'] == domain_id]
+                    held[domain_id] = occupied[0]['opp_id'] if occupied else 'L'
+                elif starting:
                     held[domain_id] = starting[0]['opp_id']
                 vector[meta['start_indicators'][l, domain_id]] = int(bool(starting))
                 for opp in domain['opps']:

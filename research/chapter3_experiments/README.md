@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.111完成自动L共同控制轨迹／连续评价，必要预检67/67；新策略方法构模／搜索尚未适配，显式拒收，不运行性能比较 |
+| 当前阶段 | K.112接通自动L的MILP控制／物理补全、仅共享部署构模及候选合并，必要预检71/71；完整求解生命周期及对照方法仍待适配，无新性能比较 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新实现状态（K.111）：** [自动L必要预检67/67](results/idle_policy_precheck02/checks.json)及[独立审查](results/idle_policy_precheck02/independent_review.md)通过，共同轨迹和连续评价已支持新策略；原配置和历史结果保留。MILP等方法尚未适配，入口明确拒收新策略。见[§3.12r](#312r-自动l共同轨迹与连续评价k111)，本轮无研究求解或性能比较。
+**最新实现状态（K.112）：** [必要预检71/71](results/auto_milp_precheck02/checks.json)及[独立审查](results/auto_milp_precheck02/independent_review.md)通过；自动L已接MILP控制／物理补全，新增仅固定跨场景H的构模及原输入候选合并。见[§3.12s](#312s-自动l的milp表达与仅共享部署接口k112)。当前完成表达和评价接口，未启动MATLAB、研究方法或正式对照。
+
+**历史实现状态（K.111）：** [自动L必要预检67/67](results/idle_policy_precheck02/checks.json)及[独立审查](results/idle_policy_precheck02/independent_review.md)通过，共同轨迹和连续评价已支持新策略；原配置和历史结果保留。当时MILP等方法尚未适配，入口明确拒收新策略。见[§3.12r](#312r-自动l共同轨迹与连续评价k111)，无研究求解或性能比较。
 
 **历史执行状态（K.108）：** [57项必要预检](results/prefilter_precheck02/checks.json)与独立审查通过后，按冻结顺序完成三个原R1条件×current／prefilter、每次300秒，6/6技术验收。三对最终U相同、0次严格改善、0条反馈；变量／行数及构模和首SAFE时间下降。第六次有一条预算内后续SAFE，但与种子完全相同。见[§3.12q](#312q-期限前置过滤与事件重建的六次诊断k108)、[完整分析](../chapter3_formal_analysis/prefilter_diagnostic01/summary.md)及[运行独立审查](results/prefilter_diagnostic01/independent_review.md)。阶段结束，不追加实验；下方K.107及更早的待批／待实现状态是历史。
 
@@ -907,7 +909,7 @@ checked = validate_schedule(auto_instance, candidate)
 receipt = evaluate_candidate(auto_instance, candidate, accuracy, budget)
 ```
 
-**尚未接入的方法明确拒收。** 新策略不可进入仍按hold表达的MILP构模（含`include_physics=False`）、物理lift／x0补全、旧完整固定部署场景适配、HEFT／SA正式搜索及未重新核查的新策略方法下界接口。实例或配置任一带新策略都不能悄悄运行旧表达；低层无规则的既有模拟对象不因此变更。纯构造与输入展开不代表新策略方法已就绪。后续按同一规则逐项适配后才可开启，旧批准／预检不匹配新源码也不能重启研究批次。
+**K.111完成时尚未接入的方法明确拒收。** 当时新策略不可进入仍按hold表达的MILP构模（含`include_physics=False`）、物理lift／x0补全、旧完整固定部署场景适配、HEFT／SA正式搜索及未重新核查的新策略方法下界接口。实例或配置任一带新策略都不能悄悄运行旧表达；低层无规则的既有模拟对象不因此变更。K.112接通范围见下一节，未适配的入口继续拒收；旧批准／预检不能重启新源码研究批次。
 
 [可复跑入口](run_idle_policy_precheck.py)最终[67/67通过](results/idle_policy_precheck02/checks.json)，6.141秒：27项新控制／评价检查、32项受影响旧HEFT／SA单测、8项完整性核对。完整记录／原源码快照位于[预检目录02](results/idle_policy_precheck02)，并有[独立审查](results/idle_policy_precheck02/independent_review.md)。正确性阶段事先设180秒外限，禁止原生求解和MILP构模，不是新的方法性能预算。首轮[01](results/idle_policy_precheck01/checks.json)66/66通过、8.156秒，原记录保留；审查随后发现旧源码对照若依赖动态HEAD，提交后会失去独立性，故将测试与快照基准固定为修改前的`e086ef4`并加一项一致性检查，重做受影响预检。两轮之间未改控制或数值实现。
 
@@ -915,7 +917,21 @@ receipt = evaluate_candidate(auto_instance, candidate, accuracy, budget)
 
 阶段止于共同评价基础层，不报告新策略研究节能率或MILP收益。下一项接自动L的MILP控制／物理补全和部分固定部署构模、候选合并及统一预算；各方法尚未共同适配前不做比较。外层排序、时间配额、实际研究调用和预算仍需后续明确；不自动补跑旧115项、Q1或K.108。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.111更新见上）
+### 3.12s 自动L的MILP表达与仅共享部署接口（K.112）
+
+在既有活动锁频及OPP唯一选择约束上，auto分支为每个非L档增加`auto_opp_active_support`：该档的`rho`不大于本片段同档活动选项`y`之和。无选中活动时所有非L为0，域必L；有工作时原锁频关系确定其OPP，支持同频并发。auto取消跨片段`idle_hold_*`，状态集合取`{L}∪本片段潜在活动OPP`，按真实半开区间更新；没有新增busy整数变量。`J`仍只表示Stage启动，不把自动降L当新启动。`lift_candidate`和`initial_point._propose_vector`按选中活动同步重建；原连续评价、区间系数及误差要求不变，legacy分支保留。
+
+`build_model(..., fixed_shared_deployment=a, fixed_scene_id=c)`在**原完整输入**上调用`shared_deployment_ids`／`validate_shared_deployment`确定H；只过滤H中不相容的具体单元，场景内本地映射及所有兼容频点／起点继续开放。H空时允许`a={}`，与旧完整`fixed_deployment`互斥；不使用投影后的H替代原条件。新元数据保存`deployment_scope='shared_only'`、外层条件和原输入身份。单场景视图权重为1，保留全部物理节点；原权重不改。
+
+新`scene_adapter.evaluate_partial_scene`与`aggregate_partial_scene_receipts`使用独立协议`partial-shared-deployment-unweighted-scene-v1`，分别保存外层H条件和本地实际部署，绑定原输入、规则、候选、精度、源码和同一Budget。合并后重新核原输入的完整合法性；包括零权重场景在内全部匹配SAFE，才按原权重加计一次并提交全局U。局部失败／未决不排整个外层条件；已成匹配违规在外层到期后保留，迟到安全结果不补U。旧完整固定部署适配API仍保持原语义，暂不接auto。
+
+[可复跑入口](run_auto_milp_precheck.py)在预声明240秒正确性外限内，[最终02为71/71](results/auto_milp_precheck02/checks.json)，19.922秒：59项单测、12项完整性核对。四小域共408条笛卡尔积赋值、197条合法安排，在辅助整数／连续两种表达下逐项一致；另36条仅共享部署小域赋值，独立合法集2条，与两种固定A及其场景投影的并相同。本地完整模式表保留另行核对，支持设备不等于每个慢频安排均能满足期限。两份legacy小域非物理矩阵与固定`2e72ad6`旧源逐行一致；一份真实SAFE单Stage的两种物理补全通过原x0数值接纳，4条能量下界行／证书对应的7个状态残差检查均通过。
+
+每轮8次物理接口调用，其中6次真实连续传播、2次在传播前截止；20项partial接口测试另用明确mock回执，不计物理证据。两次真实partial场景评价在同一Budget内形成完整SAFE并合并加权U。25次当前小域构模及2次固定旧源参考构模均无优化器；输入展开不算研究调用。28项源码／输入与快照绑定，原配置、数值核心及旧24档案保持。首次[01](results/auto_milp_precheck01/checks.json)70/71：测试误将B／C所有L档支持设备计入可行乘积，忽略其原期限；[修订说明](results/auto_milp_precheck01/failure_analysis.json)保留。仅改测试预期、按独立合法域核对后形成02，未改实现／夹具／研究输入。
+
+阶段结论为表达、物理补全与部分固定／合并接口正确性，不是MATLAB实际接纳或研究节能收益。完整`execute_milp`生命周期、内层反馈和统一全局U更新尚未适配；HEFT／SA及旧方法下界继续拒收auto。下一项只接这些内层生命周期与计费，先小域端到端；外层排序／配额、原规模研究清单与总预算仍待明确，不自动重启旧115项、Q1或K.108。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.112更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

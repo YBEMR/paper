@@ -8,7 +8,7 @@ bound. Small explicit start sets are permitted solely for named fixtures.
 from bisect import bisect_right
 from contextlib import nullcontext, contextmanager
 from copy import deepcopy
-from control_policy import require_legacy_control
+from control_policy import AUTO_LOW_IMMEDIATE_V1, resolve_idle_policy
 from fractions import Fraction as F
 from itertools import product
 import math
@@ -546,7 +546,8 @@ def add_energy_lower_bound(model, target, sources, gates, source_rows, onehot_ro
 def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None,
                 *, fix_late_options=True, aggregate_opp_locks=True,
                 relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
-                fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None):
+                fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None,
+                fixed_shared_deployment=None):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
@@ -558,6 +559,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     fixed_scene_id then constructs one unweighted scene; it never changes the
     original scenario weights or input. Rebuilt physics is freshly enclosed,
     not claimed row-equivalent to the old numerical outer approximation.
+    Alternatively fixed_shared_deployment fixes only Stages occurring across
+    multiple original scenes, leaving every scene-local deployment free.
 
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
@@ -565,25 +568,37 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     """
     budget = budget if budget is not None else Budget()
     budget.check()
-    require_legacy_control(instance, 'MILP formulation')
-    require_legacy_control(config, 'MILP configuration')
-    adapted = fixed_deployment is not None or prefilter_deadlines or fixed_scene_id is not None
-    if fixed_scene_id is not None and fixed_deployment is None:
-        raise ValueError('single-scene construction requires a complete fixed shared deployment')
+    idle_policy = resolve_idle_policy(instance)
+    if resolve_idle_policy(config) != idle_policy:
+        raise ValueError('MILP instance/config control policies must match')
+    auto_low = idle_policy == AUTO_LOW_IMMEDIATE_V1
+    partial_fixed = fixed_shared_deployment is not None
+    if partial_fixed and fixed_deployment is not None:
+        raise ValueError('full and shared-only fixed deployments are mutually exclusive')
+    adapted = (fixed_deployment is not None or partial_fixed or prefilter_deadlines
+               or fixed_scene_id is not None)
+    if fixed_scene_id is not None and fixed_deployment is None and not partial_fixed:
+        raise ValueError('single-scene construction requires a fixed deployment condition')
     normalized = None
     view = instance
-    if fixed_deployment is not None:
+    if fixed_deployment is not None or partial_fixed:
         from scene_adapter import validate_fixed_deployment, make_scene_instance
-        normalized = validate_fixed_deployment(instance, fixed_deployment)
+        if partial_fixed:
+            from scene_adapter import validate_shared_deployment
+            normalized = validate_shared_deployment(instance, fixed_shared_deployment)
+        else:
+            normalized = validate_fixed_deployment(instance, fixed_deployment)
         view = (make_scene_instance(instance, fixed_scene_id, unweighted=True)
                 if fixed_scene_id is not None else deepcopy(instance))
-        view['stage_modes'] = {shared: modes for shared, modes in view['stage_modes'].items()
-                               if shared in normalized}
+        if not partial_fixed:
+            view['stage_modes'] = {shared: modes for shared, modes in view['stage_modes'].items()
+                                   if shared in normalized}
         # Filter modes BEFORE local-option expansion; never enumerate complete
         # arrangements or discard a compatible frequency/start preference.
         for shared, modes in view['stage_modes'].items():
             budget.check()
-            view['stage_modes'][shared] = [m for m in modes if m['unit_id'] == normalized[shared]]
+            if shared in normalized:
+                view['stage_modes'][shared] = [m for m in modes if m['unit_id'] == normalized[shared]]
     budget.check()
     model = Model(view, budget, progress)
     model.formulation = dict(fix_late_options=bool(fix_late_options),
@@ -591,10 +606,12 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                              relax_auxiliary_integrality=bool(relax_auxiliary_integrality))
     if strengthen_energy_lower_bounds:
         model.formulation['energy_lower_bounds'] = True
+    if auto_low:
+        model.formulation['idle_policy'] = idle_policy
     if adapted:
         model.preprocessing = {
             'source_input_sha256': _digest(instance),
-            'fixed_deployment': deepcopy(normalized),
+            'fixed_deployment': None if partial_fixed else deepcopy(normalized),
             'fixed_scene_id': fixed_scene_id,
             'prefilter_deadlines': bool(prefilter_deadlines),
             'objective_weights': {s['id']: s['weight'] for s in instance['scenarios']},
@@ -603,8 +620,12 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             'empty_stage_option_sets': [], 'fixed_idle_domains': {},
         }
         model.formulation.update(prefilter_deadlines=bool(prefilter_deadlines),
-                                 fixed_deployment=normalized is not None,
+                                 fixed_deployment=fixed_deployment is not None,
                                  fixed_scene_id=fixed_scene_id)
+        if partial_fixed:
+            model.preprocessing.update(deployment_scope='shared_only',
+                fixed_shared_deployment=deepcopy(normalized))
+            model.formulation['fixed_shared_deployment'] = True
     energy_specs, energy_onehot_rows = [], {}
     auxiliary = dict(integer=not relax_auxiliary_integrality,
                      implied_binary=relax_auxiliary_integrality)
@@ -694,7 +715,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 'active': [], 'options': scene_options, 'stage_options': stage_options,
                 'start_indicators': {}, 'states': []}
         model.scenes[sid] = meta
-        fixed_idle = ({did: scene['entry']['domain_opp'][did] for did in domains
+        fixed_idle = ({did: 'L' if auto_low else scene['entry']['domain_opp'][did] for did in domains
                        if not any(unit_domain[o['unit_id']] == did for o, y in scene_options)}
                       if adapted else {})
         if adapted:
@@ -742,14 +763,25 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 for y in starting:
                     model.le({y: 1, trigger: -1}, 0, 'start_or_lower')
                 model.le({trigger: 1, **{y: -1 for y in starting}}, 0, 'start_or_upper')
-                for opp in domain['opps']:
-                    now = meta['rho'][l, domain_id, opp]
-                    difference = {now: 1}
-                    previous = int(scene['entry']['domain_opp'][domain_id] == opp) if l == 0 else 0
-                    if l:
-                        difference[meta['rho'][l-1, domain_id, opp]] = -1
-                    model.le({**difference, trigger: -1}, previous, 'idle_hold_upper')
-                    model.le({**{j: -a for j, a in difference.items()}, trigger: -1}, -previous, 'idle_hold_lower')
+                if auto_low:
+                    # A non-L state needs active work at that same OPP.
+                    # Together with the active locks and one-hot rows, this
+                    # forces L exactly when the whole domain is empty.
+                    for opp in domain['opps']:
+                        if opp != 'L':
+                            model.le({meta['rho'][l, domain_id, opp]: 1,
+                                      **{y: -1 for o, y in active_by_domain[domain_id]
+                                         if o['opp_id'] == opp}},
+                                     0, 'auto_opp_active_support')
+                else:
+                    for opp in domain['opps']:
+                        now = meta['rho'][l, domain_id, opp]
+                        difference = {now: 1}
+                        previous = int(scene['entry']['domain_opp'][domain_id] == opp) if l == 0 else 0
+                        if l:
+                            difference[meta['rho'][l-1, domain_id, opp]] = -1
+                        model.le({**difference, trigger: -1}, previous, 'idle_hold_upper')
+                        model.le({**{j: -a for j, a in difference.items()}, trigger: -1}, -previous, 'idle_hold_lower')
                 if aggregate_opp_locks:
                     by_unit_opp = {}
                     for o, y in active_by_domain[domain_id]:
@@ -760,9 +792,14 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 else:
                     for o, y in active_by_domain[domain_id]:
                         model.le({y: 1, meta['rho'][l, domain_id, o['opp_id']]: -1}, 0, 'active_locks_opp')
-                # Necessary prefix reachability only: an OPP cannot be held
-                # before any possible Stage using it has started.
-                possible.append(sorted(prefix_opps[domain_id]))
+                if auto_low:
+                    # Every selected active OPP is possible; idle is always L.
+                    possible.append(sorted({'L'} | {
+                        o['opp_id'] for o, y in active_by_domain[domain_id]}))
+                else:
+                    # Necessary prefix reachability only: an OPP cannot be held
+                    # before any possible Stage using it has started.
+                    possible.append(sorted(prefix_opps[domain_id]))
             states = list(product(*possible))
             meta['states'].append(states)
             for state in states:
@@ -915,7 +952,7 @@ def lift_candidate(model, candidate, allow_invalid=False):
     tests allow_invalid creates a deterministic assignment whose violated
     rows can be compared with an independent Cartesian legality oracle.
     """
-    require_legacy_control(model.instance, 'MILP physical lift')
+    auto_low = resolve_idle_policy(model.instance) == AUTO_LOW_IMMEDIATE_V1
     from scipy.linalg import expm
     if not allow_invalid:
         checked = validate_schedule(model.instance, candidate)
@@ -945,7 +982,10 @@ def lift_candidate(model, candidate, allow_invalid=False):
             active = [o for o, y in choices if F(o['start_ms'])/1000 <= left < F(o['end_ms'])/1000]
             for domain_id, domain in p['domains'].items():
                 starting = [o for o, y in choices if units[o['unit_id']]['domain_id'] == domain_id and F(o['start_ms'])/1000 == left]
-                if starting:
+                if auto_low:
+                    occupied = [o for o in active if units[o['unit_id']]['domain_id'] == domain_id]
+                    held[domain_id] = occupied[0]['opp_id'] if occupied else 'L'
+                elif starting:
                     held[domain_id] = starting[0]['opp_id']
                 x[meta['start_indicators'][l, domain_id]] = int(bool(starting))
                 for opp in domain['opps']:

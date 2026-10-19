@@ -433,9 +433,8 @@ class ControlPolicyLegacyMethodGuards(unittest.TestCase):
         require_legacy_control({},'test_existing_low_level_mock')
         with self.assertRaises(ValueError): require_legacy_control(self.auto,'test_auto')
 
-    def test_MILP_and_both_physical_lifts_reject_before_construction(self):
+    def test_MILP_rejects_mismatched_policy_before_construction(self):
         import milp
-        import initial_point
         with patch.object(milp,'Model',side_effect=AssertionError('Model must not be built')) as model:
             with self.assertRaises(ValueError): milp.build_model(self.auto,_CONFIG)
             legacy = deepcopy(self.auto)
@@ -443,13 +442,6 @@ class ControlPolicyLegacyMethodGuards(unittest.TestCase):
             auto_config = with_auto_low_idle(_CONFIG)
             with self.assertRaises(ValueError): milp.build_model(legacy,auto_config)
             model.assert_not_called()
-        dummy = SimpleNamespace(instance=self.auto)
-        with patch.object(initial_point,'expm',side_effect=AssertionError('Lift must not run')) as expm:
-            with self.assertRaises(ValueError): initial_point._propose_vector(dummy,self.candidate,Budget())
-            expm.assert_not_called()
-        with patch.object(milp.np,'zeros',side_effect=AssertionError('Lift must not allocate')) as zeros:
-            with self.assertRaises(ValueError): milp.lift_candidate(dummy,self.candidate,allow_invalid=True)
-            zeros.assert_not_called()
 
     def test_HEFT_SA_and_legacy_LB_reject_before_assessment(self):
         from heft_method import run_heft

@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.119根割单因素配对完成；原参数下两版同U、无初始化外改善，不推广新默认 |
+| 当前阶段 | K.120累计前置代数及静态成本核查完成；生产模型尚未接入，不报告性能收益 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新诊断（K.119）：** 可选session级CutMaxIterations已接通；最终50项mock通过、34源冻结后，按预声明完成原首共享条件的10／1各一次300秒／scene60秒诊断。两版U均1.080823451833 J，等于各自完整初始化；0新安排、0后续改善、0反馈，方法160.484／160.922秒，实际选项及矩阵指纹匹配。见[结果摘要](results/cut_pair_diagnostic01/analysis01/summary.md)与[§3.12y](#312y-根割单因素配对k119)。本次不把1改为默认，不补跑或扫参。[本线程独立审查](results/cut_pair_diagnostic01/independent_review.md)另存，非主线⑥。
+**最新核查（K.120）：** 累计前置可保留精确整数合法安排并加强局部期望依赖松弛。一次11项代数测试覆盖384局部整数配对；薄核验7项通过。首条件AB／AC静态新增99／91行、9306／7350非零，保留38条空前驱prefix行；不增变量、不改生产代码或物理输入，未运行LP／MILP／热评价。[凭据](results/cumulative_precedence_audit01/verification.json)与[本线程独立审查](results/cumulative_precedence_audit01/independent_review.md)保存，非主线⑥；不宣称加速或节能。
+
+**历史诊断（K.119）：** 可选session级CutMaxIterations已接通；最终50项mock通过、34源冻结后，按预声明完成原首共享条件的10／1各一次300秒／scene60秒诊断。两版U均1.080823451833 J，等于各自完整初始化；0新安排、0后续改善、0反馈，方法160.484／160.922秒，实际选项及矩阵指纹匹配。见[结果摘要](results/cut_pair_diagnostic01/analysis01/summary.md)与[§3.12y](#312y-根割单因素配对k119)。本次不把1改为默认，不补跑或扫参。[本线程独立审查](results/cut_pair_diagnostic01/independent_review.md)另存，非主线⑥。
 
 **历史分析（K.118）：** 只读核K.116九次原生记录，7次完整返回均逐元素等于各自x0、2次为空；7次已有rootlp→heuristics及内部界，不将节点0说成根LP均未完成。原生调用合计625.232秒，约方法时间81.93%；第7次58.442秒仍报告cutgen、界无可辨识提升。[逐次CSV](results/shared_search_diagnostic01/log_analysis01/factual_requests.csv)及[事实JSON](results/shared_search_diagnostic01/log_analysis01/facts.json)已存。只建议后续单独限制CutMaxIterations=1；代码、模型和60秒片本轮不改，条件配对及预算提案见[计划K.118](../第三章当前进展与正式实验推进计划_审查稿.md#k118九次既有日志的瓶颈归因与唯一后续候选)，未运行／批准。
 
@@ -1024,7 +1026,25 @@ F:/Anaconda3/python.exe research/chapter3_experiments/summarize_cut_pair.py --ru
 
 [分析01](results/cut_pair_diagnostic01/analysis01/summary.md)只读已完成档案，保存两调用CSV、U／L0／L_a的PNG／PDF、各请求阶段／原生界／实际cut／向量比较及首模型指纹。两版最终U与本次init相同、AB只返回x0、AC空、节点和反馈均0；独立L0＝L_a＝0.738285994489 J，gap31.6923%，无最优／无解证书。原生MaxTime派生差异原样列出；0.438秒单次耗时差不作性能结论。阶段结束，不将1推广为默认，不把K.116当control，不扫描其他设置。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.119更新见上）
+### 3.12z 累计前置代数与静态成本核查（K.120）
+
+`precedence_check.build_precedence_system(P,S,simplify=False)`只生成一条有限DAG边的精确期望／累计关系，不接优化器或热评价；选项需提供唯一ID及精确start/end，标签不参与删项。按所有不同后继启动阈值累计，等端点可接，原期望行始终保留；可选简化只删已证恒真／同系数行，空前驱prefix非平凡行保留。后续接入须绑定真实y索引，不跨场景按字符串ID合并。
+
+可复跑入口（原研究档案不重跑）：
+
+```powershell
+# 单测在research/chapter3_experiments目录执行；本轮11/11仅执行一次。
+F:/Anaconda3/python.exe -B -m unittest test_precedence_check -v
+# 以下在项目根目录执行；输出须用不存在的新路径。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/analyze_precedence_cost.py --archive research/chapter3_experiments/results/cut_pair_diagnostic01 --out <新的静态计数目录>
+F:/Anaconda3/python.exe -B research/chapter3_experiments/verify_precedence_audit.py --audit research/chapter3_experiments/results/cumulative_precedence_audit01 --out <新的核验JSON>
+```
+
+单测工作目录为`research/chapter3_experiments`。静态成本入口只读保存input／MAT／源码并展开单Stage选项，不调用build_model、LP、MILP或热传播；原MAT按.gitignore留本机，缺失时不能重算原矩阵匹配。初版[计数记录](results/cumulative_precedence_audit01/costs.json)保留；持久化脚本的唯一[复现结果](results/cumulative_precedence_audit01/reproduced/costs.json)逐场景及逐弧完全一致，含producer SHA。
+
+[薄核验](results/cumulative_precedence_audit01/verification.json)7/7绑定4个本轮源码，核11项原单测、34个未变生产／输入源、静态成本复现、独立累计生成器的190行／16656非零及已存x0保留。原期望依赖8行全部匹配；38条空prefix行保留，透明删除0。当前只完成正确性／成本依据，尚未实施可选强化或测根LP改进，下一项见[计划K.120](../第三章当前进展与正式实验推进计划_审查稿.md#k120依赖分数松弛与累计前置强化审查完成未接入)。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.120更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

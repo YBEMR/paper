@@ -266,19 +266,33 @@ def _solver_time_cap(value):
     return result
 
 
+def _cut_iteration_limit(value):
+    """Optional native cut-pass limit; None leaves the R2023b default alone."""
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise ValueError('cut_max_iterations must be an integer from 1 to 50 or None')
+    if not 1 <= value <= 50 or value != int(value):
+        raise ValueError('cut_max_iterations must be an integer from 1 to 50 or None')
+    return int(value)
+
+
 class MatlabSession:
     """File-handshake worker with external deadline checks on every request.
 
     ``remaining_s`` passed to solve is the caller's remaining *case* budget.
     Optional ``solver_max_time_s`` limits only native intlinprog MaxTime; it
     never moves the absolute deadline for callbacks, evidence, or responses.
+    Optional session-level ``cut_max_iterations`` sets only CutMaxIterations
+    for every request; None leaves that native default unset by this bridge.
     Startup may be amortized only for correctness prechecks.  Formal method
     timing must instantiate a fresh session inside the method budget and pass
     ``budget=...``. Its ``deadline`` must use the bridge's monotonic clock.
     """
 
     def __init__(self, workdir, total_budget_s=600, matlab_path=DEFAULT_MATLAB,
-                 clock=time.monotonic, budget=None):
+                 clock=time.monotonic, budget=None, cut_max_iterations=None):
+        self.cut_max_iterations = _cut_iteration_limit(cut_max_iterations)
         if not math.isfinite(total_budget_s) or total_budget_s <= 0:
             raise ValueError('total_budget_s must be positive and finite')
         self.clock = clock
@@ -320,6 +334,9 @@ class MatlabSession:
                 'general_solver_defect_claim': False,
             },
         }
+        if self.cut_max_iterations is not None:
+            self.metadata['cut_max_iterations_declared'] = self.cut_max_iterations
+            self.metadata['cut_max_iterations_scope'] = 'native_cut_pass_limit_only'
         _json(self.workdir / 'session.json', self.metadata)
         quote = lambda p: Path(p).as_posix().replace("'", "''")
         try:
@@ -376,6 +393,7 @@ class MatlabSession:
         if self.closed or self.request_blocked:
             raise RuntimeError('Worker is closed or a timed-out request still needs cleanup')
         solver_cap = _solver_time_cap(solver_max_time_s)
+        cut_limit = _cut_iteration_limit(getattr(self, 'cut_max_iterations', None))
         started = self.clock()
         deadline = self.deadline
         if budget is not None:
@@ -428,6 +446,9 @@ class MatlabSession:
         if solver_cap is not None:
             request_info['solver_max_time_s_declared'] = solver_cap
             request_info['solver_max_time_s_scope'] = 'native_MaxTime_only_not_response_or_evidence_deadline'
+        if cut_limit is not None:
+            request_info['cut_max_iterations_declared'] = cut_limit
+            request_info['cut_max_iterations_scope'] = 'native_cut_pass_limit_only'
         with phase('transport_input_metadata'):
             _json(prefix.with_suffix('.input.json'), request_info)
         if self.clock() >= deadline:
@@ -436,6 +457,8 @@ class MatlabSession:
         # inside the request budget.  MATLAB receives only the time still left.
         temporary = prefix.with_suffix('.mat.tmp')
         payload['remaining_s'] = max(0.0, deadline - self.clock())
+        if cut_limit is not None:
+            payload['cut_max_iterations'] = cut_limit
         if solver_cap is not None:
             payload['solver_max_time_s_declared'] = solver_cap
             payload['solver_max_time_s'] = min(solver_cap, payload['remaining_s'])
@@ -452,6 +475,8 @@ class MatlabSession:
         request = {
             'remaining_s': allocated,
             'stream_events': bool(getattr(self, 'event_consumer', None))}
+        if cut_limit is not None:
+            request['cut_max_iterations'] = cut_limit
         if solver_cap is not None:
             request['solver_max_time_s_declared'] = solver_cap
             request['solver_max_time_s'] = min(solver_cap, allocated)

@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.118九次日志分析完成；只建议单独限制根割轮数，尚未改代码／执行配对 |
+| 当前阶段 | K.119根割单因素配对完成；原参数下两版同U、无初始化外改善，不推广新默认 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新分析（K.118）：** 只读核K.116九次原生记录，7次完整返回均逐元素等于各自x0、2次为空；7次已有rootlp→heuristics及内部界，不将节点0说成根LP均未完成。原生调用合计625.232秒，约方法时间81.93%；第7次58.442秒仍报告cutgen、界无可辨识提升。[逐次CSV](results/shared_search_diagnostic01/log_analysis01/factual_requests.csv)及[事实JSON](results/shared_search_diagnostic01/log_analysis01/facts.json)已存。只建议后续单独限制CutMaxIterations=1；代码、模型和60秒片本轮不改，条件配对及预算提案见[计划K.118](../第三章当前进展与正式实验推进计划_审查稿.md#k118九次既有日志的瓶颈归因与唯一后续候选)，未运行／批准。
+**最新诊断（K.119）：** 可选session级CutMaxIterations已接通；最终50项mock通过、34源冻结后，按预声明完成原首共享条件的10／1各一次300秒／scene60秒诊断。两版U均1.080823451833 J，等于各自完整初始化；0新安排、0后续改善、0反馈，方法160.484／160.922秒，实际选项及矩阵指纹匹配。见[结果摘要](results/cut_pair_diagnostic01/analysis01/summary.md)与[§3.12y](#312y-根割单因素配对k119)。本次不把1改为默认，不补跑或扫参。[本线程独立审查](results/cut_pair_diagnostic01/independent_review.md)另存，非主线⑥。
+
+**历史分析（K.118）：** 只读核K.116九次原生记录，7次完整返回均逐元素等于各自x0、2次为空；7次已有rootlp→heuristics及内部界，不将节点0说成根LP均未完成。原生调用合计625.232秒，约方法时间81.93%；第7次58.442秒仍报告cutgen、界无可辨识提升。[逐次CSV](results/shared_search_diagnostic01/log_analysis01/factual_requests.csv)及[事实JSON](results/shared_search_diagnostic01/log_analysis01/facts.json)已存。只建议后续单独限制CutMaxIterations=1；代码、模型和60秒片本轮不改，条件配对及预算提案见[计划K.118](../第三章当前进展与正式实验推进计划_审查稿.md#k118九次既有日志的瓶颈归因与唯一后续候选)，未运行／批准。
 
 **历史修复（K.117）：** MATLAB请求文本读取增加2秒／10毫秒限额的文件打开重试，坏JSON不重试，总时钟、Python发布和热安全接纳不变。原12项桥接回归通过；一次六请求原生检查验证恢复／超时／取消／stop及同worker后续请求，原报告73/74 false保留：进程未在5秒自然退出，最终沿原20秒兜底强制清理。读取修复按范围验收，自然退出未验收。见[§3.12w](#312w-matlab请求读取修复与分范围验收k117)及[独立审查](results/request_read_native01/independent_review.md)。未补跑K.116、未产生新研究SAFE／能耗。
 
@@ -1005,7 +1007,24 @@ receipt = evaluate_candidate(auto_instance, candidate, accuracy, budget)
 
 下一候选只限`CutMaxIterations=1`（9次保存为basic／10），本轮没有添加开关或修改默认。其含义和合法范围核[R2023b官方说明](https://www.mathworks.com/help/releases/R2023b/optim/ug/intlinprog.html)；实际割轮数／内部阶段细分未记录，节能仍待验证。完整的首共享条件、10／1各一次300秒／scene60秒**待确认提案**只维护在[计划K.118](../第三章当前进展与正式实验推进计划_审查稿.md#k118九次既有日志的瓶颈归因与唯一后续候选)，不凭旧claim或本次分析自动运行。强退清理局限、全域L0与SAFE标准保持，不加其他排序／修复／模型强化。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.118更新见上）
+### 3.12y 根割单因素配对（K.119）
+
+`MatlabSession(...,cut_max_iterations=None)`保持旧默认；显式1—50数学整数经JSON／MAT一致校验，在原生回执中保存声明与实际值，其他选项、时钟和安全接纳不动。两版小型导出矩阵与x0完全相同，多轮及初始解包装传递、数值／清理停止和迟到证据由[预检02](results/cut_pair_precheck02/checks.json)50/50核对；[01](results/cut_pair_precheck01/checks.json)49/49保留，后续仅补原有cleanup_pending状态检查。本次没有重新执行物理全包／原生小接口；K.117原报告false及读取修复范围保持。
+
+本次已执行命令归档（路径已存在、唯一claim已消费，不能删claim补跑）：
+
+```powershell
+F:/Anaconda3/python.exe research/chapter3_experiments/run_cut_pair_diagnostic.py --precheck --out research/chapter3_experiments/results/cut_pair_precheck02
+F:/Anaconda3/python.exe research/chapter3_experiments/run_cut_pair_diagnostic.py --prepare --out research/chapter3_experiments/results/cut_pair_diagnostic01 --checks research/chapter3_experiments/results/cut_pair_precheck02/checks.json
+F:/Anaconda3/python.exe research/chapter3_experiments/run_cut_pair_diagnostic.py --run --out research/chapter3_experiments/results/cut_pair_diagnostic01
+F:/Anaconda3/python.exe research/chapter3_experiments/summarize_cut_pair.py --run research/chapter3_experiments/results/cut_pair_diagnostic01 --out research/chapter3_experiments/results/cut_pair_diagnostic01/analysis01
+```
+
+[声明及源快照](results/cut_pair_diagnostic01/declaration.json)绑定固定A＝CPU1→NPU0→CPU1、原完整AB／AC及本地自由决策；10先1后，各自fresh输入／构模／初始化／worker／候选缓存及300秒总截止，scene60秒只是合作式片。相同Python解释器的公共导入不计入方法预算，不共享模型系数、见证或热结果缓存；生产缓存均从本次模型／记录器新建。计费仍含全部方法步骤，清理和完成证据序列化单列。
+
+[分析01](results/cut_pair_diagnostic01/analysis01/summary.md)只读已完成档案，保存两调用CSV、U／L0／L_a的PNG／PDF、各请求阶段／原生界／实际cut／向量比较及首模型指纹。两版最终U与本次init相同、AB只返回x0、AC空、节点和反馈均0；独立L0＝L_a＝0.738285994489 J，gap31.6923%，无最优／无解证书。原生MaxTime派生差异原样列出；0.438秒单次耗时差不作性能结论。阶段结束，不将1推广为默认，不把K.116当control，不扫描其他设置。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.119更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

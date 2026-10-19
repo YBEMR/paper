@@ -70,12 +70,32 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             result.solver_max_time_s_allocated=solverTimeCap;
             result.solver_max_time_s_scope='native_MaxTime_only_not_response_or_evidence_deadline';
         end
+        hasCutIterationLimit=isfield(req,'cut_max_iterations');
+        if hasCutIterationLimit ~= isfield(p,'cut_max_iterations')
+            error('chapter3:cutIterationLimit','Cut limit request/MAT declaration mismatch');
+        end
+        if hasCutIterationLimit
+            cutIterationLimit=req.cut_max_iterations;
+            if ~isnumeric(cutIterationLimit) || ~isscalar(cutIterationLimit) ...
+                    || ~isreal(cutIterationLimit) || isnan(cutIterationLimit) ...
+                    || isinf(cutIterationLimit) || cutIterationLimit~=fix(cutIterationLimit) ...
+                    || cutIterationLimit<1 || cutIterationLimit>50 ...
+                    || ~isnumeric(p.cut_max_iterations) || ~isscalar(p.cut_max_iterations) ...
+                    || ~isreal(p.cut_max_iterations) || p.cut_max_iterations~=cutIterationLimit
+                error('chapter3:cutIterationLimit','CutMaxIterations must be an integer from 1 to 50');
+            end
+            result.cut_max_iterations_declared=cutIterationLimit;
+        end
         opts = optimoptions('intlinprog','Display','off', ...
             'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
             'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
             'IntegerPreprocess','none', ...
             'LPPreprocess','none', ...
             'OutputFcn',@callback);
+        if hasCutIterationLimit
+            opts.CutMaxIterations=cutIterationLimit;
+            result.cut_max_iterations_actual_effective=opts.CutMaxIterations;
+        end
         % Engineering compatibility setting, fixed before formal runs:
         % numeric_diagnostic04 solved the unchanged small physical model with
         % IntegerPreprocess='none', where 'basic' reported infeasible despite
@@ -91,6 +111,7 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         % LPPreprocess is documented for R2023b but hidden from properties().
         % Archive it explicitly; IntegerPreprocess='none' does not disable it.
         names = [properties(opts); {'LPPreprocess'}]; optionValues = struct();
+        if hasCutIterationLimit, names=[names; {'CutMaxIterations'}]; end
         for k=1:numel(names)
             value=opts.(names{k});
             if isa(value,'function_handle'), value=func2str(value); end
@@ -117,6 +138,10 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             if streamEvents
                 entered=struct('kind','solver_entered','request_wall_seconds',toc(requestClock));
                 if hasSolverTimeCap, entered.solver_time_allocation=solverTimeAllocation; end
+                if hasCutIterationLimit
+                    entered.cut_max_iterations_declared=cutIterationLimit;
+                    entered.cut_max_iterations_actual_effective=opts.CutMaxIterations;
+                end
                 publish(entered);
             end
             phaseClock=tic;

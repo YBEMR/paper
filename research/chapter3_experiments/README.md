@@ -1128,7 +1128,26 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/run_neighborhood_method
 
 原输入、完整调用、回调记录及[结果／独审](results/neighborhood_method_precheck02/summary.md)已保存。当前已可调用方法，但未验证原规模求解、成本或能量改善；下一项仅建议按[计划K.125](../第三章当前进展与正式实验推进计划_审查稿.md#k125n1方法生命周期与必要端到端预检完成)冻结一次原基准质量诊断，不自动运行正式比较或增加N2。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.125更新见上）
+### 3.12af 一次原基准N1质量诊断（K.126）
+
+新入口`run_neighborhood_diagnostic.py --prepare/--run --out ...`复用K125最终45项及53源的未变范围，只增加自身为第54源，不重跑旧gate或增加预检层。准备冻结原base__R1/config、明确AB的B.main／post与AC的C.main／post实例ID、规则及源码；运行前复核并消费全局唯一claim，只有一次300秒调用、各scene60秒合作片、CDF off／Cut10，fresh input／seed／worker／缓存，不读旧候选或热结果。
+
+```powershell
+# 项目根目录。历史claim已消费；以下展示协议，不能借此补跑已完成调用。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_neighborhood_diagnostic.py --prepare --out <新预声明目录>
+# 新研究调用须另按确认范围执行；已有claim／call目录拒绝重试或覆盖。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_neighborhood_diagnostic.py --run --out <已冻结目录>
+# 只读后处理可写新目录，不求解／新解码／热评价。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/summarize_neighborhood_diagnostic.py --run <已完成目录> --out <新分析目录>
+```
+
+[实际调用](results/neighborhood_diagnostic01/run_record.json)正常结束，54源未变，方法204.531秒、清理9.234秒；本次种子1.080823451833→最终0.962885037941 J，严格减少10.9119%。0.812秒首SAFE，129.703／204.500秒后续更新；两请求确认2个新安排，7次后续接收含3次重复。B／C main＋post均H改L及起点，所有设备／A／pre保持；C.post本次实际CPU1。完整安排均在预算内原输入连续复核后全聚合。合作片实际约69.515／61.985秒是软停止，不能写成严格60秒，但均未越总300秒。剩余预算未追加搜索。
+
+[facts／能量分项／时间表／U曲线](results/neighborhood_diagnostic01/analysis01/summary.md)由已有reader只读生成，适配N1的initialisation.candidate身份；distinct按已保存评价记录可确认的完整安排统计，原生辅助向量、重复数和解码记录分列。事后8/8核验通过、113原档案保持。最高峰约51.178°C，0违规／反馈；独立L₀＝Lₐ≈0.738286 J，保守差距23.3256%，两scene均提前停止、未证最优。单scene内部界不聚合，旧K122不作单因素control。MAT／PDF遵守忽略规则，仅本机保留。
+
+[本线程独审](results/neighborhood_diagnostic01/independent_review.md)不是主线⑥跨会话结论。本次支持局部搜索取得初始化外节能，不支持全域／基线优势或热反馈收益。下一项仅建议沿[计划K.126](../第三章当前进展与正式实验推进计划_审查稿.md#k126一次原基准n1质量诊断完成)集中整理热约束／反馈最小对照，先冻结再执行，不继续扫冷态邻域或自动恢复正式批次。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.126更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

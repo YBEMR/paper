@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.123只读机会盘点完成，推荐本地main＋post N1；尚无邻域实现或新求解 |
+| 当前阶段 | K.124 N1条件与原输入评价接口通过43项检查；方法生命周期／原基准未运行 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新盘点（K.123）：** 已审f60469d。原安全初始化均H，B／C余量76.3／75 ms，当前本地main＋post占活动项58.6709%；推荐只开放其OPP／起点、固定设备及其他工作。静态AB167选项／150事件、AC137／144，不是实际模型规模或性能。见[机会表](results/local_neighborhood_audit01/summary.md)及[§3.12ac](#312ac-初始化的只读能耗与局部邻域盘点k123)。本轮无生产／输入变更，无新热评价或求解。
+**最新接入（K.124）：** neighborhood条件模块、build_model默认None参数及原输入评价包装已完成。43/43检查、50源匹配；36项独立投影／24合法，默认旧源码矩阵身份及真实小域x0／原聚合闭环通过。无原规模、优化器或研究调用，尚未接N1方法级搜索。见[§3.12ad](#312ad-n1条件接口与必要小域预检k124)、[结果](results/neighborhood_precheck01/summary.md)及[内部独审](results/neighborhood_precheck01/independent_review.md)。
+
+**历史盘点（K.123）：** 已审f60469d。原安全初始化均H，B／C余量76.3／75 ms，当前本地main＋post占活动项58.6709%；推荐只开放其OPP／起点、固定设备及其他工作。静态AB167选项／150事件、AC137／144，不是实际模型规模或性能。见[机会表](results/local_neighborhood_audit01/summary.md)及[§3.12ac](#312ac-初始化的只读能耗与局部邻域盘点k123)。本轮无生产／输入变更，无新热评价或求解。
 
 **历史诊断（K.122）：** 原首共享部署，OFF／ON均Cut=10、各300秒总预算／每scene60秒合作片，fresh调用各一次正常结束。两版U均1.080823451833 J＝各自初始化，0新decoded／0严格改善／0反馈；方法249.875／167.782秒、启动64.969／10.657秒，不能归因CDF加速。矩阵只追加99／91行，开关保持默认关闭。见[§3.12ab](#312ab-累计前置关闭开启配对k122)、[结果](results/cumulative_pair_diagnostic01/analysis01/summary.md)及[本线程独审](results/cumulative_pair_diagnostic01/independent_review.md)，非主线⑥。
 
@@ -1096,7 +1098,22 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/results/local_neighborh
 
 推荐N1为每场景仅本地main＋post固定设备、开放原OPP／5 ms起点，其他四份工作保持精确选项。共享A条件和一般原域不改。旧full fixed_deployment不能直接接auto-L；独立邻域身份与事件前过滤接口尚未实现。静态167／137选项和150／144事件不作变量数／时间结论，结构低档示例不记SAFE／新U。N2保留，下一项只建议薄接口及必要小域检查，不开启新研究调用。[计划K.123](../第三章当前进展与正式实验推进计划_审查稿.md#k123初始化改善空间与最小n1邻域只读完成)、[本线程独审](results/local_neighborhood_audit01/independent_review.md)维护细节。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.123更新见上）
+### 3.12ad N1条件接口与必要小域预检（K.124）
+
+`make_n1_condition(original, a, seed_candidate, seed_aggregate, opened_by_scene, budget=budget, accuracy=accuracy)`绑定同次完整SAFE聚合种子。全部设备固定；未开放工作再固定OPP／精确起点，opened仅scene-local Stage。条件附原输入／候选／回执／源码／精度／Budget及自身哈希，不改原研究输入或一般合法域。
+
+`build_model(original, config, fixed_shared_deployment=a, fixed_scene_id=sid, neighborhood_condition=condition, budget=budget, ...)`在保留选项产生事件前过滤；默认省略／None不加邻域字段。原starts限制和full fixed_deployment的auto-L拒收保持。`evaluate_n1_scene(original, condition, sid, candidate, budget=budget, accuracy=accuracy)`先核成员再调原partial评价，返回原样receipt；全场景U仍调用原聚合。不得把局部界或无解提升为全域结论。
+
+```powershell
+# 项目根目录；新目录拒绝覆盖。仅必要小域，无优化器/MATLAB/研究调用。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_neighborhood_precheck.py --out <新预检目录>
+```
+
+[01](results/neighborhood_precheck01/checks.json)一次43/43、21.344秒，50源匹配；32新检查＋11旧累计回归，N1独立36项／24合法，旧144／80投影保持。固定bd9293c的小结构8组数组／rows／options／summary匹配；真实两scene种子→条件物理模型→原输入复核／聚合及276维x0解码／矩阵数值接纳通过。22个当前小域模型（1物理）＋1旧源结构，4次真实小域传播，零原规模／LP／MILP／native／研究调用。Mock SAFE与真实夹具分开，不作节能证据。[独立审查](results/neighborhood_precheck01/independent_review.md)为本线程内部核查。
+
+此处尚无N1独立方法入口，旧partial的builder_options不接收该新条件。下一项统一接fresh初始化、条件构模／x0及候选原输入评价／反馈／U生命周期，再定原基准诊断；不据预检运行正式批次或复用K122历史种子。细节统一见[计划K.124](../第三章当前进展与正式实验推进计划_审查稿.md#k124n1条件构模与原输入评价接口完成)。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.124更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

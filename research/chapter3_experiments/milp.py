@@ -486,6 +486,13 @@ class Model:
                 result['objective'] = 'unweighted complete scene energy including leakage and idle tail'
         if hasattr(self, 'cumulative_precedence_stats'):
             result['cumulative_precedence'] = deepcopy(self.cumulative_precedence_stats)
+        if hasattr(self, 'neighborhood_stats'):
+            result['neighborhood'] = {
+                'condition_sha256': self.neighborhood_condition['condition_sha256'],
+                'source_input_sha256': self.neighborhood_condition['source_input_sha256'],
+                'scope': 'fixed_device_local_OPP_start_subdomain_not_global',
+                'options': deepcopy(self.neighborhood_stats),
+            }
         return result
 
 
@@ -694,7 +701,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 *, fix_late_options=True, aggregate_opp_locks=True,
                 relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
                 fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None,
-                fixed_shared_deployment=None, cumulative_precedence=False):
+                fixed_shared_deployment=None, cumulative_precedence=False,
+                neighborhood_condition=None):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
@@ -710,6 +718,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     multiple original scenes, leaving every scene-local deployment free.
     Optional cumulative precedence appends exact inclusive CDF rows after all
     original rows. It retains the expected dependency rows and every option.
+    A separately bound N1 neighborhood may retain a subset of local options
+    before event construction. This is a search subdomain, not an equivalent
+    formulation of the full problem; omitted/None preserves the original path.
 
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
@@ -726,6 +737,13 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     partial_fixed = fixed_shared_deployment is not None
     if partial_fixed and fixed_deployment is not None:
         raise ValueError('full and shared-only fixed deployments are mutually exclusive')
+    n1_condition = None
+    if neighborhood_condition is not None:
+        if not partial_fixed:
+            raise ValueError('N1 requires the original shared-only deployment condition')
+        from neighborhood import validate_n1_condition
+        n1_condition = validate_n1_condition(instance, neighborhood_condition,
+            budget=budget, shared_deployment=fixed_shared_deployment)
     adapted = (fixed_deployment is not None or partial_fixed or prefilter_deadlines
                or fixed_scene_id is not None)
     if fixed_scene_id is not None and fixed_deployment is None and not partial_fixed:
@@ -779,6 +797,10 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             model.preprocessing.update(deployment_scope='shared_only',
                 fixed_shared_deployment=deepcopy(normalized))
             model.formulation['fixed_shared_deployment'] = True
+    if n1_condition is not None:
+        model.neighborhood_condition = n1_condition
+        model.formulation['fixed_device_neighborhood'] = True
+        model.preprocessing['neighborhood_condition_sha256'] = n1_condition['condition_sha256']
     energy_specs, energy_onehot_rows = [], {}
     auxiliary = dict(integer=not relax_auxiliary_integrality,
                      implied_binary=relax_auxiliary_integrality)
@@ -794,6 +816,11 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         start_sets = {(sid, stage): set(map(F, values))
                       for sid, stages in starts.items() for stage, values in stages.items()}
         options = [o for o in options if F(o['start_ms']) in start_sets[o['scenario_id'], o['stage_instance_id']]]
+    if n1_condition is not None:
+        from neighborhood import filter_n1_options
+        model.report('neighborhood_options')
+        options, model.neighborhood_stats = filter_n1_options(
+            instance, n1_condition, options, budget=budget)
     if adapted:
         model.preprocessing['options_before_deadline_filter'] = len(options)
     if prefilter_deadlines:

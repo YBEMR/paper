@@ -14,6 +14,8 @@
 
 **最新实现状态（K.113）：** [39/39模拟／代数预检](results/partial_method_precheck02/checks.json)后，唯一一次180秒原生小域[14/14验收](results/partial_method_native01/verification.json)通过，方法31.844秒。两个场景内层候选实际更新全局U：0.736705→0.722711 J；0热反馈，不作反馈收益结论。见[§3.12t](#312t-给定共享部署的统一预算生命周期k113)及[独立审查](results/partial_method_native01/independent_review.md)。当前只接通给定一个共享条件，不含外层搜索或原规模性能比较。
 
+**下一诊断协议（K.114，尚未实现／执行）：** [原计划K.114](../第三章当前进展与正式实验推进计划_审查稿.md#k114一次完整链共享部署搜索诊断协议待实现待执行)唯一维护900秒完整链诊断提案、16条件分组轮转、60秒合作式搜索片及来源归因。需要外层单Budget／单worker与独立原生软上限，不能循环当前入口或用短`remaining_s`续接；本轮只更新记录。下一阶段补必要预检，不重做K.112／113全包，不自动恢复旧研究调用。
+
 **历史实现状态（K.112）：** [必要预检71/71](results/auto_milp_precheck02/checks.json)及[独立审查](results/auto_milp_precheck02/independent_review.md)通过；自动L已接MILP控制／物理补全，新增仅固定跨场景H的构模及原输入候选合并。见[§3.12s](#312s-自动l的milp表达与仅共享部署接口k112)。当时只完成表达和评价接口，未启动MATLAB、研究方法或正式对照。
 
 **历史实现状态（K.111）：** [自动L必要预检67/67](results/idle_policy_precheck02/checks.json)及[独立审查](results/idle_policy_precheck02/independent_review.md)通过，共同轨迹和连续评价已支持新策略；原配置和历史结果保留。当时MILP等方法尚未适配，入口明确拒收新策略。见[§3.12r](#312r-自动l共同轨迹与连续评价k111)，无研究求解或性能比较。

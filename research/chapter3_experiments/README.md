@@ -1113,7 +1113,22 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/run_neighborhood_preche
 
 此处尚无N1独立方法入口，旧partial的builder_options不接收该新条件。下一项统一接fresh初始化、条件构模／x0及候选原输入评价／反馈／U生命周期，再定原基准诊断；不据预检运行正式批次或复用K122历史种子。细节统一见[计划K.124](../第三章当前进展与正式实验推进计划_审查稿.md#k124n1条件构模与原输入评价接口完成)。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.124更新见上）
+### 3.12ae N1方法生命周期与端到端预检（K.125）
+
+`neighborhood_method.execute_n1_neighborhood(input_loader, workdir, shared_deployment=a, opened_by_scene=opened, ...)`是独立方法入口。全场景fresh构造→原输入逐sceneSAFE／聚合→N1条件→各scene模型与x0→单worker回调／完整热反馈→原输入复核／全U，全部使用同MethodBudget；旧partial入口不改。opened必须显式给scene／Stage实例，不自动从名字推断。N1仍是受限搜索条件，全部设备固定seed、未开放OPP／起点精确固定，原一般域不删项。
+
+默认保留原五项构模开关，CDF只显式开启。无完整SAFE种子不构造N1、不声称无解；x0数值拒收可裸求解但保留U；缓存仍核成员／原回执／能量区间。已有SAFE与technical_state分列，截止前已成U／违规／L₀保留，预算后不补聚合。solver-reported界标N1单scene范围，不与原L₀／Lₐ混用。初始化使用完整构造视图，可能不同于旧partial逐scene种子；只相对本次seed归因，不把K122当单因素对照。
+
+```powershell
+# 项目根目录；仅模拟原生传输及真实小物理链路，无优化器/MATLAB/研究调用。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_neighborhood_method_precheck.py --out <新的预检目录>
+```
+
+[01](results/neighborhood_method_precheck01/checks.json)修订前44/44、13.969秒；随后补正默认下界逐项保存，新增La到期保留L0检查。[最终02](results/neighborhood_method_precheck02/checks.json)45/45、14.140秒，53源匹配：23新生命周期＋16旧partial＋6包装回归。真实小域2物理模型、6次连续评价，276／320维x0通过解码及数值接纳；模拟session仅回声x0，最终包络等于种子。两轮均无失败，凭据各自绑定当时源；01不覆盖修订后源。旧K124文件字节保持，复用其范围依据，不冒称重跑整个旧套件。
+
+原输入、完整调用、回调记录及[结果／独审](results/neighborhood_method_precheck02/summary.md)已保存。当前已可调用方法，但未验证原规模求解、成本或能量改善；下一项仅建议按[计划K.125](../第三章当前进展与正式实验推进计划_审查稿.md#k125n1方法生命周期与必要端到端预检完成)冻结一次原基准质量诊断，不自动运行正式比较或增加N2。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.125更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

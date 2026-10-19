@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.122累计前置OFF／ON同预算配对完成；两版均无初始化外新安排／能耗改善 |
+| 当前阶段 | K.123只读机会盘点完成，推荐本地main＋post N1；尚无邻域实现或新求解 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新诊断（K.122）：** 原首共享部署，OFF／ON均Cut=10、各300秒总预算／每scene60秒合作片，fresh调用各一次正常结束。两版U均1.080823451833 J＝各自初始化，0新decoded／0严格改善／0反馈；方法249.875／167.782秒、启动64.969／10.657秒，不能归因CDF加速。矩阵只追加99／91行，开关保持默认关闭。见[§3.12ab](#312ab-累计前置关闭开启配对k122)、[结果](results/cumulative_pair_diagnostic01/analysis01/summary.md)及[本线程独审](results/cumulative_pair_diagnostic01/independent_review.md)，非主线⑥。
+**最新盘点（K.123）：** 已审f60469d。原安全初始化均H，B／C余量76.3／75 ms，当前本地main＋post占活动项58.6709%；推荐只开放其OPP／起点、固定设备及其他工作。静态AB167选项／150事件、AC137／144，不是实际模型规模或性能。见[机会表](results/local_neighborhood_audit01/summary.md)及[§3.12ac](#312ac-初始化的只读能耗与局部邻域盘点k123)。本轮无生产／输入变更，无新热评价或求解。
+
+**历史诊断（K.122）：** 原首共享部署，OFF／ON均Cut=10、各300秒总预算／每scene60秒合作片，fresh调用各一次正常结束。两版U均1.080823451833 J＝各自初始化，0新decoded／0严格改善／0反馈；方法249.875／167.782秒、启动64.969／10.657秒，不能归因CDF加速。矩阵只追加99／91行，开关保持默认关闭。见[§3.12ab](#312ab-累计前置关闭开启配对k122)、[结果](results/cumulative_pair_diagnostic01/analysis01/summary.md)及[本线程独审](results/cumulative_pair_diagnostic01/independent_review.md)，非主线⑥。
 
 **历史接入（K.121）：** `cumulative_precedence`默认关闭；显式True在全部旧行末尾追加CDF依赖行。62项必要预检及旧源小物理矩阵身份、原catalog的190行核对通过；01权限错误false与同源02通过分开保留。本轮未启动原基准、LP／MILP、MATLAB或热轨迹，没有新U或性能结论。见[§3.12aa](#312aa-累计前置可选接入与必要预检k121)及[本线程独审](results/cumulative_precedence_precheck02/independent_review.md)，非主线⑥。
 
@@ -1083,7 +1085,18 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/run_cumulative_pair_dia
 
 [独立审查](results/cumulative_pair_diagnostic01/independent_review.md)为本线程内部核查。累计开关继续默认关闭；该项到此结束，不扫cut／CDF设置。唯一后续建议在[计划K.122](../第三章当前进展与正式实验推进计划_审查稿.md#k122累计前置关闭开启单因素配对完成)维护：先只读审查初始化可改善决策与一项小邻域MILP接口，不运行新研究调用或改变片配额。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.122更新见上）
+### 3.12ac 初始化的只读能耗与局部邻域盘点（K.123）
+
+[local_neighborhood_audit01](results/local_neighborhood_audit01/summary.md)保存两段标准库脚本、精确能耗／Stage／选项事件facts、12行CSV、来源SHA和只读字节一致复现记录。只读K122 call_off完整SAFE及输入，不重新生成温度轨迹、不构模或求解。原始归档和生产源保持。脚本从项目根目录执行，只在.runtime写再现facts；不会覆盖研究输入或结果。
+
+```powershell
+F:/Anaconda3/python.exe -B research/chapter3_experiments/results/local_neighborhood_audit01/energy_audit.py
+F:/Anaconda3/python.exe -B research/chapter3_experiments/results/local_neighborhood_audit01/neighborhood_audit.py
+```
+
+推荐N1为每场景仅本地main＋post固定设备、开放原OPP／5 ms起点，其他四份工作保持精确选项。共享A条件和一般原域不改。旧full fixed_deployment不能直接接auto-L；独立邻域身份与事件前过滤接口尚未实现。静态167／137选项和150／144事件不作变量数／时间结论，结构低档示例不记SAFE／新U。N2保留，下一项只建议薄接口及必要小域检查，不开启新研究调用。[计划K.123](../第三章当前进展与正式实验推进计划_审查稿.md#k123初始化改善空间与最小n1邻域只读完成)、[本线程独审](results/local_neighborhood_audit01/independent_review.md)维护细节。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.123更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

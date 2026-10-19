@@ -12,6 +12,7 @@ and every candidate evaluation use the caller's single method deadline.
 """
 from collections import Counter
 from copy import deepcopy
+from control_policy import require_legacy_control
 from fractions import Fraction as F
 import math
 import random
@@ -189,6 +190,8 @@ def run_sa(instance, config, budget, assess, seed):
     Imported HEFT is only a constructor: its energy-improvement loop is not
     called and no answer from another method invocation is read.
     """
+    require_legacy_control(instance, 'SA search')
+    require_legacy_control(config, 'SA configuration')
     from heft_method import build_heft_candidate
     from heuristic_common import decode_plan, plan_from_candidate
 

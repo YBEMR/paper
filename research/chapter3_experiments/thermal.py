@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import time
 
+from control_policy import idle_policy_evidence
 from schedules import validate_schedule
 
 KERNEL_PATH = Path(__file__).resolve().parents[1] / 'v1_evaluator' / 'interval.py'
@@ -360,6 +361,7 @@ def evaluate_candidate(instance, candidate, accuracy=None, budget=None):
            'formal_experiment_result': False}
     try:
         budget.check()
+        out.update(idle_policy_evidence(instance, candidate))
         accuracy = _accuracy(accuracy)
         weights = [_q(s['weight']) for s in instance['scenarios']]
         if any(w < 0 for w in weights) or sum(weights) != 1:

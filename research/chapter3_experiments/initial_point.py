@@ -11,6 +11,7 @@ from fractions import Fraction as F
 import numpy as np
 from scipy.linalg import expm
 
+from control_policy import require_legacy_control
 from initial_schedule import iter_initial_candidates
 from matlab_bridge import _prepare, InitialPointRejected
 from milp import decode, selected_options, evaluate_model_candidate, _digest
@@ -29,6 +30,7 @@ def _key(candidate):
 
 def _propose_vector(model, candidate, budget):
     """Budgeted nominal physical lift, followed by separate admission checks."""
+    require_legacy_control(model.instance, 'MILP initial physical point')
     p = model.instance['platform']; nodes = p['node_order']; n = len(nodes)
     units = {u['id']: u for u in p['units']}
     vector = np.zeros(len(model.names))

@@ -7,6 +7,7 @@ these hashes detect accidental mixing, not adversarially forged evidence.
 No search, repair, deployment exclusion or optimum certificate is performed.
 """
 from copy import deepcopy
+from control_policy import require_legacy_control
 from fractions import Fraction
 import hashlib
 import json
@@ -44,6 +45,7 @@ def validate_fixed_deployment(instance, fixed_deployment):
     Unused catalog stages are not outer decisions. Every Stage actually used
     anywhere in the instance must appear, with one legal specific unit.
     """
+    require_legacy_control(instance, 'Fixed-deployment scene adapter')
     if not isinstance(fixed_deployment, dict):
         raise ValueError('fixed deployment must be a dict')
     scenes = _scenes(instance)

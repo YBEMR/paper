@@ -8,6 +8,7 @@ bound. Small explicit start sets are permitted solely for named fixtures.
 from bisect import bisect_right
 from contextlib import nullcontext, contextmanager
 from copy import deepcopy
+from control_policy import require_legacy_control
 from fractions import Fraction as F
 from itertools import product
 import math
@@ -564,6 +565,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     """
     budget = budget if budget is not None else Budget()
     budget.check()
+    require_legacy_control(instance, 'MILP formulation')
+    require_legacy_control(config, 'MILP configuration')
     adapted = fixed_deployment is not None or prefilter_deadlines or fixed_scene_id is not None
     if fixed_scene_id is not None and fixed_deployment is None:
         raise ValueError('single-scene construction requires a complete fixed shared deployment')
@@ -912,6 +915,7 @@ def lift_candidate(model, candidate, allow_invalid=False):
     tests allow_invalid creates a deterministic assignment whose violated
     rows can be compared with an independent Cartesian legality oracle.
     """
+    require_legacy_control(model.instance, 'MILP physical lift')
     from scipy.linalg import expm
     if not allow_invalid:
         checked = validate_schedule(model.instance, candidate)

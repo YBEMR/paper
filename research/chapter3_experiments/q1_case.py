@@ -4,6 +4,7 @@ No historical witness, solver result or energy answer is read. The explicit
 start restriction is specific to this quality reference, not the main study.
 """
 from copy import deepcopy
+from control_policy import require_legacy_control
 from fractions import Fraction as F
 import hashlib
 import json
@@ -73,6 +74,7 @@ def load_q1(budget=None):
 
 def independent_lower_bound(instance):
     """Physical bound, exact algebra; not a solver-reported integer bound."""
+    require_legacy_control(instance, 'Method energy lower-bound interface')
     p = instance['platform']
     floor = F(p['external_common_power_W'])
     minimum, _ = map(F, p['power_model_temperature_range_degC'])

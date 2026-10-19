@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.108完成期限前置过滤／事件重建预检及六次独立配对诊断；表达与准备成本下降，最终U未改善；原115项保留 |
+| 当前阶段 | K.111完成自动L共同控制轨迹／连续评价，必要预检67/67；新策略方法构模／搜索尚未适配，显式拒收，不运行性能比较 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新执行状态（K.108）：** [57项必要预检](results/prefilter_precheck02/checks.json)与独立审查通过后，按冻结顺序完成三个原R1条件×current／prefilter、每次300秒，6/6技术验收。三对最终U相同、0次严格改善、0条反馈；变量／行数及构模和首SAFE时间下降。第六次有一条预算内后续SAFE，但与种子完全相同。见[§3.12q](#312q-期限前置过滤与事件重建的六次诊断k108)、[完整分析](../chapter3_formal_analysis/prefilter_diagnostic01/summary.md)及[运行独立审查](results/prefilter_diagnostic01/independent_review.md)。阶段结束，不追加实验；下方K.107及更早的待批／待实现状态是历史。
+**最新实现状态（K.111）：** [自动L必要预检67/67](results/idle_policy_precheck02/checks.json)及[独立审查](results/idle_policy_precheck02/independent_review.md)通过，共同轨迹和连续评价已支持新策略；原配置和历史结果保留。MILP等方法尚未适配，入口明确拒收新策略。见[§3.12r](#312r-自动l共同轨迹与连续评价k111)，本轮无研究求解或性能比较。
+
+**历史执行状态（K.108）：** [57项必要预检](results/prefilter_precheck02/checks.json)与独立审查通过后，按冻结顺序完成三个原R1条件×current／prefilter、每次300秒，6/6技术验收。三对最终U相同、0次严格改善、0条反馈；变量／行数及构模和首SAFE时间下降。第六次有一条预算内后续SAFE，但与种子完全相同。见[§3.12q](#312q-期限前置过滤与事件重建的六次诊断k108)、[完整分析](../chapter3_formal_analysis/prefilter_diagnostic01/summary.md)及[运行独立审查](results/prefilter_diagnostic01/independent_review.md)。阶段结束，不追加实验；下方K.107及更早的待批／待实现状态是历史。
 
 **修正状态（K.106）：** 固定原逻辑子问题LP basic报告无解、LP none返回原x0，后续入口显式关闭LP预处理并归档。已加入本次x0／内部无解冲突未决保护，公共115项与原生接口13项通过。见[§3.12p](#312p-milp预处理兼容与数值冲突保护k106)和[独立审查](results/infeasible_audit01/independent_review.md)。完整自由调度性能仍未由本次证明，未补跑原正式案例。
 
@@ -889,7 +891,31 @@ HEFT继承TPDS 2002的秩与空隙插入，新增场景共同部署／频点和�
 
 伴随只读原15题／45份SAFE的[能耗归因](../chapter3_formal_analysis/prefilter_diagnostic01/summary_existing.md)及95项来源哈希，发现MILP种子的全窗基准、活动及温度修正项均高于HEFT／SA代表。base R1与HEFT差额中基准占约73.5%；多因素同时变化，不作尾段单因素因果归因，旧回执不足以拆漏电尾段。阶段判断为表达和准备成本改善，尚无后续节能／反馈收益，不推断稳定或普遍加速。六次完成即停，原115项和Q1不覆盖；下一项仅建议审阅既有固定部署／场景分解的外层组织，未获新运行范围或预算。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.108更新见上）
+### 3.12r 自动L共同轨迹与连续评价（K.111）
+
+依D134已确认的规则及用户本轮“继续”，实现K.109第2步的共同评价基础层。新增`control_policy.py`：`resolve_idle_policy(value)`严格解析旧hold或新`auto_low_immediate_v1`，`with_auto_low_idle(value)`先验证来源再深复制，只改变副本的三个规则字段：`idle_holds_last_opp=false`、`idle_policy='auto_low_immediate_v1'`、`idle_delay_ms='0'`；所有已有零额外开销、模式与数值物理参数不变。转换工具对已合法新策略幂等，原config_v01文件及历史输入不覆盖。
+
+`schedules.py`按真实半开区间处理结束／继续／新启：整域确实空且同刻无新启才立即L；忙域同OPP可以加入新任务；全结束同刻新M直接M。t=0、未使用域、非整数结束及400 ms尾段按同一规则处理；不把切换取整到5 ms起点，不制造零长度L段。L保留域基准去重、本地漏电、全部节点耦合及不注热的公共项。无版本false、未知／矛盾策略、非零或非精确延迟／开销、缺失或非唯一最低频L均拒收。
+
+共同`thermal.evaluate_candidate`仅对新策略附`control_policy`和完整input／candidate SHA身份；旧回执不增加字段。`evaluate_piecewise`及其全部数值函数／类、误差要求和区间内核未改，继续检查全窗口及段内峰值；底层给定片段积分不冒称已验证其调度策略。SAFE才给完整加权U，预算／数值未决不使用前缀能量，已成违规在外层到期后保留。
+
+示意调用如下，`candidate`与`budget`由调用方提供，不在此生成或启动方法：
+
+```python
+auto_instance = with_auto_low_idle(legacy_instance)
+checked = validate_schedule(auto_instance, candidate)
+receipt = evaluate_candidate(auto_instance, candidate, accuracy, budget)
+```
+
+**尚未接入的方法明确拒收。** 新策略不可进入仍按hold表达的MILP构模（含`include_physics=False`）、物理lift／x0补全、旧完整固定部署场景适配、HEFT／SA正式搜索及未重新核查的新策略方法下界接口。实例或配置任一带新策略都不能悄悄运行旧表达；低层无规则的既有模拟对象不因此变更。纯构造与输入展开不代表新策略方法已就绪。后续按同一规则逐项适配后才可开启，旧批准／预检不匹配新源码也不能重启研究批次。
+
+[可复跑入口](run_idle_policy_precheck.py)最终[67/67通过](results/idle_policy_precheck02/checks.json)，6.141秒：27项新控制／评价检查、32项受影响旧HEFT／SA单测、8项完整性核对。完整记录／原源码快照位于[预检目录02](results/idle_policy_precheck02)，并有[独立审查](results/idle_policy_precheck02/independent_review.md)。正确性阶段事先设180秒外限，禁止原生求解和MILP构模，不是新的方法性能预算。首轮[01](results/idle_policy_precheck01/checks.json)66/66通过、8.156秒，原记录保留；审查随后发现旧源码对照若依赖动态HEAD，提交后会失去独立性，故将测试与快照基准固定为修改前的`e086ef4`并加一项一致性检查，重做受影响预检。两轮之间未改控制或数值实现。
+
+每轮预检仅三次真实区间传播：单Stage auto／legacy各一次及既有解析空闲尾段内峰一次；另两次在传播前到期、一次mock场景回执隔离加权提交边界。auto单Stage与独立手写两段功率表及一次DOP853参考交叉核终温、峰温、温度修正和总能量，基准／活动／公共项由精确有理数双算。ODE沿既有2e-8 K／2e-10 J诊断阈值，不代替区间误差包络，不改变安全容差；解析内峰是数值夹具，不是研究案例。固定`e086ef4`旧校验器源码重放核legacy轨迹，旧配置SHA及24份历史档案保持，26项当前依赖源码／输入运行前后与快照绑定。没有运行旧95问题main或完整研究实例的热评价，旧单测的输入展开不算研究运行。
+
+阶段止于共同评价基础层，不报告新策略研究节能率或MILP收益。下一项接自动L的MILP控制／物理补全和部分固定部署构模、候选合并及统一预算；各方法尚未共同适配前不做比较。外层排序、时间配额、实际研究调用和预算仍需后续明确；不自动补跑旧115项、Q1或K.108。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.111更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

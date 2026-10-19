@@ -1,5 +1,6 @@
 """One deadline, complete continuous receipts, isolated baseline invocation."""
 from copy import deepcopy
+from control_policy import require_legacy_control
 from fractions import Fraction as F
 import hashlib
 import json
@@ -113,6 +114,8 @@ def execute_heuristic(input_loader, workdir, *, method, seconds, seed=None,
     try:
         with budget.phase(active):
             config, instance = input_loader(budget)
+            require_legacy_control(instance, 'Heuristic method lifecycle')
+            require_legacy_control(config, 'Heuristic method configuration')
             bound = independent_lower_bound(instance)
             budget.check()
             result.update(problem_id=instance['id'], input_sha256=canonical_hash(instance),

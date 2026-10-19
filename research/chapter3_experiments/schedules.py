@@ -16,6 +16,7 @@ physical scalars use reduced rational strings and times remain milliseconds.
 
 from fractions import Fraction
 
+from control_policy import AUTO_LOW_IMMEDIATE_V1, resolve_idle_policy
 from start_domain import explicit_start_sets
 
 
@@ -95,12 +96,16 @@ def _check_rules(instance):
     rules = instance["execution_rules"]
     for name in ("preemption", "migration", "in_stage_opp_change"):
         _require(rules[name] is False, "UNSUPPORTED_EXECUTION_RULE", rule=name)
-    for name in ("switch_only_when_domain_empty", "idle_holds_last_opp"):
+    for name in ("switch_only_when_domain_empty",):
         _require(rules[name] is True, "UNSUPPORTED_EXECUTION_RULE", rule=name)
     _require(rules["interval_convention"] == "[start,end)", "UNSUPPORTED_INTERVAL_CONVENTION")
     for name in ("extra_transfer_time_ms", "extra_switch_time_ms", "extra_handoff_time_ms",
                  "extra_transfer_energy_J", "extra_switch_energy_J", "extra_handoff_energy_J"):
         _require(_fraction(rules[name]) == 0, "UNSUPPORTED_NONZERO_OVERHEAD", rule=name)
+    try:
+        return resolve_idle_policy(instance)
+    except ValueError as error:
+        raise InvalidSchedule("UNSUPPORTED_IDLE_POLICY", message=str(error)) from error
 
 
 def _scene_rows(instance, scene, supplied, units, domains, shared_deployment, window, grid,
@@ -189,7 +194,7 @@ def _scene_rows(instance, scene, supplied, units, domains, shared_deployment, wi
     return sorted(rows, key=lambda row: (row["start_ms"], row["stage_id"]))
 
 
-def _power_segments(platform, scene, rows, nodes, units, domains, window):
+def _power_segments(platform, scene, rows, nodes, units, domains, window, idle_policy=None):
     entry = scene["entry"]
     _require(entry["unfinished_work"] == [], "UNSUPPORTED_UNFINISHED_ENTRY_WORK")
     held = dict(entry["domain_opp"])
@@ -207,7 +212,10 @@ def _power_segments(platform, scene, rows, nodes, units, domains, window):
         for domain in domains:
             requested = {row["opp"] for row in new if row["domain_id"] == domain}
             if not requested:
-                continue  # Idle retains the last OPP; no autonomous reduction.
+                if idle_policy == AUTO_LOW_IMMEDIATE_V1 and not any(
+                        row["domain_id"] == domain for row in continuing):
+                    held[domain] = "L"
+                continue  # Legacy idle holds; an occupied domain never drops.
             _require(len(requested) == 1, "SIMULTANEOUS_OPP_CONFLICT", domain=domain)
             opp = next(iter(requested))
             _require(all(row["opp"] == opp for row in continuing if row["domain_id"] == domain),
@@ -252,7 +260,7 @@ def validate_schedule(instance, candidate):
     """
     try:
         _require(instance["schema_version"] == "chapter3-input-v0.1", "UNSUPPORTED_INPUT_SCHEMA")
-        _check_rules(instance)
+        idle_policy = _check_rules(instance)
         window, grid = _fraction(instance["window_ms"]), _fraction(instance["start_grid_ms"])
         _require(window > 0 and grid > 0, "INVALID_WINDOW_OR_GRID")
         explicit_starts = explicit_start_sets(instance)
@@ -266,7 +274,7 @@ def validate_schedule(instance, candidate):
         for scene_id, scene in scenes.items():
             rows = _scene_rows(instance, scene, candidate["scenes"][scene_id], units, domains,
                                shared_deployment, window, grid, explicit_starts)
-            segments = _power_segments(instance["platform"], scene, rows, nodes, units, domains, window)
+            segments = _power_segments(instance["platform"], scene, rows, nodes, units, domains, window, idle_policy)
             completions = {request["id"]: str(max(row["end_ms"] for row in rows
                            if row["request_id"] == request["id"])) for request in scene["requests"]}
             result_scenes[scene_id] = {

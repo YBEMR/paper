@@ -12,6 +12,7 @@ thermal/energy assessment. Search priority does not alter the legal domain.
 """
 
 from copy import deepcopy
+from control_policy import require_legacy_control
 from fractions import Fraction as F
 
 from schedules import validate_schedule
@@ -283,6 +284,8 @@ def run_heft(instance, config, budget, assess):
     controls the next local base, not the result archive. Budget exhaustion
     propagates so the wrapper can preserve already committed receipts.
     """
+    require_legacy_control(instance, 'HEFT search')
+    require_legacy_control(config, 'HEFT configuration')
     del config  # Same expanded instance supplies all options; no hidden answers.
     meta = {"rule_version": RULE_VERSION, "rules": dict(RULES),
             "construction_attempts": [], "local_attempts": [],

@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.117读取修复按范围验收；原生73/74 false及自然退出限制保留，正式比较未执行 |
+| 当前阶段 | K.118九次日志分析完成；只建议单独限制根割轮数，尚未改代码／执行配对 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新修复（K.117）：** MATLAB请求文本读取增加2秒／10毫秒限额的文件打开重试，坏JSON不重试，总时钟、Python发布和热安全接纳不变。原12项桥接回归通过；一次六请求原生检查验证恢复／超时／取消／stop及同worker后续请求，原报告73/74 false保留：进程未在5秒自然退出，最终沿原20秒兜底强制清理。读取修复按范围验收，自然退出未验收。见[§3.12w](#312w-matlab请求读取修复与分范围验收k117)及[独立审查](results/request_read_native01/independent_review.md)。未补跑K.116、未产生新研究SAFE／能耗。
+**最新分析（K.118）：** 只读核K.116九次原生记录，7次完整返回均逐元素等于各自x0、2次为空；7次已有rootlp→heuristics及内部界，不将节点0说成根LP均未完成。原生调用合计625.232秒，约方法时间81.93%；第7次58.442秒仍报告cutgen、界无可辨识提升。[逐次CSV](results/shared_search_diagnostic01/log_analysis01/factual_requests.csv)及[事实JSON](results/shared_search_diagnostic01/log_analysis01/facts.json)已存。只建议后续单独限制CutMaxIterations=1；代码、模型和60秒片本轮不改，条件配对及预算提案见[计划K.118](../第三章当前进展与正式实验推进计划_审查稿.md#k118九次既有日志的瓶颈归因与唯一后续候选)，未运行／批准。
+
+**历史修复（K.117）：** MATLAB请求文本读取增加2秒／10毫秒限额的文件打开重试，坏JSON不重试，总时钟、Python发布和热安全接纳不变。原12项桥接回归通过；一次六请求原生检查验证恢复／超时／取消／stop及同worker后续请求，原报告73/74 false保留：进程未在5秒自然退出，最终沿原20秒兜底强制清理。读取修复按范围验收，自然退出未验收。见[§3.12w](#312w-matlab请求读取修复与分范围验收k117)及[独立审查](results/request_read_native01/independent_review.md)。未补跑K.116、未产生新研究SAFE／能耗。
 
 **历史诊断（K.116）：** 唯一一次原`base__R1`／自动L／900秒上限调用于763.156秒因第10请求读文件Permission denied停止，清理7.594秒；访问5/16、9次实际入solver。26.640秒已有完整SAFE，最终U＝1.080823451833 J，等于本次最佳初始化；0全局改善、0反馈。SAFE与技术失败分列，未补跑。见[§3.12v](#312v-一次原完整链共享部署搜索诊断k116)、[只读汇总](results/shared_search_diagnostic01/analysis/summary.md)及[内部独立审查](results/shared_search_diagnostic01/independent_review.md)。
 
@@ -995,7 +997,15 @@ receipt = evaluate_candidate(auto_instance, candidate, accuracy, budget)
 
 原Python桥接12项mock同源通过，[沙箱setup失败](results/request_read_mock01.json)与[宿主通过](results/request_read_mock02.json)均留存，和K.116原生故障根因不混同。当前worker已经换SHA，旧57/13整包并不直接匹配；未变数学／数值模块仅按源身份复用。固定[claim](results/request_read_native_claim01.json)已消费，不删claim／换目录重跑。零新研究调用、SAFE／U或热反馈收益。后续仅分析已有K.116日志的求解质量问题，清理成本与退出状态持续分列。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.117更新见上）
+### 3.12x 九次原生调用的只读归因（K.118）
+
+`shared_search_diagnostic01/log_analysis01/`保存[事实JSON](results/shared_search_diagnostic01/log_analysis01/facts.json)、[九行CSV](results/shared_search_diagnostic01/log_analysis01/factual_requests.csv)及[独立审查](results/shared_search_diagnostic01/log_analysis01/independent_review.md)；本线程8项核查通过，非主线⑥。来源为原input／response／python／event及MAT内保存数组，带读取档案SHA；未执行模型、LP、热或优化器，未改旧结果／生产程序。7个完整返回及全部非空callback向量与该次x0逐元素相同；两空返回不据done.numfeaspoints重建候选。7次rootlp→heuristics有有限内部界，只有请求7另存cutgen；阶段时间不完整，不作过强因果归属。
+
+九次原生调用625.232秒，九次矩阵导出4.377秒、MAT序列化0.158秒、搜索内连续复核3.641秒；原方法构模89.453秒。不同进程区间重叠，不能直接相加；9次原生终止均报告MaxTime，与合作cancel记录分开。R2023b原生`relativegap=100(U−L)/(|U|+1)`，不能替代独立物理能量的`(U−L0)/U`。
+
+下一候选只限`CutMaxIterations=1`（9次保存为basic／10），本轮没有添加开关或修改默认。其含义和合法范围核[R2023b官方说明](https://www.mathworks.com/help/releases/R2023b/optim/ug/intlinprog.html)；实际割轮数／内部阶段细分未记录，节能仍待验证。完整的首共享条件、10／1各一次300秒／scene60秒**待确认提案**只维护在[计划K.118](../第三章当前进展与正式实验推进计划_审查稿.md#k118九次既有日志的瓶颈归因与唯一后续候选)，不凭旧claim或本次分析自动运行。强退清理局限、全域L0与SAFE标准保持，不加其他排序／修复／模型强化。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.118更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

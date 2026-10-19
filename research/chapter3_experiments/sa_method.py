@@ -12,7 +12,7 @@ and every candidate evaluation use the caller's single method deadline.
 """
 from collections import Counter
 from copy import deepcopy
-from control_policy import require_legacy_control
+from auto_heuristic_policy import require_heuristic_control
 from fractions import Fraction as F
 import math
 import random
@@ -182,7 +182,7 @@ def _accept(old, new, safe_trials, rng):
     return exponent < 745 and rng.random() < math.exp(-exponent)
 
 
-def run_sa(instance, config, budget, assess, seed):
+def run_sa(instance, config, budget, assess, seed, *, allow_auto_low=False):
     """Run one independent SA invocation.  The caller owns SAFE/cache records.
 
     ``assess(candidate, source)`` performs the common full evaluation under the
@@ -190,8 +190,7 @@ def run_sa(instance, config, budget, assess, seed):
     Imported HEFT is only a constructor: its energy-improvement loop is not
     called and no answer from another method invocation is read.
     """
-    require_legacy_control(instance, 'SA search')
-    require_legacy_control(config, 'SA configuration')
+    require_heuristic_control(instance, config, 'SA search', allow_auto_low=allow_auto_low)
     from heft_method import build_heft_candidate
     from heuristic_common import decode_plan, plan_from_candidate
 

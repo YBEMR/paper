@@ -1169,3 +1169,17 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/summarize_neighborhood_
 K.79构造诊断47.469 s完成模型和矩阵；K.80完整调用60 s停于启动；K.81依D106只作一次900 s诊断，已进入求解但未取得整数候选。K.83完成分项小域核对；K.84依D109用两项强化版、关闭辅助连续化，再作一次900 s完整诊断，仍无整数候选。K.86依D110显式开启辅助连续化，完成数值接纳预检及第三次单次900 s诊断，仍无候选；仅整数声明改变，原始LP及其他数学系数不变。K.87依D111完成热能耗有效下界及342项小域核对，五域LP目标提高，原整数安排保留。K.88依D112启用新强化完成第四次单次900 s诊断，根LP从0提高至0.740332 J，但仍无候选。K.90小域接通安全见证及可选初始解；K.91取得原规模SAFE和数值起点；K.92一次首解辅助900秒调用已观察到种子成为求解器可行解，U仍约1.632465 J，没有后续改善或最优证明。首解接入阶段结束，下一项先讨论工程参照的正式口径与预算，不再默认追加诊断。正式预算及任何后续原规模调用仍待讨论，不自动加时、改变默认开关、迁移语言、改参数或补跑。HEFT／SA尚未实现，不能把计时公共入口已落实写成三方法均已可运行。原始MAT按`.gitignore`保留本机，Git保存可重建的输入、源码、JSON证据与诊断脚本，不强制加入二进制文件。
 
 正式结果仍限定于声明的抽象平台与有限启动域。可行输出、无解证明、求解器报告、超时及数值未分辨分别统计；是否有能耗或计算收益由结果决定。
+
+### 3.12ag 夜间热证据与最小auto-L对照（K.127）
+
+新增`run_night_after_k126.py`冻结／执行薄包装及`run_night_precheck.py`必要检查；显式auto-L启发式参数`allow_auto_low=True`，默认旧hold规则保持。67／67后，1组52°C温限热配对＋原base四方法共6次，各300秒上限，全部SAFE，无重试。H热拒绝→M安全，0外层反馈；原base HEFT本次优于N1，SA仅101探索，不能将N1对自身种子改善作为对照优势。
+
+唯一实际根`results/night_k127_run02`；旧`night_k127_20261019`零调用废止。不可逆claim、125源／输入hash和全夜04:50:19截止共同准入；已消费任务不重跑。实际研究已结束，复现求解须新的明确协议，不能删除claim绕过次数限制。
+
+```powershell
+# 查看只读汇总器入口；不启动优化器／热传播。
+# 已有analysis01会拒绝覆盖，原始调用及分析记录均应保留。
+& F:/Anaconda3/python.exe -B research/chapter3_experiments/results/night_k127_run02/analysis01/analysis_script.py --help
+```
+
+[夜间总结](results/night_k127_run02/night_summary.md)汇总全部预算、结果与界；[CSV](results/night_k127_run02/analysis01/results.csv)、[U与L₀图](results/night_k127_run02/analysis01/safe_upper_and_independent_L0.png)、[热接纳图](results/night_k127_run02/analysis01/thermal_acceptance.png)、[独审](results/night_k127_run02/independent_review.md)、[选择差异](results/night_k127_run02/method_difference.md)可核查。图及其脚本只读取存档，不将事后读到的native结果补作预算内证据。

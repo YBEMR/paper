@@ -1,6 +1,6 @@
 """One deadline, complete continuous receipts, isolated baseline invocation."""
 from copy import deepcopy
-from control_policy import require_legacy_control
+from auto_heuristic_policy import require_heuristic_control
 from fractions import Fraction as F
 import hashlib
 import json
@@ -94,12 +94,14 @@ class CandidateRecorder:
 
 
 def execute_heuristic(input_loader, workdir, *, method, seconds, seed=None,
-                       clock=time.monotonic, evaluator=evaluate_candidate, search=None):
+                       clock=time.monotonic, evaluator=evaluate_candidate, search=None,
+                       allow_auto_low=False):
     """No research workload or budget is selected by this reusable lifecycle."""
     if method not in ('heft', 'sa'): raise ValueError('unknown heuristic')
     if method == 'sa' and (isinstance(seed, bool) or not isinstance(seed, int)):
         raise ValueError('SA requires an explicit integer seed')
     if method == 'heft' and seed is not None: raise ValueError('HEFT is deterministic')
+    if type(allow_auto_low) is not bool: raise ValueError('allow_auto_low must be boolean')
     budget = MethodBudget(seconds, clock=clock)
     workdir = Path(workdir)
     if workdir.exists(): raise FileExistsError(str(workdir))
@@ -114,9 +116,14 @@ def execute_heuristic(input_loader, workdir, *, method, seconds, seed=None,
     try:
         with budget.phase(active):
             config, instance = input_loader(budget)
-            require_legacy_control(instance, 'Heuristic method lifecycle')
-            require_legacy_control(config, 'Heuristic method configuration')
-            bound = independent_lower_bound(instance)
+            policy = require_heuristic_control(instance, config, 'Heuristic method lifecycle',
+                                               allow_auto_low=allow_auto_low)
+            if allow_auto_low:
+                from partial_bounds import independent_lower_bound as auto_lower_bound
+                bound = auto_lower_bound(instance, None, budget)
+                result.update(control_policy=policy, auto_low_opt_in=True)
+            else:
+                bound = independent_lower_bound(instance)
             budget.check()
             result.update(problem_id=instance['id'], input_sha256=canonical_hash(instance),
                 independent_lower_bound=bound, certified_lower_bound_J=bound['lower_bound_J'],
@@ -129,6 +136,9 @@ def execute_heuristic(input_loader, workdir, *, method, seconds, seed=None,
             else:
                 from sa_method import run_sa
                 search = run_sa
+            if allow_auto_low:
+                from functools import partial
+                search = partial(search, allow_auto_low=True)
         active = 'heuristic_search'
         with budget.phase(active):
             result['search'] = (search(instance, config, budget, recorder.assess) if method == 'heft'

@@ -12,7 +12,7 @@ thermal/energy assessment. Search priority does not alter the legal domain.
 """
 
 from copy import deepcopy
-from control_policy import require_legacy_control
+from auto_heuristic_policy import require_heuristic_control
 from fractions import Fraction as F
 
 from schedules import validate_schedule
@@ -275,7 +275,7 @@ def _next_start(instance, sid, iid, current, declared):
     return next((value for value in declared[sid][iid] if value > current), None)
 
 
-def run_heft(instance, config, budget, assess):
+def run_heft(instance, config, budget, assess, *, allow_auto_low=False):
     """Construct and make a single safe-energy descent pass.
 
     ``assess(candidate, source)`` owns common checking/cache/budget evidence and
@@ -284,8 +284,7 @@ def run_heft(instance, config, budget, assess):
     controls the next local base, not the result archive. Budget exhaustion
     propagates so the wrapper can preserve already committed receipts.
     """
-    require_legacy_control(instance, 'HEFT search')
-    require_legacy_control(config, 'HEFT configuration')
+    require_heuristic_control(instance, config, 'HEFT search', allow_auto_low=allow_auto_low)
     del config  # Same expanded instance supplies all options; no hidden answers.
     meta = {"rule_version": RULE_VERSION, "rules": dict(RULES),
             "construction_attempts": [], "local_attempts": [],

@@ -1,0 +1,139 @@
+%% 本章由已审阅Markdown讨论稿忠实转排；保留技术文字和公式。
+\chapter{绪论}\label{ux7eeaux8bba}
+
+\section{研究背景与意义}\label{ux7814ux7a76ux80ccux666fux4e0eux610fux4e49}
+
+近年来，深度学习在目标识别、视频分析和智能感知等领域得到广泛应用，推理任务也逐渐从云端延伸到移动终端和嵌入式设备。将计算放在数据产生的位置，可以减少网络传输带来的响应延迟，并支持设备在网络条件受限时独立完成处理。与云端服务器相比，端侧设备通常受到计算资源、供电和散热条件的共同限制。特别是在多个应用同时运行、部分请求具有明确截止期限的情况下，系统不仅需要及时完成计算，还需要控制持续运行的能源开销。因此，如何在有限资源下实现具有实时性要求的高能效推理，成为端侧计算中的重要研究问题。
+
+为提高计算能力和能源利用效率，端侧片上系统逐渐采用中央处理单元（Central Processing Unit，CPU）、图形处理单元（Graphics Processing Unit，GPU）和神经网络处理单元（Neural Processing Unit，NPU）协同工作的异构架构。CPU适于执行控制与通用计算，GPU能够处理具有较高数据并行度的运算，NPU则通过专用计算单元和存储组织加速部分深度学习算子。不同处理器在可支持的运算、执行速度和功率方面存在差异，使同一推理应用具备多种部署选择。与此同时，异构资源的增加也使调度器需要判断哪些计算适合在哪类设备上执行，以及不同设备如何共同完成一次推理{[}1-4,16{]}。
+
+这种配置问题并不局限于整模型选择。深度学习应用通常由具有先后依赖关系的多个计算阶段（Stage）构成，前处理、主要计算和后处理对执行设备的要求可能不同。将应用划分为Stage后，系统可以为各阶段选择适合的处理器，但某个阶段的局部最优配置未必能够形成完整请求的最优安排。例如，一个Stage在NPU上可能具有较低活动能量，若其后继必须等待该设备上的其他任务，完整请求的完成时间仍可能增加。因此，处理器映射需要结合任务依赖和资源占用关系共同考虑。
+
+动态电压频率调整（Dynamic Voltage and Frequency Scaling，DVFS）进一步增加了配置的灵活性。较低的频率与电压通常能够减少部分动态功耗，却会影响任务执行时间，而且不同Stage对频率降低的敏感程度并不相同。对于计算受限的阶段，降频可能明显延长运行时间；而对于受到数据访问等因素限制的阶段，时长变化可能相对较小。由此，工作点选择不仅影响当前阶段的能量，还会改变后继任务的可用时间。如何利用截止期限内的时间余量，在降低活动功率与及时释放计算资源之间取得平衡，成为设备映射之后需要解决的另一项问题。
+
+当多个推理请求并发执行时，设备选择和频率调整之间的联系更加紧密。不同Stage可能竞争同一GPU或NPU，即使两个Stage分别占用CPU1和CPU2，也可能因为CPU单元共享同一频率控制域而受到共同工作点的限制。一个任务的延长执行可能推迟其他请求，较快完成则可以提前释放资源，改变后续阶段的启动时刻与运行配置。此外，任务运行结束并不意味着设备停止耗电，空闲期间的低频基准功耗及等待时间的分布，同样会影响系统完整运行的能耗。因此，仅依据各Stage的活动能量求和评价方案，难以反映资源竞争、调频和时序相互影响后的实际代价{[}12,17,22{]}。
+
+除运行能耗外，端侧设备还需要考虑温度限制。高强度计算产生的热量会随时间积累，并通过芯片内部的热耦合影响其他处理单元。即使某个任务安排能够满足截止期限，执行过程中的局部温度仍可能超过安全上限。另一方面，处理器静态漏电与温度有关，温度升高又可能增加后续时刻的功耗。这样，工作点和执行时序不仅决定计算何时完成，还通过功率分布影响温度轨迹，并进一步影响系统能耗{[}7,19,25-26{]}。
+
+这种温度与能耗之间的联系使等待时间具有了新的作用。推迟某个Stage可以改变相邻阶段的温度条件，为局部散热创造机会，却也会减少请求的期限余量；适当提高工作点虽然可能增加当前活动功率，却可能减少设备占用和后续等待时间。同时，任务完成后的空闲尾段仍存在基准功耗和温度相关漏电，因此只统计任务执行期间的能量，可能无法准确比较不同调度安排。若要在满足期限的同时降低能耗，需要将执行、等待和空闲状态放入统一的时间范围，并沿完整时间轴判断温度是否安全。
+
+除同一场景中的任务竞争外，端侧设备还可能面临不同的应用组合。例如，一种场景同时运行应用A和B，另一种场景运行应用A和C。应用A的计算流程保持不变，但在两个场景中与其竞争设备的应用不同，适合的运行频率和执行时序也可能不同。如果A的同一Stage需要在多个场景中保持一致的处理器部署，那么它的执行位置就不能分别按照A+B和A+C的局部结果独立确定。相反，各场景可以在共享部署的基础上，根据实际请求和资源竞争分别安排工作点与启动时刻{[}14-15{]}。由此，跨场景部署一致性与场景内运行灵活性构成了另一层需要协调的关系。
+
+基于上述问题，本文研究热感知条件下的多场景端侧协同推理任务调度。在给定Stage结构、合法执行模式、场景请求及实时要求的条件下，联合选择跨场景共享的Stage执行单元和各场景的工作点、启动时刻，使所有场景均满足任务依赖、资源约束、截止期限和连续热安全要求，同时降低按场景权重汇总的完整窗口系统能耗。这一研究从统一能量与热安全评价出发，考察部署和时序的共同作用；针对由离散配置、复杂资源关系和连续温度约束带来的求解规模问题，进一步研究适合有限计算预算的优化方法，为端侧异构推理提供具有明确约束依据的安全节能配置方案。
+
+\section{国内外研究现状}\label{ux56fdux5185ux5916ux7814ux7a76ux73b0ux72b6}
+
+围绕本文研究的问题，现有工作大体可以分为四个方向。第一类研究关注异构处理器上的推理配置与多任务协同；第二类研究面向温度感知的运行管理与热安全；第三类研究将期限、频率和温度共同纳入节能调度；第四类研究进一步处理不同应用组合下的共享部署。这些研究分别从资源选择、热状态控制、完整时序和场景关联等方面展开，并逐步形成了面向端侧推理联合优化的研究基础。
+
+第一类研究主要解决计算阶段应采用何种处理器和工作点的问题。由于不同网络层或计算内核在CPU、GPU及专用加速器上的执行效率存在差异，相关工作逐渐由整模型配置转向细粒度的设备与频率协同。PELSI依据逐层性能和功率画像，在推理期限约束下搜索设备与频率组合，并将层间切换代价纳入配置评价；MEDEA则结合算子支持和本地存储要求生成合法执行模式，再通过整数线性规划安排各计算内核的工作点，以降低推理活动能量{[}1-2{]}。这类研究使异构推理的能效选择从单一设备扩展为多个阶段的共同配置，也说明不同阶段的运行代价应当结合完整推理过程加以评价。
+
+随着端侧设备同时执行多个深度学习模型，研究者开始将资源竞争与任务时序纳入优化。Kang等针对嵌入式异构处理器上的多DNN执行，考虑层级任务关系及不同处理单元的配置，研究多应用调度中的时间与能源取舍{[}16{]}。MEPHESTO进一步针对异构片上系统中并发内核的共享资源干扰，联合分析设备分配、执行次序和能量---性能关系{[}17{]}。相比仅为各阶段选择运行设备，这些工作开始关注不同任务之间的执行位置和先后顺序如何共同影响系统表现。
+
+进一步地，Band根据异构后端的支持关系组织子图并协调多个DNN请求，HaX-CoNN在联合映射与执行安排中考虑共享内存争用，以改善并发模型的完成时间或吞吐表现{[}3-4{]}。此外，NeuOS把多DNN的系统级DVFS与应用配置共同考虑，在期限、能耗和服务质量之间作选择；MapFormer则面向多个DNN联合搜索网络划分、异构映射及组件频率配置{[}18,23{]}。这些方法反映出异构推理优化正在从局部算子执行扩展到多模型协同，所需处理的决策也从设备选择发展为配置、并发和运行控制的共同安排。不过，设备利用率或任务完成时间较优的方案，未必同时具有较低的完整窗口能耗，特别是在执行功率会改变后续热状态时，还需要进一步评价温度与能量之间的联系。
+
+第二类研究从处理器温度及运行状态出发，关注设备在持续推理中的安全性和服务能力。EdgeEngine将温度纳入运行控制状态，联合调整CPU、GPU和内存控制器的频率，在时间或能量预算下选择推理配置{[}5{]}。Tan和Cao面向含NPU的移动平台，根据温度变化协调GPU、NPU和视频处理策略，以兼顾处理速度、准确率与热状态{[}6{]}。近年来，热节流对多模型长期运行的影响也得到更多关注。例如，Phoenix围绕移动端多实例DNN推理，在处理器热节流条件下结合设备分配与自适应早退出维持应用服务表现{[}20{]}。这类研究使温度由被动监测指标转变为影响设备配置和运行策略的重要因素。
+
+除了根据当前温度调整频率或设备，已有工作还利用任务信息预测后续热状态。Maity等提出F-DTM，根据未来内核配置和期限估计温度变化，共同调整CPU/GPU工作划分与频率，以降低峰值温度；其后续平台管理研究又通过设备重分配、调频和启动延迟处理运行中的超温情况{[}7-8{]}。在具有芯片内部热耦合的系统上，Lee等研究集成CPU---GPU平台的温度感知调度，将CPU核分配与GPU执行协调起来，以处理不同任务之间的热影响{[}19{]}。国内也有相关研究，屈双喜等根据多核处理器的预测热状态选择待执行线程，通过任务选择和迁移控制改善运行温度{[}27{]}。这些工作说明，当前任务的执行位置及时间会改变其他处理单元和后续任务的热条件，热管理因而需要关注任务间的连续影响。
+
+从热安全保证的角度，Schor等进一步针对多核实时系统中的不确定任务执行，分析可能出现的最坏温度峰值，为运行期间的温度限制提供了分析方法{[}26{]}。这类研究与依据当前温度进行控制的工作相互补充：前者关注给定任务条件下温度是否能够得到保证，后者关注运行中如何调整配置。对于本文面向已知请求的离线节能规划，还需要在制定完整时间表时同时处理期限、资源竞争和温度约束，使热检查不仅用于识别超温，也能够服务于后续的低能耗配置选择。
+
+第三类研究进一步将实时任务调度与温度、能耗目标结合起来。针对具有依赖关系的任务，Zhou等在异构多处理器系统上共同考虑任务分配、频率和温度上限，并将温度相关漏电纳入能耗评价；Li等则研究具有前驱约束的实时应用，利用映射及执行次序确定后的时间余量选择降频或冷却等待{[}9-10{]}。这说明期限内的剩余时间具有不同用途：既可以用于降低当前运行功率，也可以通过调整等待改变后续温度。然而，降频会延长资源占用，等待则减少后继任务的时间余量，两者的能耗收益还需要放到完整任务图中共同判断。
+
+在热感知任务映射和调度方面，Chantem等建立面向硬实时应用的任务分配与时序优化方法，将处理器位置和任务先后关系与温度联系起来，以降低峰值温度{[}21{]}。与此同时，Liu等采用混合整数线性规划（Mixed-Integer Linear Programming，MILP），联合表达任务映射、离散工作点、执行时刻及重叠关系，在期限、温度和寿命约束下研究节能安排{[}11{]}。这些工作为将热条件纳入数学规划提供了基础，但温度评价采用的时间尺度与执行模型直接相关。对于具有不同入口温度、短时功率变化和芯片内热耦合的推理场景，连续温度演化仍是判断候选安排能否实际采用的重要依据。
+
+此外，能耗优化还受到空闲状态和功率管理方式的影响。Coskun等从多核处理器任务安排与功率管理出发，分析不同调度及DVFS策略对性能、温度和处理器寿命的共同影响{[}25{]}。Esmaili等将动态功耗管理（Dynamic Power Management，DPM）、DVFS和任务调度纳入统一优化，考虑执行、空闲及状态转换的能量代价，说明任务次序和空闲分布也会影响节能效果{[}12{]}。Bao等进一步研究温度感知的空闲时间分布，通过调整等待位置改变后续温度及漏电能量{[}13{]}。由此可见，能耗不仅与选定的活动模式有关，还与任务何时执行、设备何时进入空闲状态及该期间的温度变化有关。
+
+在端侧深度学习应用中，完整推理间隔的功率状态也开始成为细粒度优化对象。PowerFlow-DNN面向具有期限要求的推理过程，跨层协调电压状态与功率门控，并考虑层间状态转换对完整能量的影响{[}22{]}。该研究进一步说明，逐层看似较好的局部功率状态，未必对应整个运行间隔的最低能耗。对于由CPU、GPU和NPU共同承担、存在资源竞争及共享频率域的多请求执行，既需要利用上述功率管理思想，也需要将实际Stage时序与完整温度轨迹联系起来，才能比较不同联合配置的安全性和能量代价。
+
+第四类研究考虑应用组合变化后，多个场景如何共享资源部署。不同于只针对一次请求或固定并发集合安排运行过程，多场景优化还要求同一应用在不同组合中采用一致的部分配置。Kim和Ha针对多场景深度学习应用提出能量感知映射方法，在CPU、GPU和深度学习加速器组成的异构平台上，为应用选择跨场景共同的具体处理单元，并按场景调整设备频率，通过响应时间分析与加权能量评价满足实时要求{[}14{]}。该方法说明，共享部署与场景内运行配置可以共同优化，既不需要为每个场景独立保存一套完全不同的部署，也不必要求所有场景采用相同工作频率。
+
+在此基础上，已有端侧异构多核任务调度研究进一步将Stage级任务图、共享映射、频率及执行时序统一建模，并分别利用约束生成和分解式启发方法组织求解{[}15{]}。与此相关，多模式系统研究还关注模式变化时的调度与资源转换。例如，Jung等研究具有不同运行模式的数据流图，并将模式转换延迟纳入多处理器调度{[}24{]}。这两类研究从不同角度描述场景之间的联系：前者强调不同场景共用的部署决策，后者还处理模式切换过程的成本。本文关注前一种关系，即各场景分别从给定入口状态评价，而由相同Stage的处理器部署建立跨场景约束。
+
+当温度相关功耗和连续热安全进一步进入共享部署问题时，部署的评价需要同时考察各场景的完整执行过程。仍以应用A+B和A+C为例，如果A的某个Stage固定映射到NPU，那么它在两个场景中必须使用同一设备；但B和C可能分别占用不同处理器，也可能与A竞争同一加速器。这样，即使A的部署保持不变，各场景的工作点、等待和温度演化仍可能不同。另一方面，若为了一个场景改变A的执行位置，该决定也会作用于另一个场景。因此，共享部署的价值不能仅由某个场景中的单Stage活动能量衡量，而应由全部场景中满足期限与连续热安全的完整安排共同决定。
+
+综合来看，现有研究已经从阶段级设备配置发展到多模型资源协调，并将温度管理、期限节能和跨场景共享部署逐步纳入分析。对本文研究对象而言，需要同时处理两种相互联系的决策关系。一方面，相同Stage的具体执行单元在不同场景之间保持一致，使各场景无法完全独立选择部署；另一方面，场景内的频率和启动时刻改变资源占用与功率轨迹，温度又通过安全约束和漏电功率影响候选方案。因而，跨场景部署与场景内调度不能彼此分离地确定，也不能只依据阶段活动能量评价其整体效果。
+
+此外，将共享部署、离散工作点、执行时序与连续热条件共同纳入优化，会使求解问题具有较多离散组合和复杂的温度约束。为在完整运行过程中保证安全，需要对候选时间表进行连续热评价，并利用所发现的可靠违规信息改进后续搜索；而跨场景耦合主要由共享部署形成，固定这一共同决策后，仍可分别规划各场景的本地部署和时序。基于这些特点，本文建立热约束下的多场景节能联合模型，进一步研究连续热检查与反馈以及利用共享部署结构的分解式求解方法，在给定计算预算内寻找满足全部场景要求的低能耗安排。
+
+\section{本文研究的主要内容}\label{ux672cux6587ux7814ux7a76ux7684ux4e3bux8981ux5185ux5bb9}
+
+本文面向CPU、GPU和NPU构成的异构端侧平台，研究多个推理应用在不同并发场景下的高能效任务调度。根据给定的Stage任务图、合法处理器模式及请求期限，同一Stage跨场景保持具体执行单元一致，场景内的频率与时序则允许分别调整。本文以全部场景满足资源、依赖、期限和连续热安全约束为前提，最小化按场景权重汇总的完整窗口系统能耗。围绕这一目标，主要研究内容如下。
+
+（1）建立多场景热感知的协同推理联合调度模型。在Stage级任务表示的基础上，描述不同Stage在各处理器和工作点下的执行响应，并通过共同Stage身份建立跨场景部署关系。进一步考虑CPU共享频率域与空闲控制，结合包含基准功率、活动功率和温度相关漏电的功耗模型，以及多节点瞬态热网络，描述工作点、时序、功率和温度之间的联系。在此基础上建立满足完整请求期限和全过程温度要求的联合优化问题，对执行、等待及完成后的空闲过程进行统一能耗评价。
+
+（2）研究联合模型的MILP表达与连续热安全反馈方法。根据合法执行模式和有限启动时刻建立MILP模型，将处理器互斥、共享频率域、Stage依赖和请求期限纳入统一约束。对于求解器给出的候选安排，按照真实启动和结束事件恢复功率轨迹，连续传播节点温度并检查事件之间可能出现的温度峰值；当发现可靠的超温情况时，将有效的温度限制反馈给后续求解过程。通过MILP规划与连续热检查相结合，使离散优化产生的候选接受完整热安全与能耗评价。
+
+（3）研究利用共享部署结构的分解式节能求解方法。针对跨场景共同部署和场景内局部安排之间的关系，将真正需要共享的Stage具体执行单元作为外层选择，其他应用的部署、工作点与启动时刻保留在各场景子问题内。给定共享部署后，分别求解各场景并对完整安全候选进行加权合并；通过统一预算组织初始化、内层MILP搜索及外层部署探索，研究在有限计算时间内获得高质量安全方案的方法，同时分析不同求解环节对方案质量和计算成本的影响。
+
+针对上述研究内容，本文采用一致的任务数据、功耗温度参数及安全评价标准组织实验，考察场景与资源组合、请求规模、期限条件、温度压力及频率响应变化对可行性、完整系统能耗和求解时间的影响，并设置相应比较方法，以检验联合建模和求解策略的作用。
+
+\section{论文组织结构}\label{ux8bbaux6587ux7ec4ux7ec7ux7ed3ux6784}
+
+全文拟分为五章，各章内容安排如下。
+
+第1章为绪论，介绍研究背景与意义，梳理异构推理配置、温度感知运行管理、热感知节能调度和多场景共享部署的相关研究，明确本文的问题来源与主要内容。
+
+第2章介绍端侧异构处理器、Stage级任务图、DVFS、功耗与瞬态热模型，以及任务调度与优化求解的相关理论，为后续建模和方法设计提供基础。
+
+第3章研究多场景端侧推理的热约束节能联合规划，建立完整窗口功耗与瞬态温度表达，给出MILP构建、候选热检查和约束反馈方法，并分析相应实验结果。
+
+第4章针对联合规划中的计算成本，利用跨场景共享部署与场景内调度之间的结构关系研究分解式求解，评价统一计算预算内的安全方案质量与求解效率。
+
+第5章总结全文研究工作及主要结论，并对后续研究方向进行展望。
+
+\section*{本章参考文献}
+\addcontentsline{toc}{section}{本章参考文献}
+
+{[}1{]} AGHAPOUR E, SAPRA D, PIMENTEL A D, PATHANIA A. PELSI: Power-Efficient Layer-Switched Inference{[}C{]}//RTCSA. 2023: 12--17. \href{https://doi.org/10.1109/RTCSA58653.2023.00011}{DOI}.
+
+{[}2{]} TAJI H, MIRANDA J, PEÓN-QUIRÓS M, ATIENZA D. MEDEA: A Design-Time Multi-Objective Manager for Energy-Efficient DNN Inference on Heterogeneous Ultra-Low Power Platforms{[}EB/OL{]}. arXiv:2506.19067v3, 2026. \href{https://arxiv.org/abs/2506.19067}{原文}.
+
+{[}3{]} JEONG S, 等. Band: Coordinated Multi-DNN Inference on Heterogeneous Mobile Processors{[}C{]}//MobiSys. 2022. \href{https://doi.org/10.1145/3498361.3538948}{DOI}.
+
+{[}4{]} DAGLI I, BELVIRANLI M E. Shared Memory-contention-aware Concurrent DNN Execution for Diversely Heterogeneous SoCs{[}C{]}//PPoPP. 2024. \href{https://doi.org/10.1145/3627535.3638502}{DOI}.
+
+{[}5{]} AHMADI A, ABDELHAFEZ H A, PATTABIRAMAN K, RIPEANU M. EdgeEngine: A Thermal-Aware Optimization Framework for Edge Inference{[}C{]}//ACM/IEEE SEC. 2023. \href{https://doi.org/10.1145/3583740.3626616}{DOI}.
+
+{[}6{]} TAN, CAO. Thermal-Aware Scheduling for Deep Learning on Mobile Devices with NPU{[}J{]}. IEEE Transactions on Mobile Computing, 2024, 23(12): 10706--10719. \href{https://doi.org/10.1109/TMC.2024.3379501}{DOI}.
+
+{[}7{]} MAITY S, ROY R, MAJUMDER A, DEY S, HOTA A R. Future aware Dynamic Thermal Management in CPU-GPU Embedded Platforms{[}C{]}//RTSS. 2022. \href{https://doi.org/10.1109/RTSS55097.2022.00041}{DOI}.
+
+{[}8{]} MAITY S, GHOSE A, DEY S, BISWAS S. Thermal-aware Adaptive Platform Management for Heterogeneous Embedded Systems{[}J{]}. ACM Transactions on Embedded Computing Systems, 2021, 20(5s): Article 97. \href{https://doi.org/10.1145/3477028}{DOI}.
+
+{[}9{]} ZHOU J, 等. Thermal-aware correlated two-level scheduling of real-time tasks with reduced processor energy on heterogeneous MPSoCs{[}J{]}. Journal of Systems Architecture, 2018, 82: 1--11. \href{https://doi.org/10.1016/j.sysarc.2017.09.007}{DOI}.
+
+{[}10{]} LI T, ZHANG T, YU G, SONG J, FAN J. Minimizing temperature and energy of real-time applications with precedence constraints on heterogeneous MPSoC systems{[}J{]}. Journal of Systems Architecture, 2019, 98: 79--91. \href{https://doi.org/10.1016/j.sysarc.2019.07.001}{DOI}.
+
+{[}11{]} LIU W, YI J, LI M, CHEN P, YANG L. Energy-Efficient Application Mapping and Scheduling for Lifetime Guaranteed MPSoCs{[}J{]}. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems, 2019. \href{https://doi.org/10.1109/TCAD.2018.2801242}{DOI}.
+
+{[}12{]} ESMAILI A, NAZEMI M, PEDRAM M. Modeling Processor Idle Times in MPSoC Platforms to Enable Integrated DPM, DVFS, and Task Scheduling Subject to a Hard Deadline{[}C{]}//ASP-DAC. 2019. \href{https://arxiv.org/abs/1812.07723}{作者版本}.
+
+{[}13{]} BAO M, ANDREI A, ELES P, PENG Z. Temperature-Aware Idle Time Distribution for Leakage Energy Optimization{[}J{]}. IEEE Transactions on Very Large Scale Integration Systems, 2012, 20(7): 1187--1200. \href{https://doi.org/10.1109/TVLSI.2011.2157542}{DOI}.
+
+{[}14{]} KIM J, HA S. Energy-Aware Scenario-Based Mapping of Deep Learning Applications Onto Heterogeneous Processors Under Real-Time Constraints{[}J{]}. IEEE Transactions on Computers, 2023, 72(6). \href{https://doi.org/10.1109/TC.2022.3218991}{DOI}.
+
+{[}15{]} 面向端侧深度学习推理的高能效异构多核任务调度算法研究{[}D{]}. 重庆邮电大学, 2026. \href{https://github.com/YBEMR/paper/blob/main/main.pdf}{仓库归档全文}.
+
+{[}16{]} KANG D, OH J, CHOI J, YI Y, HA S. Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device{[}J{]}. IEEE Access, 2020, 8: 43980--43991. \href{https://doi.org/10.1109/ACCESS.2020.2977496}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2020_Kang_Heterogeneous_DL_Scheduling.pdf}{本地全文}.
+
+{[}17{]} MONIL M A H, BELVIRANLI M E, LEE S, VETTER J S, MALONY A D. MEPHESTO: Modeling Energy-Performance in Heterogeneous SoCs and Their Trade-Offs{[}C{]}//PACT. 2020. \href{https://doi.org/10.1145/3410463.3414671}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2020_Monil_MEPHESTO_author.pdf}{本地全文}.
+
+{[}18{]} KARATZAS A, ANAGNOSTOPOULOS I. MapFormer: Attention-based multi-DNN Manager for Throughout \& Power Co-Optimization on Embedded Devices{[}C{]}//ICCAD. 2024. \href{https://doi.org/10.1145/3676536.3676724}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2024_MapFormer_Attention-basedmulti-DNNManagerfor.pdf}{本地全文}.
+
+{[}19{]} LEE Y, SHIN K G, CHWA H S. Thermal-Aware Scheduling for Integrated CPUs--GPU Platforms{[}J{]}. ACM Transactions on Embedded Computing Systems, 2019, 18(5s): Article 90. \href{https://doi.org/10.1145/3358235}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2019_Lee_Thermal_Aware_Integrated_CPUs_GPU.pdf}{本地全文}.
+
+{[}20{]} JEON S, KIM J, LEE J, CHA H. Phoenix: Thermal-Aware On-Device Inference of Multi-Instance DNNs for Mobile Video Applications{[}J{]}. ACM Transactions on Embedded Computing Systems, 2026, 25(2): Article 31. \href{https://doi.org/10.1145/3793860}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2026_Jeon_Phoenix.pdf}{本地全文}.
+
+{[}21{]} CHANTEM T, HU X S, DICK R P. Temperature-Aware Scheduling and Assignment for Hard Real-Time Applications on MPSoCs{[}J{]}. IEEE Transactions on VLSI Systems, 2011, 19(10): 1884--1897. \href{https://doi.org/10.1109/TVLSI.2010.2058873}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2011_Temperature-Aware_Scheduling_and_Assignment_for.pdf}{本地全文}.
+
+{[}22{]} CHEN P Y C, KIM J, ZHU W, 等. PowerFlow-DNN: Compiler-Directed Fine-Grained Power Orchestration for End-to-End Edge AI Inference{[}C{]}//ISLPED. 2026. \href{https://doi.org/10.1145/3816440.3818667}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2026_Chen_PowerFlow_DNN_v3.pdf}{本地全文}.
+
+{[}23{]} BATENI S, LIU C. NeuOS: A Latency-Predictable Multi-Dimensional Optimization Framework for DNN-driven Autonomous Systems{[}C{]}//USENIX ATC. 2020. \href{https://www.usenix.org/conference/atc20/presentation/bateni}{会议论文}；\href{https://github.com/YBEMR/paper/blob/main/papers/2020_NeuOS_A_Latency-Predictable\%20Multi-Dimensional.pdf}{本地全文}.
+
+{[}24{]} JUNG H, OH H, HA S. Multiprocessor Scheduling of a Multi-Mode Dataflow Graph Considering Mode Transition Delay{[}J{]}. ACM Transactions on Design Automation of Electronic Systems, 2017, 22(2): Article 37. \href{https://doi.org/10.1145/2997645}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2017_Multiprocessor_Scheduling_of_a_Multi-Mode_Dataflow_Graph_Considering_Mode_Transition_Delay.pdf}{本地全文}.
+
+{[}25{]} COSKUN A K, STRONG R, TULLSEN D M, ROSING T S. Evaluating the Impact of Job Scheduling and Power Management on Processor Lifetime for Chip Multiprocessors{[}C{]}//SIGMETRICS. 2009. \href{https://github.com/YBEMR/paper/blob/main/papers/2009_Coskun_Job_Scheduling_Power_Management_Processor_Lifetime.pdf}{本地全文}.
+
+{[}26{]} SCHOR L, BACIVAROV I, YANG H, THIELE L. Worst-Case Temperature Guarantees for Real-Time Applications on Multi-Core Systems{[}C{]}//RTAS. 2012. \href{https://doi.org/10.1109/RTAS.2012.14}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2012_Schor.pdf}{本地全文}.
+
+{[}27{]} 屈双喜, 张民选, 刘涛, 刘光辉. 基于多核微处理器温度感知的线程调度算法{[}J{]}. 计算机应用, 2011, 31(9): 2567--2570. \href{https://doi.org/10.3724/SP.J.1087.2011.02567}{DOI}.

@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.120累计前置代数及静态成本核查完成；生产模型尚未接入，不报告性能收益 |
+| 当前阶段 | K.121累计前置默认关闭接入及必要预检通过；未验证性能收益 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新核查（K.120）：** 累计前置可保留精确整数合法安排并加强局部期望依赖松弛。一次11项代数测试覆盖384局部整数配对；薄核验7项通过。首条件AB／AC静态新增99／91行、9306／7350非零，保留38条空前驱prefix行；不增变量、不改生产代码或物理输入，未运行LP／MILP／热评价。[凭据](results/cumulative_precedence_audit01/verification.json)与[本线程独立审查](results/cumulative_precedence_audit01/independent_review.md)保存，非主线⑥；不宣称加速或节能。
+**最新接入（K.121）：** `cumulative_precedence`默认关闭；显式True在全部旧行末尾追加CDF依赖行。62项必要预检及旧源小物理矩阵身份、原catalog的190行核对通过；01权限错误false与同源02通过分开保留。本轮未启动原基准、LP／MILP、MATLAB或热轨迹，没有新U或性能结论。见[§3.12aa](#312aa-累计前置可选接入与必要预检k121)及[本线程独审](results/cumulative_precedence_precheck02/independent_review.md)，非主线⑥。
+
+**历史核查（K.120）：** 累计前置可保留精确整数合法安排并加强局部期望依赖松弛。一次11项代数测试覆盖384局部整数配对；薄核验7项通过。首条件AB／AC静态新增99／91行、9306／7350非零，保留38条空前驱prefix行；不增变量、不改生产代码或物理输入，未运行LP／MILP／热评价。[凭据](results/cumulative_precedence_audit01/verification.json)与[本线程独立审查](results/cumulative_precedence_audit01/independent_review.md)保存，非主线⑥；不宣称加速或节能。
 
 **历史诊断（K.119）：** 可选session级CutMaxIterations已接通；最终50项mock通过、34源冻结后，按预声明完成原首共享条件的10／1各一次300秒／scene60秒诊断。两版U均1.080823451833 J，等于各自完整初始化；0新安排、0后续改善、0反馈，方法160.484／160.922秒，实际选项及矩阵指纹匹配。见[结果摘要](results/cut_pair_diagnostic01/analysis01/summary.md)与[§3.12y](#312y-根割单因素配对k119)。本次不把1改为默认，不补跑或扫参。[本线程独立审查](results/cut_pair_diagnostic01/independent_review.md)另存，非主线⑥。
 
@@ -1044,7 +1046,22 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/verify_precedence_audit
 
 [薄核验](results/cumulative_precedence_audit01/verification.json)7/7绑定4个本轮源码，核11项原单测、34个未变生产／输入源、静态成本复现、独立累计生成器的190行／16656非零及已存x0保留。原期望依赖8行全部匹配；38条空prefix行保留，透明删除0。当前只完成正确性／成本依据，尚未实施可选强化或测根LP改进，下一项见[计划K.120](../第三章当前进展与正式实验推进计划_审查稿.md#k120依赖分数松弛与累计前置强化审查完成未接入)。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.120更新见上）
+### 3.12aa 累计前置可选接入与必要预检（K.121）
+
+默认`build_model`及显式False保留旧矩阵和默认summary；True通过`cumulative_precedence=True`开启。`scene_method.execute_fixed_deployment`及`partial_method.execute_shared_deployment`可传`builder_options={'cumulative_precedence': True}`；外层`execute_shared_search`沿既有`condition_options={'builder_options': {'cumulative_precedence': True}}`透传。原默认五键不变，新键严格bool；不改变原生求解设置或安全接纳。
+
+生产`add_cumulative_precedence`在原构模末尾按直接边／不同后继起点生成CDF，全部时间为精确Fraction秒。保留原期望依赖及所有选项、变量、事件、物理行；只删已证恒真／精确同系数行，空前驱prefix保留。生成／统计／导出计入原Budget；True才有`summary.cumulative_precedence`逐边统计，全场景完成前complete=False。反馈仅append，重复导出不重复添加CDF；x0使用当前完整矩阵接纳。
+
+```powershell
+# 项目根目录；仅小域正确性构模/矩阵/模拟生命周期，无求解或真实热轨迹。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_cumulative_precheck.py --out <新的预检目录>
+```
+
+[01](results/cumulative_precedence_precheck01/checks.json)在受限沙箱遇临时目录访问／清理WinError5，62项中有115个errors，未执行物理reference；原false保留。[02](results/cumulative_precedence_precheck02/checks.json)仅使用沙箱外权限，同源62/62、27.750秒，39源及快照绑定；22新测试＋40模拟回归。[同次枚举](results/cumulative_precedence_precheck02/unit_details.json)144种安排／80合法／64非法；[旧源物理矩阵](results/cumulative_precedence_precheck02/default_matrix_identity.json)默认逐项同`229eef8`、True只加1行／14非零；[原catalog局部生产行](results/cumulative_precedence_precheck02/archived_rows.json)190行／16656非零、38条空prefix及旧x0的y均保留。
+
+两次预检合计16个结构夹具、3个小物理构模（含旧源1次）、2个仅y／依赖行容器；无原规模完整构模、LP／MILP、MATLAB、热轨迹或研究调用。预检仅认证本次接入和覆盖范围，旧整包凭据不升格为当前源码准入。性能尚未知；下一项单因素关闭／开启提案统一见[计划K.121](../第三章当前进展与正式实验推进计划_审查稿.md#k121累计前置可选接入与小域等价预检完成)，本轮不执行。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.121更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

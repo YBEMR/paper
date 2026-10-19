@@ -107,7 +107,8 @@ def execute_shared_search(input_loader, workdir, *, seconds=900, scene_slice_s=6
 
     The factory is called only after the first condition's initialization. It
     supplies the same worker to subsequent conditions and never renews time.
-    ``condition_options`` injects correctness-fixture dependencies only.
+    ``condition_options`` may pass explicit ``builder_options`` formulation
+    flags; other dependency injections are for correctness fixtures only.
     """
     budget = MethodBudget(seconds, clock=clock)
     folder = Path(workdir)

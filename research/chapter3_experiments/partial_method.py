@@ -546,7 +546,8 @@ def execute_shared_deployment(input_loader, workdir, *, shared_deployment,
                 raise ValueError('max_rounds must be in 1..50')
             flags = dict(DEFAULT_BUILDER_OPTIONS)
             if builder_options is not None:
-                if set(builder_options)-set(flags) or any(type(v) is not bool for v in builder_options.values()):
+                allowed = set(flags) | {'cumulative_precedence'}
+                if set(builder_options)-allowed or any(type(v) is not bool for v in builder_options.values()):
                     raise ValueError('Unsupported builder flags')
                 flags.update(builder_options)
             result.update(problem_id=instance['id'], shared_stage_ids=shared_deployment_ids(instance),

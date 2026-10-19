@@ -143,9 +143,10 @@ def execute_fixed_deployment(input_loader, workdir, *, fixed_deployment,
                 raise ValueError('scenario weights must be nonnegative and sum to one')
             flags = dict(DEFAULT_BUILDER_OPTIONS)
             if builder_options is not None:
-                if set(builder_options) - set(flags):
+                allowed = set(flags) | {'cumulative_precedence'}
+                if set(builder_options) - allowed:
                     raise ValueError('unsupported builder option')
-                if any(not isinstance(value, bool) for value in builder_options.values()):
+                if any(type(value) is not bool for value in builder_options.values()):
                     raise ValueError('builder flags must be booleans')
                 flags.update(builder_options)
             result.update(problem_id=instance['id'], fixed_deployment=deepcopy(deployment),

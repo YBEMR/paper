@@ -2,6 +2,12 @@
 
 更新：2026-10-19。
 
+**K.121／D145：累计前置已作为默认关闭的表达强化接入，必要预检通过（E566）。** `build_model(..., cumulative_precedence=True)`在全部旧行之后追加直接边CDF约束，保留原期望依赖、选项、变量、目标、事件及热表达；不取整结束。真实y索引与精确Fraction前缀生成，空前驱prefix行保留，只删已证恒真／精确重复；生成、统计及导出均计入原Budget。默认省略与False不增加formulation／summary键；scene／partial沿原builder_options显式传参，shared沿既有condition_options转发。
+
+**实际核查：** [最终02](research/chapter3_experiments/results/cumulative_precedence_precheck02/checks.json)62/62、27.750秒，39源匹配；22项新测试及40项受影响模拟回归。144个两Stage小域完整安排中80合法、64非法，旧／新结构表达与独立oracle一致，保留合法等待、非整数结束、跨场景同名选项和中断状态。[旧源矩阵对照](research/chapter3_experiments/results/cumulative_precedence_precheck02/default_matrix_identity.json)按`229eef8`源码做三次小型物理构模：默认导出与旧版逐项相同，True仅追加1行／14非零；[归档局部行核对](research/chapter3_experiments/results/cumulative_precedence_precheck02/archived_rows.json)另确认AB／AC生产行99／91、9306／7350非零，38条空prefix及已存x0的y均保留。未重建原规模完整模型、未解LP／MILP／启动MATLAB或新算热轨迹。
+
+**失败记录与下一项：** [01](research/chapter3_experiments/results/cumulative_precedence_precheck01/checks.json)仍为false，62项中记录115个Windows临时目录访问／清理错误；02仅改沙箱外执行权限，全部源码SHA与01相同，不将两次写成一次全通过。本线程[独立审查](research/chapter3_experiments/results/cumulative_precedence_precheck02/independent_review.md)另存，非主线⑥；旧整包凭据不冒称适用于新源。本轮只证明接入范围与正确性，没有新U、节能或加速结论。下一项建议按K.121已声明范围做累计开关关闭／开启各一次同预算配对，保留Cut=10及原输入／SAFE标准；当前未启动该调用，不叠加其他优化。
+
 **K.120／D144：累计前置是有效的局部松弛强化，静态成本已核清（E565）。** 原`milp.py`699／705—709行在one-hot整数选择下正确；放松后只约束期望结束≤期望启动。新关系按每条直接边、每个不同后继合法启动τ约束“已启动的后继质量≤已结束的前驱质量”；完整族保留所有真实合法整数安排，在非负归一化分数域可严格强于原行。非整数结束用Fraction、同刻可接，原期望行保留。本轮只新增独立代数／静态核查入口，未接入生产MILP，不产生加速或节能结论。
 
 **核查结果：** 一次[11/11代数单测](research/chapter3_experiments/results/cumulative_precedence_audit01/unit_checks.json)覆盖384个局部整数选项配对；[薄核验7/7](research/chapter3_experiments/results/cumulative_precedence_audit01/verification.json)复核两种独立生成口径、成本复跑及已存x0通过全部190行。K.119首条件AB／AC仅新增99／91行、9306／7350非零，合计行约增0.146%、非零约增1.221%，不增变量或重建热事件；38条前驱空prefix的非平凡行均保留。[逐弧成本](research/chapter3_experiments/results/cumulative_precedence_audit01/reproduced/costs.csv)与全部8条原矩阵依赖行逐系数匹配；静态规模不代表实际耗时。
@@ -551,6 +557,8 @@
 **连续候选原型更新（2026-10-08，K.19／E452）：** S02已在CP1核两模式各3Stage分叉汇合DAG、14行跨设备／工作点选项和轮内并发；S09三代表协议已实现，有限覆盖限制不变。S01共享域和双CPU仅增加调度矩阵探针，S04仍为原计量接口；S03共同轮级期限、S05入口、S06给定盒、S07给定反例、S08诊断数据均保持。S10运行结果确认本包热筛选不活跃。76项运行预检、49项事后核对不等于这些一般平台及研究效果缺口已补齐。原型正式结果入口为research/continuous_planner/results/prototype02/search.json；未新增用户基础假设选择。
 
 ### 选择路径与变更记录（唯一维护入口）
+
+**D145（2026-10-19，用户“继续”承接K.120后的可选接入）：** 授权落实默认关闭的累计前置开关及必要小域等价核对，不包含原基准性能调用。实际新增生产helper及末尾CDF行，原期望行保留；既有scene／partial builder_options接受严格bool，默认五键和默认归档保持，shared仅补参数用途说明。原物理／输入／域／热安全／原生设置不变；两次预检合计16个结构夹具构模、3个小物理构模（含旧源1个）、2个局部y／依赖行容器，零LP／MILP／MATLAB／热轨迹／研究调用。预检01权限受限false保留；同源沙箱外02为62/62，矩阵身份及190行复用核对通过。新凭据绑定39源，不替代旧记录；下一项关闭／开启配对是助手提案，预算和调用尚未因本记录获准。详见K.121／E566。
 
 **D144（2026-10-19，用户“继续吧”承接K.119后的依赖松弛审查）：** 本轮只核现有期望依赖与累计前置的数学关系、必要局部代数及既有档案静态成本。采用直接边、全部不同后继启动阈值、精确结束和one-hot前提；原期望行保留，首版只删已证恒真／精确重复行，不做变量删项、DAG预滤或跨场景按标签去重。11项单测只执行一次并保存原输出；持久化成本脚本单次复现与原内联记录逐字段相同，薄核验另查全部190条及已存初始化y。未改生产模型、工作负载／物理／热安全，不求LP或MILP、不补跑原基准。下一项可选接入与小域表达预检是助手建议，性能调用尚未授权或执行；不因数学强化成立承诺节能。详见K.120／E565。
 

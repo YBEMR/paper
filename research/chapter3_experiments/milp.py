@@ -484,7 +484,154 @@ class Model:
             result['preprocessing'] = deepcopy(self.preprocessing)
             if self.preprocessing['fixed_scene_id'] is not None:
                 result['objective'] = 'unweighted complete scene energy including leakage and idle tail'
+        if hasattr(self, 'cumulative_precedence_stats'):
+            result['cumulative_precedence'] = deepcopy(self.cumulative_precedence_stats)
         return result
+
+
+def add_cumulative_precedence(model, sid, stage_options, option_start, option_end,
+                              dependencies=None):
+    """Append inclusive CDF rows on real y indices, for one scene only.
+
+    This is the budget-checked, streaming equivalent of
+    precedence_check.build_precedence_system(..., simplify=True). Cached
+    start/end values are exact Fraction seconds. The standalone oracle is
+    deliberately not called here: it copies the complete raw row family and
+    has no checks inside its generation loops. No label or variable bound is
+    used to filter choices. The original expected dependency rows stay intact.
+
+    Only a nonempty predecessor's complete prefix is a one-hot tautology.
+    Empty prefixes remain constraints. Deduplication compares exact real-index
+    coefficients, locally within a single direct edge, never across scenes.
+    Distinct thresholds actually add a successor variable each time, so their
+    coefficient rows are distinct on the normal disjoint Stage catalogs.
+    """
+    budget = model.budget
+    budget.check()
+    if dependencies is None:
+        for scene in model.instance['scenarios']:
+            budget.check()
+            if scene['id'] == sid:
+                dependencies = scene['dependencies']
+                break
+        else:
+            raise ValueError('unknown cumulative-precedence scene')
+    counters = ('raw_rows', 'raw_nonzeros', 'rows_added', 'nonzeros_added',
+                'removed_tautology_rows', 'removed_duplicate_rows',
+                'empty_predecessor_prefix_rows', 'empty_predecessor_prefix_rows_added')
+    if not hasattr(model, 'cumulative_precedence_stats'):
+        model.cumulative_precedence_stats = {
+            'enabled': True, 'scope': 'per_direct_edge_real_y_indices',
+            'thresholds': 'distinct successor starts; inclusive exact Fraction seconds',
+            'expected_dependency_retained': True, 'options_removed': 0,
+            'variables_added': 0, 'complete': False, 'edges': [],
+            **dict.fromkeys(counters, 0)}
+    stats = model.cumulative_precedence_stats
+    stats['complete'] = False
+    for before, after in dependencies:
+        budget.check()
+        predecessor = stage_options[before]
+        successor = stage_options[after]
+        edge = {'scene_id': sid, 'predecessor_stage_id': before,
+                'successor_stage_id': after,
+                'predecessor_option_count': len(predecessor),
+                'successor_option_count': len(successor),
+                'empty_predecessor_option_set': not predecessor,
+                'empty_successor_option_set': not successor,
+                'rows': [], 'removed_rows': [], **dict.fromkeys(counters, 0)}
+        stats['edges'].append(edge)
+        ends, predecessor_indices = [], set()
+        for position, (_, y) in enumerate(predecessor):
+            if position % 128 == 0:
+                budget.check()
+            if y in predecessor_indices:
+                raise ValueError('duplicate real y in predecessor Stage catalog')
+            predecessor_indices.add(y)
+            ends.append((option_end[y], y))
+        ends.sort(key=lambda pair: pair[0])
+        budget.check()
+        starts, successor_indices = {}, set()
+        for position, (_, y) in enumerate(successor):
+            if position % 128 == 0:
+                budget.check()
+            if y in predecessor_indices or y in successor_indices:
+                raise ValueError('direct-edge Stage catalogs require distinct real y indices')
+            successor_indices.add(y)
+            starts.setdefault(option_start[y], []).append(y)
+        thresholds = sorted(starts)
+        budget.check()
+        edge['repeated_successor_start_values'] = len(successor)-len(thresholds)
+        predecessor_prefix, successor_prefix = [], []
+        cursor, seen_by_nonzeros = 0, {}
+        for threshold in thresholds:
+            budget.check()
+            while cursor < len(ends) and ends[cursor][0] <= threshold:
+                if cursor % 128 == 0:
+                    budget.check()
+                predecessor_prefix.append(ends[cursor][1])
+                cursor += 1
+            for position, y in enumerate(starts[threshold]):
+                if position % 128 == 0:
+                    budget.check()
+                successor_prefix.append(y)
+            prefix_counts = {'threshold_s': str(threshold),
+                'predecessor_prefix_count': len(predecessor_prefix),
+                'successor_prefix_count': len(successor_prefix)}
+            nonzeros = len(predecessor_prefix)+len(successor_prefix)
+            for record in (stats, edge):
+                record['raw_rows'] += 1
+                record['raw_nonzeros'] += nonzeros
+                record['empty_predecessor_prefix_rows'] += int(not predecessor_prefix)
+            if predecessor and len(predecessor_prefix) == len(predecessor):
+                edge['removed_rows'].append({**prefix_counts,
+                    'reason': 'predecessor_prefix_is_one',
+                    'proof': 'nonempty predecessor prefix = 1; successor prefix <= 1 '
+                             'by nonnegativity and the two Stage one-hot equations'})
+                stats['removed_tautology_rows'] += 1
+                edge['removed_tautology_rows'] += 1
+                continue
+            row = {}
+            for position, y in enumerate(predecessor_prefix):
+                if position % 128 == 0:
+                    budget.check()
+                row[y] = -1
+            for position, y in enumerate(successor_prefix):
+                if position % 128 == 0:
+                    budget.check()
+                row[y] = 1
+            duplicate = None
+            for previous in seen_by_nonzeros.get(nonzeros, ()):
+                budget.check()
+                old = model.rows[previous]['coef']
+                identical = True
+                for position, (y, coefficient) in enumerate(row.items()):
+                    if position % 128 == 0:
+                        budget.check()
+                    if old.get(y) != coefficient:
+                        identical = False
+                        break
+                if identical:
+                    duplicate = previous
+                    break
+            if duplicate is not None:
+                edge['removed_rows'].append({**prefix_counts,
+                    'reason': 'duplicate_real_coefficients', 'kept_row_index': duplicate})
+                stats['removed_duplicate_rows'] += 1
+                edge['removed_duplicate_rows'] += 1
+                continue
+            row_index = len(model.rows)
+            model.le(row, 0, 'dependency_cumulative')
+            seen_by_nonzeros.setdefault(nonzeros, []).append(row_index)
+            edge['rows'].append({**prefix_counts, 'row_index': row_index,
+                                 'nonzeros': nonzeros})
+            for record in (stats, edge):
+                record['rows_added'] += 1
+                record['nonzeros_added'] += nonzeros
+                record['empty_predecessor_prefix_rows_added'] += int(not predecessor_prefix)
+        budget.check()
+    budget.check()
+    stats['complete'] = True
+    return stats
 
 
 def add_energy_lower_bound(model, target, sources, gates, source_rows, onehot_rows,
@@ -547,7 +694,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 *, fix_late_options=True, aggregate_opp_locks=True,
                 relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
                 fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None,
-                fixed_shared_deployment=None):
+                fixed_shared_deployment=None, cumulative_precedence=False):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
@@ -561,11 +708,15 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     not claimed row-equivalent to the old numerical outer approximation.
     Alternatively fixed_shared_deployment fixes only Stages occurring across
     multiple original scenes, leaving every scene-local deployment free.
+    Optional cumulative precedence appends exact inclusive CDF rows after all
+    original rows. It retains the expected dependency rows and every option.
 
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
     so a partially generated model is never returned as a solver-ready one.
     """
+    if type(cumulative_precedence) is not bool:
+        raise ValueError('cumulative_precedence must be a bool')
     budget = budget if budget is not None else Budget()
     budget.check()
     idle_policy = resolve_idle_policy(instance)
@@ -606,6 +757,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                              relax_auxiliary_integrality=bool(relax_auxiliary_integrality))
     if strengthen_energy_lower_bounds:
         model.formulation['energy_lower_bounds'] = True
+    if cumulative_precedence:
+        model.formulation['cumulative_precedence'] = True
     if auto_low:
         model.formulation['idle_policy'] = idle_policy
     if adapted:
@@ -878,6 +1031,16 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             for sid, l, ev, sources, gates, rows in energy_specs:
                 add_energy_lower_bound(model, ev, sources, gates, rows, energy_onehot_rows[sid, l],
                                        scene=sid, interval=l)
+    if cumulative_precedence:
+        model.report('cumulative_precedence', scene=None, interval=None, control_state=None)
+        with model.measure_construction('cumulative_precedence'):
+            for scene in model.instance['scenarios']:
+                budget.check()
+                add_cumulative_precedence(model, scene['id'],
+                    model.scenes[scene['id']]['stage_options'], option_start, option_end,
+                    dependencies=scene['dependencies'])
+                model.cumulative_precedence_stats['complete'] = False
+        model.cumulative_precedence_stats['complete'] = True
     model.report('complete', scene=None, interval=None, control_state=None)
     return model
 

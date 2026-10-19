@@ -25,7 +25,13 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         'initial_point',struct('provided',false));
     try
         phaseClock=tic;
-        req = jsondecode(fileread([prefix '.request.json']));
+        [requestText,readInfo,readError] = read_request_text(prefix,folder,workerClock,guardSeconds);
+        result.request_publication_read=readInfo;
+        if ~isempty(readError), throw(readError); end
+        % Atomic publication can still be temporarily locked on Windows.
+        % Only file-open failures are retried; complete malformed JSON is an
+        % immediate protocol error, not a transient publication to accept.
+        req = jsondecode(requestText);
         streamEvents = isfield(req,'stream_events') && req.stream_events;
         p = load([prefix '.mat']);
         initialPoint=[];
@@ -103,7 +109,8 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         end
         result.options_text = evalc('disp(opts)');
         result.phase_seconds.options_preparation=toc(phaseClock);
-        if opts.MaxTime<=0 || isfile([prefix '.cancel'])
+        if opts.MaxTime<=0 || isfile([prefix '.cancel']) ...
+                || isfile(fullfile(folder,'stop')) || toc(workerClock)>=guardSeconds
             result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
         else
             result.intlinprog_entered=true;
@@ -137,6 +144,10 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             result.phase_seconds.native_result_archive=toc(phaseClock);
         end
     catch err
+        if any(strcmp(err.identifier,{'chapter3:requestReadCancelled', ...
+                'chapter3:requestReadStopped','chapter3:requestReadGuardExpired'}))
+            result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
+        end
         result.error_identifier=err.identifier;
         result.error_message=getReport(err,'extended','hyperlinks','off');
     end
@@ -176,6 +187,60 @@ end
         eventNumber=eventNumber+1;
         entry.event_number=eventNumber;
         writejson(sprintf('%s.event_%06d.json',prefix,eventNumber),entry);
+    end
+end
+
+function [text,info,readError] = read_request_text(prefix,folder,workerClock,guardSeconds)
+% A short transport retry window, not another solve or a replenished budget.
+% requestClock was started by the caller before the first read, so all time
+% here is still deducted from req.remaining_s and the original worker guard.
+readClock=tic; text=''; readError=[];
+info=struct('attempts',0,'read_failures',0,'elapsed_s',0, ...
+    'retry_window_s',2,'retry_pause_s',.01,'outcome','WAITING', ...
+    'last_error_identifier','','last_error_message','');
+while true
+    if stop_reading(), return; end
+    info.attempts=info.attempts+1;
+    try
+        text=fileread([prefix '.request.json']);
+    catch err
+        info.read_failures=info.read_failures+1;
+        info.last_error_identifier=err.identifier;
+        info.last_error_message=err.message;
+        info.elapsed_s=toc(readClock);
+        if ~strcmp(err.identifier,'MATLAB:fileread:cannotOpenFile')
+            info.outcome='READ_ERROR'; readError=err; return;
+        end
+        if stop_reading(), return; end
+        pause(min([info.retry_pause_s,info.retry_window_s-info.elapsed_s, ...
+            max(0,guardSeconds-toc(workerClock))]));
+        continue;
+    end
+    % A read that completed after cancellation, close, guard or the fixed
+    % retry window must not start a solve merely because the lock cleared.
+    if stop_reading(), text=''; return; end
+    info.outcome='READ';
+    return;
+end
+
+    function stopped = stop_reading()
+        info.elapsed_s=toc(readClock);
+        if toc(workerClock)>=guardSeconds
+            info.outcome='WORKER_GUARD_EXHAUSTED';
+            readError=MException('chapter3:requestReadGuardExpired','Worker guard expired before request read');
+        elseif isfile(fullfile(folder,'stop'))
+            info.outcome='STOPPED';
+            readError=MException('chapter3:requestReadStopped','Worker close requested before request read');
+        elseif isfile([prefix '.cancel'])
+            info.outcome='CANCELLED';
+            readError=MException('chapter3:requestReadCancelled','Request cancelled before request read');
+        elseif info.elapsed_s>=info.retry_window_s
+            info.outcome='RETRY_LIMIT';
+            readError=MException('chapter3:requestReadTimeout', ...
+                'Request remained unreadable for %.3g s; last error [%s]: %s', ...
+                info.retry_window_s,info.last_error_identifier,info.last_error_message);
+        end
+        stopped=~isempty(readError);
     end
 end
 

@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.116唯一完整链诊断结束：保留SAFE、读请求技术失败，0初始化之外改善；正式比较未执行 |
+| 当前阶段 | K.117读取修复按范围验收；原生73/74 false及自然退出限制保留，正式比较未执行 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新诊断（K.116）：** 唯一一次原`base__R1`／自动L／900秒上限调用于763.156秒因第10请求读文件Permission denied停止，清理7.594秒；访问5/16、9次实际入solver。26.640秒已有完整SAFE，最终U＝1.080823451833 J，等于本次最佳初始化；0全局改善、0反馈。SAFE与技术失败分列，未补跑。见[§3.12v](#312v-一次原完整链共享部署搜索诊断k116)、[只读汇总](results/shared_search_diagnostic01/analysis/summary.md)及[内部独立审查](results/shared_search_diagnostic01/independent_review.md)。
+**最新修复（K.117）：** MATLAB请求文本读取增加2秒／10毫秒限额的文件打开重试，坏JSON不重试，总时钟、Python发布和热安全接纳不变。原12项桥接回归通过；一次六请求原生检查验证恢复／超时／取消／stop及同worker后续请求，原报告73/74 false保留：进程未在5秒自然退出，最终沿原20秒兜底强制清理。读取修复按范围验收，自然退出未验收。见[§3.12w](#312w-matlab请求读取修复与分范围验收k117)及[独立审查](results/request_read_native01/independent_review.md)。未补跑K.116、未产生新研究SAFE／能耗。
+
+**历史诊断（K.116）：** 唯一一次原`base__R1`／自动L／900秒上限调用于763.156秒因第10请求读文件Permission denied停止，清理7.594秒；访问5/16、9次实际入solver。26.640秒已有完整SAFE，最终U＝1.080823451833 J，等于本次最佳初始化；0全局改善、0反馈。SAFE与技术失败分列，未补跑。见[§3.12v](#312v-一次原完整链共享部署搜索诊断k116)、[只读汇总](results/shared_search_diagnostic01/analysis/summary.md)及[内部独立审查](results/shared_search_diagnostic01/independent_review.md)。
 
 **历史实现状态（K.115）：** [模拟57/57](results/shared_search_precheck04/checks.json)及唯一一次[原生接口13/13](results/shared_search_native01/verification.json)通过。原生方法20.093秒，实际观察极短原生MaxTime停止、同worker下一请求默认正常返回；仅结构检查，零热评价。外层／软片实现见[§3.12u](#312u-共享部署首遍搜索与合作式搜索片k115)，下一项一次900秒原完整链诊断仍未执行。
 
@@ -983,7 +985,17 @@ receipt = evaluate_candidate(auto_instance, candidate, accuracy, budget)
 
 本轮结束，不追加研究调用、调片或压力参数。下一项只修复／预检MATLAB请求读取的瞬态访问失败；安全接纳和模型原样保持。当前没有原完整链上初始化之外节能、热反馈收益或公平性能优势的证据。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.116更新见上）
+### 3.12w MATLAB请求读取修复与分范围验收（K.117）
+
+`solve_model.m`在JSON解码前调用本文件的`read_request_text`，只重试`MATLAB:fileread:cannotOpenFile`。固定2秒读窗、10毫秒间隔是I/O工程限额；首次读前已开始的requestClock不重置，原`remaining_s−toc(requestClock)`继续扣读取／等待，solver软限及Python绝对证据截止保持。`request_publication_read`保存attempts／read_failures／elapsed_s／outcome和末次原生错误；成功读后也检查取消／stop／guard，不能因锁恢复而晚启动solver。完整坏JSON立即沿原ERROR回执，持续打不开则`requestReadTimeout`，没有I/O错误被当成合法候选。
+
+必要接口入口为`precheck_request_read.py --out <新目录>`：固定claim、单180秒、同worker六个1变量请求；先以一个工作区文件核Windows锁／原子改名兼容性，再在生产Path.replace前锁住已关闭的临时文件。检查必须有真实MATLAB拒读计数，不能以延迟猜测已覆盖。没有调用原完整链、物理模型或热评价。
+
+唯一运行在[request_read_native01](results/request_read_native01/)：短锁1次拒读后恢复，持续锁107次／2.005秒后ERROR，坏JSON1次读且不重试，取消／stop均不进solver，第5个普通请求恢复同worker。六个场景原始返回和当前源绑定；方法80.828秒、清理20.344秒。原[验证](results/request_read_native01/verification.json)**73/74、passed=false**不改：5秒内进程退出断言失败，原close等20秒后强制结束进程树。独立审查接受读取分支与截止保护，保留自然退出未验证；不将该范围验收冒称整包通过或工程性能优势。
+
+原Python桥接12项mock同源通过，[沙箱setup失败](results/request_read_mock01.json)与[宿主通过](results/request_read_mock02.json)均留存，和K.116原生故障根因不混同。当前worker已经换SHA，旧57/13整包并不直接匹配；未变数学／数值模块仅按源身份复用。固定[claim](results/request_read_native_claim01.json)已消费，不删claim／换目录重跑。零新研究调用、SAFE／U或热反馈收益。后续仅分析已有K.116日志的求解质量问题，清理成本与退出状态持续分列。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.117更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

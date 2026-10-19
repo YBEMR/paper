@@ -44,6 +44,26 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         % publication latency. Python's original absolute deadline governs
         % acceptance; MATLAB MaxTime/callbacks provide best-effort stopping.
         remaining = req.remaining_s;
+        % This optional cap applies only to one native solve. The request's
+        % original remaining time and Python's evidence deadline are unchanged.
+        hasSolverTimeCap=isfield(req,'solver_max_time_s');
+        solverTimeCap=inf;
+        if hasSolverTimeCap
+            solverTimeCap=req.solver_max_time_s;
+            declaredSolverTimeCap=req.solver_max_time_s_declared;
+            if ~isnumeric(solverTimeCap) || ~isscalar(solverTimeCap) ...
+                    || ~isreal(solverTimeCap) || isnan(solverTimeCap) || isinf(solverTimeCap) ...
+                    || solverTimeCap<=0 ...
+                    || ~isnumeric(declaredSolverTimeCap) || ~isscalar(declaredSolverTimeCap) ...
+                    || ~isreal(declaredSolverTimeCap) || isnan(declaredSolverTimeCap) ...
+                    || isinf(declaredSolverTimeCap) ...
+                    || declaredSolverTimeCap<=0 || solverTimeCap>declaredSolverTimeCap
+                error('chapter3:solverTimeCap','Invalid native-only MaxTime cap');
+            end
+            result.solver_max_time_s_declared=declaredSolverTimeCap;
+            result.solver_max_time_s_allocated=solverTimeCap;
+            result.solver_max_time_s_scope='native_MaxTime_only_not_response_or_evidence_deadline';
+        end
         opts = optimoptions('intlinprog','Display','off', ...
             'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
             'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
@@ -59,8 +79,8 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         % for this R2023b numerical representation. The original matrices,
         % variable domain and tolerances are unchanged. Full free-schedule
         % optimization speed is not established by that compatibility check.
-        opts.MaxTime = max(0,min(remaining-toc(requestClock), ...
-            guardSeconds-toc(workerClock)));
+        opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+            guardSeconds-toc(workerClock),solverTimeCap]));
         result.options_text = evalc('disp(opts)');
         % LPPreprocess is documented for R2023b but hidden from properties().
         % Archive it explicitly; IntegerPreprocess='none' does not disable it.
@@ -72,9 +92,15 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         end
         result.options = optionValues;
         % Options inspection and MAT loading belong to this same request.
-        opts.MaxTime = max(0,min(remaining-toc(requestClock), ...
-            guardSeconds-toc(workerClock)));
+        opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+            guardSeconds-toc(workerClock),solverTimeCap]));
         result.options.MaxTime = opts.MaxTime;
+        if hasSolverTimeCap
+            result.solver_max_time_s_used=opts.MaxTime;
+            solverTimeAllocation=struct('declared',declaredSolverTimeCap, ...
+                'allocated',solverTimeCap,'native_MaxTime_used',opts.MaxTime, ...
+                'response_deadline_shortened',false);
+        end
         result.options_text = evalc('disp(opts)');
         result.phase_seconds.options_preparation=toc(phaseClock);
         if opts.MaxTime<=0 || isfile([prefix '.cancel'])
@@ -82,7 +108,9 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
         else
             result.intlinprog_entered=true;
             if streamEvents
-                publish(struct('kind','solver_entered','request_wall_seconds',toc(requestClock)));
+                entered=struct('kind','solver_entered','request_wall_seconds',toc(requestClock));
+                if hasSolverTimeCap, entered.solver_time_allocation=solverTimeAllocation; end
+                publish(entered);
             end
             phaseClock=tic;
             lastwarn('');
@@ -100,7 +128,12 @@ while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
             % MAT retains NaN/Inf and all native solver fields independently
             % of JSON's null representation.  This is raw solver evidence.
             phaseClock=tic;
-            save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks','initialPoint');
+            if hasSolverTimeCap
+                save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks', ...
+                    'initialPoint','solverTimeAllocation');
+            else
+                save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks','initialPoint');
+            end
             result.phase_seconds.native_result_archive=toc(phaseClock);
         end
     catch err

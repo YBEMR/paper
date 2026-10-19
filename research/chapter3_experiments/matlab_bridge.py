@@ -18,6 +18,7 @@ from copy import deepcopy
 import hashlib
 import json
 import math
+from numbers import Real
 import os
 from pathlib import Path
 import subprocess
@@ -253,10 +254,24 @@ def _absolute_deadline(budget):
     return deadline
 
 
+def _solver_time_cap(value):
+    """Optional native MaxTime only; never an evidence/response deadline."""
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise ValueError('solver_max_time_s must be positive and finite')
+    result = float(value)
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError('solver_max_time_s must be positive and finite')
+    return result
+
+
 class MatlabSession:
     """File-handshake worker with external deadline checks on every request.
 
     ``remaining_s`` passed to solve is the caller's remaining *case* budget.
+    Optional ``solver_max_time_s`` limits only native intlinprog MaxTime; it
+    never moves the absolute deadline for callbacks, evidence, or responses.
     Startup may be amortized only for correctness prechecks.  Formal method
     timing must instantiate a fresh session inside the method budget and pass
     ``budget=...``. Its ``deadline`` must use the bridge's monotonic clock.
@@ -356,9 +371,11 @@ class MatlabSession:
             exc.matlab_workdir = str(self.workdir)
             raise
 
-    def solve(self, model, remaining_s=None, budget=None, x0=None):
+    def solve(self, model, remaining_s=None, budget=None, x0=None,
+              solver_max_time_s=None):
         if self.closed or self.request_blocked:
             raise RuntimeError('Worker is closed or a timed-out request still needs cleanup')
+        solver_cap = _solver_time_cap(solver_max_time_s)
         started = self.clock()
         deadline = self.deadline
         if budget is not None:
@@ -408,6 +425,9 @@ class MatlabSession:
             'intcon_convention': 'Python_zero_based_converted_to_MATLAB_one_based',
             'initial_point': initial_point,
         }
+        if solver_cap is not None:
+            request_info['solver_max_time_s_declared'] = solver_cap
+            request_info['solver_max_time_s_scope'] = 'native_MaxTime_only_not_response_or_evidence_deadline'
         with phase('transport_input_metadata'):
             _json(prefix.with_suffix('.input.json'), request_info)
         if self.clock() >= deadline:
@@ -416,6 +436,9 @@ class MatlabSession:
         # inside the request budget.  MATLAB receives only the time still left.
         temporary = prefix.with_suffix('.mat.tmp')
         payload['remaining_s'] = max(0.0, deadline - self.clock())
+        if solver_cap is not None:
+            payload['solver_max_time_s_declared'] = solver_cap
+            payload['solver_max_time_s'] = min(solver_cap, payload['remaining_s'])
         with phase('transport_mat_serialization'):
             savemat(str(temporary), payload, appendmat=False, oned_as='column')
         if self.clock() >= deadline:
@@ -426,10 +449,14 @@ class MatlabSession:
         if allocated <= 0:
             return expire_before_submission('mat_publication')
         # Separate JSON is written last so the worker never reads partial MAT.
+        request = {
+            'remaining_s': allocated,
+            'stream_events': bool(getattr(self, 'event_consumer', None))}
+        if solver_cap is not None:
+            request['solver_max_time_s_declared'] = solver_cap
+            request['solver_max_time_s'] = min(solver_cap, allocated)
         with phase('transport_request_publication'):
-            _json(prefix.with_suffix('.request.json'), {
-                'remaining_s': allocated,
-                'stream_events': bool(getattr(self, 'event_consumer', None))})
+            _json(prefix.with_suffix('.request.json'), request)
         response = prefix.with_suffix('.response.json')
         try:
             with phase('solver_wait_and_response_read'):

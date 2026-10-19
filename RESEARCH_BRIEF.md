@@ -2,11 +2,19 @@
 
 更新：2026-10-19。
 
+**K.122／D146：累计前置关闭／开启配对完成，未取得初始化外的能耗改善（E567）。** 原`base__R1`首共享条件A＝CPU1→NPU0→CPU1、完整AB／AC及本地选择保持；先off后on，均Cut=10，各300秒总上限、每scene一个60秒合作式片。两调用正常结束、41源未变，无补跑／延时／技术故障。[结果与曲线](research/chapter3_experiments/results/cumulative_pair_diagnostic01/analysis01/summary.md)、[本线程独立审查](research/chapter3_experiments/results/cumulative_pair_diagnostic01/independent_review.md)保存；后者非主线⑥跨会话审查。
+
+**结果：** 两版U均1.080823451833 J，原始完整区间均等于各自初始化；0新decoded安排、0严格改善、0热反馈。AB全部非空向量精确等于本次x0，AC最终向量均空，四请求节点均0。首SAFE为26.234／26.375秒，方法249.875／167.782秒，清理6.265／6.109秒。独立L0＝L_a＝1152169123/1560600000 J（0.738285994489 J），保守gap31.6923%，最优／无解未证。AB单场景未加权内部界只提高0.000186010306 J，不能代替系统认证界或节能结果。
+
+**归因与完成：** ON仅追加AB99／AC91行、共16656非零，旧A/b前缀及其余六组数组相同；CDF测量组件约0.029105秒。总耗时差82.093秒中，startup差54.312秒；AB合作片实际97.453／69.797秒，均超软60片但未超总300。单次差异不足以归因CDF加速。入口[11/11](research/chapter3_experiments/results/cumulative_pair_precheck01/checks.json)及只读后处理[6/6](research/chapter3_experiments/results/cumulative_pair_diagnostic01/analysis_precheck01/checks.json)通过，K.121凭据按未变源复用，没有重跑整包。累计开关保持默认关闭，不据本例断言一般无效；原400 ms／5 ms、自动L、物理／合法域和连续SAFE标准保持。
+
+**唯一后续建议（未实施）：** 暂停根割／CDF追加实验，先只读盘点本次安全初始化的能量构成、工作点与时序余量及原合法替换，审查一个小邻域MILP改善接口是否值得实现，目标仍是生成更低能耗整数方案。该项不运行新热评价／求解，不预定邻域或裁减原问题；本阶段至此结束，不恢复正式批次或扩大预算。
+
 **K.121／D145：累计前置已作为默认关闭的表达强化接入，必要预检通过（E566）。** `build_model(..., cumulative_precedence=True)`在全部旧行之后追加直接边CDF约束，保留原期望依赖、选项、变量、目标、事件及热表达；不取整结束。真实y索引与精确Fraction前缀生成，空前驱prefix行保留，只删已证恒真／精确重复；生成、统计及导出均计入原Budget。默认省略与False不增加formulation／summary键；scene／partial沿原builder_options显式传参，shared沿既有condition_options转发。
 
 **实际核查：** [最终02](research/chapter3_experiments/results/cumulative_precedence_precheck02/checks.json)62/62、27.750秒，39源匹配；22项新测试及40项受影响模拟回归。144个两Stage小域完整安排中80合法、64非法，旧／新结构表达与独立oracle一致，保留合法等待、非整数结束、跨场景同名选项和中断状态。[旧源矩阵对照](research/chapter3_experiments/results/cumulative_precedence_precheck02/default_matrix_identity.json)按`229eef8`源码做三次小型物理构模：默认导出与旧版逐项相同，True仅追加1行／14非零；[归档局部行核对](research/chapter3_experiments/results/cumulative_precedence_precheck02/archived_rows.json)另确认AB／AC生产行99／91、9306／7350非零，38条空prefix及已存x0的y均保留。未重建原规模完整模型、未解LP／MILP／启动MATLAB或新算热轨迹。
 
-**失败记录与下一项：** [01](research/chapter3_experiments/results/cumulative_precedence_precheck01/checks.json)仍为false，62项中记录115个Windows临时目录访问／清理错误；02仅改沙箱外执行权限，全部源码SHA与01相同，不将两次写成一次全通过。本线程[独立审查](research/chapter3_experiments/results/cumulative_precedence_precheck02/independent_review.md)另存，非主线⑥；旧整包凭据不冒称适用于新源。本轮只证明接入范围与正确性，没有新U、节能或加速结论。下一项建议按K.121已声明范围做累计开关关闭／开启各一次同预算配对，保留Cut=10及原输入／SAFE标准；当前未启动该调用，不叠加其他优化。
+**失败记录与下一项：** [01](research/chapter3_experiments/results/cumulative_precedence_precheck01/checks.json)仍为false，62项中记录115个Windows临时目录访问／清理错误；02仅改沙箱外执行权限，全部源码SHA与01相同，不将两次写成一次全通过。本线程[独立审查](research/chapter3_experiments/results/cumulative_precedence_precheck02/independent_review.md)另存，非主线⑥；旧整包凭据不冒称适用于新源。本轮只证明接入范围与正确性，没有新U、节能或加速结论。K.121结束时建议下一项按已声明范围做累计开关关闭／开启同预算配对；该项现已由K.122完成，未叠加其他优化。
 
 **K.120／D144：累计前置是有效的局部松弛强化，静态成本已核清（E565）。** 原`milp.py`699／705—709行在one-hot整数选择下正确；放松后只约束期望结束≤期望启动。新关系按每条直接边、每个不同后继合法启动τ约束“已启动的后继质量≤已结束的前驱质量”；完整族保留所有真实合法整数安排，在非负归一化分数域可严格强于原行。非整数结束用Fraction、同刻可接，原期望行保留。本轮只新增独立代数／静态核查入口，未接入生产MILP，不产生加速或节能结论。
 
@@ -557,6 +565,8 @@
 **连续候选原型更新（2026-10-08，K.19／E452）：** S02已在CP1核两模式各3Stage分叉汇合DAG、14行跨设备／工作点选项和轮内并发；S09三代表协议已实现，有限覆盖限制不变。S01共享域和双CPU仅增加调度矩阵探针，S04仍为原计量接口；S03共同轮级期限、S05入口、S06给定盒、S07给定反例、S08诊断数据均保持。S10运行结果确认本包热筛选不活跃。76项运行预检、49项事后核对不等于这些一般平台及研究效果缺口已补齐。原型正式结果入口为research/continuous_planner/results/prototype02/search.json；未新增用户基础假设选择。
 
 ### 选择路径与变更记录（唯一维护入口）
+
+**D146（2026-10-19，用户“继续”承接K.121的同预算配对提案）：** 授权一次CDF关闭／开启单因素配对，均CutMaxIterations=10，原base__R1首A＝CPU1→NPU0→CPU1、完整AB／AC三Stage链及本地模式自由；各自300秒方法总上限、每scene一个60秒合作式片，先off后on，不使用历史结果作control／种子／缓存。原400 ms／5 ms、自动L、物理／温度／合法域和SAFE标准保持。仅新增独立入口与必要mock预检，复用K.121未变的39源依据；出现技术、数值冲突或清理pending停止后续调用并保留已成证据，不补跑、不延时。本阶段完成即止，不据局部分数强化预设更低能耗；后处理不新解码、热评价或求解。详见K.122及对应预声明。 唯一配对现已正常结束，两版均无初始化外新安排／能耗改善／反馈；11项入口与6项后处理检查通过，累计开关仍默认关闭。总耗时差受启动及合作片实际耗时影响，不认定CDF加速。
 
 **D145（2026-10-19，用户“继续”承接K.120后的可选接入）：** 授权落实默认关闭的累计前置开关及必要小域等价核对，不包含原基准性能调用。实际新增生产helper及末尾CDF行，原期望行保留；既有scene／partial builder_options接受严格bool，默认五键和默认归档保持，shared仅补参数用途说明。原物理／输入／域／热安全／原生设置不变；两次预检合计16个结构夹具构模、3个小物理构模（含旧源1个）、2个局部y／依赖行容器，零LP／MILP／MATLAB／热轨迹／研究调用。预检01权限受限false保留；同源沙箱外02为62/62，矩阵身份及190行复用核对通过。新凭据绑定39源，不替代旧记录；下一项关闭／开启配对是助手提案，预算和调用尚未因本记录获准。详见K.121／E566。
 

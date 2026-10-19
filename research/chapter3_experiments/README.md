@@ -7,12 +7,14 @@
 | 用途 | 将已审阅的第三章数值配置落实为可复跑输入和实验程序 |
 | 模型与输入依据 | [配置草案第7—10节](../第三章实验输入来源核查与配置草案.md)、[第三章正文](../latex/chapter03.tex) |
 | 授权与范围 | 用户确认暂保留400 ms窗口、5 ms启动间隔及功耗／热参数，并授权逐步推进实验 |
-| 当前阶段 | K.121累计前置默认关闭接入及必要预检通过；未验证性能收益 |
+| 当前阶段 | K.122累计前置OFF／ON同预算配对完成；两版均无初始化外新安排／能耗改善 |
 | 证据等级 | 文献指导的抽象仿真；物理数字为自设或由自设输入派生，非实机标定 |
 
 用户本次授权更新了配置草案此前“不编程、不实验”的阶段限制。平台、工作负载与模型保持；HEFT／SA细则、数值实现和正式批量执行协议尚未全部冻结。
 
-**最新接入（K.121）：** `cumulative_precedence`默认关闭；显式True在全部旧行末尾追加CDF依赖行。62项必要预检及旧源小物理矩阵身份、原catalog的190行核对通过；01权限错误false与同源02通过分开保留。本轮未启动原基准、LP／MILP、MATLAB或热轨迹，没有新U或性能结论。见[§3.12aa](#312aa-累计前置可选接入与必要预检k121)及[本线程独审](results/cumulative_precedence_precheck02/independent_review.md)，非主线⑥。
+**最新诊断（K.122）：** 原首共享部署，OFF／ON均Cut=10、各300秒总预算／每scene60秒合作片，fresh调用各一次正常结束。两版U均1.080823451833 J＝各自初始化，0新decoded／0严格改善／0反馈；方法249.875／167.782秒、启动64.969／10.657秒，不能归因CDF加速。矩阵只追加99／91行，开关保持默认关闭。见[§3.12ab](#312ab-累计前置关闭开启配对k122)、[结果](results/cumulative_pair_diagnostic01/analysis01/summary.md)及[本线程独审](results/cumulative_pair_diagnostic01/independent_review.md)，非主线⑥。
+
+**历史接入（K.121）：** `cumulative_precedence`默认关闭；显式True在全部旧行末尾追加CDF依赖行。62项必要预检及旧源小物理矩阵身份、原catalog的190行核对通过；01权限错误false与同源02通过分开保留。本轮未启动原基准、LP／MILP、MATLAB或热轨迹，没有新U或性能结论。见[§3.12aa](#312aa-累计前置可选接入与必要预检k121)及[本线程独审](results/cumulative_precedence_precheck02/independent_review.md)，非主线⑥。
 
 **历史核查（K.120）：** 累计前置可保留精确整数合法安排并加强局部期望依赖松弛。一次11项代数测试覆盖384局部整数配对；薄核验7项通过。首条件AB／AC静态新增99／91行、9306／7350非零，保留38条空前驱prefix行；不增变量、不改生产代码或物理输入，未运行LP／MILP／热评价。[凭据](results/cumulative_precedence_audit01/verification.json)与[本线程独立审查](results/cumulative_precedence_audit01/independent_review.md)保存，非主线⑥；不宣称加速或节能。
 
@@ -1061,7 +1063,27 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/run_cumulative_precheck
 
 两次预检合计16个结构夹具、3个小物理构模（含旧源1次）、2个仅y／依赖行容器；无原规模完整构模、LP／MILP、MATLAB、热轨迹或研究调用。预检仅认证本次接入和覆盖范围，旧整包凭据不升格为当前源码准入。性能尚未知；下一项单因素关闭／开启提案统一见[计划K.121](../第三章当前进展与正式实验推进计划_审查稿.md#k121累计前置可选接入与小域等价预检完成)，本轮不执行。
 
-### 3.13 正式计费协议的剩余工作（早期记录，K.121更新见上）
+### 3.12ab 累计前置关闭／开启配对（K.122）
+
+独立入口`run_cumulative_pair_diagnostic.py`提供`--precheck`／`--prepare`／`--run`。只比较原`base__R1`首共享条件A＝CPU1→NPU0→CPU1，完整AB／AC、本地选择自由；同原400 ms／5 ms／自动L／50°C入口／80°C上限，CDF False→True均Cut10，各300秒方法钟、每scene60秒合作式片。每次重新输入／构模／初始化／worker／缓存；只有builder_options.cumulative_precedence不同，MaxTime根据本次剩余量派生，不以历史K.119当control。
+
+```powershell
+# 项目根目录；顺序独立模式。历史claim已消费，不能借复跑命令追加研究调用。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_cumulative_pair_diagnostic.py --precheck --out <新的入口预检目录>
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_cumulative_pair_diagnostic.py --prepare --out <新的预声明目录> --checks <入口预检目录>/checks.json
+# 新研究调用另按已确认范围授权；历史目录、claim或半成品均拒绝覆盖。
+F:/Anaconda3/python.exe -B research/chapter3_experiments/run_cumulative_pair_diagnostic.py --run --out <已冻结预声明目录>
+```
+
+[入口11/11](results/cumulative_pair_precheck01/checks.json)通过，mock检查不运行模型／热／求解；绑定K.121五份既有凭据及39源，加本轮2源为41源，不重跑原62项或冒称旧整包gate匹配。预声明及快照核完才消费唯一claim；技术／数值冲突、清理错误或pending阻止第二调用，已有SAFE仍保留。实际[两调用](results/cumulative_pair_diagnostic01/run_record.json)正常完成、源未变，各两个原生请求，无补跑／延时。AB合作片实际97.453／69.797秒，60片不等同硬截止；总方法249.875／167.782秒均未超300，清理6.265／6.109秒另列。
+
+两版初始化与最终完整能量区间相同，U＝1.080823451833 J；AB全部非空向量精确等于本次x0，AC返回空，0新安排／0严格改善／0反馈。L0＝L_a＝1152169123/1560600000 J、保守gap31.6923%，未证最优／无解。AB单场景未加权内部界约升0.000186 J，不能与系统L0跨scope比较。ON只追加99／91行、9306／7350非零，其余矩阵／x0相同；startup差54.312秒占总差82.093秒的大部，余差也无因果隔离，不宣称加速。
+
+只读后处理`summarize_cumulative_pair.py --run <完整诊断目录> --out <新分析目录>`复用通用存档reader，不调用研究生成器／新解码／热／优化器。6项纯数据测试一次通过并保存[stdout及源身份](results/cumulative_pair_diagnostic01/analysis_precheck01/checks.json)；输出[facts.json](results/cumulative_pair_diagnostic01/analysis01/facts.json)、[CSV](results/cumulative_pair_diagnostic01/analysis01/calls.csv)、[首请求矩阵核对](results/cumulative_pair_diagnostic01/analysis01/mat_model_summary.json)及[U／界图](results/cumulative_pair_diagnostic01/analysis01/cumulative_bounds.png)。图止于实际停止、未用预算着灰；无原生向量时不以numfeaspoints补新SAFE。SAFE仅引用预算内完整回执，严格比较使用原能量包络。MAT／PDF仅本地保留，遵守.gitignore。
+
+[独立审查](results/cumulative_pair_diagnostic01/independent_review.md)为本线程内部核查。累计开关继续默认关闭；该项到此结束，不扫cut／CDF设置。唯一后续建议在[计划K.122](../第三章当前进展与正式实验推进计划_审查稿.md#k122累计前置关闭开启单因素配对完成)维护：先只读审查初始化可改善决策与一项小邻域MILP接口，不运行新研究调用或改变片配额。
+
+### 3.13 正式计费协议的剩余工作（早期记录，K.122更新见上）
 
 归档实际运行环境、求解器选项、容差、所有方法的计时起止与停止行为。输入展开、构造、系数生成、初始化、修复和完整评价均计入本方法预算；不得共享其他方法的候选、见证或热缓存。预算外的新结果不能补记为预算内证据，中断时保留已经形成的安全方案或明确违规记录。
 

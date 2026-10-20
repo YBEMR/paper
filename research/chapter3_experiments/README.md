@@ -1253,3 +1253,15 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 [augmented_structure_review01](results/augmented_structure_review01/summary.md)仅读K135存档，保存原／增广变量、行、事件与候选时机统计；没有构模、热评价、原生调用或新研究实验。`metrics`内分析脚本只处理已存数组／JSON，不生成搜索候选，不把静态计数当性能实验。原MAT继续遵守忽略规则，本地保留并登记SHA。
 
 建议同一调用先旧N1再全Stage，固定同一fresh种子设备，携带本次完整SAFE并重新准备新模型x0。第一遍原60秒片不拆半，第二遍只用同一300秒余量；这是待实现／预检的建议，不是已冻结的新研究driver。不要重跑K135或自行补次数；研究调用仍为0，115次与温限扫描暂停。
+
+### 3.12ap 有界两遍搜索实现与小域正确性（K.137）
+
+新增`staged_method.execute_staged_fixed_unit_opp_start`，参数`opened_by_scene`明确指定第一遍旧N1范围；第二遍自动保留原输入全部Stage的合法OPP／起点，全部unit由本次fresh SAFE种子固定。单MethodBudget、单底层worker、两遍上限；第二遍只用余量，准备后cap=min(60,R/k)。完整代际读`committed_safe_snapshot`，各遍条件／模型／求解记录读`phases`；顶层`condition/opened_by_scene`是第一遍定义，`scenes`是可能先于系统U的最新局部记录，不能混配。
+
+```powershell
+& F:/Anaconda3/python.exe -B research/chapter3_experiments/run_staged_method_precheck.py --out research/chapter3_experiments/results/NEW_K137_PRECHECK_DIRECTORY
+```
+
+入口仅运行明确mock／小域检查，禁止原生求解器和进程启动；需要工作区`.runtime/k137_baseline.json`，已用基线完整存于预检目录`parent_baseline.json`，可核其参考提交及各历史SHA后恢复该文件。不要用旧凭据替代当前源码核验，亦不要覆盖已存在目录。
+
+[最终02](results/staged_method_precheck02/summary.md)99/99、38.703秒，147源／143继承／452历史核对；首轮01同为通过，因只测到60秒cap而补100秒mock子例，02实测R/2为47.1秒。真实小域两遍回声通过、能量同种子；0原生／研究调用、0原规模构模，不提供节能或原生性能证据。原三Stage质量验证另行冻结，本轮未运行，不恢复115次／温度扫描。

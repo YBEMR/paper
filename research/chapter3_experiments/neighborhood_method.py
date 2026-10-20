@@ -66,7 +66,8 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         max_rounds=OUTER_ROUND_LIMIT, close_session=True, scene_slice_s=None,
         on_global_update=None, membership_checker=check_n1_candidate,
         evaluation_protocol=N1_EVALUATION_PROTOCOL,
-        condition_protocol=N1_CONDITION_PROTOCOL, _method_identity=None):
+        condition_protocol=N1_CONDITION_PROTOCOL, _method_identity=None,
+        _second_phase=None):
     """Build a fresh complete SAFE seed, then search its declared N1 domain.
 
     Input expansion, at most three original constructor templates, original
@@ -116,6 +117,19 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         scene_slice_s = float(scene_slice_s)
     if on_global_update is not None and not callable(on_global_update):
         raise TypeError('on_global_update must be callable')
+    if _second_phase is not None:
+        required = {'condition_factory', 'opened', 'membership_checker',
+            'scene_evaluator', 'evaluation_protocol', 'condition_protocol',
+            'recorder_factory', 'session_adapter', 'latched', 'identity'}
+        if (not isinstance(_second_phase, dict) or set(_second_phase) != required
+                or any(not callable(_second_phase[key]) for key in (
+                    'condition_factory', 'opened', 'membership_checker',
+                    'scene_evaluator', 'recorder_factory', 'session_adapter', 'latched'))
+                or not isinstance(_second_phase['identity'], dict)
+                or set(_second_phase['identity']) != set(labels)):
+            raise ValueError('Invalid bounded second-phase lifecycle specification')
+        if scene_slice_s is None:
+            raise ValueError('A bounded two-pass lifecycle needs an explicit scene cap')
     invocation_started = budget.elapsed
     workdir = Path(workdir)
     if workdir.exists():
@@ -140,11 +154,17 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         'scene_budget_policy': 'original scene order, one absolute remaining budget; no reset',
         'inner_MILP_improved_initial_upper_bound': False,
         'strict_improvement_over_initial_certified': False}
+    if _second_phase is not None:
+        result.update(phases=[], committed_safe_snapshot=None,
+            search_failure_latched=False, maximum_search_passes=2,
+            scene_budget_policy='first pass original cap; second pass min(cap, remaining/k) after preparation; one absolute deadline')
     models, observers, initial, receipts, candidates, sources, caches = {}, {}, {}, {}, {}, {}, {}
+    construction_snapshots = {}
     config = instance = session = condition = None
     active_stage, active_scene = 'invocation_setup', None
     constructor_cleanup_s = 0.0
     session_counter_at_entry = 0
+    phase_index, phase_record, phase_session = 0, None, None
 
     def validate_original_receipt(sid, candidate, receipt):
         local = _local_candidate_deployment(instance, sid, candidate)
@@ -177,14 +197,29 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             'safe_upper_bound_J': aggregation['safe_upper_bound_J'],
             'committed_at_s': aggregation['completed_at_elapsed_s'],
             'transferred_at_s': budget.elapsed, **change}
+        if _second_phase is not None:
+            # Prepare the entire matching generation before publishing any
+            # part of it. Scene records can be ahead after a failed aggregate.
+            snapshot = deepcopy({'safe_candidate': aggregation['safe_candidate'],
+                'aggregation': aggregation,
+                'safe_upper_bound_J': aggregation['safe_upper_bound_J'],
+                'weighted_energy_J': aggregation['weighted_energy_J'],
+                'scene_receipts': receipts, 'scene_candidates': candidates,
+                'scene_sources': sources,
+                'committed_at_s': aggregation['completed_at_elapsed_s'],
+                'phase_index': phase_index})
+            update['phase_index'] = phase_index
         result['global_updates'].append(update)
         all_initial = all(value == 'initial_constructor' for value in sources.values())
-        result.update(state='SAFE', safe_candidate=deepcopy(aggregation['safe_candidate']),
+        committed = dict(state='SAFE', safe_candidate=deepcopy(aggregation['safe_candidate']),
             safe_upper_bound_J=aggregation['safe_upper_bound_J'],
             weighted_energy_J=deepcopy(aggregation['weighted_energy_J']), rankable_energy=True,
             aggregation=deepcopy(aggregation),
             safe_solution_source='initial_constructor' if all_initial else labels['inner_solution_source'],
             deployment_feasibility='ALL_SCENES_SAFE_WITNESS')
+        if _second_phase is not None:
+            committed['committed_safe_snapshot'] = snapshot
+        result.update(committed)
         result.setdefault('first_safe_at_s', aggregation['completed_at_elapsed_s'])
         if all_initial and result['initial_global_safe_upper_bound_J'] is None:
             result['initial_global_safe_upper_bound_J'] = aggregation['safe_upper_bound_J']
@@ -228,9 +263,13 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             'transferred_at_s': budget.elapsed, **change})
 
     def remember_view(sid, candidate, evaluation, source):
-        result['scenes'][sid]['model_view_evaluations'].append({
+        entry = {
             'candidate': deepcopy(candidate), 'evaluation': deepcopy(evaluation),
-            'source': source, 'received_at_s': budget.elapsed})
+            'source': source, 'received_at_s': budget.elapsed}
+        if _second_phase is not None:
+            entry['phase_index'] = phase_index
+            phase_record['scenes'][sid].setdefault('model_view_evaluations', []).append(deepcopy(entry))
+        result['scenes'][sid]['model_view_evaluations'].append(entry)
         result['violations'].extend(_violations(evaluation, sid, labels['model_violation_source']))
 
     def publish_safe(sid, model, candidate, evaluation, source):
@@ -252,6 +291,14 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             if (view_energy is None or max(_q(view_energy[0]), _q(energy[0]))
                     > min(_q(view_energy[1]), _q(energy[1]))):
                 raise ValueError('Cached original-input and model-view SAFE energies disagree')
+            if _second_phase is not None:
+                previous = receipts.get(sid)
+                if previous is None or _q(cached['safe_upper_bound_J']) < _q(previous['safe_upper_bound_J']):
+                    store_scene(sid, candidate, cached, source)
+                    budget.check()
+                    with budget.phase('outer_weighted_aggregation'):
+                        aggregation = aggregator(instance, deployment, receipts, candidates, accuracy, budget)
+                    commit_aggregate(aggregation, sid, source)
             return
         with budget.phase(labels['original_evaluation_phase']):
             wrapper = n1_scene_evaluator(instance, condition, sid, candidate,
@@ -294,6 +341,134 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         with budget.phase('outer_weighted_aggregation'):
             aggregation = aggregator(instance, deployment, receipts, candidates, accuracy, budget)
         commit_aggregate(aggregation, sid, source)
+
+    def prepare_scene(index, scene, phase_dir, warm_candidate, source, snapshot_hash=None):
+        """Every model owns its events, rows, model-view evidence and x0."""
+        nonlocal active_scene, active_stage
+        active_scene = sid = scene['id']; record = result['scenes'][sid]
+        active_stage = 'model_construction'
+        observer = BuildObserver(budget, phase_dir/f'build_scene_{index:03d}.jsonl')
+        observers[(phase_index, sid) if _second_phase is not None else sid] = observer
+        with budget.phase('model_construction'):
+            model = model_builder(instance, config, starts=starts, budget=budget, progress=observer,
+                fixed_shared_deployment=deployment, fixed_scene_id=sid,
+                neighborhood_condition=condition, **flags)
+            models[sid] = model
+            observer.finish('MODEL_CONSTRUCTED')
+            metadata = dict(model_complete=True, model_completed_at_s=budget.elapsed,
+                model_summary=model.summary(), preprocessing=deepcopy(getattr(model, 'preprocessing', None)))
+            record.update(metadata)
+            if phase_record is not None:
+                phase_record['scenes'][sid].update(deepcopy(metadata))
+        budget.check()
+        active_stage = 'initial_point_preparation'
+        local = {'scenes': {sid: deepcopy(warm_candidate['scenes'][sid])}}
+        with budget.phase(labels['model_evaluation_phase']):
+            evaluation = model_evaluator(model, local, accuracy, budget)
+        remember_view(sid, local, evaluation, source)
+        completion = {'state': 'INITIAL_POINT_REJECTED', 'x0': None,
+                      'reason': 'MODEL_VIEW_SAFE_NOT_CONFIRMED'}
+        if _safe(evaluation, budget):
+            publish_safe(sid, model, local, evaluation, source)
+            completion = initial_completer(model, local, evaluation, budget)
+        elif evaluation.get('state') in ('THERMAL_VIOLATION', 'INVALID_SCHEDULE'):
+            prefix = 'Fresh SAFE seed' if _second_phase is None else 'Committed SAFE witness'
+            raise ValueError(prefix+' disagrees with '+labels['name']+' model view')
+        initial[sid] = completion
+        record['initialisation'] = {
+            'candidate': local, 'evaluation': deepcopy(evaluation),
+            'completion': deepcopy({key: value for key, value in completion.items() if key != 'x0'}),
+            'state': completion.get('state'), 'completed_at_s': budget.elapsed}
+        if phase_record is not None:
+            record['initialisation'].update(source=source,
+                snapshot_candidate_sha256=snapshot_hash, phase_index=phase_index)
+            phase_record['scenes'][sid]['initialisation'] = deepcopy(record['initialisation'])
+        record['initial_checkpoint'] = {'requested': True, 'completed': False}
+        with budget.phase('initial_receipt_checkpoint'):
+            if checkpoint is None:
+                _save(phase_dir/f'initial_scene_{index:03d}.json', record['initialisation'])
+            else:
+                checkpoint(sid, record['initialisation'], budget)
+        record['initial_checkpoint'].update(completed=True, completed_at_s=budget.elapsed)
+        if phase_record is not None:
+            phase_record['scenes'][sid]['initial_checkpoint'] = deepcopy(record['initial_checkpoint'])
+        budget.check()
+
+    def search_scene(index, scene, phase_dir, cap):
+        nonlocal active_scene, active_stage
+        active_scene = sid = scene['id']; record = result['scenes'][sid]
+        budget.check(); active_stage = 'candidate_search'
+        folder = phase_dir/f'scene_{index}'
+        folder.mkdir()
+        model = models[sid]
+        recorder = recorder_factory(model, accuracy, budget, folder,
+            model_evaluator=model_evaluator,
+            on_evaluation=lambda candidate, evaluation, source, sid=sid:
+                remember_view(sid, candidate, evaluation, source),
+            on_safe=lambda candidate, evaluation, source, sid=sid, model=model:
+                publish_safe(sid, model, candidate, evaluation, source),
+            witness_validator=witness_validator)
+        prepared = initial[sid]
+        ready = prepared.get('state') == 'INITIAL_POINT_READY' and prepared.get('x0') is not None
+        inner_session = _InitialSession(phase_session, prepared['x0']) if ready else phase_session
+        search_metadata = dict(x0_injected=ready, bare_MILP_fallback=not ready,
+                               search_started_at_s=budget.elapsed)
+        record.update(search_metadata)
+        if phase_record is not None:
+            phase_record['scenes'][sid].update(search_metadata)
+        solved = _solve_scene(model, inner_session, accuracy, budget, recorder,
+            feedback_adder=feedback_adder, witness_validator=witness_validator,
+            max_rounds=max_rounds, scene_slice_s=cap)
+        record.update(solver_result=solved, reason=solved['reason'],
+                      search_returned_at_s=budget.elapsed)
+        bounds = [dict(item, scope=labels['bound_scope'],
+            condition_sha256=condition['condition_sha256']) for item in _reported_bounds(solved)]
+        record['solver_reported_bounds'] = bounds
+        if phase_record is not None:
+            phase_record['scenes'][sid].update(solver_result=deepcopy(solved),
+                reason=solved['reason'], search_returned_at_s=budget.elapsed,
+                solver_reported_bounds=deepcopy(bounds), scene_slice_s=cap)
+        result['worker_reusable'] = solved['worker_reusable']
+        stop_reason = solved['reason']
+        if _second_phase is not None:
+            # _InitialSession does not proxy closed/request_blocked. Check
+            # the actually owned session and transport, after callback detach.
+            idle = (solved.get('request_settled') is True
+                and getattr(session, 'event_consumer', None) is None
+                and getattr(phase_session, 'event_consumer', None) is None
+                and not getattr(session, 'closed', False)
+                and not getattr(session, 'request_blocked', False)
+                and not getattr(phase_session, 'closed', False)
+                and not getattr(phase_session, 'request_blocked', False)
+                and not _second_phase['latched']())
+            result['worker_reusable'] = bool(result['worker_reusable'] and idle)
+            if not result['worker_reusable']:
+                result['search_failure_latched'] = True
+                phase_record['failure_latched'] = True
+                if _second_phase['latched']():
+                    stop_reason = NUMERICAL_CONSISTENCY_UNRESOLVED
+                elif not idle and budget.remaining > 0:
+                    stop_reason = 'SOLVER_INTERFACE_ERROR'
+                phase_record['scenes'][sid]['worker_admission'] = {
+                    'idle': idle, 'underlying_closed': getattr(session, 'closed', False),
+                    'underlying_request_blocked': getattr(session, 'request_blocked', False),
+                    'event_consumer_detached': getattr(session, 'event_consumer', None) is None,
+                    'request_settled': solved.get('request_settled'), 'stop_reason': stop_reason}
+        budget.check()
+        if not result['worker_reusable']:
+            result['reason'] = stop_reason
+            return False
+        return True
+
+    def start_phase(index, name, opened):
+        nonlocal phase_index, phase_record
+        phase_index = index
+        phase_record = {'phase_index': index, 'name': name,
+            'condition': deepcopy(condition), 'condition_sha256': condition['condition_sha256'],
+            'protocol': condition_protocol, 'opened_by_scene': deepcopy(opened),
+            'started_at_s': budget.elapsed, 'failure_latched': False,
+            'scenes': {scene['id']: {} for scene in instance['scenarios']}}
+        result['phases'].append(phase_record)
 
     try:
         with budget.phase('input_read_and_expansion'):
@@ -423,46 +598,11 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
                 raise ValueError('Neighborhood condition protocol does not match this lifecycle')
             result['condition'] = deepcopy(condition)
             result['condition_sha256'] = condition['condition_sha256']
+        if _second_phase is not None:
+            start_phase(1, 'N1', declared_opened)
         budget.check()
         for index, scene in enumerate(instance['scenarios']):
-            active_scene = sid = scene['id']; record = result['scenes'][sid]
-            active_stage = 'model_construction'
-            observer = BuildObserver(budget, workdir/f'build_scene_{index:03d}.jsonl')
-            observers[sid] = observer
-            with budget.phase('model_construction'):
-                model = model_builder(instance, config, starts=starts, budget=budget, progress=observer,
-                    fixed_shared_deployment=deployment, fixed_scene_id=sid,
-                    neighborhood_condition=condition, **flags)
-                models[sid] = model
-                observer.finish('MODEL_CONSTRUCTED')
-                record.update(model_complete=True, model_completed_at_s=budget.elapsed,
-                    model_summary=model.summary(), preprocessing=deepcopy(getattr(model, 'preprocessing', None)))
-            budget.check()
-            active_stage = 'initial_point_preparation'
-            local = {'scenes': {sid: deepcopy(seed_candidate['scenes'][sid])}}
-            with budget.phase(labels['model_evaluation_phase']):
-                evaluation = model_evaluator(model, local, accuracy, budget)
-            remember_view(sid, local, evaluation, 'initial_constructor')
-            completion = {'state': 'INITIAL_POINT_REJECTED', 'x0': None,
-                          'reason': 'MODEL_VIEW_SAFE_NOT_CONFIRMED'}
-            if _safe(evaluation, budget):
-                publish_safe(sid, model, local, evaluation, 'initial_constructor')
-                completion = initial_completer(model, local, evaluation, budget)
-            elif evaluation.get('state') in ('THERMAL_VIOLATION', 'INVALID_SCHEDULE'):
-                raise ValueError('Fresh SAFE seed disagrees with '+labels['name']+' model view')
-            initial[sid] = completion
-            record['initialisation'] = {
-                'candidate': local, 'evaluation': deepcopy(evaluation),
-                'completion': deepcopy({key: value for key, value in completion.items() if key != 'x0'}),
-                'state': completion.get('state'), 'completed_at_s': budget.elapsed}
-            record['initial_checkpoint'] = {'requested': True, 'completed': False}
-            with budget.phase('initial_receipt_checkpoint'):
-                if checkpoint is None:
-                    _save(workdir/f'initial_scene_{index:03d}.json', record['initialisation'])
-                else:
-                    checkpoint(sid, record['initialisation'], budget)
-            record['initial_checkpoint'].update(completed=True, completed_at_s=budget.elapsed)
-            budget.check()
+            prepare_scene(index, scene, workdir, seed_candidate, 'initial_constructor')
         active_scene = None
         active_stage = 'solver_startup'
         with budget.phase('solver_startup'):
@@ -475,37 +615,78 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
                 raise ValueError('Worker must use the identical MethodBudget')
         budget.check()
         result['matlab_worker_ready'] = True
+        phase_session = session
+        sequence_complete = True
         for index, scene in enumerate(instance['scenarios']):
-            active_scene = sid = scene['id']; record = result['scenes'][sid]
-            budget.check(); active_stage = 'candidate_search'
-            folder = workdir/f'scene_{index}'
-            folder.mkdir()
-            model = models[sid]
-            recorder = recorder_factory(model, accuracy, budget, folder,
-                model_evaluator=model_evaluator,
-                on_evaluation=lambda candidate, evaluation, source, sid=sid:
-                    remember_view(sid, candidate, evaluation, source),
-                on_safe=lambda candidate, evaluation, source, sid=sid, model=model:
-                    publish_safe(sid, model, candidate, evaluation, source),
-                witness_validator=witness_validator)
-            prepared = initial[sid]
-            ready = prepared.get('state') == 'INITIAL_POINT_READY' and prepared.get('x0') is not None
-            inner_session = _InitialSession(session, prepared['x0']) if ready else session
-            record.update(x0_injected=ready, bare_MILP_fallback=not ready,
-                          search_started_at_s=budget.elapsed)
-            solved = _solve_scene(model, inner_session, accuracy, budget, recorder,
-                feedback_adder=feedback_adder, witness_validator=witness_validator,
-                max_rounds=max_rounds, scene_slice_s=scene_slice_s)
-            record.update(solver_result=solved, reason=solved['reason'],
-                          search_returned_at_s=budget.elapsed)
-            record['solver_reported_bounds'] = [dict(item,
-                scope=labels['bound_scope'],
-                condition_sha256=condition['condition_sha256']) for item in _reported_bounds(solved)]
-            result['worker_reusable'] = solved['worker_reusable']
+            if not search_scene(index, scene, workdir, scene_slice_s):
+                sequence_complete = False
+                break
+        if phase_record is not None:
+            phase_record.update(completed_at_s=budget.elapsed, search_sequence_complete=sequence_complete)
+        if sequence_complete and _second_phase is not None:
             budget.check()
-            if not solved['worker_reusable']:
-                result['reason'] = solved['reason']; break
-        else:
+            active_scene = None
+            active_stage = 'second_phase_setup'
+            if (result['search_failure_latched'] or _second_phase['latched']()
+                    or getattr(session, 'closed', False)
+                    or getattr(session, 'request_blocked', False)
+                    or getattr(session, 'event_consumer', None) is not None):
+                raise ValueError('A failed or active worker cannot enter the second phase')
+            # Discard uncommitted local generations. Only raw original-input
+            # receipt caches may cross phases, and their hits recheck identity,
+            # current membership and energy before re-adoption.
+            with budget.phase('second_phase_setup'):
+                snapshot = result['committed_safe_snapshot']
+                receipts = deepcopy(snapshot['scene_receipts'])
+                candidates = deepcopy(snapshot['scene_candidates'])
+                sources = deepcopy(snapshot['scene_sources'])
+                for key, observer in observers.items():
+                    construction_snapshots[key] = observer.snapshot()
+                    _detach_observer(observer)
+                models, initial = {}, {}
+                labels = dict(_second_phase['identity'])
+                condition_factory = _second_phase['condition_factory']
+                membership_checker = _second_phase['membership_checker']
+                n1_scene_evaluator = _second_phase['scene_evaluator']
+                evaluation_protocol = _second_phase['evaluation_protocol']
+                condition_protocol = _second_phase['condition_protocol']
+                recorder_factory = _second_phase['recorder_factory']
+                declared_second_opened = _second_phase['opened'](instance, budget)
+                phase_dir = workdir/'pass_02'
+                phase_dir.mkdir()
+                phase_session = _second_phase['session_adapter'](session)
+                if (getattr(phase_session, 'budget', budget) is not budget
+                        or getattr(phase_session, 'event_consumer', None) is not None
+                        or getattr(phase_session, 'request_blocked', False)
+                        or getattr(phase_session, 'closed', False)):
+                    raise ValueError('Second-phase transport must wrap the idle original worker and budget')
+            budget.check()
+            active_stage = 'neighborhood_condition_construction'
+            with budget.phase('neighborhood_condition_construction'):
+                # D belongs to the original fresh seed, never the warm point.
+                condition = condition_factory(instance, deployment, seed_candidate, seed_aggregate,
+                    declared_second_opened, budget=budget, accuracy=accuracy)
+                if condition.get('protocol') != condition_protocol:
+                    raise ValueError('Second-phase condition protocol does not match this lifecycle')
+                start_phase(2, 'all_stage_opp_start', declared_second_opened)
+            budget.check()
+            total_scenes = len(instance['scenarios'])
+            for index, scene in enumerate(instance['scenarios']):
+                budget.check()
+                # Each scene sees the latest *complete committed* generation,
+                # including a timely second-pass improvement of an earlier scene.
+                with budget.phase('committed_warm_snapshot'):
+                    warm = deepcopy(result['committed_safe_snapshot'])
+                    warm_hash = canonical_hash(warm['safe_candidate'])
+                prepare_scene(index, scene, phase_dir, warm['safe_candidate'],
+                    'last_committed_full_aggregate', warm_hash)
+                cap = min(scene_slice_s, budget.remaining/(total_scenes-index))
+                budget.check()
+                if not search_scene(index, scene, phase_dir, cap):
+                    sequence_complete = False
+                    break
+            phase_record.update(completed_at_s=budget.elapsed, search_sequence_complete=sequence_complete)
+        if sequence_complete:
             result['reason'] = 'SCENE_SEARCH_SEQUENCE_COMPLETE'
     except _NoCompleteSafeSeed:
         pass
@@ -537,6 +718,15 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             result['seed_attempts'][-1]['reason'] = result['reason']
         failed = result['reason'] in ('RESOURCE_LIMIT', 'INVALID_INPUT_OR_INTERFACE',
             'INTERFACE_ERROR', 'SOLVER_INTERFACE_ERROR', NUMERICAL_CONSISTENCY_UNRESOLVED)
+        if _second_phase is not None:
+            result['search_failure_latched'] = bool(
+                result['search_failure_latched'] or failed or _second_phase['latched']())
+            if phase_record is not None:
+                phase_record.setdefault('completed_at_s', stopped)
+                phase_record.setdefault('search_sequence_complete', False)
+                phase_record['stop_reason'] = result['reason']
+                phase_record['failure_latched'] = bool(
+                    phase_record['failure_latched'] or result['search_failure_latched'])
         result['technical_state'] = ('FAILED' if failed else 'COMPLETED' if
             result['reason'] == 'SCENE_SEARCH_SEQUENCE_COMPLETE' else 'INTERRUPTED_OR_UNRESOLVED')
         result['timing'] = budget.summary(stopped)
@@ -584,7 +774,9 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         result['worker_reusable'] = (result['worker_reusable'] and budget.remaining > 0
             and result['event_consumer_detached'] and not result['session_closed_by_neighborhood']
             and not getattr(session, 'closed', False) and not getattr(session, 'request_blocked', False))
-        rounds = [round_record for scene in result['scenes'].values()
+        scene_results = (result['scenes'].values() if _second_phase is None else
+            [scene for phase in result['phases'] for scene in phase['scenes'].values()])
+        rounds = [round_record for scene in scene_results
                   for round_record in (scene.get('solver_result') or {}).get('rounds', [])]
         entries = [round_record.get('intlinprog_entered') for round_record in rounds]
         result['raw_native_solver_entry_seen'] = True in entries
@@ -618,12 +810,16 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
                           archive_errors=archive_errors)
             return None
 
-    for sid, observer in observers.items():
+    for key, observer in observers.items():
+        sid = key if _second_phase is None else key[1]
         construction = archive_attempt('construction_metadata', None,
-            lambda observer=observer: (observer.snapshot() if observer.finished_at is not None
-                                      else observer.finish('CONSTRUCTION_INTERRUPTED')))
+            lambda observer=observer, key=key: (construction_snapshots[key] if key in construction_snapshots
+                else observer.snapshot() if observer.finished_at is not None
+                else observer.finish('CONSTRUCTION_INTERRUPTED')))
         if construction is not None:
             result['scenes'][sid]['construction'] = construction
+            if _second_phase is not None:
+                result['phases'][key[0]-1]['scenes'][sid]['construction'] = deepcopy(construction)
         archive_attempt('construction_observer_detach', None,
                         lambda observer=observer: _detach_observer(observer))
     if config is not None:

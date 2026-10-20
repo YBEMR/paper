@@ -1305,3 +1305,11 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 [唯一准备目录](results/fair_comparison_preparation01/summary.md)已保存，ledger DECLARED、consumed0。未来`--run --execution-authorized --out ...`或已保存launcher只供下一执行阶段；本轮未启动。global／launcher／逐方法claims不得删除重开；技术故障停止未启动方法，无补跑／延时。不要复用旧K127已到期的夜间controller。`source_audit.py --out NEW_JSON`可只读复核继承关系，不产生物理证据。
 
 整体保留原全域表达／conditional反馈，HEFT／SA显式auto-L且保留mapping自由，linked保持原种子unit、两遍／双锚和60秒scene合作片。公共代码加载、包装、清理与方法内300秒分列；whole L0计费形成，首候选／合法／SAFE按真实嵌套schema取值。当前独审24项通过，暂无新排名／节能／热反馈结果。下一项仅四调用小范围比较，SA101单次探索，不恢复115次、温限扫描或额外组件。
+
+### 3.12au 冻结四方法执行中断与完整SAFE留存（K.142）
+
+用户授权K141整体MILP→联动→HEFT→SA101各一次300秒。实际2次：整体U＝1.084886371304 J，联动U＝0.962885037941 J；后者第二遍AC在截止接纳／归档未闭合，包装按冻结规则停止后两法。已存数值门通过，不能当候选非法或模型无解；已有预算内完整SAFE保留，本次第二遍0新增U。参数／合法域／auto-L／连续热安全保持，无补跑、延时或生产修改。
+
+准入18／本线程独审37项通过，159源及输入匹配；实际方法合600.047秒、清理28.781秒、进程636.282秒，停止尾延迟不补新证据。0违规／反馈，L0未闭合，四方法排名未形成，HEFT／SA不记失败、不借旧值填空。[执行入口](results/fair_comparison_preparation01/execution_index.md)、[结论](results/fair_comparison_preparation01/execution_k142/summary.md)、[分析与曲线](results/fair_comparison_preparation01/execution_k142/analysis01/summary.md)、[独审](results/fair_comparison_preparation01/execution_k142/independent_review.md)保存；原K141准备文件保持历史。
+
+下一项只建议厘清预算结束与真故障分类、补离线边界预检，再讨论剩余方法安排。不追补此次四法、增算法／温限／种子或恢复115次。

@@ -4,9 +4,11 @@ Only unique ignored workspace directories are written. Native subprocess
 creation and taskkill are always mocked; synthetic PIDs are never acted on.
 """
 from contextlib import ExitStack
+from copy import deepcopy
 import io
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -20,11 +22,48 @@ RECORDS = {'scope': 'fake process and filesystem-failure injection only',
            'native_calls': 0, 'research_calls': 0, 'checks': []}
 
 
+class NoSuchProcess(Exception):
+    pass
+
+
+class AccessDenied(Exception):
+    pass
+
+
+class IdentityProcess:
+    def __init__(self, pid, created, *, running=True, children=None, denied=False):
+        self.pid, self.created, self.running = pid, created, running
+        self.child_processes, self.denied = children or [], denied
+
+    def create_time(self):
+        return self.created
+
+    def is_running(self):
+        return self.running
+
+    def children(self, recursive):
+        if self.denied:
+            raise AccessDenied('MOCK_CHILD_ENUMERATION_DENIED')
+        return list(self.child_processes)
+
+
+def fake_psutil(registry):
+    def process(pid):
+        value = registry.get(pid)
+        if value is None:
+            raise NoSuchProcess(pid)
+        if isinstance(value, Exception):
+            raise value
+        return value
+    return SimpleNamespace(__version__='5.9.mock', Process=process)
+
+
 class FakeProc:
     pid = 98765031  # synthetic identifier; subprocess.run is patched below
 
-    def __init__(self, *, running=True, graceful=False):
+    def __init__(self, *, running=True, graceful=False, exitcode=0):
         self.running, self.graceful = running, graceful
+        self.exitcode = exitcode
         self.waits, self.kills = [], 0
 
     def wait(self, timeout):
@@ -33,10 +72,10 @@ class FakeProc:
             self.running = False
         if self.running:
             raise bridge.subprocess.TimeoutExpired('FAKE_MATLAB', timeout)
-        return 0
+        return self.exitcode
 
     def poll(self):
-        return None if self.running else 0
+        return None if self.running else self.exitcode
 
     def kill(self):
         self.kills += 1
@@ -53,6 +92,30 @@ class CleanupArchiveTests(unittest.TestCase):
             side_effect=AssertionError('native process forbidden')))
         self.run = self.stack.enter_context(patch.object(bridge.subprocess, 'run',
             side_effect=AssertionError('native taskkill forbidden')))
+        # Existing cleanup boundary tests do not inspect any real process ID.
+        self.real_capture = bridge._capture_owned_process_tree
+        self.real_verify = bridge._verify_owned_process_tree
+        self.real_wait = bridge._wait_owned_process_tree
+        self.owned = {}
+        def capture(proc, previous=None, *, phase):
+            self.owned[proc.pid] = proc
+            root = {'pid': proc.pid, 'create_time': 1000.0}
+            return {'root_pid': proc.pid, 'root_identity': root,
+                'identities': [root], 'capture_complete': True, 'capture_errors': [],
+                'root_identity_verified': proc.poll() is None,
+                'observations': [{'phase': phase, 'state': 'MOCK_OWNED_TREE'}]}
+        def verify(tree):
+            proc = self.owned.get((tree or {}).get('root_pid'))
+            identities = [dict(item, state='EXITED' if proc and proc.poll() is not None else 'RUNNING')
+                          for item in (tree or {}).get('identities', [])]
+            return {'capture_complete': bool(tree and tree.get('capture_complete')),
+                'identities': identities, 'verified_terminated': bool(identities and
+                    all(item['state'] == 'EXITED' for item in identities))}
+        self.stack.enter_context(patch.object(bridge, '_capture_owned_process_tree', side_effect=capture))
+        self.stack.enter_context(patch.object(bridge, '_verify_owned_process_tree', side_effect=verify))
+        # Original cases isolate cleanup mechanics and must not wait/query PIDs.
+        self.stack.enter_context(patch.object(bridge, '_wait_owned_process_tree',
+            side_effect=lambda tree, **kwargs: bridge._verify_owned_process_tree(tree)))
 
     def session(self, proc):
         session = bridge.MatlabSession.__new__(bridge.MatlabSession)
@@ -200,6 +263,138 @@ class CleanupArchiveTests(unittest.TestCase):
         self.assertNotIn('cleanup_archive_error', session.cleanup)
         self.assertNotIn('stop_write_error', session.cleanup)
         self.assertTrue(session.log.closed)
+
+    def tree_case(self, *, child_alive=False, denied=False, parent_reused=False):
+        proc = FakeProc(exitcode=1)
+        child = IdentityProcess(proc.pid + 1, 1001.0)
+        root = IdentityProcess(proc.pid, 1000.0, children=[child], denied=denied)
+        registry = {root.pid: root, child.pid: child}
+        module = fake_psutil(registry)
+        session = self.session(proc)
+        with patch.dict(sys.modules, {'psutil': module}):
+            session.process_tree = self.real_capture(proc, phase='ready')
+        self.assertEqual(len(session.process_tree['identities']), 1 if denied else 2)
+        if parent_reused:
+            registry[root.pid] = IdentityProcess(root.pid, 9999.0)
+        def terminate(args, **kwargs):
+            self.assertEqual(args, ['taskkill', '/PID', str(proc.pid), '/T', '/F'])
+            proc.running = root.running = False
+            child.running = child_alive
+            return SimpleNamespace(returncode=0)
+        with patch.dict(sys.modules, {'psutil': module}), \
+                patch.object(bridge, '_capture_owned_process_tree', side_effect=self.real_capture), \
+                patch.object(bridge, '_verify_owned_process_tree', side_effect=self.real_verify), \
+                patch.object(bridge.os, 'name', 'nt'), \
+                patch.object(bridge.subprocess, 'run', side_effect=terminate) as killed:
+            session.close()
+        return session, proc, root, child, registry, killed
+
+    def test_forced_exit_one_with_both_captured_identities_exited_is_complete(self):
+        session, proc, _, _, _, killed = self.tree_case()
+        self.assertEqual(killed.call_count, 1)
+        self.assertEqual(session.cleanup['returncode'], 1)
+        self.assertEqual(session.cleanup['cleanup_status'], 'forced_closed')
+        self.assertTrue(session.cleanup['force_requested'])
+        self.assertTrue(session.cleanup['force_termination_succeeded'])
+        self.assertEqual(session.cleanup['observed_tree_identity_count'], 2)
+        self.assertTrue(session.cleanup['observed_tree_verified_terminated'])
+        self.assertTrue(bridge.cleanup_is_complete(session.cleanup))
+        self.assertEqual(proc.waits, [20, 10])
+
+    def test_taskkill_zero_and_parent_exit_do_not_hide_live_child(self):
+        session, _, _, child, _, _ = self.tree_case(child_alive=True)
+        self.assertTrue(child.running)
+        self.assertEqual(session.cleanup['own_process_tree_kill_returncode'], 0)
+        self.assertEqual(session.cleanup['returncode'], 1)
+        self.assertEqual(session.cleanup['cleanup_status'], 'unresolved')
+        self.assertFalse(session.cleanup['observed_tree_verified_terminated'])
+        self.assertFalse(bridge.cleanup_is_complete(session.cleanup))
+
+    def test_enumeration_denied_remains_unresolved_even_after_parent_exits(self):
+        session, _, _, _, _, _ = self.tree_case(denied=True)
+        self.assertFalse(session.cleanup['observed_tree_capture_complete'])
+        self.assertEqual(session.cleanup['cleanup_status'], 'unresolved')
+        self.assertFalse(bridge.cleanup_is_complete(session.cleanup))
+
+    def test_reused_parent_pid_is_not_signalled(self):
+        session, proc, _, _, _, killed = self.tree_case(parent_reused=True)
+        killed.assert_not_called()
+        self.assertEqual(proc.kills, 0)
+        self.assertEqual(session.cleanup['cleanup_status'], 'unresolved')
+        self.assertIn('force_identity_error', session.cleanup)
+        self.assertFalse(bridge.cleanup_is_complete(session.cleanup))
+
+    def test_verification_treats_reused_child_as_original_exit_without_signalling(self):
+        root = {'pid': 100, 'create_time': 1000.0}
+        child = {'pid': 101, 'create_time': 1001.0}
+        tree = {'root_identity': root, 'identities': [root, child], 'capture_complete': True}
+        with patch.dict(sys.modules, {'psutil': fake_psutil({101: IdentityProcess(101, 9999.0)})}):
+            verified = self.real_verify(tree)
+        self.assertTrue(verified['verified_terminated'])
+        self.assertEqual(verified['identities'][1]['state'], 'PID_REUSED_ORIGINAL_EXITED')
+
+    def test_ready_capture_is_extended_before_force_and_checks_new_descendant(self):
+        proc = FakeProc()
+        child = IdentityProcess(proc.pid + 1, 1001.0)
+        root = IdentityProcess(proc.pid, 1000.0, children=[child])
+        registry = {root.pid: root, child.pid: child}
+        with patch.dict(sys.modules, {'psutil': fake_psutil(registry)}):
+            first = self.real_capture(proc, phase='ready')
+            later = IdentityProcess(proc.pid + 2, 1002.0)
+            root.child_processes.append(later); registry[later.pid] = later
+            second = self.real_capture(proc, first, phase='before_force')
+        self.assertEqual(len(first['identities']), 2)
+        self.assertEqual(len(second['identities']), 3)
+        self.assertEqual([item['phase'] for item in second['observations']], ['ready', 'before_force'])
+
+    def test_cleanup_helper_rejects_status_only_and_malformed_receipts(self):
+        session, _, _, _, _, _ = self.tree_case()
+        valid = session.cleanup
+        self.assertTrue(bridge.cleanup_is_complete(valid))
+        for replacement in (None, [], 'bad', {'identities': None}, {'identities': ['bad']}):
+            malformed = deepcopy(valid); malformed['process_tree_verification'] = replacement
+            self.assertFalse(bridge.cleanup_is_complete(malformed))
+        for key in ('force_termination_succeeded', 'observed_tree_capture_complete',
+                    'observed_tree_verified_terminated'):
+            malformed = deepcopy(valid); malformed[key] = False
+            self.assertFalse(bridge.cleanup_is_complete(malformed))
+        self.assertFalse(bridge.cleanup_is_complete({'cleanup_status': 'forced_closed', 'returncode': 1}))
+        self.assertTrue(bridge.cleanup_is_complete({'returncode': 0}))
+        self.assertFalse(bridge.cleanup_is_complete({'returncode': 1, 'own_process_tree_kill_returncode': 0}))
+        self.assertFalse(bridge.cleanup_is_complete({'returncode': 0, 'cleanup_error': 'failed'}))
+
+    def test_confirmation_wait_accepts_slightly_late_child_inside_remaining_window(self):
+        now, pauses = [0.0], []
+        def verify(tree):
+            gone = now[0] >= 0.2
+            return {'capture_complete': True, 'verified_terminated': gone,
+                'identities': [{'pid': 100, 'create_time': 1000.0, 'state': 'EXITED'},
+                    {'pid': 101, 'create_time': 1001.0, 'state': 'EXITED' if gone else 'RUNNING'}]}
+        def pause(seconds):
+            pauses.append(seconds); now[0] += seconds
+        with patch.object(bridge, '_verify_owned_process_tree', side_effect=verify):
+            result = self.real_wait({}, clock=lambda: now[0], deadline=0.8, pause=pause)
+        self.assertTrue(result['verified_terminated'])
+        self.assertAlmostEqual(now[0], 0.2)
+        self.assertEqual(len(pauses), 2)
+        self.assertEqual(result['confirmation_wait']['stop_reason'], 'ALL_CAPTURED_IDENTITIES_EXITED')
+
+    def test_confirmation_wait_stops_at_cutoff_or_immediately_on_access_unknown(self):
+        now = [0.0]
+        live = {'capture_complete': True, 'verified_terminated': False,
+            'identities': [{'pid': 101, 'create_time': 1001.0, 'state': 'RUNNING'}]}
+        def pause(seconds):
+            now[0] += seconds
+        with patch.object(bridge, '_verify_owned_process_tree', return_value=live):
+            result = self.real_wait({}, clock=lambda: now[0], deadline=0.25, pause=pause)
+        self.assertFalse(result['verified_terminated'])
+        self.assertAlmostEqual(now[0], 0.25)
+        self.assertEqual(result['confirmation_wait']['stop_reason'], 'CONFIRMATION_WINDOW_EXHAUSTED')
+        blocked = deepcopy(live); blocked['identities'][0]['state'] = 'UNRESOLVED'
+        with patch.object(bridge, '_verify_owned_process_tree', return_value=blocked), \
+                patch.object(bridge.time, 'sleep', side_effect=AssertionError('must not wait')):
+            result = self.real_wait({}, clock=lambda: now[0], deadline=10)
+        self.assertEqual(result['confirmation_wait']['stop_reason'], 'IDENTITY_OR_ACCESS_UNRESOLVED')
 
 
 if __name__ == '__main__':

@@ -277,6 +277,167 @@ def _cut_iteration_limit(value):
     return int(value)
 
 
+def _capture_owned_process_tree(proc, previous=None, *, phase):
+    """Observe only this Popen root and descendants, retaining pid/create_time."""
+    tree = deepcopy(previous) if previous else {
+        'root_pid': proc.pid, 'root_identity': None, 'identities': [],
+        'capture_complete': True, 'capture_errors': [], 'observations': []}
+    observation = {'phase': phase, 'root_identity_verified': False}
+    tree['root_identity_verified'] = False
+    root_loaded = False
+    try:
+        import psutil
+        tree['psutil_version'] = psutil.__version__
+        if tree['root_pid'] != proc.pid:
+            raise ValueError('owned Popen root PID changed')
+        root = psutil.Process(proc.pid)
+        actual = {'pid': int(root.pid), 'create_time': float(root.create_time())}
+        root_loaded = True
+        if not math.isfinite(actual['create_time']) or actual['create_time'] <= 0:
+            raise ValueError('invalid owned root creation time')
+        expected = tree['root_identity']
+        if expected is not None and actual != expected:
+            # This new process is not ours. Do not enumerate or signal it.
+            observation['state'] = 'ROOT_PID_REUSED_ORIGINAL_EXITED'
+        elif proc.poll() is not None:
+            observation['state'] = 'ROOT_EXITED'
+            if expected is None:
+                raise ValueError('root exited before its ownership identity was captured')
+        else:
+            tree['root_identity'] = actual
+            tree['root_identity_verified'] = True
+            observation.update(state='ROOT_OBSERVED', root_identity_verified=True)
+            known = {(item['pid'], item['create_time']) for item in tree['identities']}
+            if (actual['pid'], actual['create_time']) not in known:
+                tree['identities'].append(actual)
+                known.add((actual['pid'], actual['create_time']))
+            for process in root.children(recursive=True):
+                identity = {'pid': int(process.pid), 'create_time': float(process.create_time())}
+                if not math.isfinite(identity['create_time']) or identity['create_time'] <= 0:
+                    raise ValueError('invalid owned descendant creation time')
+                key = (identity['pid'], identity['create_time'])
+                if key not in known:
+                    tree['identities'].append(identity)
+                    known.add(key)
+    except Exception as error:
+        # A previously identified root may have exited before this observation.
+        if (type(error).__name__ == 'NoSuchProcess' and not root_loaded
+                and tree.get('root_identity') is not None):
+            observation['state'] = 'ROOT_EXITED'
+        else:
+            tree['capture_complete'] = False
+            tree['capture_errors'].append({'phase': phase, 'error': repr(error)})
+            observation.update(state='UNRESOLVED', error=repr(error))
+    tree['observations'].append(observation)
+    return tree
+
+
+def _verify_owned_process_tree(tree):
+    """Check saved identities without signalling any process or reused PID."""
+    result = {'capture_complete': bool(tree and tree.get('capture_complete')),
+              'identities': [], 'verified_terminated': False}
+    identities = (tree or {}).get('identities', [])
+    for identity in identities:
+        item = dict(identity)
+        try:
+            import psutil
+            process = psutil.Process(identity['pid'])
+            if float(process.create_time()) != identity['create_time']:
+                item['state'] = 'PID_REUSED_ORIGINAL_EXITED'
+            else:
+                item['state'] = 'RUNNING' if process.is_running() else 'EXITED'
+        except Exception as error:
+            if type(error).__name__ == 'NoSuchProcess':
+                item['state'] = 'EXITED'
+            else:
+                item.update(state='UNRESOLVED', error=repr(error))
+        result['identities'].append(item)
+    result['verified_terminated'] = bool(result['capture_complete'] and identities
+        and (tree or {}).get('root_identity') in identities
+        and all(item['state'] in ('EXITED', 'PID_REUSED_ORIGINAL_EXITED')
+                for item in result['identities']))
+    return result
+
+
+def _wait_owned_process_tree(tree, *, clock, deadline, pause=None):
+    """Confirm only captured identities until the existing cleanup cutoff."""
+    pause = time.sleep if pause is None else pause
+    started, checks = clock(), 0
+    while True:
+        result = _verify_owned_process_tree(tree)
+        checks += 1
+        if result['verified_terminated']:
+            reason = 'ALL_CAPTURED_IDENTITIES_EXITED'
+            break
+        if (not result['capture_complete'] or not result['identities']
+                or any(item['state'] == 'UNRESOLVED' for item in result['identities'])):
+            reason = 'IDENTITY_OR_ACCESS_UNRESOLVED'
+            break
+        remaining = deadline - clock()
+        if remaining <= 0:
+            reason = 'CONFIRMATION_WINDOW_EXHAUSTED'
+            break
+        pause(min(0.1, remaining))
+    result['confirmation_wait'] = {'started_at_monotonic': started,
+        'deadline_monotonic': deadline, 'wall_seconds': max(0.0, clock() - started),
+        'checks': checks, 'stop_reason': reason,
+        'scope': 'previously captured identities only; no new cleanup window or signals'}
+    return result
+
+
+def _cleanup_has_error(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if (key in ('error', 'errors') or key.endswith(('_error', '_errors')) or 'pending' in key):
+                if item not in (None, False, '', [], {}):
+                    return True
+            if _cleanup_has_error(item):
+                return True
+    elif isinstance(value, list):
+        return any(_cleanup_has_error(item) for item in value)
+    return False
+
+
+def cleanup_is_complete(receipt):
+    """Pure receipt check; historical nonzero exits are never upgraded."""
+    if not isinstance(receipt, dict) or _cleanup_has_error(receipt):
+        return False
+    code = receipt.get('returncode')
+    if isinstance(code, bool) or not isinstance(code, int):
+        return False
+    if 'cleanup_status' not in receipt:
+        return code == 0
+    status = receipt['cleanup_status']
+    verified = receipt.get('process_tree_verification')
+    if not isinstance(verified, dict) or not isinstance(verified.get('identities'), list):
+        return False
+    identities = verified['identities']
+    count = receipt.get('observed_tree_identity_count')
+    if (status not in ('graceful_closed', 'forced_closed')
+            or receipt.get('observed_tree_verified_terminated') is not True
+            or receipt.get('observed_tree_capture_complete') is not True
+            or verified.get('capture_complete') is not True
+            or verified.get('verified_terminated') is not True
+            or isinstance(count, bool) or not isinstance(count, int) or count <= 0
+            or count != len(identities)):
+        return False
+    for item in identities:
+        if not isinstance(item, dict):
+            return False
+        pid, created = item.get('pid'), item.get('create_time')
+        if (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0
+                or isinstance(created, bool) or not isinstance(created, Real)
+                or not math.isfinite(created) or created <= 0
+                or item.get('state') not in ('EXITED', 'PID_REUSED_ORIGINAL_EXITED')):
+            return False
+    if status == 'graceful_closed':
+        return code == 0 and receipt.get('force_requested') is False
+    return (receipt.get('force_requested') is True
+        and receipt.get('force_termination_succeeded') is True
+        and (receipt.get('own_process_tree_kill_returncode') == 0
+             or receipt.get('own_process_kill_succeeded') is True))
+
+
 class MatlabSession:
     """File-handshake worker with external deadline checks on every request.
 
@@ -365,6 +526,8 @@ class MatlabSession:
                 raise RuntimeError('MATLAB worker unavailable: ' + str(self.environment))
             if self.environment.get('release') != '2023b':
                 raise RuntimeError('This bridge is checked only against MATLAB R2023b')
+            self.process_tree = _capture_owned_process_tree(self.proc, phase='ready')
+            self.metadata['process_tree_at_ready'] = deepcopy(self.process_tree)
             self.metadata['startup_wall_seconds'] = self.clock() - self.started
             self.metadata['startup_outcome'] = 'READY'
             _json(self.workdir / 'session.json', self.metadata)
@@ -555,14 +718,19 @@ class MatlabSession:
         if self.closed:
             return
         cleanup_started = self.clock()
+        cleanup_deadline = cleanup_started + 40.0
         self.closed = True
-        cleanup = {'graceful_stop_requested': False,
+        cleanup = {'graceful_stop_requested': False, 'force_requested': False,
+                   'force_termination_succeeded': False, 'cleanup_status': 'unresolved',
                    'cleanup_started_at_monotonic': cleanup_started,
                    'cleanup_not_available_for_new_evidence': True}
         # Publish the in-memory receipt before any fallible file/process step.
         # Archive failures must neither leak this session's process nor erase
         # the startup error which led here.
         self.cleanup = cleanup
+        if self.proc is not None:
+            self.process_tree = _capture_owned_process_tree(
+                self.proc, getattr(self, 'process_tree', None), phase='close_begin')
         try:
             (self.workdir / 'stop').write_text('close\n', encoding='ascii')
             cleanup['graceful_stop_requested'] = True
@@ -570,28 +738,44 @@ class MatlabSession:
             cleanup['stop_write_error'] = repr(error)
         if self.proc is not None:
             try:
-                self.proc.wait(timeout=20)
+                self.proc.wait(timeout=min(20.0, max(0.0, cleanup_deadline - self.clock())))
             except subprocess.TimeoutExpired:
                 # Only this session's child process tree, never other MATLABs.
+                cleanup['force_requested'] = True
+                self.process_tree = _capture_owned_process_tree(
+                    self.proc, self.process_tree, phase='before_force')
                 try:
-                    if os.name == 'nt':
+                    if not self.process_tree.get('root_identity_verified'):
+                        cleanup['force_identity_error'] = 'Owned root identity not verified; no PID signal sent'
+                    elif self.clock() >= cleanup_deadline:
+                        cleanup['force_window_error'] = 'Existing 40 second cleanup window exhausted'
+                    elif os.name == 'nt':
                         stopped = subprocess.run(
                             ['taskkill', '/PID', str(self.proc.pid), '/T', '/F'],
-                            stdout=self.log, stderr=subprocess.STDOUT, timeout=10)
+                            stdout=self.log, stderr=subprocess.STDOUT,
+                            timeout=min(10.0, max(0.0, cleanup_deadline - self.clock())))
                         cleanup['own_process_tree_kill_returncode'] = stopped.returncode
+                        cleanup['force_termination_succeeded'] = stopped.returncode == 0
                         if stopped.returncode != 0 and self.proc.poll() is None:
                             self.proc.kill()
+                            cleanup['own_process_kill_succeeded'] = True
+                            cleanup['force_termination_succeeded'] = True
                     else:
                         self.proc.kill()
+                        cleanup['own_process_kill_succeeded'] = True
+                        cleanup['force_termination_succeeded'] = True
                 except Exception as error:
                     cleanup['process_kill_error'] = repr(error)
                     try:
-                        if self.proc.poll() is None:
+                        if (self.process_tree.get('root_identity_verified') and self.proc.poll() is None
+                                and self.clock() < cleanup_deadline):
                             self.proc.kill()
+                            cleanup['own_process_kill_succeeded'] = True
+                            cleanup['force_termination_succeeded'] = True
                     except Exception as fallback_error:
                         cleanup['process_kill_fallback_error'] = repr(fallback_error)
                 try:
-                    self.proc.wait(timeout=10)
+                    self.proc.wait(timeout=min(10.0, max(0.0, cleanup_deadline - self.clock())))
                 except subprocess.TimeoutExpired:
                     cleanup['cleanup_pending_pid'] = self.proc.pid
                 except Exception as error:
@@ -605,6 +789,25 @@ class MatlabSession:
             except Exception as error:
                 cleanup['process_poll_error'] = repr(error)
                 cleanup['cleanup_pending_pid'] = self.proc.pid
+        tree = getattr(self, 'process_tree', None)
+        verification = _wait_owned_process_tree(tree, clock=self.clock,
+            deadline=min(cleanup_deadline, self.clock() + 10.0))
+        cleanup.update(process_tree_observation=deepcopy(tree),
+            process_tree_verification=verification,
+            observed_tree_capture_complete=verification['capture_complete'],
+            observed_tree_identity_count=len(verification['identities']),
+            observed_tree_verified_terminated=verification['verified_terminated'])
+        pending = [item for item in verification['identities']
+                   if item['state'] not in ('EXITED', 'PID_REUSED_ORIGINAL_EXITED')]
+        if pending:
+            cleanup['cleanup_pending_identities'] = pending
+        if verification['verified_terminated']:
+            if cleanup['force_requested'] and cleanup['force_termination_succeeded']:
+                cleanup['cleanup_status'] = 'forced_closed'
+            elif not cleanup['force_requested'] and cleanup.get('returncode') == 0:
+                cleanup['cleanup_status'] = 'graceful_closed'
+        if _cleanup_has_error(cleanup):
+            cleanup['cleanup_status'] = 'unresolved'
         if self.log is not None:
             try:
                 self.log.close()
@@ -612,10 +815,13 @@ class MatlabSession:
                 cleanup['log_close_error'] = repr(error)
         cleanup['session_wall_seconds'] = self.clock() - self.started
         cleanup['cleanup_wall_seconds'] = self.clock() - cleanup_started
+        if _cleanup_has_error(cleanup):
+            cleanup['cleanup_status'] = 'unresolved'
         try:
             _json(self.workdir / 'closed.json', cleanup)
         except Exception as error:
             cleanup['cleanup_archive_error'] = repr(error)
+            cleanup['cleanup_status'] = 'unresolved'
 
     def __enter__(self):
         return self

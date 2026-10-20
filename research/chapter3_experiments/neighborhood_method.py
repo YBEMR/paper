@@ -17,7 +17,7 @@ from control_policy import resolve_idle_policy
 from formal_milp import OUTER_ROUND_LIMIT, _checked_thermal_witnesses
 from initial_point import _InitialSession, complete_initial_point
 from initial_schedule import iter_initial_candidates
-from matlab_bridge import MatlabSession, NUMERICAL_CONSISTENCY_UNRESOLVED
+from matlab_bridge import MatlabSession, NUMERICAL_CONSISTENCY_UNRESOLVED, cleanup_is_complete
 from milp import add_thermal_feedback, build_model, decode, evaluate_model_candidate, _digest
 from neighborhood import (PROTOCOL as N1_CONDITION_PROTOCOL, check_n1_candidate,
                           make_n1_condition)
@@ -564,12 +564,11 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             except Exception as error:
                 result['cleanup_error'] = f'{type(error).__name__}: {error}'
             cleanup_receipt = getattr(session, 'cleanup', None)
-            cleanup_failed = (isinstance(cleanup_receipt, dict) and (
-                any(value for key, value in cleanup_receipt.items()
-                    if key == 'error' or key.endswith('_error'))
-                or cleanup_receipt.get('cleanup_pending_pid') is not None
-                or cleanup_receipt.get('returncode') not in (None, 0)))
-            if cleanup_failed:
+            cleanup_failed = (isinstance(cleanup_receipt, dict)
+                              and not cleanup_is_complete(cleanup_receipt))
+            forced_closed = (isinstance(cleanup_receipt, dict)
+                             and cleanup_receipt.get('cleanup_status') == 'forced_closed')
+            if cleanup_failed or forced_closed:
                 # close() can finish process cleanup while its stop/closed
                 # writes fail. Preserve that in-memory cause even if no
                 # closed.json exists; no SAFE or primary search error changes.

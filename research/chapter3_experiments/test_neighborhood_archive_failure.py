@@ -172,6 +172,49 @@ class NeighborhoodArchiveFailureTests(unittest.TestCase):
         self.assertEqual(saved['safe_upper_bound_J'], result['safe_upper_bound_J'])
         RECORDS['nonraising_cleanup_write_failure'] = {'result': result, 'trace': h.trace}
 
+    def run_forced_cleanup(self, *, child_alive=False, primary_error=False):
+        h = Harness(raise_after_callback=primary_error)
+        ordinary_factory = h.session_factory
+        receipt = {'cleanup_status': 'unresolved' if child_alive else 'forced_closed',
+            'force_requested': True, 'force_termination_succeeded': True,
+            'own_process_tree_kill_returncode': 0, 'returncode': 1,
+            'observed_tree_verified_terminated': not child_alive,
+            'observed_tree_capture_complete': True, 'observed_tree_identity_count': 2,
+            'process_tree_verification': {'capture_complete': True,
+                'verified_terminated': not child_alive, 'identities': [
+                {'pid': 98765031, 'create_time': 100.0, 'state': 'EXITED'},
+                {'pid': 98765032, 'create_time': 101.0,
+                 'state': 'RUNNING' if child_alive else 'EXITED'}]}}
+        def factory(*args, **kwargs):
+            session = ordinary_factory(*args, **kwargs); ordinary_close = session.close
+            def close():
+                ordinary_close(); session.cleanup = receipt
+            session.close = close
+            return session
+        h.session_factory = factory
+        return h.run(self.path/'forced'), receipt
+
+    def test_verified_forced_cleanup_preserves_raw_exit_without_algorithm_failure(self):
+        result, receipt = self.run_forced_cleanup()
+        self.assertEqual(result['technical_state'], 'COMPLETED')
+        self.assertEqual(result['state'], 'SAFE')
+        self.assertEqual(result['session_cleanup'], receipt)
+        self.assertEqual(result['session_cleanup']['returncode'], 1)
+        self.assertNotIn('technical_state_before_cleanup', result)
+
+    def test_successful_taskkill_with_live_child_remains_technical_failure(self):
+        result, receipt = self.run_forced_cleanup(child_alive=True)
+        self.assertEqual(result['technical_state'], 'FAILED')
+        self.assertEqual(result['state'], 'SAFE')
+        self.assertEqual(result['session_cleanup'], receipt)
+
+    def test_verified_cleanup_never_erases_primary_solver_failure(self):
+        result, receipt = self.run_forced_cleanup(primary_error=True)
+        self.assertEqual(result['technical_state'], 'FAILED')
+        self.assertEqual(result['state'], 'SAFE')
+        self.assertNotEqual(result['reason'], 'SCENE_SEARCH_SEQUENCE_COMPLETE')
+        self.assertEqual(result['session_cleanup'], receipt)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -120,6 +120,7 @@ def execute(job,out,d):
 
 def run(out):
     from run_neighborhood_diagnostic import technical_issues
+    from matlab_bridge import cleanup_is_complete
     out=local(out); d=admission(out); ledger=read(out/'ledger.json')
     for job in jobs():
         previous=next((c for c in ledger['calls'] if c['id']==job['id']),None)
@@ -151,8 +152,7 @@ def run(out):
         cleanup=read(closed) if closed.is_file() else None
         if (isinstance(result,dict) and result.get('matlab_worker_ready') and not cleanup):
             issues.append({'scope':'cleanup','reason':'MISSING_CLOSED_RECEIPT'})
-        if cleanup and (cleanup.get('returncode') not in (None,0) or cleanup.get('cleanup_pending_pid')
-                        or cleanup.get('error') or cleanup.get('cleanup_error')):
+        if cleanup and not cleanup_is_complete(cleanup):
             issues.append({'scope':'cleanup','reason':'WORKER_CLEANUP_ANOMALY'})
         failed=bool(error or issues or not unchanged)
         row.update(state='TECHNICAL_BLOCK' if failed else 'COMPLETED',error=error,

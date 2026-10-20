@@ -1170,6 +1170,16 @@ K.79构造诊断47.469 s完成模型和矩阵；K.80完整调用60 s停于启动
 
 正式结果仍限定于声明的抽象平台与有限启动域。可行输出、无解证明、求解器报告、超时及数值未分辨分别统计；是否有能耗或计算收益由结果决定。
 
+### 3.12ai 运行I/O与MATLAB生命周期排故（K.130）
+
+`run_runtime_io_probe.py --out NEW_DIR --native --native-startups 2 --execution-context approved_host`仅做文件读取／原子发布及顺序空闲worker启动、关闭，不调用`solve()`。应从获批、能够管理本次进程树的执行上下文运行；该字符串只记录上下文，不自动取得权限。各worker启动最多90秒，两次诊断总限240秒，第二次按剩余时间预留清理；首错即停，不重试原研究。
+
+bridge在READY／close／force前记录已观察的本次PID及创建时间，清理后核身份退出。`cleanup_status`分`graceful_closed`／`forced_closed`／`unresolved`；保留原退出码及taskkill回执。`cleanup_is_complete`不以父退出或kill0单独放行。最后确认至多10秒，与原20／10／10步骤共用40秒清理上限；PID复用不误杀，权限／身份／存活未决不接纳。
+
+最终[129项回归](results/runtime_io_precheck02/checks.json)及[两会话真实验收](results/runtime_io_probe05/summary.md)通过；实际一轮强制、一轮正常，全部已观察所属身份退出，零求解。01单次通过；02权限失败、03强杀退出码误判、04退出确认竞态均保留原false，不以05追认。原Errno22未复现／根因未证，未修改用户缓存或数值／热标准。
+
+后续比较统一使用已验收执行上下文、完整方法计时与原安全接纳；强制清理成本单列，不能称正常退出，也不因它抹掉原错误或补记超预算结果。旧K129失败不恢复U，本轮未运行质量对照。
+
 ### 3.12ah 固定设备、全Stage工作点与时序（K.129）
 
 新增独立入口`fixed_unit_method.execute_fixed_unit_opp_start`：在同一MethodBudget中重新读取原输入、构造完整SAFE种子，固定种子全部设备，按场景分别开放全部Stage的原合法OPP／起点。共享A仍只统一具体设备，不统一频率和时刻。新`fixed_unit_neighborhood`及adapter使用独立协议；`milp.build_model`按协议分派，旧N1含义和默认None路径保留。

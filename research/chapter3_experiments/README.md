@@ -1231,3 +1231,13 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 [augmented_native_check01](results/augmented_native_check01/summary.md)为已消费唯一技术调用：原AB／x0，原生exitflag2，返回原同点、原行容差通过，无新SAFE或能耗更新。完整进程87.034秒≤180；MaxTime设60但实际原生62.960秒，超2.960秒。raw PASS只覆数值／总时间门，未检查实际native≤60，必须合读[最终时间审计](results/augmented_native_check01/analysis02/facts.json)及[独审](results/augmented_native_check01/independent_review.md)，不得直接作为质量准入凭据。所有MAT按忽略规则本地保留并记SHA，不强制上传。
 
 `--prepare/--run`及claim用于本次冻结的单次技术协议，不能删除原账本重复执行。`analysis02/analyze_saved_records.py`只读已存数组，不热重算或补及时证据。生产final／callback／动态反馈尚未集成；下一项先补原行接纳与动态重建映射的小域检查，再另定质量协议。K131原结果、原SAFE及115次暂停状态保持。
+
+### 3.12am 增广表达的完整方法接入（K.134）
+
+新增独立`fixed_unit_method.execute_augmented_fixed_unit_opp_start`，旧入口／N1不改。`augmented_method.py`每调用独立上下文、每请求重建；callback／final先过原行原容差再进已有连续评价与原输入汇总，数值异常锁存取消，SAFE保留。仅无损b−M物理行改写，非无损行原式保留并登记；K133严格模块不变。
+
+```powershell
+& F:/Anaconda3/python.exe -B research/chapter3_experiments/run_augmented_method_precheck.py --out research/chapter3_experiments/results/NEW_K134_CHECK_DIRECTORY
+```
+
+[冻结预检01](results/augmented_method_precheck01/checks.json)60/60（19新＋41旧回归）、29.391秒；142源／134历史匹配、旧入口AST保持。真实双scene小域回声闭环成功，原AB八数组与旧strict相同；无原生／研究调用、无原规模质量结果。源码、开发失败、夹具映射／接纳、[总结](results/augmented_method_precheck01/summary.md)及[独审](results/augmented_method_precheck01/independent_review.md)保存。下一项回到独立冻结原base__R1质量配对，不把模拟回声、局部内部界或本轮预检当新节能证明。

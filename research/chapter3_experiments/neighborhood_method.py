@@ -19,7 +19,8 @@ from initial_point import _InitialSession, complete_initial_point
 from initial_schedule import iter_initial_candidates
 from matlab_bridge import MatlabSession, NUMERICAL_CONSISTENCY_UNRESOLVED
 from milp import add_thermal_feedback, build_model, decode, evaluate_model_candidate, _digest
-from neighborhood import check_n1_candidate, make_n1_condition
+from neighborhood import (PROTOCOL as N1_CONDITION_PROTOCOL, check_n1_candidate,
+                          make_n1_condition)
 from neighborhood_adapter import PROTOCOL as N1_EVALUATION_PROTOCOL, evaluate_n1_scene
 from partial_method import (PartialRecorder, _bound_gaps, _change, _default_bounds,
     _detach_observer, _safe, _solve_scene, _validate_bounds_receipt)
@@ -63,7 +64,9 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         witness_validator=_checked_thermal_witnesses,
         bounds_provider=_default_bounds, checkpoint=None, builder_options=None,
         max_rounds=OUTER_ROUND_LIMIT, close_session=True, scene_slice_s=None,
-        on_global_update=None):
+        on_global_update=None, membership_checker=check_n1_candidate,
+        evaluation_protocol=N1_EVALUATION_PROTOCOL,
+        condition_protocol=N1_CONDITION_PROTOCOL, _method_identity=None):
     """Build a fresh complete SAFE seed, then search its declared N1 domain.
 
     Input expansion, at most three original constructor templates, original
@@ -83,6 +86,27 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         clock = budget.clock
     else:
         budget = MethodBudget(float(seconds), clock=clock)
+    labels = {
+        'protocol': PROTOCOL, 'name': 'N1',
+        'search_scope': 'this invocation seed-defined N1 only; original domain retained',
+        'initialisation_fallback': 'rejected x0 permits bare N1 MILP; missing complete SAFE seed stops',
+        'inner_solution_source': 'N1_inner_MILP',
+        'model_violation_source': 'N1_solver_model_view',
+        'original_violation_source': 'N1_original_input_scene_receipt',
+        'original_evaluation_phase': 'original_input_n1_scene_evaluation',
+        'model_evaluation_phase': 'initial_n1_model_view_evaluation',
+        'no_seed_reason': 'NO_COMPLETE_SAFE_N1_SEED',
+        'bound_scope': 'seed_defined_N1_fixed_shared_deployment_unweighted_scene',
+        'environment_scope': 'fresh SAFE seed N1 correctness/method invocation; not a formal comparison'}
+    if _method_identity is not None:
+        if (not isinstance(_method_identity, dict) or set(_method_identity) != set(labels)
+                or any(not isinstance(value, str) or not value for value in _method_identity.values())):
+            raise ValueError('Complete method identity required for an adapted lifecycle')
+        labels = dict(_method_identity)
+    if (not callable(membership_checker) or not isinstance(evaluation_protocol, str)
+            or not evaluation_protocol or not isinstance(condition_protocol, str)
+            or not condition_protocol):
+        raise ValueError('A membership checker and explicit protocol identities are required')
     if type(close_session) is not bool:
         raise ValueError('close_session must be boolean')
     if scene_slice_s is not None:
@@ -97,7 +121,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
     if workdir.exists():
         raise FileExistsError(f'Invocation directory already exists: {workdir}')
     workdir.mkdir(parents=True, exist_ok=False)
-    result = {'protocol': PROTOCOL, 'state': 'UNRESOLVED', 'reason': None,
+    result = {'protocol': labels['protocol'], 'state': 'UNRESOLVED', 'reason': None,
         'problem_id': None, 'safe_candidate': None, 'safe_upper_bound_J': None,
         'weighted_energy_J': None, 'rankable_energy': False, 'aggregation': None,
         'global_updates': [], 'scenes': {}, 'violations': [], 'seed_attempts': [],
@@ -111,8 +135,8 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         'solver_reported_bounds_aggregated': False, 'matlab_worker_ready': False,
         'external_budget': external_budget, 'close_session_requested': close_session,
         'scene_slice_s': scene_slice_s, 'worker_reusable': True,
-        'search_scope': 'this invocation seed-defined N1 only; original domain retained',
-        'initialisation_fallback': 'rejected x0 permits bare N1 MILP; missing complete SAFE seed stops',
+        'search_scope': labels['search_scope'],
+        'initialisation_fallback': labels['initialisation_fallback'],
         'scene_budget_policy': 'original scene order, one absolute remaining budget; no reset',
         'inner_MILP_improved_initial_upper_bound': False,
         'strict_improvement_over_initial_certified': False}
@@ -159,7 +183,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             safe_upper_bound_J=aggregation['safe_upper_bound_J'],
             weighted_energy_J=deepcopy(aggregation['weighted_energy_J']), rankable_energy=True,
             aggregation=deepcopy(aggregation),
-            safe_solution_source='initial_constructor' if all_initial else 'N1_inner_MILP',
+            safe_solution_source='initial_constructor' if all_initial else labels['inner_solution_source'],
             deployment_feasibility='ALL_SCENES_SAFE_WITNESS')
         result.setdefault('first_safe_at_s', aggregation['completed_at_elapsed_s'])
         if all_initial and result['initial_global_safe_upper_bound_J'] is None:
@@ -207,7 +231,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         result['scenes'][sid]['model_view_evaluations'].append({
             'candidate': deepcopy(candidate), 'evaluation': deepcopy(evaluation),
             'source': source, 'received_at_s': budget.elapsed})
-        result['violations'].extend(_violations(evaluation, sid, 'N1_solver_model_view'))
+        result['violations'].extend(_violations(evaluation, sid, labels['model_violation_source']))
 
     def publish_safe(sid, model, candidate, evaluation, source):
         record = result['scenes'][sid]
@@ -215,7 +239,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         if not _safe(evaluation, budget) or evaluation.get('evidence_identity') != expected:
             raise ValueError('SAFE model-view receipt identity/timestamp mismatch')
         # A cache hit reuses physical evidence, never bypasses N1 membership.
-        check_n1_candidate(instance, condition, candidate, budget=budget, scene_id=sid)
+        membership_checker(instance, condition, candidate, budget=budget, scene_id=sid)
         key = canonical_hash(candidate)
         if key in caches[sid]:
             record['original_receipt_cache_hits'] += 1
@@ -229,7 +253,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
                     > min(_q(view_energy[1]), _q(energy[1]))):
                 raise ValueError('Cached original-input and model-view SAFE energies disagree')
             return
-        with budget.phase('original_input_n1_scene_evaluation'):
+        with budget.phase(labels['original_evaluation_phase']):
             wrapper = n1_scene_evaluator(instance, condition, sid, candidate,
                                          budget=budget, accuracy=accuracy)
         receipt = wrapper.get('receipt')
@@ -240,26 +264,26 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         # Preserve any inner physical violation before checking wrapper status
         # or whether its transfer crossed the absolute deadline.
         if isinstance(receipt, dict):
-            result['violations'].extend(_violations(receipt, sid, 'N1_original_input_scene_receipt'))
+            result['violations'].extend(_violations(receipt, sid, labels['original_violation_source']))
         if receipt is None:
             if wrapper.get('state') == 'INVALID_INPUT':
-                raise ValueError('N1 candidate membership/adapter rejection: '+str(wrapper.get('reason')))
+                raise ValueError(labels['name']+' candidate membership/adapter rejection: '+str(wrapper.get('reason')))
             return
-        if (wrapper.get('protocol') != N1_EVALUATION_PROTOCOL
+        if (wrapper.get('protocol') != evaluation_protocol
                 or wrapper.get('member') is not True
                 or wrapper.get('condition_sha256') != condition['condition_sha256']):
-            raise ValueError('N1 wrapper condition identity mismatch')
+            raise ValueError(labels['name']+' wrapper condition identity mismatch')
         validate_original_receipt(sid, candidate, receipt)
         if receipt.get('state') in ('THERMAL_VIOLATION', 'INVALID_SCHEDULE'):
             caches[sid][key] = deepcopy(receipt)
-            raise ValueError('SAFE N1 model-view candidate disagrees with original input')
+            raise ValueError('SAFE '+labels['name']+' model-view candidate disagrees with original input')
         if not (wrapper.get('rankable_energy') is True and _safe(receipt, budget)):
             return
         energy = _partial_scene_energy(instance, sid, receipt, budget).data()
         view_energy = evaluation.get('weighted_energy_J')
         if (view_energy is None or max(_q(view_energy[0]), _q(energy[0]))
                 > min(_q(view_energy[1]), _q(energy[1]))):
-            raise ValueError('N1 model-view and original-input SAFE energies disagree')
+            raise ValueError(labels['name']+' model-view and original-input SAFE energies disagree')
         attempt['accepted_safe'] = True
         caches[sid][key] = deepcopy(receipt)
         previous = receipts.get(sid)
@@ -386,7 +410,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
                 attempt_record['reason'] = aggregation.get('reason') or aggregation.get('state')
             budget.check()
         if seed_aggregate is None:
-            result['reason'] = 'NO_COMPLETE_SAFE_N1_SEED'
+            result['reason'] = labels['no_seed_reason']
             result['worker_reusable'] = False
             raise _NoCompleteSafeSeed()
         active_scene = None
@@ -395,6 +419,8 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         with budget.phase('neighborhood_condition_construction'):
             condition = condition_factory(instance, deployment, seed_candidate, seed_aggregate,
                 declared_opened, budget=budget, accuracy=accuracy)
+            if condition.get('protocol') != condition_protocol:
+                raise ValueError('Neighborhood condition protocol does not match this lifecycle')
             result['condition'] = deepcopy(condition)
             result['condition_sha256'] = condition['condition_sha256']
         budget.check()
@@ -414,7 +440,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             budget.check()
             active_stage = 'initial_point_preparation'
             local = {'scenes': {sid: deepcopy(seed_candidate['scenes'][sid])}}
-            with budget.phase('initial_n1_model_view_evaluation'):
+            with budget.phase(labels['model_evaluation_phase']):
                 evaluation = model_evaluator(model, local, accuracy, budget)
             remember_view(sid, local, evaluation, 'initial_constructor')
             completion = {'state': 'INITIAL_POINT_REJECTED', 'x0': None,
@@ -423,7 +449,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
                 publish_safe(sid, model, local, evaluation, 'initial_constructor')
                 completion = initial_completer(model, local, evaluation, budget)
             elif evaluation.get('state') in ('THERMAL_VIOLATION', 'INVALID_SCHEDULE'):
-                raise ValueError('Fresh SAFE seed disagrees with N1 model view')
+                raise ValueError('Fresh SAFE seed disagrees with '+labels['name']+' model view')
             initial[sid] = completion
             record['initialisation'] = {
                 'candidate': local, 'evaluation': deepcopy(evaluation),
@@ -473,7 +499,7 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             record.update(solver_result=solved, reason=solved['reason'],
                           search_returned_at_s=budget.elapsed)
             record['solver_reported_bounds'] = [dict(item,
-                scope='seed_defined_N1_fixed_shared_deployment_unweighted_scene',
+                scope=labels['bound_scope'],
                 condition_sha256=condition['condition_sha256']) for item in _reported_bounds(solved)]
             result['worker_reusable'] = solved['worker_reusable']
             budget.check()
@@ -489,12 +515,16 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
         if hasattr(error, 'matlab_cleanup'):
             result['startup_cleanup'] = error.matlab_cleanup
             constructor_cleanup_s = error.matlab_cleanup.get('cleanup_wall_seconds', 0.0)
+        if hasattr(error, 'matlab_startup_metadata'):
+            result['startup_metadata'] = deepcopy(error.matlab_startup_metadata)
     except MemoryError:
         result['reason'] = 'RESOURCE_LIMIT'; result['worker_reusable'] = False
     except Exception as error:
         if hasattr(error, 'matlab_cleanup'):
             result['startup_cleanup'] = error.matlab_cleanup
             constructor_cleanup_s = error.matlab_cleanup.get('cleanup_wall_seconds', 0.0)
+        if hasattr(error, 'matlab_startup_metadata'):
+            result['startup_metadata'] = deepcopy(error.matlab_startup_metadata)
         result.update(reason='INVALID_INPUT_OR_INTERFACE' if isinstance(error, (KeyError, TypeError, ValueError))
                       else 'INTERFACE_ERROR', error=f'{type(error).__name__}: {error}')
         result['worker_reusable'] = False
@@ -533,6 +563,20 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
                 session.close(); result['session_closed_by_neighborhood'] = True
             except Exception as error:
                 result['cleanup_error'] = f'{type(error).__name__}: {error}'
+            cleanup_receipt = getattr(session, 'cleanup', None)
+            cleanup_failed = (isinstance(cleanup_receipt, dict) and (
+                any(value for key, value in cleanup_receipt.items()
+                    if key == 'error' or key.endswith('_error'))
+                or cleanup_receipt.get('cleanup_pending_pid') is not None
+                or cleanup_receipt.get('returncode') not in (None, 0)))
+            if cleanup_failed:
+                # close() can finish process cleanup while its stop/closed
+                # writes fail. Preserve that in-memory cause even if no
+                # closed.json exists; no SAFE or primary search error changes.
+                result['session_cleanup'] = deepcopy(cleanup_receipt)
+            if cleanup_failed or result.get('cleanup_error'):
+                result.setdefault('technical_state_before_cleanup', result.get('technical_state'))
+                result['technical_state'] = 'FAILED'
         result['timing']['cleanup_s'] += clock()-cleanup_started
         session_total = getattr(session, 'counter', 0)
         result['session_total_request_count'] = session_total
@@ -553,22 +597,53 @@ def execute_n1_neighborhood(input_loader, workdir, *, shared_deployment,
             (entries and all(value is False for value in entries)) else None)
         result['integer_solver_entry_evidence'] = 'budget-valid returned native records only; late entry separate'
     archive_started = clock()
-    for sid, observer in observers.items():
+    archive_errors = []
+
+    def archive_attempt(stage, path, operation):
+        # Archival cannot replace a previously formed SAFE/violation or the
+        # search failure that preceded it. No retry, alternate output path,
+        # candidate evaluation or budget replenishment is performed here.
         try:
-            result['scenes'][sid]['construction'] = (observer.snapshot() if observer.finished_at is not None
-                                                   else observer.finish('CONSTRUCTION_INTERRUPTED'))
-        finally:
-            _detach_observer(observer)
+            return operation()
+        except Exception as error:
+            archive_errors.append({
+                'source': 'neighborhood_method post-budget archival',
+                'stage': stage, 'path': None if path is None else str(path),
+                'exception_type': type(error).__name__, 'message': str(error),
+                'exception_repr': repr(error), 'errno': getattr(error, 'errno', None),
+                'winerror': getattr(error, 'winerror', None),
+                'filename': getattr(error, 'filename', None),
+                'filename2': getattr(error, 'filename2', None)})
+            result.setdefault('technical_state_before_archive', result.get('technical_state'))
+            result.update(technical_state='FAILED', archive_complete=False,
+                          archive_errors=archive_errors)
+            return None
+
+    for sid, observer in observers.items():
+        construction = archive_attempt('construction_metadata', None,
+            lambda observer=observer: (observer.snapshot() if observer.finished_at is not None
+                                      else observer.finish('CONSTRUCTION_INTERRUPTED')))
+        if construction is not None:
+            result['scenes'][sid]['construction'] = construction
+        archive_attempt('construction_observer_detach', None,
+                        lambda observer=observer: _detach_observer(observer))
     if config is not None:
-        _save(workdir/'input_config.json', config)
+        path = workdir/'input_config.json'
+        archive_attempt('input_config', path, lambda: _save(path, config))
     if instance is not None:
-        _save(workdir/'input_instance.json', instance)
+        path = workdir/'input_instance.json'
+        archive_attempt('input_instance', path, lambda: _save(path, instance))
     result['environment'] = {'python': sys.version, 'platform': platform.platform(),
-        'scope': 'fresh SAFE seed N1 correctness/method invocation; not a formal comparison'}
+        'scope': labels['environment_scope']}
     result['counted_energy_source'] = 'matching original-input partial aggregates only'
     result['timing']['postprocess_before_serialization_s'] = clock()-archive_started
-    _save(workdir/'result.json', result)
-    _save(workdir/'archive_timing.json', {'report_wall_s': clock()-archive_started,
+    path = workdir/'result.json'
+    archive_attempt('result', path, lambda: _save(path, result))
+    archive_timing = {'report_wall_s': clock()-archive_started,
         'scope': 'serialization only; no new evaluation/aggregation/solver evidence',
-        'includes_own_file_write': False})
+        'includes_own_file_write': False}
+    if archive_errors:
+        archive_timing.update(archive_complete=False, archive_errors=deepcopy(archive_errors))
+    path = workdir/'archive_timing.json'
+    archive_attempt('archive_timing', path, lambda: _save(path, archive_timing))
     return result

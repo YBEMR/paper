@@ -493,6 +493,11 @@ class Model:
                 'scope': 'fixed_device_local_OPP_start_subdomain_not_global',
                 'options': deepcopy(self.neighborhood_stats),
             }
+            from fixed_unit_neighborhood import PROTOCOL as FIXED_UNIT_PROTOCOL
+            if self.neighborhood_condition['protocol'] == FIXED_UNIT_PROTOCOL:
+                result['neighborhood'].update(
+                    scope='seed_fixed_devices_all_stage_OPP_start_subdomain_not_global',
+                    condition_protocol=FIXED_UNIT_PROTOCOL)
         return result
 
 
@@ -742,8 +747,16 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         if not partial_fixed:
             raise ValueError('N1 requires the original shared-only deployment condition')
         from neighborhood import validate_n1_condition
-        n1_condition = validate_n1_condition(instance, neighborhood_condition,
-            budget=budget, shared_deployment=fixed_shared_deployment)
+        from fixed_unit_neighborhood import (PROTOCOL as FIXED_UNIT_PROTOCOL,
+                                            validate_fixed_unit_condition)
+        protocol = neighborhood_condition.get('protocol') if isinstance(neighborhood_condition, dict) else None
+        if protocol == FIXED_UNIT_PROTOCOL:
+            n1_condition = validate_fixed_unit_condition(instance, neighborhood_condition,
+                budget=budget, shared_deployment=fixed_shared_deployment)
+        else:
+            # Preserve N1's validation and rejection semantics for its path.
+            n1_condition = validate_n1_condition(instance, neighborhood_condition,
+                budget=budget, shared_deployment=fixed_shared_deployment)
     adapted = (fixed_deployment is not None or partial_fixed or prefilter_deadlines
                or fixed_scene_id is not None)
     if fixed_scene_id is not None and fixed_deployment is None and not partial_fixed:
@@ -817,10 +830,15 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                       for sid, stages in starts.items() for stage, values in stages.items()}
         options = [o for o in options if F(o['start_ms']) in start_sets[o['scenario_id'], o['stage_instance_id']]]
     if n1_condition is not None:
-        from neighborhood import filter_n1_options
         model.report('neighborhood_options')
-        options, model.neighborhood_stats = filter_n1_options(
-            instance, n1_condition, options, budget=budget)
+        if n1_condition['protocol'] == FIXED_UNIT_PROTOCOL:
+            from fixed_unit_neighborhood import filter_fixed_unit_options
+            options, model.neighborhood_stats = filter_fixed_unit_options(
+                instance, n1_condition, options, budget=budget)
+        else:
+            from neighborhood import filter_n1_options
+            options, model.neighborhood_stats = filter_n1_options(
+                instance, n1_condition, options, budget=budget)
     if adapted:
         model.preprocessing['options_before_deadline_filter'] = len(options)
     if prefilter_deadlines:

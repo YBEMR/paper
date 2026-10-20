@@ -1170,6 +1170,24 @@ K.79构造诊断47.469 s完成模型和矩阵；K.80完整调用60 s停于启动
 
 正式结果仍限定于声明的抽象平台与有限启动域。可行输出、无解证明、求解器报告、超时及数值未分辨分别统计；是否有能耗或计算收益由结果决定。
 
+### 3.12ah 固定设备、全Stage工作点与时序（K.129）
+
+新增独立入口`fixed_unit_method.execute_fixed_unit_opp_start`：在同一MethodBudget中重新读取原输入、构造完整SAFE种子，固定种子全部设备，按场景分别开放全部Stage的原合法OPP／起点。共享A仍只统一具体设备，不统一频率和时刻。新`fixed_unit_neighborhood`及adapter使用独立协议；`milp.build_model`按协议分派，旧N1含义和默认None路径保留。
+
+必要小域检查可用：
+
+```powershell
+& F:/Anaconda3/python.exe -B research/chapter3_experiments/run_fixed_unit_precheck.py --out research/chapter3_experiments/results/NEW_CHECK_DIRECTORY
+```
+
+最终[预检02](results/fixed_unit_precheck02/checks.json)84/84通过，另核默认／旧N1八组模型数组、rows、options和summary与`3859cbe`一致。01的23项setup错误来自预检临时目录替代器忽略`dir`，不是生产求解；失败记录保留。新检查涵盖全Stage开放、种子设备固定、跨场景共享unit、旧N1拒共享opened、原始合法选择投影、完整评价／预算边界及无安全种子状态。预检无原规模优化器或研究调用。
+
+一次质量配对由`run_fixed_unit_pair.py --prepare/--run`管理，要求匹配通过凭据、源码／输入快照和不可重复消费的调用账本。当前冻结目录[fixed_unit_pair01](results/fixed_unit_pair01/protocol.md)：旧N1后新版各独立300秒、场景60秒合作片、Cut10／CDF关闭，原`base__R1`／400 ms／5 ms／auto-L保持。首要指标是新完整SAFE包络上端严格低于旧N1下端；不把局部内部界或构模改善当作节能。历史HEFT只作事后质量参考，不提供本次初始化或同期时间排名。
+
+固定全部设备的子域不能代表完整部署搜索；全域L0、给定共享部署界和场景局部solver-reported界分列。新协议不扩展物理模型，不新增热条件、设备重选或多轮邻域。运行及独立终审结果统一登记于该目录，不重复运行已有调用。
+
+本次配对实际BLOCKED：旧N1安全U＝0.962885037941 J、方法165.672秒；新版包装25.265秒后归档OSError errno22，无完整方法结果／U，不补造也不补跑。两模型视图及x0检查点只作实现诊断，未见原生请求。详见[结果与故障界限](results/fixed_unit_pair01/analysis01/summary.md)。收尾归档和bridge清理已最小修复：错误并列、保留内存证据、原启动异常不被覆盖；[修复预检04](results/fixed_unit_precheck04/checks.json)117/117通过，134源绑定。03的预检guard错误保留。该凭据只覆盖修复后源码，不追认原失败调用；新版质量对照尚未完成。
+
 ### 3.12ag 夜间热证据与最小auto-L对照（K.127）
 
 新增`run_night_after_k126.py`冻结／执行薄包装及`run_night_precheck.py`必要检查；显式auto-L启发式参数`allow_auto_low=True`，默认旧hold规则保持。67／67后，1组52°C温限热配对＋原base四方法共6次，各300秒上限，全部SAFE，无重试。H热拒绝→M安全，0外层反馈；原base HEFT本次优于N1，SA仅101探索，不能将N1对自身种子改善作为对照优势。

@@ -381,11 +381,18 @@ class MatlabSession:
                 _json(self.workdir / 'session.json', self.metadata)
             except Exception as archive_error:
                 self.metadata['startup_archive_error'] = repr(archive_error)
-            self.close()
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                # Preserve the original startup exception even if an
+                # unexpected cleanup failure escapes the best-effort steps.
+                self.cleanup = getattr(self, 'cleanup', {})
+                self.cleanup['cleanup_error'] = repr(cleanup_error)
             # A failed constructor has no session handle for the caller's
             # finally block. Expose cleanup separately from startup timing.
             exc.matlab_cleanup = self.cleanup
             exc.matlab_workdir = str(self.workdir)
+            exc.matlab_startup_metadata = dict(self.metadata)
             raise
 
     def solve(self, model, remaining_s=None, budget=None, x0=None,
@@ -549,33 +556,66 @@ class MatlabSession:
             return
         cleanup_started = self.clock()
         self.closed = True
-        (self.workdir / 'stop').write_text('close\n', encoding='ascii')
-        cleanup = {'graceful_stop_requested': True,
+        cleanup = {'graceful_stop_requested': False,
                    'cleanup_started_at_monotonic': cleanup_started,
                    'cleanup_not_available_for_new_evidence': True}
+        # Publish the in-memory receipt before any fallible file/process step.
+        # Archive failures must neither leak this session's process nor erase
+        # the startup error which led here.
+        self.cleanup = cleanup
+        try:
+            (self.workdir / 'stop').write_text('close\n', encoding='ascii')
+            cleanup['graceful_stop_requested'] = True
+        except Exception as error:
+            cleanup['stop_write_error'] = repr(error)
         if self.proc is not None:
             try:
                 self.proc.wait(timeout=20)
             except subprocess.TimeoutExpired:
                 # Only this session's child process tree, never other MATLABs.
-                if os.name == 'nt':
-                    stopped = subprocess.run(
-                        ['taskkill', '/PID', str(self.proc.pid), '/T', '/F'],
-                        stdout=self.log, stderr=subprocess.STDOUT, timeout=10)
-                    cleanup['own_process_tree_kill_returncode'] = stopped.returncode
-                else:
-                    self.proc.kill()
+                try:
+                    if os.name == 'nt':
+                        stopped = subprocess.run(
+                            ['taskkill', '/PID', str(self.proc.pid), '/T', '/F'],
+                            stdout=self.log, stderr=subprocess.STDOUT, timeout=10)
+                        cleanup['own_process_tree_kill_returncode'] = stopped.returncode
+                        if stopped.returncode != 0 and self.proc.poll() is None:
+                            self.proc.kill()
+                    else:
+                        self.proc.kill()
+                except Exception as error:
+                    cleanup['process_kill_error'] = repr(error)
+                    try:
+                        if self.proc.poll() is None:
+                            self.proc.kill()
+                    except Exception as fallback_error:
+                        cleanup['process_kill_fallback_error'] = repr(fallback_error)
                 try:
                     self.proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     cleanup['cleanup_pending_pid'] = self.proc.pid
-            cleanup['returncode'] = self.proc.poll()
+                except Exception as error:
+                    cleanup['process_wait_error'] = repr(error)
+            except Exception as error:
+                cleanup['process_wait_error'] = repr(error)
+            try:
+                cleanup['returncode'] = self.proc.poll()
+                if cleanup['returncode'] is None:
+                    cleanup['cleanup_pending_pid'] = self.proc.pid
+            except Exception as error:
+                cleanup['process_poll_error'] = repr(error)
+                cleanup['cleanup_pending_pid'] = self.proc.pid
         if self.log is not None:
-            self.log.close()
+            try:
+                self.log.close()
+            except Exception as error:
+                cleanup['log_close_error'] = repr(error)
         cleanup['session_wall_seconds'] = self.clock() - self.started
         cleanup['cleanup_wall_seconds'] = self.clock() - cleanup_started
-        self.cleanup = cleanup
-        _json(self.workdir / 'closed.json', cleanup)
+        try:
+            _json(self.workdir / 'closed.json', cleanup)
+        except Exception as error:
+            cleanup['cleanup_archive_error'] = repr(error)
 
     def __enter__(self):
         return self

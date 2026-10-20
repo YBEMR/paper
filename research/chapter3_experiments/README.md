@@ -1287,3 +1287,12 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 `run_linked_precheck.py --out NEW_DIR`要求工作区`.runtime/k139_baseline.json`，已用版本复制在最终目录parent_baseline.json；核参考提交与历史SHA后可恢复。现[最终02](results/linked_precheck02/summary.md)66/66，155源、148继承、1087历史一致；原01 guard误拦失败保持。独立1296赋值／96合法与结构MILP一致，三旧分派8数组保持；tiny真实4次x0回声无节能结论。原输入只作JSON计数／一次结构演示，不作原规模热评或构模，0原生／研究求解。预检不启动质量调用，不能删除旧claim或改目录补跑历史实验。
 
 [独审](results/linked_precheck02/independent_review.md)及[设计审计](results/linked_precheck02/design/summary.md)保存。当前只有实现／正确性与静态规模证据，原基准第二遍质量和成本另行冻结验证；115次、温度扫描及设备重选保持暂停。
+
+
+### 3.12as 旧N1—联动版本单次质量配对（K.140）
+
+新增`run_linked_pair.py`与`test_linked_pair.py`，复用K139已冻结155源，不改物理或生产方法。`--precheck --out NEW_DIR`只跑mock，最终[02凭据](results/linked_pair_wrapper_precheck02/checks.json)28/28；01测试索引失败档案保持。`--prepare --out NEW_PAIR_DIR --checks ... --method-checks results/linked_precheck02/checks.json`核K139 66/66／当前157源、1087历史及输入后冻结；`--run`按旧N1→linked各一次300秒消费全局／方法claim，已消费不可重启、改目录或重置时钟。实际launcher在已验收host上下文运行，另有进程claim与总墙钟。
+
+[唯一配对](results/linked_quality_pair01/summary.md)已结束：旧U0.962885037941 J／147.562秒，新U0.910240996773 J／274.688秒，严格降低5.4673%。第二遍自身降低0.052643843787 J、3次完整更新，含setup133.422秒；仅AB的A链＋B.pre改L及起点，AC无新增，closed后缀固定phase1完整锚、unit固定原fresh seed。第一遍微差不算第二遍贡献。所有U仍经原输入完整连续评价／全场景汇总，0热反馈，未证最优或全域不可行。
+
+独立准入25／终审41项通过，157源／快照、155继承与1087历史保持；分析只核160份原档案及保存回执，不重算热或补搜索。[CSV／U曲线](results/linked_quality_pair01/analysis01/summary.md)、双锚、数值门、原生合作式停止延迟与清理均保存。只支持本次质量与成本记录，不据历史HEFT或其他任务声明排名。两研究调用已消费，不补跑、不加预算、不自动启动115次或新热条件。

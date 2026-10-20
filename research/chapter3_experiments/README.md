@@ -1325,3 +1325,9 @@ K142末请求为正常根截止、先前完整U保留、最后请求未决；旧
 新run_heuristic_followup提供precheck／prepare／run，执行另需--execution-authorized与新独占claim。HEFT→SA101各一次300秒、原输入／auto-L／完整热门／策略保持；6新源、165总、原159不改。02最终63/63（22分类＋19计时＋22包装）通过，禁止真实入口0；01旧61项通过保留但不作当前准入。未知输入截止与明确身份错、正常deadline与真故障分开，完整scene／窗口尾段／peak／身份及已接纳行门保护U；首SAFE／区间首strict分列，内部计时帧不计阶段节能。
 
 [独立目录](results/heft_sa_followup01/summary.md)已准备0调用，ledger DECLARED／consumed0、claims空；[新接口K142重放](results/heuristic_followup_precheck02/saved_K142_replay.json)10项仅既成数据／时钟核查，源165／历史301保持。不改旧MILP运输或历史，不喂旧候选，不恢复旧launcher；下一项仅另行执行两法并复核，不补拼历史四法排名，不加种子／温限／算法或115次。
+
+### 3.12ax 独立两方法执行完成（K.145）
+
+用户明确授权后，原K144入口唯一执行HEFT→SA101各一次300秒，ledger COMPLETED／consumed2，独占global与method claims保留，不能重启。原165源／参数／合法域／auto-L与连续热标准保持。[结果](results/heft_sa_followup01/k145_summary.md)：HEFT U0.881087997281 J、43.250秒正常完成；SA101 U0.907346431253 J、300秒正常截止，末候选未决、旧完整SAFE保留。单列首SAFE1.125／1.125秒、首strict12.266／2.782秒、封存和提取。包装348.563秒非未测的全进程墙钟。
+
+[静态分析](results/heft_sa_followup01/k145_analysis.json)及[独立终审](results/heft_sa_followup01/k145_independent_review.md)核已存完整时间表、热包络、能量和预算，未重算热或补搜索。SA比HEFT能量高2.9802%，仅单次单种子结论；共同L0未闭合、0违规、无本次反馈收益证据。下一项建议仅已存联动与HEFT方案差异分析，不拼K142四法同轮、不恢复115次。

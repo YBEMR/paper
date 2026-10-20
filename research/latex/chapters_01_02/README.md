@@ -17,7 +17,12 @@
 
 在此目录执行：
 
-Windows：
+Windows PowerShell（在本工程目录中运行）：
+```powershell
+.\build.bat
+```
+
+Windows CMD：
 ```bat
 build.bat
 ```
@@ -35,14 +40,16 @@ build/chapter01_preview.pdf
 build/chapter02_preview.pdf
 ```
 
-只编译一章：`build.bat chapter01` / `build.bat chapter02`（macOS/Linux 用 `bash build.sh chapter01` 等）；只编译合并版：`build.bat combined`。
+PowerShell 只编译一章：` .\build.bat chapter01 ` 或 ` .\build.bat chapter02 `（命令中的空格仅用于排版），只编译合并版：` .\build.bat combined `。Windows CMD 不需要开头的 ` .\ `；macOS/Linux 使用 `bash build.sh chapter01` 等。
 
 不用脚本也可在该目录两次执行：
 ```bash
 xelatex -interaction=nonstopmode -halt-on-error -jobname=chapters_01_02_preview -output-directory=build main.tex
 ```
 
-**后续修改：** 保存 `chapter01.tex` 或 `chapter02.tex` → 运行 `build.bat` / `bash build.sh` → 打开 `build/` 下的新PDF。整个构建流程只使用该子目录，不修改第三章项目。
+**后续修改：** 保存 `chapter01.tex` 或 `chapter02.tex` → 运行 PowerShell 命令 ` .\build.bat ` 或 `bash build.sh` → 打开 `build/` 下的新PDF。整个构建流程只使用该子目录，不修改第三章项目。
+
+Windows 脚本中的注释和提示使用纯 ASCII，避免不同系统代码页对 UTF-8 中文批处理文件的解析问题。
 
 原仓库 `.gitignore` 不跟踪 PDF、`.aux`、`.log` 等编译产物。本工程延续该规则，`build/` 由 `.gitkeep` 保留目录，编译输出保存在本地，不需要额外提交。
 

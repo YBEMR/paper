@@ -1319,3 +1319,9 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 K142末请求为正常根截止、先前完整U保留、最后请求未决；旧包装把预算未闭合一并列技术issue。新增解释不改旧TECHNICAL_BLOCK／BLOCKED、claim或消费记录，不续跑。真身份／I/O／载荷／数值／进程故障不因同时截止豁免；历史留档与可信可排名SAFE分开。[离线入口](results/budget_end_review01/review_budget_end.py)的22个纯数据分支通过，159源／301原工件保持，0研究／热计算／生产改动；初版19例与收紧记录保留，不称生产已修复。
 
 [结论](results/budget_end_review01/summary.md)、[计时与HEFT／SA独立协议](results/budget_end_review01/followup_protocol.md)及JSON保存。MATLAB启动17.125／72.297秒、first SAFE／首严格改善／阶段新增改善、计划分配／实际与根剩余均分列；不把请求上限当native实际MaxTime，不把NOT_RUN／NOT_APPLICABLE／UNKNOWN补0。未来两方法各一次300秒／SA101，本轮不执行、不重置旧批、不拼历史四法排名。下一项仅最小包装及必要离线门，再单独安排；115次与调温限仍不启动。
+
+### 3.12aw 最小状态／计时包装与独立两方法准备（K.144）
+
+新run_heuristic_followup提供precheck／prepare／run，执行另需--execution-authorized与新独占claim。HEFT→SA101各一次300秒、原输入／auto-L／完整热门／策略保持；6新源、165总、原159不改。02最终63/63（22分类＋19计时＋22包装）通过，禁止真实入口0；01旧61项通过保留但不作当前准入。未知输入截止与明确身份错、正常deadline与真故障分开，完整scene／窗口尾段／peak／身份及已接纳行门保护U；首SAFE／区间首strict分列，内部计时帧不计阶段节能。
+
+[独立目录](results/heft_sa_followup01/summary.md)已准备0调用，ledger DECLARED／consumed0、claims空；[新接口K142重放](results/heuristic_followup_precheck02/saved_K142_replay.json)10项仅既成数据／时钟核查，源165／历史301保持。不改旧MILP运输或历史，不喂旧候选，不恢复旧launcher；下一项仅另行执行两法并复核，不补拼历史四法排名，不加种子／温限／算法或115次。

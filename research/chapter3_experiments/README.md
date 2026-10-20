@@ -1313,3 +1313,9 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 准入18／本线程独审37项通过，159源及输入匹配；实际方法合600.047秒、清理28.781秒、进程636.282秒，停止尾延迟不补新证据。0违规／反馈，L0未闭合，四方法排名未形成，HEFT／SA不记失败、不借旧值填空。[执行入口](results/fair_comparison_preparation01/execution_index.md)、[结论](results/fair_comparison_preparation01/execution_k142/summary.md)、[分析与曲线](results/fair_comparison_preparation01/execution_k142/analysis01/summary.md)、[独审](results/fair_comparison_preparation01/execution_k142/independent_review.md)保存；原K141准备文件保持历史。
 
 下一项只建议厘清预算结束与真故障分类、补离线边界预检，再讨论剩余方法安排。不追补此次四法、增算法／温限／种子或恢复115次。
+
+### 3.12av 预算结束离线分类与独立后续协议（K.143）
+
+K142末请求为正常根截止、先前完整U保留、最后请求未决；旧包装把预算未闭合一并列技术issue。新增解释不改旧TECHNICAL_BLOCK／BLOCKED、claim或消费记录，不续跑。真身份／I/O／载荷／数值／进程故障不因同时截止豁免；历史留档与可信可排名SAFE分开。[离线入口](results/budget_end_review01/review_budget_end.py)的22个纯数据分支通过，159源／301原工件保持，0研究／热计算／生产改动；初版19例与收紧记录保留，不称生产已修复。
+
+[结论](results/budget_end_review01/summary.md)、[计时与HEFT／SA独立协议](results/budget_end_review01/followup_protocol.md)及JSON保存。MATLAB启动17.125／72.297秒、first SAFE／首严格改善／阶段新增改善、计划分配／实际与根剩余均分列；不把请求上限当native实际MaxTime，不把NOT_RUN／NOT_APPLICABLE／UNKNOWN补0。未来两方法各一次300秒／SA101，本轮不执行、不重置旧批、不拼历史四法排名。下一项仅最小包装及必要离线门，再单独安排；115次与调温限仍不启动。

@@ -1,305 +1,407 @@
-%% 本章由已审阅Markdown讨论稿忠实转排；保留技术文字和公式。
-\chapter{相关理论与技术基础}\label{ux76f8ux5173ux7406ux8bbaux4e0eux6280ux672fux57faux7840}
+% 第二章 V2：按已讨论的目录和研究对象独立重写。
+% 2026-10-20；保留原V1于 versions/chapter02_V1.tex。
+\chapter{相关理论与技术基础}
+\label{ch:foundation}
 
-\section{本章引言}\label{ux672cux7ae0ux5f15ux8a00}
+\section{本章引言}
 
-端侧深度学习推理的任务调度涉及处理器配置、任务依赖、运行能耗与芯片温度等多方面因素。不同计算阶段适合的执行单元和频率有所不同，多个请求又会竞争共享资源，使任务的执行位置、开始时间和完成时间相互影响。同时，任务运行形成的功率分布决定温度变化，温度通过漏电进一步影响系统能耗。因此，在建立多场景联合优化模型之前，需要明确异构平台的执行特点、任务的图结构表示以及能量和热状态之间的基本关系。
+端侧深度学习推理需要在有限的处理器资源上及时完成计算，同时控制设备的运行能耗和温度。影响任务完成情况的因素并不局限于计算量：不同处理器具有各自的执行特点，任务之间存在数据依赖，处理器的工作频率会改变执行时间，而任务产生的热量又会随时间积累并传递到相邻区域。因此，研究热感知的协同推理调度，需要从系统、任务、功耗和温度几个方面建立相互衔接的理论基础。
 
-本章首先介绍端侧异构多核系统的组成与资源控制方式，并说明深度学习推理任务的Stage级表示、请求期限及多场景组织。随后，从处理器功耗出发介绍DVFS、动态电源管理和完整运行能量的计算方法，再利用热阻热容网络分析温度随时间和空间的变化。最后介绍异构任务调度、混合整数规划与分解求解的基本思想，为后续热约束节能建模和算法设计提供理论基础。
+本章首先介绍实时系统及端侧异构多核处理器，说明任务的时间要求和计算资源的基本特点；随后由经典实时任务出发，介绍有依赖关系的图任务模型，并进一步说明深度学习推理任务的表示与多场景组织。接着讨论处理器功耗模型及常用能耗管理技术，在此基础上分析多核系统中的热传递和瞬态温度变化。最后介绍典型的异构任务调度与优化方法，为后续建立热约束节能模型及设计求解算法提供基础。
 
-\section{系统模型}\label{ux7cfbux7edfux6a21ux578b}
+\section{系统模型}
 
-\subsection{端侧异构多核计算平台}\label{ux7aefux4fa7ux5f02ux6784ux591aux6838ux8ba1ux7b97ux5e73ux53f0}
+\subsection{实时系统模型}
 
-端侧处理器的发展逐渐从以通用CPU为主的计算方式，转向CPU、GPU和专用加速器共同承担应用负载的异构架构。这类平台通常将多个计算单元、存储层次和片上互连集成在同一片上系统（System on Chip，SoC）中，通过选择不同的执行资源适应不同类型的计算任务。对深度学习推理而言，前处理、网络主干计算和后处理的运算特点并不相同，异构架构因而为阶段级资源配置提供了基础{[}1-4{]}。
+实时系统的正确性不仅取决于计算结果，还取决于结果能否在规定的时间内产生。以环境感知为例，即使识别结果本身正确，如果设备在需要作出响应之后才完成计算，该结果的使用价值也可能明显降低。因此，实时系统通常通过任务释放时间、执行时间和截止期限描述计算服务的时间要求，并借助调度与可调度性分析判断资源能否满足这些要求~[1]。
 
-CPU以通用指令执行和灵活控制为主要特点，适合处理数据预处理、后处理以及控制关系较复杂的任务。多核CPU可以同时运行不同线程，但核心之间仍可能共享缓存、内存带宽和频率控制资源。GPU拥有大量面向数据并行的计算单元，适合较高并行度的数值运算；其实际执行效率同时受到线程组织、访存与设备负载的影响。NPU则面向神经网络中的矩阵乘加及相关运算进行专门设计，通常结合专用数据通路和片上缓存提高部分算子的执行效率。由于各类设备的指令支持和执行机制不同，并非每个Stage都可以在所有处理器上运行。
+根据对超时的容忍程度，实时系统通常分为硬实时系统和软实时系统。硬实时系统要求所有规定任务均在截止期限内完成，研究重点是对时间要求作出可验证的保证；软实时系统允许一定程度的超时，更关注平均响应时间、超时比例及服务质量。对于过期结果已失去意义、但能够容忍有限丢失的应用，还可以进一步采用准实时或弱硬实时任务约束描述允许的超时模式。不同类别反映了系统对时间正确性的不同要求，并不直接限定任务应在何种处理器上执行。
 
-即使同一个Stage具有多种合法执行设备，不同设备上的运行时间与功率也可能相差较大。处理器选择因此不能仅依据理论峰值算力，还需要结合能够实际执行的算子范围、工作点及相应的执行代价。Kang等在嵌入式异构处理器上研究多DNN执行，Band与HaX-CoNN进一步将多请求和资源竞争纳入协同调度，说明设备映射需要结合整个任务集合的执行关系{[}1,3-4{]}。本文后续以给定的Stage合法设备集合和相应执行参数作为调度输入，不在求解过程中改变算子实现或设备内部的计算组织。
+端侧推理既可能由摄像头按照固定帧率触发，也可能由用户请求或其他传感器事件触发。多个应用共同运行时，其请求还可能在时间上重叠。对这类系统，调度器需要在资源有限的条件下决定任务执行顺序及开始时间，使要求按期完成的请求能够获得处理结果。本文后续考虑预先给定的有限请求集合，并将每个请求的截止期限作为必须满足的调度条件；执行时间采用给定的设备与工作点响应参数。由此得到的是针对所声明模型和请求集合的期限保证，而不是对未建模运行扰动的最坏情况推断。
 
-\subsection{执行单元与资源占用}\label{ux6267ux884cux5355ux5143ux4e0eux8d44ux6e90ux5360ux7528}
+\subsection{端侧异构多核处理器}
 
-异构平台中的处理器类别、实际执行单元和共享硬件资源具有不同含义。处理器类别描述CPU、GPU和NPU等硬件类型；执行单元则是调度器为一个Stage分配的具体资源。例如，CPU1与CPU2可以是同一CPU簇中的两个固定执行单元，GPU0和NPU0则分别代表可使用的一台加速设备。一个CPU执行单元也可以由预先确定的核心集合构成，而不必对应单个物理核心。
+多核处理器通过在单芯片中集成多个计算核心，使不同计算任务能够并行执行。早期同构多核平台主要依靠结构相近的CPU核心增加并行处理能力，但深度学习推理同时包含控制、访存与大规模数值运算，单一类型核心往往难以在所有计算阶段保持相同的效率。为适应不同类型的运算，端侧片上系统（System on Chip，SoC）逐渐将中央处理单元（Central Processing Unit，CPU）、图形处理单元（Graphics Processing Unit，GPU）和神经网络处理单元（Neural Processing Unit，NPU）集成在一起，形成异构协同计算平台~[2--4]。
 
-任务映射决定Stage占用哪个执行单元，资源容量决定哪些Stage能够同时运行。对设备级不可抢占调度而言，某个执行单元开始执行Stage后，需要在该Stage完成时才释放；其他映射到同一单元的Stage只能在合法的空闲时间段进入。不同单元上的任务则可以并行，前提是它们的依赖关系与共享控制条件均得到满足。实际GPU等设备可能具有更复杂的内部并发机制，调度模型需要根据研究对象明确采用的资源粒度和占用规则，而不能仅凭处理器类别推断并行能力。
+CPU采用通用指令集，便于处理分支控制、数据组织及计算规模较小的任务；GPU通过大量并行计算单元处理较规则的数据并行运算；NPU针对神经网络常用的矩阵、卷积等计算设置专用数据通路及片上存储。三类处理器并不存在对所有任务都成立的快慢次序。例如，某段张量计算可能适合NPU，而具有复杂控制逻辑或不受NPU支持的操作仍需要CPU执行。部署时还要考虑所用推理后端支持哪些算子，以及不同设备上的执行时间、功率和数据交换开销。
 
-此外，资源互斥还会影响后续任务。某个Stage虽然在GPU上执行更快，但GPU若已被其他请求占用，它的最早开始时间可能晚于采用CPU的情况。因而，阶段的实际完成时间由自身执行时长和进入设备前的等待共同决定。这一关系也是异构列表调度和联合优化方法需要处理的基本问题。
+图~\ref{fig:ch2_soc} 给出了包含CPU、GPU和NPU的异构SoC示意。CPU由多个可使用的执行单元组成，GPU和NPU分别以设备为粒度对外提供计算服务，各部分通过片上互连访问数据与存储资源。同一个推理应用的不同计算阶段可以选择不同处理器执行，但每个阶段的可选范围应由实际后端的支持关系确定。
 
-\subsection{频率控制域与执行资源的关系}\label{ux9891ux7387ux63a7ux5236ux57dfux4e0eux6267ux884cux8d44ux6e90ux7684ux5173ux7cfb}
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[font=\small,>=Latex]
+    \draw[rounded corners=4pt,thick,fill=gray!3] (-0.2,-1.75) rectangle (13.0,2.35);
+    \draw[rounded corners=3pt,fill=blue!7,draw=blue!45!black] (0.2,-0.30) rectangle (4.3,1.95);
+    \node[font=\bfseries] at (2.25,1.66) {CPU频率控制域};
+    \node[draw,rounded corners,fill=white,minimum width=1.30cm,minimum height=.76cm] at (1.25,.62) {CPU1};
+    \node[draw,rounded corners,fill=white,minimum width=1.30cm,minimum height=.76cm] at (3.23,.62) {CPU2};
+    \node[font=\scriptsize] at (2.25,-.02) {共享工作频率};
+    \draw[rounded corners=3pt,fill=green!8,draw=green!40!black] (4.65,-.30) rectangle (8.42,1.95);
+    \node[font=\bfseries] at (6.53,1.66) {GPU控制域};
+    \node[draw,rounded corners,fill=white,minimum width=2.55cm,minimum height=.78cm] at (6.53,.62) {GPU0};
+    \node[font=\scriptsize] at (6.53,-.02) {并行计算单元};
+    \draw[rounded corners=3pt,fill=orange!10,draw=orange!50!black] (8.77,-.30) rectangle (12.60,1.95);
+    \node[font=\bfseries] at (10.68,1.66) {NPU控制域};
+    \node[draw,rounded corners,fill=white,minimum width=2.55cm,minimum height=.78cm] at (10.68,.62) {NPU0};
+    \node[font=\scriptsize] at (10.68,-.02) {专用张量计算};
+    \node[draw,rounded corners,fill=gray!15,minimum width=11.7cm,minimum height=.52cm] (bus) at (6.4,-1.16) {片上互连与共享存储资源};
+    \foreach \xx in {2.25,6.53,10.68} {\draw[-Latex] (\xx,-.30) -- (\xx,-.87);}
+  \end{tikzpicture}
+  \caption{CPU、GPU和NPU组成的端侧异构多核平台示意}
+  \label{fig:ch2_soc}
+\end{figure}
 
-现代处理器通常支持多个电压---频率工作点（Operating Performance Point，OPP），每个合法工作点包含配套的频率和供电电压。调度器可以通过选择不同工作点改变计算速度和运行功率，但工作点的控制粒度不一定等同于执行单元粒度。例如，CPU1和CPU2可能分别承担两个Stage，却属于同一个频率控制域；GPU和NPU也可能各有独立的控制域。
+异构处理器的并行能力还受到资源控制方式的限制。多个CPU执行单元可以分别承担任务，却可能属于同一个频率控制域；当它们同时工作时，所用频率需要相互兼容。GPU与NPU则可以具有独立的频率控制域。因此，\emph{执行单元}用于描述任务实际占用的计算资源，\emph{频率控制域}用于描述哪些资源需要共同调整工作点，两者并不总是一一对应。与此同时，同一设备上先后运行的任务还需遵守资源互斥，而不同设备的任务可以在满足依赖要求时并行执行。这些硬件特点决定了任务映射和运行频率必须与执行时序相互协调。
 
-当多个执行单元共享频率域时，同域中正在运行的任务必须使用兼容的工作点。若CPU1上的Stage已经在某个频率执行，CPU2是否能够立即启动新的Stage，不仅取决于CPU2是否空闲，还取决于新Stage要求的频率是否与共享域当前工作点一致。频率控制因此是跨执行单元的约束，不能通过把各CPU单元当作完全独立的处理器来消除。
+\section{任务模型}
 
-执行单元、频率控制域与温度节点也并非同一对象。两个CPU单元可以共用频率，却分别具有不同的局部温度；同一份CPU域基准功率也可能分布在多个热节点上。在后续模型中，执行单元用于确定Stage的资源占用，控制域用于规定共同调频关系，热节点则用于描述芯片中的温度分布。明确这些层次之后，才能把任务映射、频率选择和温度分析连接到同一执行过程。
+\subsection{实时任务模型}
 
-\section{任务模型}\label{ux4efbux52a1ux6a21ux578b}
-
-\subsection{实时请求及截止期限}\label{ux5b9eux65f6ux8bf7ux6c42ux53caux622aux6b62ux671fux9650}
-
-任务调度首先需要描述计算何时到达、需要完成哪些工作，以及最晚应在何时得到结果。传统实时系统通常以释放时刻、执行时间和截止期限刻画任务。对于周期性任务，还可给出相邻作业的触发周期；对于一次性或有限到达的请求，则可以直接描述每次请求的释放时间和期限。不同服务对超时的容忍程度可能不同，硬实时任务强调所有规定作业均须满足截止期限，软实时任务则允许一定程度的超时并关注整体服务质量。
-
-端侧推理既可能以固定帧率持续触发，也可能由多个应用在不同时间发起请求。若研究目标是为已知请求集合制定离线执行安排，可以将每次推理调用作为独立请求，记其释放时刻为 \(r\)、相对截止期限为 \(D^{\mathrm{rel}}\)，绝对截止时刻为
-
-\begin{equation}
-D=r+D^{\mathrm{rel}}.
+任务模型将应用的计算需求转化为调度器可以使用的时间参数。经典实时调度理论通常从独立的周期任务出发。对于周期任务 $\tau_i$，可采用三元组
+\begin{equation}\label{eq:ch2-periodic}
+  \tau_i=(C_i,T_i,D_i)
 \end{equation}
+表示，其中 $C_i$ 为任务所需的执行时间，$T_i$ 为相邻两次任务释放之间的周期，$D_i$ 为相对截止期限。若 $D_i=T_i$，则称为隐式截止期限任务。周期任务模型便于分析系统的长期资源需求，是经典优先级调度和可调度性分析的重要基础~[1,5]。
 
-对于同一应用的不同请求，虽然计算流程相同，但各请求仍需分别执行，拥有独立的释放时刻与完成期限。调度方案若要求全部请求按期完成，就必须同时检查各请求的输出是否在对应的绝对截止时刻前产生，不能只以平均完成时间或整体吞吐表现代替。
-
-\subsection{有向无环任务图与Stage划分}\label{ux6709ux5411ux65e0ux73afux4efbux52a1ux56feux4e0estageux5212ux5206}
-
-深度学习应用通常存在明确的数据依赖关系。一层计算的输出可能成为后续多个算子的输入，分支经过不同路径处理后也可能重新汇合。这类结构适合利用有向无环图（Directed Acyclic Graph，DAG）表示：
-
-\begin{equation}
-G=(V,E),
+一次周期任务在每次触发时都形成一个具体的任务作业（Job）。设任务 $\tau_i$ 的第 $k$ 次作业在 $r_{i,k}$ 时刻释放，其绝对截止时刻为 $D_{i,k}^{\mathrm{abs}}$，则有
+\begin{equation}\label{eq:ch2-jobdeadline}
+  D_{i,k}^{\mathrm{abs}}=r_{i,k}+D_i.
 \end{equation}
+如果该作业的完成时刻为 $F_{i,k}$，按期完成需要满足 $F_{i,k}\leq D_{i,k}^{\mathrm{abs}}$。释放时刻限定任务最早可以开始的时间，截止时刻限定任务最晚必须结束的时间，两者共同确定可供调度的时间区间。
 
-其中，\(V\) 为计算节点集合，\(E\) 为节点间的数据依赖边集合。若 \((i,j)\in E\)，节点 \(j\) 必须在节点 \(i\) 完成后才能开始；当一个节点存在多个前驱时，需要等待所有必要输入均准备完毕。DAG既表示不能违反的先后关系，也揭示了不同分支之间可能存在的并行机会。
+实际应用并非总按固定周期到达。有些请求由事件触发，相邻释放间隔并不相同；另一些任务虽然来自周期应用，但研究时只需要安排一个有限观察时间段内的已知作业。此时可直接给出各作业的释放时刻、工作量和绝对截止时刻，而不要求利用单一周期还原所有到达事件。端侧推理中的一次模型调用便可以视为这样的作业。当一次调用还包含多个具有先后关系的计算步骤时，就需要进一步描述作业内部的结构。
 
-如果直接将网络中的每个原始算子作为调度节点，虽然能够保留较细的计算关系，却会产生大量调度对象。实际推理部署还会对计算图进行算子融合、布局转换和子图划分，因此可以将一组需要连续执行的算子组织成较大的计算阶段，即Stage。设原始算子集合被划分为若干互不重叠的子集，每个子集对应一个Stage；若跨子集存在数据依赖，则在Stage之间建立相应的依赖边。这样得到的Stage级任务图保留了后续调度所需的前驱、后继及分支汇合关系，同时减少需要单独选择处理器和启动时刻的对象数量。
+\subsection{有依赖关系的图任务模型}
 
-例如，一次推理可表示为前处理、主要计算和后处理组成的链式任务，也可以在主要计算阶段包含多条并行分支。链式结构便于说明顺序执行，具有分支汇合的DAG则能够描述更一般的执行关系。对于具体的Stage \(i\)，若启动时刻为 \(s_i\)，其所选模式对应的执行时长为 \(d_i>0\)，则完成时刻为
+独立任务模型把每次作业视为不可再分的计算对象，但许多实际应用由多个相互关联的计算部分组成。例如，图像预处理完成后才能进入特征提取，而特征提取的不同分支可能并行运行，并在输出阶段汇合。为了保留这些先后关系，通常采用有向无环图（Directed Acyclic Graph，DAG）描述一个应用的计算结构~[6]。
 
-\begin{equation}
-F_i=s_i+d_i.
+设图任务为
+\begin{equation}\label{eq:ch2-dag}
+  G=(V,E),\qquad E\subseteq V\times V,
 \end{equation}
+其中 $V$ 为计算节点集合，$E$ 为有向依赖边集合。若 $(i,j)\in E$，表示节点 $j$ 需要等待节点 $i$ 提供结果后才能执行；如果两个节点之间没有直接或间接依赖，则它们在资源允许时可以并行。图中不能存在有向环，否则按照完成后才能启动后继的规则，将无法形成合法的执行顺序。
 
-若 \(i\) 是 \(j\) 的前驱，便有 \(s_j\ge F_i\)。各输出Stage满足期限后，请求才算完成。这里的 \(d_i\) 随所选执行单元及工作点而变化，相关关系将在下节介绍。
-
-\subsection{多请求与多场景任务组织}\label{ux591aux8bf7ux6c42ux4e0eux591aux573aux666fux4efbux52a1ux7ec4ux7ec7}
-
-当多个应用同时运行时，可以将各请求的Stage实例放到同一个场景中，共同检查其资源竞争和执行时序。同一应用每发起一次请求，就形成一套独立的Stage实例；它们具有相同的应用结构，却分别消耗计算资源。除实际存在的数据依赖外，不同请求之间不必人为增加前驱边，它们的相互影响主要来自处理器占用及共享控制关系。
-
-为了描述设备在不同使用条件下的应用组合，还可以预先给定多个场景。每个场景包含确定的应用及请求集合、入口状态和评价条件。例如，A+B和A+C分别对应两个应用组合，其中A的Stage在两种场景下都出现，但B和C的计算内容以及对设备的竞争可能不同。Kim和Ha使用场景化应用组织研究跨场景处理器映射，使共同部署与逐场景运行配置能够在一个问题中协调{[}2{]}。
-
-场景之间可能存在不同的联系。有的研究需要考虑实际场景切换、数据迁移或前一场景遗留的任务，有的研究则仅要求不同场景使用共同的部署。后一种情况下，每个场景仍可从其已知入口状态独立运行，而某些Stage的具体执行单元需要保持一致。本文采用的多场景任务组织属于后一类：场景共享的是固定Stage的处理器部署，而不是执行过程或计算结果；场景内的工作点与启动时刻仍分别安排。相应的共享映射变量与加权目标在第三章进一步定义。
-
-\section{多核系统能耗管理技术}\label{ux591aux6838ux7cfbux7edfux80fdux8017ux7ba1ux7406ux6280ux672f}
-
-\subsection{处理器功耗与能量计算}\label{ux5904ux7406ux5668ux529fux8017ux4e0eux80fdux91cfux8ba1ux7b97}
-
-处理器执行计算时消耗电能，其功耗通常可从动态功耗和静态漏电功耗两方面分析。基于CMOS电路的经典近似，动态功耗主要来源于电路节点的充放电，可表示为
-
-\begin{equation}
-P_{\mathrm{dyn}}\approx \alpha_{\mathrm{sw}}C_{\mathrm{eff}}V^2f,
+任务图中的节点通常附有计算量或执行时间属性。设 $w_i$ 表示节点 $i$ 在某一给定执行代价口径下的时间，则全部节点的计算代价之和可以写为
+\begin{equation}\label{eq:ch2-work}
+  Q(G)=\sum_{i\in V}w_i.
 \end{equation}
-
-其中，\(\alpha_{\mathrm{sw}}\) 为电路平均开关活动因子，\(C_{\mathrm{eff}}\) 为等效开关电容，\(V\) 和 \(f\) 分别为供电电压与工作频率。该式揭示了电压、频率及电路活动对功耗的影响，并不意味着不同处理器或不同Stage采用相同的功率系数。
-
-静态功耗主要与漏电流有关，常用
-
-\begin{equation}
-P_{\mathrm{leak}}=VI_{\mathrm{leak}}(V,T)
+任务的依赖结构还决定了即使拥有足够多的处理器，也不可能无限缩短完成时间。记 $\mathcal{P}(G)$ 为任务图中从入口到出口的路径集合，最长依赖路径的计算代价为
+\begin{equation}\label{eq:ch2-path}
+  L(G)=\max_{\pi\in\mathcal{P}(G)}\ \sum_{i\in\pi}w_i.
 \end{equation}
+在节点执行时间固定且暂不计数据传输开销的条件下，$L(G)$ 是该任务图完成时间的下界。对异构处理器而言，同一节点在不同设备上的执行时间可能不同，因此这些代价应针对所讨论的映射或参考估计明确给出；关键路径也可能随着设备选择发生变化。
 
-描述其与电压及温度 \(T\) 的关系。处理器停止当前计算后仍可能存在漏电和其他保持系统运行所需的基准功耗，因此空闲并不等于零功率。CPU、GPU和NPU虽然遵循相同的基本物理关系，但计算组织与存储访问不同，实际工作功率仍须根据对应设备和执行状态确定。
+图模型不仅描述串行关系，也能表示并行分支。例如，若节点A完成后分别进入B和C，最后由D汇总两条分支的结果，则B与C可以并行，但D必须等待两者都完成。调度器据此决定节点所在处理器和启动时刻，并利用并行分支压缩完成时间。与把整个应用看作一个不可拆分任务相比，DAG保留了可用于异构协同执行的结构信息。
 
-功率是单位时间的能量消耗速率。一段执行过程的能量由功率对时间积分得到：
+\subsection{面向深度学习推理的任务模型}
 
-\begin{equation}
-E=\int_{t_0}^{t_1}P(t)\,\mathrm{d}t.
+深度学习模型通常由卷积、矩阵运算、激活、归一化和特征融合等算子组成，算子之间通过张量传递构成计算图。训练框架中的原始计算图可以包含较多细粒度节点，但在实际部署时，推理编译器往往进行常量折叠、算子融合和子图划分，使若干原始算子以一个连续计算单元的形式执行。调度时如果仍对每个基础算子独立选择设备，不仅会增加待处理的节点数量，也可能忽略融合执行带来的数据局部性和调度开销差异~[3,7]。
+
+为与这种部署方式对应，可以将原始算子图中相互关联的一组算子组织为一个计算阶段，记为Stage。假设原始算子节点集合为 $V_{\mathrm{op}}$，将其划分为 $K$ 个非空且互不重叠的子集，可记为
+\begin{equation}\label{eq:ch2-partition}
+  \Pi=\{S_1,S_2,\ldots,S_K\},\qquad
+  \bigcup_{k=1}^{K}S_k=V_{\mathrm{op}},\qquad
+  S_i\cap S_j=\varnothing\ (i\ne j).
 \end{equation}
+每个 $S_k$ 对应一个Stage。当不同子集之间存在张量依赖时，就在相应Stage之间保留依赖边，由此形成粒度较粗的推理任务图。Stage的划分应保持计算结果所需的数据依赖，具体划分可以依据已经确定的推理后端与部署方案给出，而不必在调度过程中重新优化原始算子融合方式。
 
-只有当所讨论时间段内功率近似恒定时，才能进一步写为 \(E\approx P\,(t_1-t_0)\)。多个Stage采用不同频率或在不同时刻执行时，系统功率通常随时间变化，因此需要根据实际运行片段计算能量，不能把某个工作点的瞬时功率直接当作完整运行能耗。
+图~\ref{fig:ch2_stage} 展示了从基础算子到阶段级任务图的一种示意转换。左侧计算过程包含连续算子以及分支，右侧将可连续执行的算子组织为若干Stage，并保留分支和汇合关系。这样既减少了独立调度对象，又使各Stage可以分别关联不同设备的执行时间和功率参数。
 
-\subsection{动态电压频率调整}\label{ux52a8ux6001ux7535ux538bux9891ux7387ux8c03ux6574}
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[>=Latex,font=\small,
+    op/.style={draw,rounded corners,fill=gray!7,minimum width=1.9cm,minimum height=.62cm,align=center},
+    st/.style={draw,rounded corners,fill=blue!8,minimum width=1.90cm,minimum height=.71cm,align=center}]
+    \node[op] (conv) at (1.4,2.15) {卷积};
+    \node[op] (norm) at (1.4,1.10) {归一化};
+    \node[op] (act) at (1.4,.05) {激活};
+    \node[op] (branch) at (.12,-1.02) {分支算子A};
+    \node[op] (branchb) at (2.67,-1.02) {分支算子B};
+    \node[op] (merge) at (1.40,-2.04) {结果融合};
+    \draw[-Latex] (conv) -- (norm);\draw[-Latex] (norm) -- (act);
+    \draw[-Latex] (act.south) |- (branch.north);
+    \draw[-Latex] (act.south) |- (branchb.north);
+    \draw[-Latex] (branch.south) |- (merge.west);
+    \draw[-Latex] (branchb.south) |- (merge.east);
+    \node[font=\scriptsize] at (1.4,2.7) {原始算子计算图};
+    \draw[->,very thick,gray!65] (3.65,0.15) -- (5.05,0.15) node[midway,above,font=\scriptsize] {融合/划分};
+    \node[st] (s1) at (6.45,.15) {Stage 1\\融合计算};
+    \node[st] (s2) at (9.35,1.2) {Stage 2\\分支A};
+    \node[st] (s3) at (9.35,-.9) {Stage 3\\分支B};
+    \node[st] (s4) at (12.0,.15) {Stage 4\\结果融合};
+    \draw[-Latex] (s1.east) -- (s2.west);\draw[-Latex] (s1.east) -- (s3.west);
+    \draw[-Latex] (s2.east) -- (s4.west);\draw[-Latex] (s3.east) -- (s4.west);
+    \node[font=\scriptsize] at (9.25,2.25) {Stage级有向无环图};
+  \end{tikzpicture}
+  \caption{从原始神经网络算子到推理计算阶段的任务表示}
+  \label{fig:ch2_stage}
+\end{figure}
 
-动态电压频率调整通过合法OPP的选择改变处理器运行速度及功率。当负载和期限允许时，降低工作点可能节省活动能量；而在时间要求紧张的情况下，较高频率能够缩短部分计算时间，减少资源占用。PELSI等研究已经利用逐层设备与频点画像搜索推理配置，说明节能选择需要同时考虑性能与功率，而不能仅按最低频率排列候选{[}13{]}。
+除了计算结构，端侧推理调度还要描述请求的产生方式。一个应用具有相对固定的推理图，但同一应用在不同时间发起的每次请求都需要独立完成计算。因而，\emph{应用}确定Stage结构，\emph{请求}确定一次具体运行及其释放时刻和截止期限，\emph{Stage实例}则对应某个请求中需要实际执行的一个计算阶段。多个请求即使属于同一应用，也不能因为复用了Stage名称而共用一次执行结果。
 
-工作频率对执行时长的影响还与应用特点有关。若任务的全部执行时间都随计算频率反比变化，降为半频时执行时长会变为原来的两倍；但实际任务可能包含访存等待和其他对频率变化不敏感的部分。Da Costa采用频率敏感部分与不敏感部分相结合的响应描述，对不同应用和硬件分别建立时长模型{[}5{]}。采用类似的分解思想，可将某一任务在参考频率 \(f^{\mathrm{ref}}\) 下的时长记为 \(d^{\mathrm{ref}}\)，写为
+设备的运行负载还会随着同时使用的应用发生变化。设系统包含应用A、B和C，场景一由A与B共同运行，场景二由A与C共同运行。每个场景给定自己的请求集合，A在两个场景中仍具有相同的计算结构，但可能面临不同的设备竞争。图~\ref{fig:ch2_scene} 中，A的主要计算阶段在两个场景里采用同一具体设备，而场景内的请求排布和工作频率可以根据B或C的运行情况分别选择。类似的跨场景部署组织已用于端侧深度学习应用的能量感知映射研究~[4]。
 
-\begin{equation}
-d(f)=d^{\mathrm{ref}}
-\left[(1-\eta)+\eta\frac{f^{\mathrm{ref}}}{f}\right],
-\qquad 0\le\eta\le 1.
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[font=\small,>=Latex,
+    app/.style={draw,rounded corners,minimum width=2.2cm,minimum height=.72cm,align=center,fill=white},
+    stage/.style={draw,rounded corners,minimum width=2.55cm,minimum height=.74cm,align=center,fill=blue!8}]
+    \draw[rounded corners=3pt,fill=gray!4] (0,0) rectangle (6.30,2.75);
+    \draw[rounded corners=3pt,fill=gray!4] (6.78,0) rectangle (13.08,2.75);
+    \node[font=\bfseries] at (3.15,2.43) {场景一：A + B};
+    \node[font=\bfseries] at (9.93,2.43) {场景二：A + C};
+    \node[app] (b) at (1.60,1.36) {应用B的请求};
+    \node[stage] (a1) at (4.62,1.36) {A的主计算阶段\\NPU0};
+    \node[app] (c) at (8.38,1.36) {应用C的请求};
+    \node[stage] (a2) at (11.38,1.36) {A的主计算阶段\\NPU0};
+    \node[font=\scriptsize,align=center] at (3.15,.43) {场景内频率、启动时刻独立安排};
+    \node[font=\scriptsize,align=center] at (9.93,.43) {场景内频率、启动时刻独立安排};
+    \draw[<->,thick,dashed,blue!65!black] (3.56,3.05) --
+       node[above,font=\scriptsize,fill=white] {A的具体部署保持一致} (10.42,3.05);
+  \end{tikzpicture}
+  \caption{不同应用组合下的共同部署与逐场景运行配置示意}
+  \label{fig:ch2_scene}
+\end{figure}
+
+多场景模型可以研究不同运行条件下共有的部署决策，也可以进一步研究真实场景切换及其开销。对于本文考虑的共享部署问题，各场景分别给定入口状态并独立评价，关注的是同一固定Stage在不同场景中使用一致的具体处理器，而不是场景切换过程中的温度延续。这样，既能描述多种应用组合对部署的共同要求，也保留了各场景根据自身任务竞争调整执行安排的空间。
+
+\section{多核系统能耗管理技术}
+
+\subsection{功耗模型}
+
+处理器的功耗表示单位时间内消耗电能的速率，是衡量不同运行状态能源开销的基础。对于采用互补金属氧化物半导体（Complementary Metal-Oxide-Semiconductor，CMOS）工艺的处理器，功耗通常由动态功耗与静态功耗组成。动态功耗主要来源于晶体管工作时对负载电容的充放电，在常用近似下可表示为
+\begin{equation}\label{eq:ch2-dynamic}
+  P_{\mathrm{dyn}}\approx \alpha_{\mathrm{sw}}C_{\mathrm{eff}}V^2 f,
 \end{equation}
+其中 $\alpha_{\mathrm{sw}}$ 为电路平均开关活动因子，$C_{\mathrm{eff}}$ 为等效开关电容，$V$ 为供电电压，$f$ 为工作频率。式~\eqref{eq:ch2-dynamic} 反映了动态功耗随电压和频率变化的基本趋势。不同算子的活动因子和访存行为不同，因此即使运行在同一设备和频率上，其实际活动功率仍可能不同。
 
-式中，\(\eta\) 表示所采用模型中随频率反比变化的时长比例。若 \(\eta=1\)，时长与频率成反比；若 \(\eta=0\)，在声明范围内时长不随频率变化。两个任务即使使用相同频档，其降频代价也可能不同。该关系为后续按照Stage与设备提供模式时长参数提供了基础，实际参数仍应与相应的工作负载和设备条件匹配。
-
-DVFS不能只看某个Stage降低频率后节省的动态功率。工作点改变还会影响执行时长、相邻任务的等待和该域的空闲时间；如果多个CPU单元共用一个控制域，一个单元上的频率选择还会限制其他单元的并行配置。因此，针对具有依赖关系的推理任务，频率与处理器映射、启动时刻需要共同考虑。
-
-\subsection{动态电源管理与空闲能耗}\label{ux52a8ux6001ux7535ux6e90ux7ba1ux7406ux4e0eux7a7aux95f2ux80fdux8017}
-
-动态电源管理（Dynamic Power Management，DPM）主要利用设备负载变化，在空闲期间选择适当的低功耗状态。与DVFS通过改变频率和电压调节运行功率不同，DPM还可能涉及休眠、时钟门控或断电等状态，其进入和退出通常需要考虑时间与能量开销。如果空闲间隔较短，状态转换的代价可能抵消休眠收益，因此节能效果与空闲段长度和分布有关。
-
-Esmaili等将DPM、DVFS与任务调度联合考虑，在硬期限条件下同时评价任务执行及空闲状态的能量{[}6{]}。Bao等进一步研究温度感知的空闲时间分布，说明通过调整等待位置可以改变后续温度及漏电能耗{[}7{]}。Coskun等也从多核任务安排和功率管理出发，分析调度策略对温度、能量及处理器寿命的共同影响{[}17{]}。这些研究共同表明，系统能量不仅由完成了多少计算决定，还受到任务何时执行以及空闲期间设备处于何种状态的影响。
-
-需要区分的是，空闲时降低频率并不等同于进入休眠。一个控制域即使没有执行Stage，仍可能处于最低的合法运行工作点，继续消耗基准功率和温度相关漏电。本文后续采用域级空闲自动低频的控制抽象，具体降频时机及切换开销由第三章统一说明；它没有把低频运行状态当作零功率休眠。
-
-完整能量比较通常需要采用共同的评价时间边界。若不同候选的完成时刻不同，而能量只累计到各自最后一个任务结束，较早结束的方案可能少计了系统随后仍然存在的基准功耗。对于给定的共同评价窗口 \([0,W]\)，应以同一系统边界计算
-
-\begin{equation}
-E_{\mathrm{sys}}=\int_{0}^{W}P_{\mathrm{sys}}(t)\,\mathrm{d}t.
+静态功耗主要来源于晶体管漏电流，常用
+\begin{equation}\label{eq:ch2-leak}
+  P_{\mathrm{leak}}=V I_{\mathrm{leak}}(V,T)
 \end{equation}
+进行描述，其中 $I_{\mathrm{leak}}$ 还会受到工作温度 $T$ 的影响。处理器没有执行用户任务时，也需要维持部分电路、时钟或共享资源运行，因此仍可能存在空闲基准功率。对于一个给定的设备或功率计量范围，运行功率可理解为基准部分与相应活动部分共同构成；共享资源的基准功率应当按计量边界计算，而不因多个核心并发而重复累加。
 
-其中既包括Stage执行期间的活动功率，也包括等待和任务完成后的空闲功率。对于多个预先定义的场景，可再按固定权重汇总各场景的完整能量。随着温度变化，空闲功率本身也可能发生变化，因而需要进一步引入温度模型。
-
-\section{多核系统热建模与温度分析}\label{ux591aux6838ux7cfbux7edfux70edux5efaux6a21ux4e0eux6e29ux5ea6ux5206ux6790}
-
-\subsection{热阻热容模型}\label{ux70edux963bux70edux5bb9ux6a21ux578b}
-
-处理器运行时产生的热量通过芯片内部材料、封装和散热结构向周围传播。温度不仅由当前功率决定，还与此前积累的热量以及相邻区域之间的传热有关。热阻热容（Resistance-Capacitance，RC）网络利用热与电的类比描述这些关系：温差对应电压差，热流对应电流，热阻反映传热阻力，热容反映材料存储热量的能力。Huang等提出的紧凑热模型将芯片及封装划分为相互连接的热节点，为结构相关的稳态和瞬态温度估计提供了方法基础{[}8{]}。
-
-对于一个连接环境的简化热节点，设其温度为 \(T(t)\)、环境温度为 \(T_a\)、热容为 \(C_{\mathrm{th}}>0\)，节点到环境的热阻为 \(R_{\mathrm{th}}>0\)，注入的热功率为 \(P^{\mathrm{heat}}(t)\)。其热平衡关系为
-
-\begin{equation}
-C_{\mathrm{th}}\frac{\mathrm{d}T(t)}{\mathrm{d}t}
-=P^{\mathrm{heat}}(t)
--\frac{T(t)-T_a}{R_{\mathrm{th}}}.
+功耗与能耗是不同的物理量。功率的单位为瓦特（W），能量的单位为焦耳（J），一段时间内的消耗能量由功率积分得到：
+\begin{equation}\label{eq:ch2-energy}
+  E(t_0,t_1)=\int_{t_0}^{t_1} P(t)\,\mathrm{d}t.
 \end{equation}
+功率恒定时，式~\eqref{eq:ch2-energy} 可以简化为功率与持续时间之积。因此，比较不同执行模式时，不能只考察瞬时功率。例如，低频率虽然可能降低处理器活动功率，却也可能使任务运行时间变长；最终能耗由两者共同决定。
 
-第一项表示工作负载产生的热量，第二项表示节点向环境散去的热量。当注热功率在一段时间内保持恒定时，温度并不会随功率切换瞬间跳变，而是沿着由热阻、热容及初始温度决定的轨迹逐渐变化。其中，\(R_{\mathrm{th}}C_{\mathrm{th}}\) 所形成的时间尺度反映了简化节点接近新热状态的速度。
+对于包含多个计算单元的系统，总功率还与各单元当前执行什么任务、采用什么工作点以及是否空闲有关。当任务在时间轴上交替或并行运行时，系统功率呈现随时间变化的分段过程。特别是在按固定时间范围评价不同调度方案时，除了任务活动期间的能量，还应计入等待和完成后的空闲区间。这样才能使用一致的时间边界比较方案的整体消耗。
 
-实际多核SoC还存在处理单元之间的横向及纵向传热。若只为每个设备设置独立的对环境热阻，就无法描述CPU发热对相邻GPU或NPU温度的影响。因而，需要根据芯片结构设置多个温度节点及相互连接的热阻，分别注入各位置的发热功率。节点粒度可以与执行单元相对应，也可以根据需要采用更细的空间网格；选定粒度后，功率注入位置及热耦合参数应保持一致。
+\subsection{能耗管理及优化技术}
 
-\subsection{多节点温度耦合与瞬态传播}\label{ux591aux8282ux70b9ux6e29ux5ea6ux8026ux5408ux4e0eux77acux6001ux4f20ux64ad}
+多核系统通常通过动态电源管理（Dynamic Power Management，DPM）和动态电压频率调整（Dynamic Voltage and Frequency Scaling，DVFS）降低运行能耗。两者都利用负载变化进行节能，但调节的对象不同：DPM主要在空闲期间选择低功耗状态，DVFS则通过改变合法的电压—频率工作点协调计算速度与功率~[8,9]。
 
-设芯片内共有 \(N\) 个热节点，以 \(T_i(t)\) 表示节点 \(i\) 的温度，\(C_i>0\) 为其热容，\(g_{ij}\ge0\) 为节点 \(i\) 与 \(j\) 之间的导热系数，\(g_{ia}\ge0\) 为节点 \(i\) 到环境的导热系数。由热量守恒，可得
+DPM利用任务之间的空闲间隔，将处理单元从活动状态转入功耗较低的状态。例如，时钟门控可以停止部分电路翻转，电源门控可以进一步减少被关闭区域的漏电。设备进入和退出这些状态通常存在时延与能量开销；因此，空闲间隔越短，状态切换获得的收益越容易被转换代价抵消。调度器在决定是否让设备进入某种休眠状态时，需要同时考虑空闲区间的长度和下一任务的时间要求。
 
-\begin{equation}
-C_i\dot T_i(t)=P_i^{\mathrm{heat}}(t)
-+\sum_{j\ne i}g_{ij}\bigl[T_j(t)-T_i(t)\bigr]
-+g_{ia}\bigl[T_a-T_i(t)\bigr].
+DVFS则主要调整任务执行期间的处理器性能。降低频率时，设备通常能够采用较低的配套电压，从而减少动态功耗；但计算时间可能增加，进而占用更多期限余量。图~\ref{fig:ch2_dpm_dvfs} 对比了两种技术在同一截止期限内改变功率分布的基本方式。DPM强调较快完成任务后利用空闲时间进入低功耗状态，DVFS强调用较低的活动功率完成任务。图中曲线仅用于说明工作机制，不代表两种方式在所有负载下具有固定的能量优劣。
+
+\begin{figure}[htbp]
+ \centering
+ \begin{tikzpicture}[font=\small,>=Latex]
+   \begin{scope}[shift={(.4,0)}]
+     \draw[->] (0,0)--(5.65,0) node[right,font=\scriptsize] {时间};
+     \draw[->] (0,0)--(0,2.62) node[above,font=\scriptsize] {功率};
+     \fill[blue!13] (0,0) rectangle (2.25,2.18);
+     \fill[blue!4] (2.25,0) rectangle (5.10,.42);
+     \draw[very thick,blue!70!black] (0,2.18)--(2.25,2.18)--(2.25,.42)--(5.1,.42);
+     \draw[dashed,gray] (5.10,0)--(5.10,2.5);
+     \node[font=\scriptsize] at (1.13,1.24) {较高功率运行};
+     \node[font=\scriptsize] at (3.65,.70) {低功耗空闲};
+     \node[font=\scriptsize] at (5.10,2.54) {期限};
+     \node[font=\bfseries] at (2.55,-.47) {(a) DPM};
+   \end{scope}
+   \begin{scope}[shift={(7.15,0)}]
+     \draw[->] (0,0)--(5.65,0) node[right,font=\scriptsize] {时间};
+     \draw[->] (0,0)--(0,2.62) node[above,font=\scriptsize] {功率};
+     \fill[green!13] (0,0) rectangle (4.25,1.14);
+     \fill[green!4] (4.25,0) rectangle (5.10,.42);
+     \draw[very thick,green!45!black] (0,1.14)--(4.25,1.14)--(4.25,.42)--(5.1,.42);
+     \draw[dashed,gray] (5.10,0)--(5.10,2.5);
+     \node[font=\scriptsize] at (2.15,.79) {较低功率运行};
+     \node[font=\scriptsize] at (5.10,2.54) {期限};
+     \node[font=\bfseries] at (2.55,-.47) {(b) DVFS};
+   \end{scope}
+ \end{tikzpicture}
+ \caption{动态电源管理与动态电压频率调整的工作机制对比}
+ \label{fig:ch2_dpm_dvfs}
+\end{figure}
+
+在实际应用中，执行时间对频率的响应还与计算特点有关。计算密集的任务可能接近频率反比缩放，而包含较多访存等待的任务可能只有部分时长随频率变化。Da Costa等研究了应用与硬件相关的性能响应，采用频率敏感部分和相对固定部分的组合描述任务时长~[10]。借鉴这一思路，对于给定的任务与执行设备，可在有效频率范围内写为
+\begin{equation}\label{eq:ch2-response}
+ d(f)=d^{\mathrm{ref}}\left[(1-\eta)+\eta\frac{f^{\mathrm{ref}}}{f}\right],
+ \qquad 0\le\eta\le1,
 \end{equation}
+其中 $d^{\mathrm{ref}}$ 为参考频率 $f^{\mathrm{ref}}$ 下的时长，$\eta$ 表示按所采用模型随频率反比变化的部分。当频率降低为参考值的一半时，时长成为原来的 $1+\eta$ 倍。因此，不同推理阶段即使采用相同的降频比例，也可能具有不同的完成时间变化。
 
-这一关系说明，各节点温度之间并不是互相独立的。同样的总功率如果集中在不同处理单元上，产生的温度分布可能不同；即使某个节点当前没有任务，其温度仍可能因为相邻节点持续发热而升高。多核热感知调度研究已经利用空间热耦合分析CPU核心及异构单元之间的温度影响{[}9-10,16{]}。
+对异构多核处理器，实际可选电压和频率由设备提供的离散工作点（Operating Performance Point，OPP）决定。多个CPU执行单元共享频率域时，不能为同时运行的任务分别指定互不兼容的频率。DPM、DVFS和任务调度因而并非相互独立：提前完成任务可能增加空闲时间，降频可能改变后继任务的等待，而工作点调整也会改变一段时间内系统的功率分布。本文后续采用按控制域确定空闲低频状态的运行模型；这是一种具体的控制设定，并不等于所有设备都支持无代价的休眠切换。
 
-为便于统一表示，令 \(\boldsymbol{\theta}(t)=\boldsymbol{T}(t)-T_a\boldsymbol{1}\) 为节点温升向量，\(\boldsymbol{C}=\operatorname{diag}(C_1,\ldots,C_N)\)，\(\boldsymbol{G}\) 为由节点间及对环境导热关系构成的矩阵，可写为
+\section{多核系统热建模与温度分析}
 
-\begin{equation}
-\boldsymbol{C}\dot{\boldsymbol{\theta}}(t)
-=-\boldsymbol{G}\boldsymbol{\theta}(t)
-+\boldsymbol{P}^{\mathrm{heat}}(t).
+\subsection{热阻热容网络模型}
+
+处理器消耗的电能有一部分最终转化为热量。热量会从发热区域经过芯片材料、封装和散热结构向外传递，同时也会在芯片内部不同计算单元之间扩散。因此，同样的总功率若集中在相邻的高功耗单元上，可能产生与功率分散时不同的热点；而某个单元即使已经停止计算，其温度也不会立即降至环境温度。为了描述这两种现象，通常采用热阻热容（Resistance-Capacitance，RC）网络建立芯片温度模型~[11]。
+
+RC网络利用热与电的对应关系进行建模。节点之间的温度差对应电压差，传递的热流对应电流；热阻描述热量通过材料时受到的阻力，热容反映该区域储存热量的能力。对于仅有一个热节点、并通过热阻连接环境的简化模型，设节点温度为 $T(t)$，环境温度为 $T_a$，热阻为 $R_{\mathrm{th}}$，热容为 $C_{\mathrm{th}}$，注入热功率为 $p(t)$，则根据能量守恒可得
+\begin{equation}\label{eq:ch2-rc-one}
+ C_{\mathrm{th}}\frac{\mathrm{d}T(t)}{\mathrm{d}t}
+ =p(t)-\frac{T(t)-T_a}{R_{\mathrm{th}}}.
 \end{equation}
+等式左侧反映节点存储热量的变化，右侧分别表示任务注入的热功率及向环境散去的热量。若输入功率在一段时间内保持不变，温度将由入口状态逐渐接近新的热平衡值，其变化速度与热阻、热容的乘积有关。该模型已经说明了为什么任务功率变化与温度变化之间存在时间上的滞后。
 
-当工作点和活动Stage在一段区间内保持不变、注热功率在相应温度范围内可写成仿射形式时，上式成为分段常系数线性微分方程：
+单节点模型便于理解温度动态，但不足以描述芯片内的空间影响。在多核SoC中，可为CPU、GPU、NPU或其他区域建立多个热节点，通过节点间的导热连接表示热耦合。图~\ref{fig:ch2_rc} 给出了一个简化的多节点RC网络。各单元的活动功率在相应节点注入热量，节点之间经热阻传递热流，各节点还通过散热路径与环境交换热量~[11--13]。
 
-\begin{equation}
-\dot{\boldsymbol{\theta}}(t)
-=\boldsymbol{A}\boldsymbol{\theta}(t)+\boldsymbol{b}.
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[>=Latex,font=\small,
+    temp/.style={draw,thick,circle,fill=orange!9,minimum size=1.33cm,align=center},
+    heat/.style={draw,rounded corners,fill=red!8,minimum width=2.2cm,minimum height=.60cm,align=center}]
+    \node[temp] (cpu) at (1.9,1.0) {$T_{\mathrm{CPU}}$};
+    \node[temp] (gpu) at (6.45,1.0) {$T_{\mathrm{GPU}}$};
+    \node[temp] (npu) at (11.0,1.0) {$T_{\mathrm{NPU}}$};
+    \draw[<->,thick] (cpu.east) -- node[above] {$R_{\mathrm{CG}}$} (gpu.west);
+    \draw[<->,thick] (gpu.east) -- node[above] {$R_{\mathrm{GN}}$} (npu.west);
+    \node[heat] (pc) at (1.9,-.75) {CPU注热 $p_C$};
+    \node[heat] (pg) at (6.45,-.75) {GPU注热 $p_G$};
+    \node[heat] (pn) at (11.0,-.75) {NPU注热 $p_N$};
+    \draw[-Latex,thick] (pc.north) -- (cpu.south);
+    \draw[-Latex,thick] (pg.north) -- (gpu.south);
+    \draw[-Latex,thick] (pn.north) -- (npu.south);
+    \node[draw,rounded corners,fill=blue!7,minimum width=9.85cm,minimum height=.57cm] (ambient) at (6.45,3.22) {环境与散热路径 $T_a$};
+    \draw[->] (cpu.north) -- (cpu.north |- ambient.south) node[midway,left,font=\scriptsize] {$R_{Ca}$};
+    \draw[->] (gpu.north) -- (gpu.north |- ambient.south) node[midway,left,font=\scriptsize] {$R_{Ga}$};
+    \draw[->] (npu.north) -- (npu.north |- ambient.south) node[midway,left,font=\scriptsize] {$R_{Na}$};
+    \node[font=\scriptsize] at (2.85,.38) {$C_C$};
+    \node[font=\scriptsize] at (7.40,.38) {$C_G$};
+    \node[font=\scriptsize] at (11.98,.38) {$C_N$};
+  \end{tikzpicture}
+  \caption{多核处理器各发热区域之间的热阻热容网络示意}
+  \label{fig:ch2_rc}
+\end{figure}
+
+设节点 $i$ 的热容为 $C_i$，相邻节点 $i$ 与 $j$ 之间的导热系数为 $g_{ij}$，节点 $i$ 向环境传热的系数为 $g_{ia}$，则节点热平衡关系可扩展为
+\begin{equation}\label{eq:ch2-rc-multi}
+ C_i\dot T_i(t)=p_i(t)
+ +\sum_{j\ne i}g_{ij}\bigl[T_j(t)-T_i(t)\bigr]
+ +g_{ia}\bigl[T_a-T_i(t)\bigr].
 \end{equation}
-
-若区间起点为 \(t_0\)，则经过 \(\tau\) 时间后的温升可以表示为
-
-\begin{equation}
-\boldsymbol{\theta}(t_0+\tau)
-=e^{\boldsymbol{A}\tau}\boldsymbol{\theta}(t_0)
-+\int_0^\tau e^{\boldsymbol{A}(\tau-s)}\boldsymbol{b}\,\mathrm{d}s.
+相邻节点的温度越高，传向节点 $i$ 的热流可能越大；因此，一个处理器的任务执行能够通过芯片材料影响其他处理器的温度。将所有节点方程合并，令 $\boldsymbol\theta(t)=\boldsymbol T(t)-T_a\boldsymbol 1$ 表示相对环境温升，可得到
+\begin{equation}\label{eq:ch2-rc-matrix}
+ \boldsymbol C\dot{\boldsymbol\theta}(t)
+ =-\boldsymbol G\boldsymbol\theta(t)+\boldsymbol p(t),
 \end{equation}
+其中 $\boldsymbol C$ 为节点热容矩阵，$\boldsymbol G$ 由节点间与对环境导热关系构成，$\boldsymbol p(t)$ 为各节点的注热功率向量。这个表达将空间热耦合和温度随时间的变化统一到同一模型中，为后续根据任务执行状态计算温度轨迹提供了基础。
 
-每当Stage启动或结束、工作点随之改变时，就更新该段的功率与系数，并以前一段的终点温度作为下一段入口，沿实际时间轴继续传播。由于热容使温度保持连续，功率发生瞬时跳变并不会产生温度瞬间跃迁。这种分段传播方式能够同时保留任务的真实结束时刻和持续变化的温度状态。
+\subsection{瞬态温度与热安全分析}
 
-\subsection{温度相关功耗与全过程热安全}\label{ux6e29ux5ea6ux76f8ux5173ux529fux8017ux4e0eux5168ux8fc7ux7a0bux70edux5b89ux5168}
+当多个任务在异构处理器上先后或并行执行时，注热功率会随任务启动、结束及工作点调整而变化。由于热容的存在，温度状态具有连续性和历史依赖性：当前时刻的温度不仅与当前功率有关，也受此前一段时间内功率分布的影响。只有了解完整执行时序，才能计算任务之间等待、并发以及空闲阶段的温度变化。
 
-温度分析还需要考虑发热与功耗之间的相互作用。漏电流通常随温度变化，因此处理器节点功率不仅包含由工作点和任务活动决定的部分，还可能包含以本地温度为输入的修正项。在给定的有效温区内，可将某个功率来源的温度相关部分近似写成
+对于给定的工作状态，可在一段功率规律不变的时间内求解RC状态方程；到达任务启动或结束事件时，以此前得到的温度作为下一段的入口，继续计算后续变化。因此，调度器即使选择了相同的处理器和频率，只要改变某些任务的起始时刻，就可能形成不同的热点分布和峰值温度。实际预测还取决于节点之间的导热强度及各场景的入口温度~[12,14]。
 
-\begin{equation}
-\Delta P_i^\lambda(t)=\lambda_i\bigl[T_i(t)-T_i^{\mathrm{ref}}\bigr],
-\qquad \lambda_i\ge0,
+温度变化还会影响处理器自身的功率。随着温度升高，器件漏电通常增大，使得芯片在相同工作状态下的静态功耗可能上升。在有限有效温区内，可以围绕参考温度 $T_i^{\mathrm{ref}}$ 对某一节点的漏电功率作线性近似：
+\begin{equation}\label{eq:ch2-temp-leak}
+ P_{i,\mathrm{leak}}(T_i)
+ \approx P_{i,\mathrm{leak}}(T_i^{\mathrm{ref}})
+ +\lambda_i\bigl(T_i-T_i^{\mathrm{ref}}\bigr),
 \end{equation}
+其中 $\lambda_i$ 为相应工作状态下的温度敏感系数。温度引起的漏电增量又可能转化为额外注热，从而形成温度与功率之间的反馈关系。对多核系统，注热应当对应实际发热位置，电功率计量时也需避免将同一共享基准重复相加。Bao等及Zhou等的研究表明，温度对漏电能耗的影响可以使等待与任务位置成为节能调度中有意义的选择~[9,13]。
 
-其中，\(T_i^{\mathrm{ref}}\) 为参考温度，\(\lambda_i\) 为在相应工作点下使用的温度系数。它描述相对参考状态的变化，而不是需要与完整漏电功率重复相加的一份新功耗。低于参考温度时修正可为负，但总功率仍应满足声明模型的物理有效条件。Bao等研究温度变化对空闲漏电能耗的影响，Zhou等将温度相关漏电纳入实时任务节能调度，均说明温度不仅决定热安全，也能改变候选安排的能量评价{[}7,10{]}。
-
-温度相关功耗与RC传播共同作用时，节点温度影响当前漏电，漏电又形成新的注热。因此，温度模型必须明确电功率的计量边界及其在各热节点的注入位置。对于共享CPU域，基准功率可以按照给定规则分配到多个节点，Stage活动增量则由实际使用的执行单元注入对应节点；位于热模型边界外但计入系统能耗的公共功率，不应无依据地再次注入节点。这样的组织使系统电能计算与空间发热关系保持一致。
-
-对于存在温度上限的实时系统，热安全通常要求整个评价区间内各节点均满足
-
-\begin{equation}
-T_i(t)\le T_i^{\max},
-\qquad \forall t\in[0,W],\quad i=1,\ldots,N.
+对于具有安全温度上限的系统，调度安排还必须保证运行期间的节点温度不超过规定范围。若评价时间区间为 $[0,W]$，节点 $i$ 的温度上限为 $T_i^{\max}$，则热安全条件可写为
+\begin{equation}\label{eq:ch2-thermal-safe}
+ T_i(t)\le T_i^{\max},\qquad
+ \forall t\in[0,W],\quad \forall i.
 \end{equation}
+这个条件要求检查的是完整时间范围内的温度，而不是只检查任务结束时刻。对于耦合瞬态热模型，节点温度的局部峰值可能出现在两个任务事件之间；即使全部事件时刻满足温度上限，也不必然意味着事件间过程安全。Chantem等和Schor等分别从热感知映射调度及实时任务最坏温度分析出发，说明温度的时间演化需要进入调度可行性评价~[12,15]。
 
-这里的限制覆盖入口、任务执行、等待及完成后的空闲尾段，而不仅是某个任务结束时的温度。Schor等研究实时多核系统的最坏温度分析，Chantem等则将温度要求与实时任务映射、调度联系起来，说明温度约束可以在调度分析中承担明确的可行性判定作用{[}11,16{]}。
+温度还与能耗目标存在联系。某种安排可能使任务更早完成，却在较短时间内集中释放热量；另一种安排也许具有较低的活动功率，却因较长的执行和等待过程改变空闲漏电的分布。因此，任务的完成时间、完整系统能耗与运行温度并不存在简单的一一对应关系。后续研究需要根据具体平台功率参数和任务时间表共同评价，才能判断某个候选是否满足期限与热安全要求，以及其完整运行能量的大小。
 
-由于多节点温度轨迹可能在两个调度事件之间出现局部峰值，只检查任务开始和结束时刻并不总能保证全过程安全。对分段光滑的温度轨迹，可以结合区间端点和内部驻点分析各节点温度，并根据需要采用可靠数值界判断是否超限。第三章在这一理论基础上进一步明确候选时间表的连续热检查及反馈方式。
+\section{异构任务调度与优化方法}
 
-\section{任务调度与优化求解基础}\label{ux4efbux52a1ux8c03ux5ea6ux4e0eux4f18ux5316ux6c42ux89e3ux57faux7840}
+任务模型和处理器模型给出了哪些计算必须完成、哪些资源可以使用，而调度算法负责确定任务的处理器、执行顺序和运行时刻。随着异构处理器数量、合法工作点和任务依赖增加，候选安排的数量也随之增加。相关研究通常从规则驱动的快速构造、元启发式搜索和数学规划三个角度设计方法，分别侧重快速获得安排、探索不同配置组合以及利用显式约束进行联合优化。
 
-\subsection{异构最早完成时间调度}\label{ux5f02ux6784ux6700ux65e9ux5b8cux6210ux65f6ux95f4ux8c03ux5ea6}
+\subsection{异构最早完成时间算法}
 
-任务调度的基本目标是在遵守依赖和资源条件的前提下，为各计算节点确定执行资源和开始时刻。对于DAG任务，如果仅按节点自身的最短执行时间选择处理器，可能因后继等待或资源竞争形成较长的总体完成时间。异构最早完成时间算法（Heterogeneous Earliest Finish Time，HEFT）利用任务间的依赖关系和处理器执行代价构造时间表，是异构DAG调度中常用的启发式方法{[}12{]}。
+异构最早完成时间（Heterogeneous Earliest Finish Time，HEFT）算法是面向DAG任务的经典列表调度方法。它不直接枚举全部任务映射，而是先根据任务对后续完成时间的影响确定处理优先级，再为每个任务选择能够使其较早完成的处理器~[6]。
 
-HEFT首先按照任务的向上排名确定调度优先级。任务的排名通常由其平均计算代价、后继任务的排名以及相邻任务的平均通信代价共同构成，以反映该任务之后仍需完成的工作。随后，算法按优先级依次安排任务，并对各个候选处理器计算最早开始时间和最早完成时间：
-
-\begin{equation}
-\operatorname{EFT}(i,u)
-=\operatorname{EST}(i,u)+d_{iu},
+在任务排序阶段，HEFT使用向上排名（Upward Rank）估计当前节点及其后继路径的剩余代价。记 $\bar w_i$ 为任务 $i$ 在候选处理器上的平均执行时间，$\bar c_{ij}$ 为节点 $i$ 到 $j$ 的平均通信代价，$\mathrm{succ}(i)$ 为节点 $i$ 的直接后继集合，则
+\begin{equation}\label{eq:ch2-heft-rank}
+ \operatorname{rank}_u(i)=\bar w_i+
+ \max_{j\in\mathrm{succ}(i)}
+ \left\{\bar c_{ij}+\operatorname{rank}_u(j)\right\}.
 \end{equation}
+对没有后继的出口节点，后面的最大值取零。向上排名较高的任务通常处于较长的剩余计算路径上，算法因此优先安排这些节点，以减少关键依赖链因晚于其他任务进入队列而产生的等待。
 
-其中，\(\operatorname{EST}(i,u)\) 由前驱完成和处理器可用时间共同决定，\(d_{iu}\) 为任务 \(i\) 在处理器 \(u\) 上的预计执行时长。算法选择能够产生较早完成时间的处理器，并允许在既有时间表的可用空档中插入任务。这里的空档插入是在规划阶段寻找合适的开始时刻，不意味着正在执行的任务可以被任意抢占。
-
-HEFT计算规则直观，能够较快产生满足所考虑依赖与设备约束的时间表，但其原始目标主要是缩短总体完成时间，并不直接优化温度相关的完整系统能耗。对于存在共享频率域、有限OPP和连续热约束的平台，还需要将这些限制纳入调度合法性与候选评价，不能仅凭最早完成时间判断方案优劣。因而，HEFT适合作为快速构造或比较方法的基础，而完整能耗与安全性仍需采用与研究问题一致的评价口径。
-
-\subsection{启发式搜索与混合整数线性规划}\label{ux542fux53d1ux5f0fux641cux7d22ux4e0eux6df7ux5408ux6574ux6570ux7ebfux6027ux89c4ux5212}
-
-在任务配置具有多种离散选择时，启发式算法可以通过有限规则或反复搜索寻找可行解。除了HEFT这类列表调度方法，遗传算法、模拟退火等元启发式方法也常用于处理设备映射和执行模式组合。遗传算法通常对映射与频率等离散选择进行编码，再通过选择、交叉和变异产生新候选；模拟退火则由当前方案生成邻域候选，并按照温度参数控制对较差方案的有限接受，以帮助搜索离开局部区域。两者都依赖适当的解码、合法性检查和目标评价，具体效果取决于候选结构及计算预算。
-
-另一类方法是将调度问题表示为数学规划。混合整数线性规划（Mixed-Integer Linear Programming，MILP）利用整数或二元变量描述处理器选择等离散决策，用连续变量描述时刻与其他辅助量，并以线性目标和约束建立统一的优化问题。其一般形式可写为
-
-\begin{equation}
-\begin{aligned}
-\min\quad &\boldsymbol{c}^{\mathsf T}\boldsymbol{x},\\
-\mathrm{s.t.}\quad
-&\boldsymbol{A}\boldsymbol{x}\le\boldsymbol{b},\\
-&\boldsymbol{A}_{\mathrm{eq}}\boldsymbol{x}=\boldsymbol{b}_{\mathrm{eq}},\\
-&x_j\in\mathbb{Z}\quad (j\in\mathcal I),
-\end{aligned}
+在处理器选择阶段，算法按排名顺序取出就绪任务，结合前驱完成时间与处理器可用空档，计算其在处理器 $p$ 上的最早开始时间 $\mathrm{EST}(i,p)$，再计算最早完成时间
+\begin{equation}\label{eq:ch2-heft-eft}
+ \mathrm{EFT}(i,p)=\mathrm{EST}(i,p)+w_{ip},
 \end{equation}
+其中 $w_{ip}$ 为任务 $i$ 在处理器 $p$ 上的执行时间。HEFT选择EFT较小的处理器，并将任务插入该处理器的合法空档。该插入行为发生在离线构造时间表时，并不需要中断已经安排的其他任务。
 
-其中，\(\mathcal I\) 为整数变量下标集合。对离散设备、频率与起点的组合，可以通过有限合法选项及相应的二元变量建立MILP表达；资源互斥、前驱完成及期限条件则由配套约束体现。Liu等已经利用MILP组织任务映射、频率和时序的联合优化，为这类表达提供了相关研究基础{[}14{]}。
+例如，某任务在CPU上运行只需2~ms，但CPU需要等待到8~ms才能开始；它在GPU上运行需3~ms，而GPU在4~ms后即可使用。若输入也已准备完毕，两个选择的最早完成时间分别为10~ms和7~ms，HEFT会选择GPU。这个例子说明异构调度不能只比较任务独立执行时间，还要同时考虑资源占用形成的等待。
 
-MILP的一个重要特点是能够在同一目标下联合考虑多个约束，并通过松弛下界与整数可行解上界描述当前求解进展。若模型与求解条件满足相应要求，求解器还可以给出关于模型最优性的证明。对于较大规模任务图，离散模式和候选时刻的大量组合会使构模与整数搜索成本上升。因此，如何在计算预算内尽快取得可行解，并利用问题结构改善搜索，是MILP实际应用中需要进一步考虑的问题。
+HEFT能够较快构造考虑任务依赖的执行时间表，因此常用于生成初始安排或作为性能导向的比较方法。不过，其经典版本主要以完成时间为目标，若应用同时具有多个工作点、共享频率域、温度约束和完整窗口能耗目标，还需要对候选选择和安全检查进行相应扩展。不同方法比较时，应采用相同的任务数据和资源规则，并分别评价完成时间、能量及热可行性。
 
-\subsection{约束生成与分解求解}\label{ux7ea6ux675fux751fux6210ux4e0eux5206ux89e3ux6c42ux89e3}
+\subsection{元启发式优化算法}
 
-当某一类约束数量较大、或无法在初始模型中以有限线性约束完整表达时，可以采用约束生成思想组织求解。其基本过程是先求解当前模型，再对所得候选进行独立检查；若发现违反原问题要求的情况，就根据违规信息补充有效约束，然后继续求解。与在开始时展开所有可能条件相比，这种方式可以把计算集中在实际遇到的违规关系上。对热调度问题而言，MILP候选即使满足已表达的时刻约束，也仍可能在事件之间出现温度峰值，因此连续热检查能够为后续约束更新提供依据。
+列表调度主要依据预定的任务优先级和局部处理器评价逐步构造安排。为了进一步探索设备映射和频率配置的组合，可以采用元启发式方法，在已有方案附近或多个方案之间反复搜索。遗传算法（Genetic Algorithm，GA）和模拟退火（Simulated Annealing，SA）是其中具有代表性的两类方法。
 
-约束生成需要区分候选检查与约束有效性。若某个候选超温，直接排除该完整选择可以防止重复获得同一候选；若能从违规节点、时刻和热传播关系导出对全部安全方案均成立的必要条件，就有可能同时限制具有相似违规原因的其他候选。具体反馈约束能否保留全部安全方案，以及有限次数反馈之后能够得到何种结论，取决于实际模型和约束构造，须在使用位置给出相应依据。
+遗传算法首先将任务的设备选择、工作点等离散配置编码为染色体。初始种群由多个候选配置组成，算法计算每个个体的适应度，再利用选择、交叉和变异产生新的候选。经过若干代迭代，种群可以同时保留不同方向的搜索结果。对于异构任务调度，染色体通常需要经过解码才能得到完整时间表；解码过程中还必须检查任务依赖、处理器资源和截止期限。若适应度以能耗为目标，违规候选的处理和可行解的保存方式也会影响搜索效果。
 
-除了逐步增加约束，还可以利用变量及约束之间的结构关系，将较大的联合问题分成若干相互协调的子问题。对于只由少量共同决策连接的多个场景，固定这些共同变量后，各场景可能分别完成局部规划，再将各场景结果合成为全局评价。这种分解能够避免所有场景的局部决策始终在同一大型模型中共同展开，但其有限预算下的求解效果还取决于外层候选选择及各子问题的计算成本。
+模拟退火则从一个当前方案出发，通过改变部分任务的设备、频率或执行顺序生成邻域方案。当新方案的目标更好时，算法通常接纳该方案；当新方案略差时，也可以按照随温度参数降低的概率接纳，以避免始终局限在某个局部邻域。对于以能耗最小化为目标的问题，常见的接受概率可写为
+\begin{equation}\label{eq:ch2-sa}
+ P_{\mathrm{acc}}=\exp\!\left(-\frac{\Delta E}{\Theta}\right),
+ \qquad \Delta E>0,
+\end{equation}
+其中 $\Delta E$ 表示候选相对当前方案增加的能量，$\Theta$ 为搜索中的退火温度；更低的退火温度会降低接受较差候选的可能性。式中的 $\Theta$ 是算法控制参数，与芯片的实际运行温度不是同一概念。经典模拟退火思想来自Kirkpatrick等的组合优化研究~[16]。
 
-逻辑Benders分解（Logic-Based Benders Decomposition，LBBD）是利用主问题和子问题逻辑关系进行协调的一类方法，可通过从子问题推导有效的可行性或最优性约束，逐步改进主问题。Elçi和Hooker将这类思想用于随机规划与调度问题，展示了逻辑推理在分解求解中的作用{[}15{]}。不过，简单地固定共享变量、分别求解场景并汇总结果，本身还不能等同于具有有效主问题割及相应保证的LBBD。本文后续重点利用跨场景共享部署与场景内决策之间的结构，组织统一预算下的安全能耗搜索，具体求解接口与反馈机制在第三、第四章展开。
+这两类方法都可以根据实际问题设计搜索表示和邻域操作，但它们的输出质量取决于如何生成合法候选、如何评价完整时间表，以及给定的计算预算。对于具有连续温度上限的任务调度，搜索到一个能耗较低的模式组合还不够，需要将其恢复为满足资源与期限条件的完整时序，再检查温度轨迹。只有通过同一套安全评价的候选才适合进行能耗比较。
 
-\section{本章小结}\label{ux672cux7ae0ux5c0fux7ed3}
+\subsection{基于数学规划的优化方法}
 
-本章介绍了多场景端侧协同推理任务调度所需的相关理论与技术基础。首先，从CPU、GPU和NPU构成的异构平台出发，说明执行单元、频率控制域及资源占用之间的关系，并利用DAG和Stage级表示描述任务依赖、请求期限与多场景组织。随后，介绍处理器动态功耗、温度相关漏电和DVFS、DPM等能耗管理机制，说明工作点与空闲状态如何共同影响完整窗口能耗。
+启发式搜索通过一定规则探索部分候选，而数学规划方法尝试将任务选择、时序和约束统一表示为可求解的优化模型。其中，混合整数线性规划（Mixed-Integer Linear Programming，MILP）同时包含整数与连续变量，适合描述具有有限设备和工作点选择的联合调度问题~[8,17]。
 
-在此基础上，本章利用多节点RC网络说明功率、热耦合与瞬态温度之间的联系，并给出连续温度约束的基本形式。最后，介绍HEFT、启发式搜索、MILP、约束生成和分解求解的主要思想，明确各类方法在调度构造、联合建模及复杂问题求解中的作用。上述理论为第三章建立完整热约束节能模型及后续组织分解式求解提供了基础。
+在调度建模中，是否把某个任务分配到某台处理器、是否选择某个工作点，通常可以由0--1变量表示；任务开始时刻和完成时刻则可以采用连续变量或有限离散选项表示。资源互斥可通过先后顺序、时间区间或预先枚举的合法选项表达，DAG边对应的前驱完成要求和请求截止期限也可以写成显式约束。完成这些表达后，优化器需要在所有满足已建模条件的变量组合中选择目标值较小的安排。
 
-\section*{本章参考文献}
-\addcontentsline{toc}{section}{本章参考文献}
+一般MILP问题可表示为
+\begin{equation}\label{eq:ch2-milp}
+ \begin{aligned}
+  \min_{\boldsymbol x}\quad &\boldsymbol c^{\mathsf T}\boldsymbol x,\\
+  \text{s.t.}\quad &\boldsymbol A\boldsymbol x\le\boldsymbol b,\\
+   &\boldsymbol A_{\rm eq}\boldsymbol x=\boldsymbol b_{\rm eq},\\
+   &x_j\in\mathbb Z,\quad j\in\mathcal I,
+ \end{aligned}
+\end{equation}
+其中 $\mathcal I$ 表示整数变量下标集合。实际求解器可通过整数可行解给出目标上界，并通过松弛问题等手段估计下界；在满足相应条件且完成证明时，可以得到针对该数学模型的最优性结论。计算时间受到任务规模、离散配置组合、资源关系及求解参数等因素影响，有限时间内取得可行解与最终证明最优性属于不同的求解状态。
 
-{[}1{]} KANG D, OH J, CHOI J, YI Y, HA S. Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device{[}J{]}. IEEE Access, 2020, 8: 43980--43991. \href{https://doi.org/10.1109/ACCESS.2020.2977496}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2020_Kang_Heterogeneous_DL_Scheduling.pdf}{本地全文}.
+当某类约束不适合在初始模型中全部展开时，还可以采用约束生成的思路：先对当前模型求解，再检查候选是否满足尚未充分表达的要求，发现违规后向模型加入有效约束并继续搜索。对具有连续温度限制的调度问题，可以先由整数模型组织任务模式和时序，再利用独立的瞬态热分析检查候选。如果能够依据违规轨迹形成对全部安全安排均成立的限制，就可以把该信息反馈到后续求解，而不必在开始时列举所有可能的温度检查时刻。
 
-{[}2{]} KIM J, HA S. Energy-Aware Scenario-Based Mapping of Deep Learning Applications Onto Heterogeneous Processors Under Real-Time Constraints{[}J{]}. IEEE Transactions on Computers, 2023, 72(6): 1666--1680. \href{https://doi.org/10.1109/TC.2022.3218991}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2023_Kim_Energy_Aware_Mapping.pdf}{本地全文}.
+另一个常见思路是按照决策之间的联系分解问题。例如，多场景应用中的某些设备部署需要共同确定，而各场景的请求时序可以在固定共同部署后分别评价。将共有决策放在外层、局部决策放在内层，可以形成不同层次的求解过程。这类结构性分解与逻辑Benders分解等方法具有一定联系，但是否具备相应的最优性割和收敛保证，还取决于具体的模型构造。本文后续在上述理论基础上，进一步设计适用于热约束多场景协同推理的求解流程。
 
-{[}3{]} JEONG S, 等. Band: Coordinated Multi-DNN Inference on Heterogeneous Mobile Processors{[}C{]}//MobiSys. 2022. \href{https://doi.org/10.1145/3498361.3538948}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2022_Jeong_Band.pdf}{本地全文}.
+\section{本章小结}
 
-{[}4{]} DAGLI I, BELVIRANLI M E. Shared Memory-contention-aware Concurrent DNN Execution for Diversely Heterogeneous SoCs{[}C{]}//PPoPP. 2024. \href{https://doi.org/10.1145/3627535.3638502}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2024_Dagli_HaX_CoNN.pdf}{本地全文}.
+本章围绕端侧异构多核系统中的实时推理任务调度，介绍了后续研究所需的相关理论。首先说明实时系统的时间要求以及CPU、GPU、NPU的执行特点，并区分任务占用的执行单元与共享频率控制域。随后由经典实时任务发展到具有依赖关系的DAG模型，再根据深度学习算子的计算结构介绍Stage级表示、推理请求和多场景应用组合，为研究共同部署与场景内调度提供任务基础。
 
-{[}5{]} DA COSTA G. Hardware and application aware performance, power and energy models for modern HPC servers with DVFS{[}J{]}. Sustainable Computing: Informatics and Systems, 2025, 46: 101106. \href{https://doi.org/10.1016/j.suscom.2025.101106}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2025_IRIT_Hardware-and-application-aware-performance-power-and-energy-models.pdf}{本地全文}.
+在功耗与温度方面，本章介绍动态功耗、静态功耗以及DPM、DVFS的基本机制，利用热阻热容网络说明发热、节点间热耦合与瞬态温度的关系，并给出温度相关漏电及全过程热安全的基本表达。最后介绍HEFT、遗传算法、模拟退火、MILP及约束生成和结构分解的主要思想。上述内容构成后续联合建模、连续温度评价和优化求解的理论基础。
 
-{[}6{]} ESMAILI A, NAZEMI M, PEDRAM M. Modeling Processor Idle Times in MPSoC Platforms to Enable Integrated DPM, DVFS, and Task Scheduling Subject to a Hard Deadline{[}C{]}//ASP-DAC. 2019. \href{https://arxiv.org/abs/1812.07723}{作者版本}；\href{https://github.com/YBEMR/paper/blob/main/papers/2019_Esmaili_Integrated_DPM_DVFS_Scheduling.pdf}{本地全文}.
-
-{[}7{]} BAO M, ANDREI A, ELES P, PENG Z. Temperature-Aware Idle Time Distribution for Leakage Energy Optimization{[}J{]}. IEEE Transactions on Very Large Scale Integration (VLSI) Systems, 2012, 20(7): 1187--1200. \href{https://doi.org/10.1109/TVLSI.2011.2157542}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2012_Temperature-Aware_Idle_Time_Distribution_for.pdf}{本地全文}.
-
-{[}8{]} HUANG W, STAN M R, SKADRON K, SANKARANARAYANAN K, GHOSH S, VELUSAMY S. Compact Thermal Modeling for Temperature-Aware Design{[}C{]}//DAC. 2004: 878--883. \href{https://doi.org/10.1145/996566.996800}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2004_Wei_Compact_thermal_modeling_for_temperature-aware_design.pdf}{本地全文}.
-
-{[}9{]} MAITY S, ROY R, MAJUMDER A, DEY S, HOTA A R. Future aware Dynamic Thermal Management in CPU-GPU Embedded Platforms{[}C{]}//RTSS. 2022. \href{https://doi.org/10.1109/RTSS55097.2022.00041}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2022_F-DTM_RTSS_Future_aware_Dynamic_Thermal_Management_in_CPU-GPU_Embedded_Platforms.pdf}{本地全文}.
-
-{[}10{]} ZHOU J, 等. Thermal-aware correlated two-level scheduling of real-time tasks with reduced processor energy on heterogeneous MPSoCs{[}J{]}. Journal of Systems Architecture, 2018, 82: 1--11. \href{https://doi.org/10.1016/j.sysarc.2017.09.007}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2018_Zhou_Thermal_Heterogeneous_MPSoC.pdf}{本地全文}.
-
-{[}11{]} SCHOR L, 等. Worst-Case Temperature Guarantees for Real-Time Applications on Multi-Core Systems{[}C{]}//RTAS. 2012. \href{https://github.com/YBEMR/paper/blob/main/papers/2012_Schor.pdf}{本地全文}.
-
-{[}12{]} TOPCUOGLU H, HARIRI S, WU M Y. Performance-Effective and Low-Complexity Task Scheduling for Heterogeneous Computing{[}J{]}. IEEE Transactions on Parallel and Distributed Systems, 2002, 13(3): 260--274. \href{https://doi.org/10.1109/71.993206}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2002_Haluk_Performance-effective_and_low-complexity_task_scheduling_for_heterogeneous_computing.pdf}{本地全文}.
-
-{[}13{]} AGHAPOUR E, SAPRA D, PIMENTEL A D, PATHANIA A. PELSI: Power-Efficient Layer-Switched Inference{[}C{]}//RTCSA. 2023: 12--17. \href{https://doi.org/10.1109/RTCSA58653.2023.00011}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2023_PELSI_Power-Efficient_Layer-Switched_Inference.pdf}{本地全文}.
-
-{[}14{]} LIU W, YI J, LI M, CHEN P, YANG L. Energy-Efficient Application Mapping and Scheduling for Lifetime Guaranteed MPSoCs{[}J{]}. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems, 2019. \href{https://doi.org/10.1109/TCAD.2018.2801242}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/Liu_Energy_Efficient_Lifetime_MPSoCs_author.pdf}{本地作者稿}.
-
-{[}15{]} ELÇI Ö, HOOKER J N. Stochastic Planning and Scheduling with Logic-Based Benders Decomposition. 2022. \href{https://github.com/YBEMR/paper/blob/main/papers/2022_Hooker_Stochastic_Planning_and_Scheduling_with_Logic-Based_Benders_Decomposition.pdf}{仓库论文}.
-
-{[}16{]} CHANTEM T, HU X S, DICK R P. Temperature-Aware Scheduling and Assignment for Hard Real-Time Applications on MPSoCs{[}J{]}. IEEE Transactions on VLSI Systems, 2011, 19(10): 1884--1897. \href{https://doi.org/10.1109/TVLSI.2010.2058873}{DOI}；\href{https://github.com/YBEMR/paper/blob/main/papers/2011_Temperature-Aware_Scheduling_and_Assignment_for.pdf}{本地全文}.
-
-{[}17{]} COSKUN A K, STRONG R, TULLSEN D M, ROSING T S. Evaluating the Impact of Job Scheduling and Power Management on Processor Lifetime for Chip Multiprocessors{[}C{]}//SIGMETRICS. 2009. \href{https://github.com/YBEMR/paper/blob/main/papers/2009_Coskun_Job_Scheduling_Power_Management_Processor_Lifetime.pdf}{本地全文}.
+\section*{参考文献（第二章讨论稿引用对照）}
+\addcontentsline{toc}{section}{参考文献（第二章讨论稿引用对照）}
+\begingroup\small\setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
+[1] BUTTAZZO G C. Hard Real-Time Computing Systems: Predictable Scheduling Algorithms and Applications[M]. 3rd ed. Springer, 2011.\par
+[2] KANG D, OH J, CHOI J, YI Y, HA S. Scheduling of Deep Learning Applications Onto Heterogeneous Processors in an Embedded Device[J]. IEEE Access, 2020, 8: 43980--43991.\par
+[3] JEONG S, et al. Band: Coordinated Multi-DNN Inference on Heterogeneous Mobile Processors[C]. MobiSys, 2022.\par
+[4] KIM J, HA S. Energy-Aware Scenario-Based Mapping of Deep Learning Applications Onto Heterogeneous Processors Under Real-Time Constraints[J]. IEEE Transactions on Computers, 2023, 72(6).\par
+[5] LIU C L, LAYLAND J W. Scheduling Algorithms for Multiprogramming in a Hard-Real-Time Environment[J]. Journal of the ACM, 1973, 20(1): 46--61.\par
+[6] TOPCUOGLU H, HARIRI S, WU M Y. Performance-Effective and Low-Complexity Task Scheduling for Heterogeneous Computing[J]. IEEE Transactions on Parallel and Distributed Systems, 2002, 13(3): 260--274.\par
+[7] AGHAPOUR E, SAPRA D, PIMENTEL A D, PATHANIA A. PELSI: Power-Efficient Layer-Switched Inference[C]. RTCSA, 2023: 12--17.\par
+[8] ESMAILI A, NAZEMI M, PEDRAM M. Modeling Processor Idle Times in MPSoC Platforms to Enable Integrated DPM, DVFS, and Task Scheduling Subject to a Hard Deadline[C]. ASP-DAC, 2019.\par
+[9] BAO M, ANDREI A, ELES P, PENG Z. Temperature-Aware Idle Time Distribution for Leakage Energy Optimization[J]. IEEE Transactions on VLSI Systems, 2012, 20(7): 1187--1200.\par
+[10] DA COSTA G. Hardware and Application Aware Performance, Power and Energy Models for Modern HPC Servers with DVFS[J]. Sustainable Computing: Informatics and Systems, 2025, 46: 101106.\par
+[11] HUANG W, STAN M R, SKADRON K, et al. Compact Thermal Modeling for Temperature-Aware Design[C]. DAC, 2004: 878--883.\par
+[12] CHANTEM T, HU X S, DICK R P. Temperature-Aware Scheduling and Assignment for Hard Real-Time Applications on MPSoCs[J]. IEEE Transactions on VLSI Systems, 2011, 19(10): 1884--1897.\par
+[13] ZHOU J, et al. Thermal-Aware Correlated Two-Level Scheduling of Real-Time Tasks with Reduced Processor Energy on Heterogeneous MPSoCs[J]. Journal of Systems Architecture, 2018, 82: 1--11.\par
+[14] MAITY S, ROY R, MAJUMDER A, et al. Future Aware Dynamic Thermal Management in CPU-GPU Embedded Platforms[C]. RTSS, 2022.\par
+[15] SCHOR L, BACIVAROV I, YANG H, THIELE L. Worst-Case Temperature Guarantees for Real-Time Applications on Multi-Core Systems[C]. RTAS, 2012.\par
+[16] KIRKPATRICK S, GELATT C D, VECCHI M P. Optimization by Simulated Annealing[J]. Science, 1983, 220(4598): 671--680.\par
+[17] LIU W, YI J, LI M, CHEN P, YANG L. Energy-Efficient Application Mapping and Scheduling for Lifetime Guaranteed MPSoCs[J]. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems, 2019.\par
+\endgroup

@@ -1,11 +1,12 @@
 # 第一、二章独立 LaTeX 阅读工程
 
-第一章 V3 与第二章 V1 的**可复编译源码**，和现有 `research/latex/main.tex` 第三章入口相互独立，不会覆盖已有章节。两章参考文献暂按各自讨论稿编号，正式整合时需要统一编号。
+第一章 V3 与第二章 V2 的**可复编译源码**，和现有 `research/latex/main.tex` 第三章入口相互独立，不会覆盖已有章节。两章参考文献暂按各自讨论稿编号，正式整合时需要统一编号。
 
 ## 文件
 
 - `main.tex`：第一、二章合并编译入口
-- `chapter01.tex`、`chapter02.tex`：直接编辑的章节正文
+- `chapter01.tex`、`chapter02.tex`：直接编辑的章节正文；后者现为 **V2讨论稿**。
+- `versions/chapter02_V1.tex`：上一版第二章的完整LaTeX备份。
 - `preamble.tex`：字体及版式
 - `chapter01_only.tex`、`chapter02_only.tex`：单章入口
 - `build.sh`、`build.bat`：一键编译脚本
@@ -13,7 +14,7 @@
 
 ## 编译
 
-安装 **XeLaTeX**（TeX Live 或 MiKTeX）、`ctex`、`amsmath`、`hyperref` 等常用宏包。中文字体首选 Noto CJK，未安装时自动回退宋体/微软雅黑及 TeX Live Fandol 字体；不随仓库分发字体。
+安装 **XeLaTeX**（TeX Live 或 MiKTeX）、`ctex`、`amsmath`、`hyperref`、`tikz`（PGF）等常用宏包。中文字体首选 Noto CJK，未安装时自动回退宋体/微软雅黑及 TeX Live Fandol 字体；不随仓库分发字体。
 
 在此目录执行：
 
@@ -54,3 +55,7 @@ Windows 脚本中的注释和提示使用纯 ASCII，避免不同系统代码页
 原仓库 `.gitignore` 不跟踪 PDF、`.aux`、`.log` 等编译产物。本工程延续该规则，`build/` 由 `.gitkeep` 保留目录，编译输出保存在本地，不需要额外提交。
 
 原始讨论稿：[第一章 V3](../../第一章绪论_讨论稿_V3.md)、[第二章 V1](../../第二章相关理论与技术基础_讨论稿_V1.md)。
+
+## 第二章 V2（2026-10-20）
+
+本次按已讨论的七节结构重新撰写第二章，保留12个次小节；2.3.3标题为“面向深度学习推理的任务模型”，2.4.1为“功耗模型”。增补异构SoC、算子至计算阶段、A+B/A+C跨场景、DPM/DVFS、RC网络五幅TikZ示意图；正文包含19组编号公式。插图与公式均为LaTeX源码，不依赖外部图片文件。第二章参考文献暂采用章节独立编号，后续统一论文时再整合。若需回看V1，请打开`versions/chapter02_V1.tex`，不必回滚整个Git仓库。

@@ -1247,3 +1247,9 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 独立`run_augmented_pair.py`固定旧N1→增广全Stage各一次300秒／scene60秒合作片；原142源60项与新两包装19项分开准入，冻结144源。`--prepare`只冻输入／源；实际唯一[augmented_quality_pair01](results/augmented_quality_pair01/summary.md)已消费2次，launcher／全局／方法claim保留。不要重复`--run`；读取既存结果即可。
 
 旧N1安全U0.962885037941 J，新版仅种子1.080823451833 J，技术正常但质量未改善；同seed、完整SAFE及新32矩阵身份／原行门通过。方法、清理、包装、外部进程时钟分列。[analysis02](results/augmented_quality_pair01/analysis02/summary.md)更正摘要不含x造成的callback计数错误，原01保留。19项wrapper预检01失败也保留；无补跑、温限调整或115次。下一项只用现存载荷分析搜索组织，再决定一项修订，不把接通当节能。
+
+### 3.12ao 存档结构分析与有界两遍搜索建议（K.136）
+
+[augmented_structure_review01](results/augmented_structure_review01/summary.md)仅读K135存档，保存原／增广变量、行、事件与候选时机统计；没有构模、热评价、原生调用或新研究实验。`metrics`内分析脚本只处理已存数组／JSON，不生成搜索候选，不把静态计数当性能实验。原MAT继续遵守忽略规则，本地保留并登记SHA。
+
+建议同一调用先旧N1再全Stage，固定同一fresh种子设备，携带本次完整SAFE并重新准备新模型x0。第一遍原60秒片不拆半，第二遍只用同一300秒余量；这是待实现／预检的建议，不是已冻结的新研究driver。不要重跑K135或自行补次数；研究调用仍为0，115次与温限扫描暂停。

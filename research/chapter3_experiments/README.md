@@ -1211,3 +1211,9 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 ```
 
 [夜间总结](results/night_k127_run02/night_summary.md)汇总全部预算、结果与界；[CSV](results/night_k127_run02/analysis01/results.csv)、[U与L₀图](results/night_k127_run02/analysis01/safe_upper_and_independent_L0.png)、[热接纳图](results/night_k127_run02/analysis01/thermal_acceptance.png)、[独审](results/night_k127_run02/independent_review.md)、[选择差异](results/night_k127_run02/method_difference.md)可核查。图及其脚本只读取存档，不将事后读到的native结果补作预算内证据。
+
+### 3.12aj 排故后新版质量配对（K.131）
+
+[fixed_unit_pair02](results/fixed_unit_pair02/protocol.md)是独立新阶段：复用K129配对规则、K130匹配129项凭据及135源，旧N1→新版各一次300秒，统一approved_host与原计费。两个fresh种子及初始能量完全一致。旧N1完成、安全U0.962885037941 J；新版仅保留初始SAFE U1.080823451833 J，AB数值接纳与原生exit−2冲突后停止，AC未搜索。账本已BLOCKED／2次消费，不删除claim、补跑或重开K129。
+
+[结果／图／CSV](results/fixed_unit_pair02/analysis01/summary.md)、[终审／载荷算术](results/fixed_unit_pair02/independent_review.md)保留SAFE与技术状态。请求x0与native initialPoint相同，直接残差复算通过既定容差，但不是精确可行证书；无解退出不升为独立无解。方法合226.828秒、清理19.969秒，生命周期正常。质量比较未完成，不能用本次排名；下一项只审现存AB载荷数值表达，不改原模型、调温限或恢复批量。

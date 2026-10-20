@@ -1276,3 +1276,14 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 结果旧U0.962885037941 J／190.016秒，新第一阶段U0.962884840560 J／含初始化142.344秒，第二阶段141.203秒无新增U，整调用283.547秒。微差0.197微焦耳全部来自第一遍，不作新增第二遍实用收益。阶段准备0.078秒单列包含；旧新启动56.875／9.063秒，不作单次加速结论。0热反馈，L0未闭合。AB中间数值admission是3条前缀，终态4条含新增通过final门；读取终态核覆盖，不要求两个时点副本逐字同。
 
 原生／源码／输入／声明／claims／完整时间表及[阶段CSV与图](results/staged_quality_pair01/analysis01/summary.md)、[独审](results/staged_quality_pair01/independent_review.md)保存。只读`analysis01/analysis_script.py`不生成新候选或热轨迹，既有分析目录拒绝覆盖。MAT遵守忽略规则、本地保留SHA。本轮研究已结束，不恢复115次或温度扫描。
+
+
+### 3.12ar 单一联动小域与双SAFE锚点（K.139）
+
+新增`linked_neighborhood`／`linked_neighborhood_adapter`和`linked_method.execute_linked_fixed_unit_opp_start`；参数`opened_by_scene`仍为旧N1第一遍，`linked_opened_by_scene`显式指定第二遍的非空真子集。原基准计划每scene开A全链＋local.pre、闭合local.main/post；精确IDs见[静态设计](results/linked_precheck02/design/reference_scope.json)。原种子固定所有unit，第一遍末最后完整SAFE固定closed OPP/start，两套回执都须同原输入／Budget／来源／精度；第二遍不再改变该锚点。两场景A工作点与时序仍独立。
+
+沿旧生命周期单Budget／worker和最多两遍，第二遍仅用余量；暖启动必须来自原子完整账本，原行接纳、连续热评价、完整汇总及失败保SAFE均沿用。新域不包含全部N1域，只包含当前完整安排，不能上升为全域覆盖或最优性证明。阶段名在新入口保留lifecycle_label后作联动元数据说明，不改旧staged语义。
+
+`run_linked_precheck.py --out NEW_DIR`要求工作区`.runtime/k139_baseline.json`，已用版本复制在最终目录parent_baseline.json；核参考提交与历史SHA后可恢复。现[最终02](results/linked_precheck02/summary.md)66/66，155源、148继承、1087历史一致；原01 guard误拦失败保持。独立1296赋值／96合法与结构MILP一致，三旧分派8数组保持；tiny真实4次x0回声无节能结论。原输入只作JSON计数／一次结构演示，不作原规模热评或构模，0原生／研究求解。预检不启动质量调用，不能删除旧claim或改目录补跑历史实验。
+
+[独审](results/linked_precheck02/independent_review.md)及[设计审计](results/linked_precheck02/design/summary.md)保存。当前只有实现／正确性与静态规模证据，原基准第二遍质量和成本另行冻结验证；115次、温度扫描及设备重选保持暂停。

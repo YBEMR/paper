@@ -498,6 +498,12 @@ class Model:
                 result['neighborhood'].update(
                     scope='seed_fixed_devices_all_stage_OPP_start_subdomain_not_global',
                     condition_protocol=FIXED_UNIT_PROTOCOL)
+            from linked_neighborhood import PROTOCOL as LINKED_PROTOCOL
+            if self.neighborhood_condition['protocol'] == LINKED_PROTOCOL:
+                result['neighborhood'].update(
+                    scope='seed_fixed_devices_linked_OPP_start_warm_closed_subdomain_not_global',
+                    condition_protocol=LINKED_PROTOCOL,
+                    warm_candidate_sha256=self.neighborhood_condition['warm_candidate_sha256'])
         return result
 
 
@@ -749,9 +755,14 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         from neighborhood import validate_n1_condition
         from fixed_unit_neighborhood import (PROTOCOL as FIXED_UNIT_PROTOCOL,
                                             validate_fixed_unit_condition)
+        from linked_neighborhood import (PROTOCOL as LINKED_PROTOCOL,
+                                         validate_linked_condition)
         protocol = neighborhood_condition.get('protocol') if isinstance(neighborhood_condition, dict) else None
         if protocol == FIXED_UNIT_PROTOCOL:
             n1_condition = validate_fixed_unit_condition(instance, neighborhood_condition,
+                budget=budget, shared_deployment=fixed_shared_deployment)
+        elif protocol == LINKED_PROTOCOL:
+            n1_condition = validate_linked_condition(instance, neighborhood_condition,
                 budget=budget, shared_deployment=fixed_shared_deployment)
         else:
             # Preserve N1's validation and rejection semantics for its path.
@@ -834,6 +845,10 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         if n1_condition['protocol'] == FIXED_UNIT_PROTOCOL:
             from fixed_unit_neighborhood import filter_fixed_unit_options
             options, model.neighborhood_stats = filter_fixed_unit_options(
+                instance, n1_condition, options, budget=budget)
+        elif n1_condition['protocol'] == LINKED_PROTOCOL:
+            from linked_neighborhood import filter_linked_options
+            options, model.neighborhood_stats = filter_linked_options(
                 instance, n1_condition, options, budget=budget)
         else:
             from neighborhood import filter_n1_options

@@ -1241,3 +1241,9 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 ```
 
 [冻结预检01](results/augmented_method_precheck01/checks.json)60/60（19新＋41旧回归）、29.391秒；142源／134历史匹配、旧入口AST保持。真实双scene小域回声闭环成功，原AB八数组与旧strict相同；无原生／研究调用、无原规模质量结果。源码、开发失败、夹具映射／接纳、[总结](results/augmented_method_precheck01/summary.md)及[独审](results/augmented_method_precheck01/independent_review.md)保存。下一项回到独立冻结原base__R1质量配对，不把模拟回声、局部内部界或本轮预检当新节能证明。
+
+### 3.12an 原基准新增广方法质量配对（K.135）
+
+独立`run_augmented_pair.py`固定旧N1→增广全Stage各一次300秒／scene60秒合作片；原142源60项与新两包装19项分开准入，冻结144源。`--prepare`只冻输入／源；实际唯一[augmented_quality_pair01](results/augmented_quality_pair01/summary.md)已消费2次，launcher／全局／方法claim保留。不要重复`--run`；读取既存结果即可。
+
+旧N1安全U0.962885037941 J，新版仅种子1.080823451833 J，技术正常但质量未改善；同seed、完整SAFE及新32矩阵身份／原行门通过。方法、清理、包装、外部进程时钟分列。[analysis02](results/augmented_quality_pair01/analysis02/summary.md)更正摘要不含x造成的callback计数错误，原01保留。19项wrapper预检01失败也保留；无补跑、温限调整或115次。下一项只用现存载荷分析搜索组织，再决定一项修订，不把接通当节能。

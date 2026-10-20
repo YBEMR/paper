@@ -1265,3 +1265,14 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 入口仅运行明确mock／小域检查，禁止原生求解器和进程启动；需要工作区`.runtime/k137_baseline.json`，已用基线完整存于预检目录`parent_baseline.json`，可核其参考提交及各历史SHA后恢复该文件。不要用旧凭据替代当前源码核验，亦不要覆盖已存在目录。
 
 [最终02](results/staged_method_precheck02/summary.md)99/99、38.703秒，147源／143继承／452历史核对；首轮01同为通过，因只测到60秒cap而补100秒mock子例，02实测R/2为47.1秒。真实小域两遍回声通过、能量同种子；0原生／研究调用、0原规模构模，不提供节能或原生性能证据。原三Stage质量验证另行冻结，本轮未运行，不恢复115次／温度扫描。
+
+
+### 3.12aq 原基准旧N1／两阶段单次质量配对（K.138）
+
+新增`run_staged_pair.py --precheck/--prepare/--run`薄包装与22项mock；核心K137 147源不改，仅新两个wrapper扩为149源。`--prepare`须匹配K137最终99项及本次wrapper最终22项凭据。`--run`对已消费、已完成或未结算claim均拒绝，不能删除claim重跑。原基准两研究调用已在[staged_quality_pair01](results/staged_quality_pair01/summary.md)正常完成；全局claim是`results/staged_pair_claim01.json`。
+
+旧N1先执行，两阶段版再独立fresh执行；第一遍原opened及60秒合作片，第二遍仅用同一300秒余量、逐scene全Stage原OPP／起点及min(60,R/k)，设备仍为本次种子。phase2按`phases`核条件，顶层condition是phase1；完整U须读`committed_safe_snapshot/global_updates`，正常预算停止不误作技术锁存，数值／接口异常仍停止后续。包装／清理／主归档和完整外部进程分别记录，不把尾部序列化补成新证据。
+
+结果旧U0.962885037941 J／190.016秒，新第一阶段U0.962884840560 J／含初始化142.344秒，第二阶段141.203秒无新增U，整调用283.547秒。微差0.197微焦耳全部来自第一遍，不作新增第二遍实用收益。阶段准备0.078秒单列包含；旧新启动56.875／9.063秒，不作单次加速结论。0热反馈，L0未闭合。AB中间数值admission是3条前缀，终态4条含新增通过final门；读取终态核覆盖，不要求两个时点副本逐字同。
+
+原生／源码／输入／声明／claims／完整时间表及[阶段CSV与图](results/staged_quality_pair01/analysis01/summary.md)、[独审](results/staged_quality_pair01/independent_review.md)保存。只读`analysis01/analysis_script.py`不生成新候选或热轨迹，既有分析目录拒绝覆盖。MAT遵守忽略规则、本地保留SHA。本轮研究已结束，不恢复115次或温度扫描。

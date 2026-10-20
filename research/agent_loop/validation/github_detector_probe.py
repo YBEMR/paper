@@ -70,6 +70,12 @@ def main():
             except urllib.error.HTTPError as exc:
                 result["requests"].append({"path": path, "method": method,
                                            "http_status": exc.code})
+                # Standard GitHub error diagnostics, no headers or credentials.
+                try:
+                    error = json.loads(exc.read())
+                    result["requests"][-1]["github_message"] = str(error.get("message", ""))[:500]
+                except (ValueError, UnicodeError):
+                    pass
                 # Do not serialize response headers or body (may include secrets).
                 raise RuntimeError("GitHub endpoint returned HTTP " + str(exc.code)) from None
 
@@ -86,6 +92,15 @@ def main():
         result["runs"] = [{key: run.get(key) for key in (
             "id", "name", "path", "event", "status", "conclusion", "html_url", "head_sha", "created_at")}
             for run in runs["workflow_runs"] if run.get("path") == ".github/workflows/" + WORKFLOW]
+        for run in runs["workflow_runs"]:
+            if run.get("path") == ".github/workflows/" + WORKFLOW and run.get("conclusion") == "failure":
+                suite = api("/check-suites/" + str(int(run["check_suite_id"])) + "/check-runs")
+                result["failed_check_runs"] = []
+                for check in suite.get("check_runs", []):
+                    annotations = api("/check-runs/" + str(int(check["id"])) + "/annotations")
+                    result["failed_check_runs"].append({"id": check["id"], "name": check["name"],
+                        "output": check.get("output"), "annotations": annotations})
+                break
         result["probe_status"] = "COMPLETED"
     except Exception as exc:
         # Known exceptions carry no credentials. Arbitrary messages are suppressed.

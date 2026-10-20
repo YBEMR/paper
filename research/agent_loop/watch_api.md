@@ -31,4 +31,8 @@ Python 接口：`detect(repo_root, config_path=..., requests_path=...) -> dict`�
 
 Actions 仅检出默认分支的受信代码与数据。PR/review 事件触发重新检测默认分支，不检出、不执行 PR 分支脚本，也不把 PR 评论当批准。新审查文件须进入默认分支后才能在此产物中出现。计划间隔配置为每 15 分钟；实际运行时间与是否产生运行记录由 GitHub 调度决定。静态配置不等于已经实际触发。
 
+工作流输出在运行步骤中使用 `$RUNNER_TEMP/agent-loop-status.json`，上传步骤在 `with.path` 使用 `${{ runner.temp }}` 指向同一文件。不能在 `jobs.detect.env` 中引用 `runner`，该位置不提供此上下文；这是 GitHub 的[上下文可用性规则](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability)。静态检查覆盖这项位置限制及检测/上传路径一致性，但不替代实际 Actions 验证。
+
+保留首次线上失败记录：根代理报告 [run 39450935582](https://github.com/YBEMR/paper/actions/runs/39450935582) 在首次发布后立即失败，手动 dispatch 返回 422；旧配置在 job 级 `env` 中使用了不允许的 `runner.temp`。现已修正这项配置错误；此处不将静态检查通过写成远程运行成功。
+
 单测命令：`python -B -m unittest discover -s research/agent_loop/tests -p test_monitor.py -v`。Windows 沙箱如不能写默认临时目录，可设置 `AGENT_LOOP_TEST_TMP` 为已有可写临时目录。测试只在 `TemporaryDirectory` 中创建隔离的 `TEST_ONLY` Git fixture，既不创建真实审查，也不启动研究调用、MATLAB、LP/MILP 或热实验。

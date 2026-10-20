@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -24,6 +25,29 @@ exec(compile(SOURCE.read_text(encoding="utf-8"), str(SOURCE), "exec"), monitor._
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+class WorkflowStaticTests(unittest.TestCase):
+    """Regression checks for runner context placement; no Actions are triggered."""
+
+    def setUp(self):
+        self.workflow = (SOURCE.parents[2] / ".github/workflows/agent-loop-watch.yml").read_text(encoding="utf-8")
+
+    def test_runner_context_is_not_used_before_steps(self):
+        steps = re.search(r"(?m)^    steps:\s*$", self.workflow)
+        self.assertIsNotNone(steps)
+        # GitHub's context table excludes `runner` from jobs.<job_id>.env.
+        self.assertNotRegex(self.workflow[:steps.start()], r"\$\{\{\s*runner[.\[]")
+
+    def test_detector_and_artifact_share_runner_temporary_output(self):
+        commands = re.findall(r"(?m)^\s+run:\s*(.+)$", self.workflow)
+        self.assertEqual(commands, [
+            'python3 -B research/agent_loop/monitor.py --repo-root "$GITHUB_WORKSPACE" '
+            '--output "$RUNNER_TEMP/agent-loop-status.json"'
+        ])
+        # runner is allowed in jobs.<job_id>.steps.with, where upload reads it.
+        self.assertIn("path: ${{ runner.temp }}/agent-loop-status.json", self.workflow)
+        self.assertNotIn("AGENT_LOOP_OUTPUT", self.workflow)
 
 
 class MonitorTests(unittest.TestCase):

@@ -1217,3 +1217,9 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 [fixed_unit_pair02](results/fixed_unit_pair02/protocol.md)是独立新阶段：复用K129配对规则、K130匹配129项凭据及135源，旧N1→新版各一次300秒，统一approved_host与原计费。两个fresh种子及初始能量完全一致。旧N1完成、安全U0.962885037941 J；新版仅保留初始SAFE U1.080823451833 J，AB数值接纳与原生exit−2冲突后停止，AC未搜索。账本已BLOCKED／2次消费，不删除claim、补跑或重开K129。
 
 [结果／图／CSV](results/fixed_unit_pair02/analysis01/summary.md)、[终审／载荷算术](results/fixed_unit_pair02/independent_review.md)保留SAFE与技术状态。请求x0与native initialPoint相同，直接残差复算通过既定容差，但不是精确可行证书；无解退出不升为独立无解。方法合226.828秒、清理19.969秒，生命周期正常。质量比较未完成，不能用本次排名；下一项只审现存AB载荷数值表达，不改原模型、调温限或恢复批量。
+
+### 3.12ak K131数值冲突定位与离线表达原型（K.132）
+
+[numerical_conflict_audit01](results/numerical_conflict_audit01/summary.md)保存一次同AB技术重建（8数组精确匹配）、原行标签、存档精确算术及最小表达。零优化器／MATLAB／候选热评价，135源、K131原档案及生产保持。`row_trace/rebuild_once.py`已消费，不能删除attempt重复构模；`audit_saved_rows.py`和`numeric_route/audit_saved_affine_route.py`只读存档算术，可复核已保存结果。
+
+全joint取补因269行右端非无损表示而拒绝；仅物理行增加补变量通过精确投影核查，但新增2400连续变量与2400等式，链接容差会放大原行误差。它仅是离线原型，不能当原生故障已修。下一项建议一次180秒总墙钟、native≤60秒的独立技术接纳；生产final／callback投影、原行复核及动态反馈仍未实现。原K131质量配对不补跑，115次与温限扫描暂停。

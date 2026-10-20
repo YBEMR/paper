@@ -4,7 +4,7 @@
 
 **K.147／D171：GitHub交接与审批基础设施验收，真实执行仍关闭（E592）。** 用户要求由原有另一段ChatGPT独立审查，执行端不得代写reviews；已保存[协议](research/agent_loop/PROTOCOL.md)、固定subject／hash交接、只读检测器、签名／一次性消费／Git远端CAS／预算预留／STOP。[门禁28项](research/agent_loop/validation/gate_unittest.json)、[监测25项](research/agent_loop/validation/monitor_unittest.json)及[TEST_ONLY全链](research/agent_loop/validation/test_only_e2e.json)通过；均为基础设施测试，0研究／MATLAB／LP/MILP／热计算。原165源码及301旧工件保持，未创建真实reviews。
 
-**授权与阻塞：** 用户确认外部“GitHub 独立实验审查”每小时启用，双方同YBEMR；后续明确授权最多2轮、累计2次×300秒、累计600研究秒、总墙钟7200秒、北京时间2026-10-21 07:00截止，无改善／技术故障即停、不补跑。config已记新配额，未复用历史预算；真实来源／公钥、实际写回、受控Windows/MATLAB执行链仍未验收，开关false。GitHub只读检测按每15分钟配置，不能唤醒外部聊天或替代审批；本机有界heartbeat创建失败，不声称会自动续接。当前待审为[K146交接](research/agent_loop/rounds/K146-handoff-001/experiment_report.md)及“5开1闭”只读范围／成本审查提案，未授权实施或求解。详见[验收与实际远程检测记录](research/agent_loop/ACCEPTANCE.md)。
+**授权与阻塞：** 用户确认外部“GitHub 独立实验审查”每小时启用，双方同YBEMR；后续明确授权最多2轮、累计2次×300秒、累计600研究秒、总墙钟7200秒、北京时间2026-10-21 07:00截止，无改善／技术故障即停、不补跑。config已记新配额，未复用历史预算；真实来源／公钥、实际写回、受控Windows/MATLAB执行链仍未验收，开关false。GitHub只读检测每15分钟配置，手动实测成功并返回WAITING_REVIEW，不能唤醒外部聊天或替代审批；本机heartbeat最终创建成功：每小时最多6次、ACTIVE、早于明早07:00结束；尚未实测唤醒，依赖本机／App，不等于科研执行已通。当前待审为[K146交接](research/agent_loop/rounds/K146-handoff-001/experiment_report.md)及“5开1闭”只读范围／成本审查提案，未授权实施或求解。详见[验收与实际远程检测记录](research/agent_loop/ACCEPTANCE.md)。
 
 **K.146／D170：联动—HEFT存档差异分析完成，0研究调用（E591）。** 用户只授权对比部署、工作点、时序和组成，不补跑、不改参数。原输入三文件逐字相同、165源与301份K142原工件保持。[分析](research/chapter3_experiments/results/linked_heft_gap_analysis01/summary.md)：K142联动0.962885037941 J，K145 HEFT0.881087997281 J，完整方案差0.081797040660 J；活动0.056607632、基准0.020300000、温度修正0.004889409 J，公共项不变。这是跨批次方案账差，不拼四法排名或单因素因果。
 

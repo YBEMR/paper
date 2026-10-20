@@ -1223,3 +1223,11 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 [numerical_conflict_audit01](results/numerical_conflict_audit01/summary.md)保存一次同AB技术重建（8数组精确匹配）、原行标签、存档精确算术及最小表达。零优化器／MATLAB／候选热评价，135源、K131原档案及生产保持。`row_trace/rebuild_once.py`已消费，不能删除attempt重复构模；`audit_saved_rows.py`和`numeric_route/audit_saved_affine_route.py`只读存档算术，可复核已保存结果。
 
 全joint取补因269行右端非无损表示而拒绝；仅物理行增加补变量通过精确投影核查，但新增2400连续变量与2400等式，链接容差会放大原行误差。它仅是离线原型，不能当原生故障已修。下一项建议一次180秒总墙钟、native≤60秒的独立技术接纳；生产final／callback投影、原行复核及动态反馈仍未实现。原K131质量配对不补跑，115次与温限扫描暂停。
+
+### 3.12al 存档增广表达的唯一原生接纳（K.133）
+
+新增`augmented_payload.py`与`run_augmented_native_check.py`，独立技术入口不接生产求解。纯载荷变换保持原坐标／目标／整数索引，只新增已核连续补变量；`validate_projected_vector`同时核原行、增广与链接。所有callback／final失败锁存未决，禁止近似修复。载荷[34项预检](results/augmented_payload_precheck01/checks.json)及driver[19项预检02](results/augmented_driver_precheck02/checks.json)通过；01的临时目录权限失败保留。
+
+[augmented_native_check01](results/augmented_native_check01/summary.md)为已消费唯一技术调用：原AB／x0，原生exitflag2，返回原同点、原行容差通过，无新SAFE或能耗更新。完整进程87.034秒≤180；MaxTime设60但实际原生62.960秒，超2.960秒。raw PASS只覆数值／总时间门，未检查实际native≤60，必须合读[最终时间审计](results/augmented_native_check01/analysis02/facts.json)及[独审](results/augmented_native_check01/independent_review.md)，不得直接作为质量准入凭据。所有MAT按忽略规则本地保留并记SHA，不强制上传。
+
+`--prepare/--run`及claim用于本次冻结的单次技术协议，不能删除原账本重复执行。`analysis02/analyze_saved_records.py`只读已存数组，不热重算或补及时证据。生产final／callback／动态反馈尚未集成；下一项先补原行接纳与动态重建映射的小域检查，再另定质量协议。K131原结果、原SAFE及115次暂停状态保持。

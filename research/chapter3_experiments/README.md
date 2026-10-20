@@ -1331,3 +1331,9 @@ K142末请求为正常根截止、先前完整U保留、最后请求未决；旧
 用户明确授权后，原K144入口唯一执行HEFT→SA101各一次300秒，ledger COMPLETED／consumed2，独占global与method claims保留，不能重启。原165源／参数／合法域／auto-L与连续热标准保持。[结果](results/heft_sa_followup01/k145_summary.md)：HEFT U0.881087997281 J、43.250秒正常完成；SA101 U0.907346431253 J、300秒正常截止，末候选未决、旧完整SAFE保留。单列首SAFE1.125／1.125秒、首strict12.266／2.782秒、封存和提取。包装348.563秒非未测的全进程墙钟。
 
 [静态分析](results/heft_sa_followup01/k145_analysis.json)及[独立终审](results/heft_sa_followup01/k145_independent_review.md)核已存完整时间表、热包络、能量和预算，未重算热或补搜索。SA比HEFT能量高2.9802%，仅单次单种子结论；共同L0未闭合、0违规、无本次反馈收益证据。下一项建议仅已存联动与HEFT方案差异分析，不拼K142四法同轮、不恢复115次。
+
+### 3.12ay 联动与HEFT已存方案差异（K.146）
+
+[报告](results/linked_heft_gap_analysis01/summary.md)、[静态算术／成员入口](results/linked_heft_gap_analysis01/compare_saved.py)仅读K142／K145存档；同输入和评价器、完整400 ms窗口，0研究／构模／热重算／生产修改。差0.081797040660 J，活动／基准／温度项0.056607632／0.0203／0.004889409 J。首遍A固定、二遍main/post闭合使HEFT组合域外；二遍只剩77.344秒并仅回warm，无热拒绝。共享部署与场景OPP分层，不把CPU差当全部原因。
+
+K135／138全开早试无新增；K140同seed设备曾到0.910240996773 J。下一项仅建议审查二遍5开1闭替换4开2闭（A整链＋本地pre/main开放，post锚定，设备不改），尚未实施或证明收益，不加阶段／预算，不重跑或恢复115次。

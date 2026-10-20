@@ -1296,3 +1296,12 @@ bridge在READY／close／force前记录已观察的本次PID及创建时间，�
 [唯一配对](results/linked_quality_pair01/summary.md)已结束：旧U0.962885037941 J／147.562秒，新U0.910240996773 J／274.688秒，严格降低5.4673%。第二遍自身降低0.052643843787 J、3次完整更新，含setup133.422秒；仅AB的A链＋B.pre改L及起点，AC无新增，closed后缀固定phase1完整锚、unit固定原fresh seed。第一遍微差不算第二遍贡献。所有U仍经原输入完整连续评价／全场景汇总，0热反馈，未证最优或全域不可行。
 
 独立准入25／终审41项通过，157源／快照、155继承与1087历史保持；分析只核160份原档案及保存回执，不重算热或补搜索。[CSV／U曲线](results/linked_quality_pair01/analysis01/summary.md)、双锚、数值门、原生合作式停止延迟与清理均保存。只支持本次质量与成本记录，不据历史HEFT或其他任务声明排名。两研究调用已消费，不补跑、不加预算、不自动启动115次或新热条件。
+
+
+### 3.12at 第三章四方法最小对照准备（K.141）
+
+新增`run_minimal_comparison.py`与`test_minimal_comparison.py`，原157源保持。`--precheck --out NEW_DIR`只跑mock；最终[03凭据](results/fair_comparison_wrapper_precheck03/checks.json)25/25，01失败和02旧源通过档案保留。`--prepare --out NEW_DIR --checks ...`冻结159源、三输入及整体MILP→linked→HEFT→SA101各300秒规则，检查K140继承157与K127122／3关系，不重跑旧67或调用模型／热评。
+
+[唯一准备目录](results/fair_comparison_preparation01/summary.md)已保存，ledger DECLARED、consumed0。未来`--run --execution-authorized --out ...`或已保存launcher只供下一执行阶段；本轮未启动。global／launcher／逐方法claims不得删除重开；技术故障停止未启动方法，无补跑／延时。不要复用旧K127已到期的夜间controller。`source_audit.py --out NEW_JSON`可只读复核继承关系，不产生物理证据。
+
+整体保留原全域表达／conditional反馈，HEFT／SA显式auto-L且保留mapping自由，linked保持原种子unit、两遍／双锚和60秒scene合作片。公共代码加载、包装、清理与方法内300秒分列；whole L0计费形成，首候选／合法／SAFE按真实嵌套schema取值。当前独审24项通过，暂无新排名／节能／热反馈结果。下一项仅四调用小范围比较，SA101单次探索，不恢复115次、温限扫描或额外组件。

@@ -2,15 +2,17 @@
 
 更新：2026-10-21。
 
-**K.156／D181：账本写入与双终态修复通过167项预检，已冻结原P0剩余37槽续接（E601），尚待本次实际启动。** 用户明确授权仅原第4—40槽，前三次不重跑；原178方法／参数、K155的197源和全部旧工件保持，只新增[执行层协议](research/chapter3_experiments/p0_resume/protocol.md)与[冻结声明](research/chapter3_experiments/results/p0_resume01/declaration.json)，总203源绑定。每次300秒，原3次900＋本次37次11100＝40次12000秒；日历仍K155最初启动UTC＋19200秒，不重置且计入诊断／准备暂停。原global／slot／post claims只读，新root独占续接；科学方法和初始化不借旧见证／缓存。
+**K.156／D181：账本修复后37次续接全部完成，P0合计40/40份最终SAFE（E601）。** 前三次未重跑，37份新结果均完成原定一次post；167项必要预检及453项终态存档核查通过，203项冻结源与旧工件保持，续接无技术故障。每次300秒接纳截止，原3次900＋本次37次11100＝12000预留方法秒；实计方法根时钟10542.234秒，原启动至终态12685.815秒＜19200秒，暂停计入且未重置。完整[阶段结果与图](research/chapter3_experiments/results/p0_resume01/summary.md)、[40次CSV](research/chapter3_experiments/results/p0_resume01/analysis01/results40.csv)、[453项核查](research/chapter3_experiments/results/p0_resume01/record_review01.json)保存。
 
-**执行层改变：** 同次pending替换WinError5／32最多重试1秒，永久错误／旧pending仍停，不重跑方法。监督只读compact status，不读大账本；完整方法回执先独占落盘，再改账本；worker与supervisor独立写终态，异常不再仅留下RUNNING。原300秒证据截止、420／480秒监督及一次60秒post不变；故障／数值覆盖未决／post失败仍停后续。首轮测试的4个同名监督器导入及1个返回键兼容错误留存，修正后167/167，0新研究／MATLAB／模型／热调用。当前续接状态以[p0_resume账本](research/chapter3_experiments/results/p0_resume01/ledger.json)和独立终态为准，不能据准备完成声称37次已运行。
+**质量与限制：** 联动相对HEFT在R1／R2／R4／R5分别低2.318117%／10.067571%／0.011967%／5.875998%，R3高8.662912%；HEFT五题均更快。联动五题均低于整体MILP，第二阶段5/5有严格安全改善，但不构成等预算消融或全域最优证明。SA五种子分别及分布保存，不以五次最优值冒充单次竞争者。40次保存热违规0／反馈0，独立L0未闭合、全域最优及无解证明均0；本批不能宣称热反馈求解收益。MATLAB启动差异与分段执行如实保留，不作统计稳定性或实机收益结论。
 
-**K.155执行结果：P0在3/40次后因账本写入故障停止，37次未启动，无补跑／延时。** 三份R1最终安排均SAFE并完成各自一次post；U依次整体1.084886371304、联动0.860663343334、HEFT0.881087997281 J。联动本次严格低于HEFT 2.318117%，HEFT更快；SA／R2—R5尚无结果，不能称40次完成或总体排名。整体正常截止末请求未决，联动与HEFT方法正常完成；故障在HEFT返回后替换账本，非求解／热模型失败。消费3次／900预留秒，方法时钟合610.219秒、监督637.579秒，0新热反馈／全域证明。[阶段结论](research/chapter3_experiments/results/p0_execution01/summary.md)、[派生终态](research/chapter3_experiments/results/p0_execution01/terminal_receipt.json)、[27项核查](research/chapter3_experiments/results/p0_execution01/failure_review01/review.json)保存。
+**执行层改变与完成边界：** 同次pending替换WinError5／32最多等待1秒，监督只读compact status，方法回执先独占落盘，worker／supervisor均已COMPLETED、退出0。原197源与旧三次证据／claims不改，不借旧见证或缓存；首轮5项夹具接口错误留档，最终167项预检无研究调用。原300秒证据截止、420／480秒停止监督及各一次60秒post保持。外部自动审查仍暂停，453项为本会话存档核查。阶段已结束；下一步先审阅P0及R3反向结果，再确认下一组既定实验预算，不自动启动后续批次或调参。
 
-**故障处理边界：** 原ledger及pending保留，因此旧文件仍显示HEFT RUNNING；实际进程已退出，以派生终态和退出日志解释，不改写历史。197冻结源与原153工件保持；原定HEFT一次post已完成，无重跑。Windows读句柄占用可在小夹具复现，但实际锁持有者未定位；1秒有界IO重试候选8/8通过，仅留在故障目录，未接入冻结源码。下一步建议接入写入修复及独立故障终态、作并发读写／退出预检，再单独冻结未执行37槽的后续安排；不直接重启本批、不重跑前三次、不改科学模型或方法。
+**K.155历史执行结果：P0在3/40次后因账本写入故障停止，当时37次未启动，无补跑／延时。** 三份R1最终安排均SAFE并完成各自一次post；U依次整体1.084886371304、联动0.860663343334、HEFT0.881087997281 J。联动本次严格低于HEFT 2.318117%，HEFT更快；SA／R2—R5尚无结果，不能称40次完成或总体排名。整体正常截止末请求未决，联动与HEFT方法正常完成；故障在HEFT返回后替换账本，非求解／热模型失败。消费3次／900预留秒，方法时钟合610.219秒、监督637.579秒，0新热反馈／全域证明。[阶段结论](research/chapter3_experiments/results/p0_execution01/summary.md)、[派生终态](research/chapter3_experiments/results/p0_execution01/terminal_receipt.json)、[27项核查](research/chapter3_experiments/results/p0_execution01/failure_review01/review.json)保存。
 
-用户已确认P0 40次×300秒，实际启动协议及163项预检通过，准备执行（E600）。** R1—R5每题整体／预消元联动／HEFT各1＋SA101—105各1，顺序及输入沿K154，原178方法／配置与191准备源不改。新增[实际总控协议](research/chapter3_experiments/p0_execution/protocol.md)与[冻结声明](research/chapter3_experiments/results/p0_execution01/declaration.json)绑定197项源／协议／依赖；方法上限12000秒，日历硬限19200秒，单槽返回／清理420秒、含post／归档480秒均不延长300秒安全证据截止。真实claims独占消费，无恢复／补跑入口；正常截止经原回执与隔离核对可继续，故障／数值覆盖未决／post失败停后续。每份已接纳最终SAFE只作一次60秒post，不补搜索或改U。当前进度以[p0账本](research/chapter3_experiments/results/p0_execution01/ledger.json)为准；未把准备通过写成已运行40次。自动外审仍暂停，依据本轮直接授权执行。
+**K.155故障处理历史：** 原ledger及pending保留，因此旧文件仍显示HEFT RUNNING；实际进程已退出，以派生终态和退出日志解释，不改写历史。197冻结源与原153工件保持；原定HEFT一次post已完成，无重跑。Windows读句柄占用可在小夹具复现，但实际锁持有者未定位；1秒有界IO重试候选8/8通过，仅留在故障目录，未接入冻结源码。下一步建议接入写入修复及独立故障终态、作并发读写／退出预检，再单独冻结未执行37槽的后续安排；不直接重启本批、不重跑前三次、不改科学模型或方法。
+
+**K.155历史冻结：用户确认P0 40次×300秒，实际启动协议及163项预检通过，当时准备执行（E600）。** R1—R5每题整体／预消元联动／HEFT各1＋SA101—105各1，顺序及输入沿K154，原178方法／配置与191准备源不改。新增[实际总控协议](research/chapter3_experiments/p0_execution/protocol.md)与[冻结声明](research/chapter3_experiments/results/p0_execution01/declaration.json)绑定197项源／协议／依赖；方法上限12000秒，日历硬限19200秒，单槽返回／清理420秒、含post／归档480秒均不延长300秒安全证据截止。真实claims独占消费，无恢复／补跑入口；正常截止经原回执与隔离核对可继续，故障／数值覆盖未决／post失败停后续。每份已接纳最终SAFE只作一次60秒post，不补搜索或改U。当前进度以[p0账本](research/chapter3_experiments/results/p0_execution01/ledger.json)为准；未把准备通过写成已运行40次。自动外审仍暂停，依据本轮直接授权执行。
 
 **K.154／D179：P0基准批准备完成，139项预检及20项存档核对通过，0研究调用（E599）。** 新增[多问题入口与协议](research/chapter3_experiments/p0_batch/protocol.md)、[阶段说明](research/chapter3_experiments/results/p0_batch_preparation01/summary.md)和40槽声明，独立展开base__R1—R5原完整AB／AC链，保留400 ms／5 ms、auto-L、原功热与安全标准。178份旧源码不改；五个输入身份、方法轮转／SA101—105、派发参数、截止处理及完整回执条件已核。R1仍是拟议新批的预声明重复，不复用K152见证或配额。首轮系统版本查询触发子进程禁用门的2项失败保留，修正测试环境后139/139通过；340份K152原工件保持。
 
@@ -1835,3 +1837,5 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 - 预测0.25 ms，最终方案与最优完成集合共同以0.005 ms采样验证，最优能耗不变；均无首次最优分歧。仍仅为合成参数、1 ms调度网格和采样温度约束下的结论。
 - 修复等待分支、未来映射提前比较、ready状态和初温峰值统计；回归检查全部通过。原报告保留，新报告及源码快照在`research/matlab_thermal_sched_src/reports_waiting/run_20260920_163834/`。
 - 当前判断：这批差距已被单阶段主动等待消除，暂不据此主张新联合算法的必要性。结果及限制见[实施报告](research/07_主动等待基线实施结果.md)。
+
+**D181执行补充（2026-10-21）：** 原第4—40槽37次全部完成，worker／supervisor正常终态；与原三次合计40次，未重跑／延时。40份最终SAFE均完成原定一次post，453项终态存档核查通过；203源和旧工件保持。方法根时钟合10542.234秒、原启动至最终终态12685.815秒＜19200秒。联动相对HEFT四题更低、R3更高，第二阶段五题均有严格改善，0反馈／0全域证明；阶段结束，不自动追加批次。详见E601与p0_resume01/summary.md。

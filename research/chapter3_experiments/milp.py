@@ -713,7 +713,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
                 fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None,
                 fixed_shared_deployment=None, cumulative_precedence=False,
-                neighborhood_condition=None):
+                neighborhood_condition=None, preeliminate_closed_anchors=False):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
@@ -732,6 +732,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     A separately bound N1 neighborhood may retain a subset of local options
     before event construction. This is a search subdomain, not an equivalent
     formulation of the full problem; omitted/None preserves the original path.
+    Default-off closed-anchor preelimination applies only to a validated linked
+    condition. It removes original resource/direct-edge impossibilities before
+    events; physical coefficients and all numerical lifts must be rebuilt.
 
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
@@ -739,6 +742,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     """
     if type(cumulative_precedence) is not bool:
         raise ValueError('cumulative_precedence must be a bool')
+    if type(preeliminate_closed_anchors) is not bool:
+        raise ValueError('preeliminate_closed_anchors must be a bool')
     budget = budget if budget is not None else Budget()
     budget.check()
     idle_policy = resolve_idle_policy(instance)
@@ -768,6 +773,9 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             # Preserve N1's validation and rejection semantics for its path.
             n1_condition = validate_n1_condition(instance, neighborhood_condition,
                 budget=budget, shared_deployment=fixed_shared_deployment)
+    if preeliminate_closed_anchors:
+        if n1_condition is None or n1_condition['protocol'] != LINKED_PROTOCOL:
+            raise ValueError('Closed-anchor preelimination requires a validated linked condition')
     adapted = (fixed_deployment is not None or partial_fixed or prefilter_deadlines
                or fixed_scene_id is not None)
     if fixed_scene_id is not None and fixed_deployment is None and not partial_fixed:
@@ -865,6 +873,13 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 retained.append(option)
         model.preprocessing['deadline_removed_count'] = len(options)-len(retained)
         options = retained
+    if preeliminate_closed_anchors:
+        from anchor_preelimination import filter_closed_anchor_options
+        model.report('closed_anchor_preelimination')
+        options, stats = filter_closed_anchor_options(instance, n1_condition, options,
+            budget=budget, scene_ids=[scene['id'] for scene in model.instance['scenarios']])
+        model.preprocessing['closed_anchor_preelimination'] = stats
+        model.formulation['preeliminate_closed_anchors'] = True
     model.options = options
     model.report('mode_variables')
     model.option_vars = [model.var('y:'+o['option_id'], integer=True) for o in options]

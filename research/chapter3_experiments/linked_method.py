@@ -10,7 +10,7 @@ def execute_linked_fixed_unit_opp_start(input_loader, workdir, *,
         seconds=300, scene_slice_s=60, budget=None, clock=time.monotonic,
         session_factory=None, condition_factory=None, second_condition_factory=None,
         n1_scene_evaluator=None, second_scene_evaluator=None,
-        augmented_context_factory=None, **kwargs):
+        augmented_context_factory=None, preeliminate_closed_anchors=False, **kwargs):
     """Use one fresh seed, one root deadline and the original settled worker.
 
     ``opened_by_scene`` is the original first-pass N1 declaration. The distinct
@@ -44,6 +44,20 @@ def execute_linked_fixed_unit_opp_start(input_loader, workdir, *,
         from neighborhood_adapter import evaluate_n1_scene
         from neighborhood_method import execute_n1_neighborhood
         from scene_adapter import canonical_hash
+
+        if type(preeliminate_closed_anchors) is not bool:
+            raise ValueError('preeliminate_closed_anchors must be a bool')
+        if preeliminate_closed_anchors:
+            from milp import build_model
+            original_builder = kwargs.pop('model_builder', build_model)
+
+            def anchor_builder(instance, config, **options):
+                active = options.get('neighborhood_condition', {})
+                if active.get('protocol') == LINKED_CONDITION_PROTOCOL:
+                    options['preeliminate_closed_anchors'] = True
+                return original_builder(instance, config, **options)
+
+            kwargs['model_builder'] = anchor_builder
 
         reserved = {'membership_checker', 'evaluation_protocol', 'condition_protocol',
                     '_method_identity', '_second_phase'}
@@ -163,6 +177,10 @@ def execute_linked_fixed_unit_opp_start(input_loader, workdir, *,
         'scenes': 'latest local metadata; may precede the last complete global aggregate',
         'phases': 'per-pass condition, model, initialisation and solver records',
         'committed_safe_snapshot': 'only complete global generation and second-pass warm source'}
+    if preeliminate_closed_anchors:
+        result['linked_record_contract']['closed_anchor_preelimination'] = {
+            'enabled': True, 'phase_indices': [2],
+            'scope': 'original linked integer schedules retained; all filtering billed before events'}
     result['linked_budget_boundary'] = {
         'entry_owns_budget': entry_owns_budget,
         'clock_begins_before_adapter_import_and_context': True,

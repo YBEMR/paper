@@ -27,7 +27,9 @@ def _source_hash():
 
 
 def _dependency_hashes():
-    return {'neighborhood.py': hashlib.sha256(Path(n1.__file__).read_bytes()).hexdigest()}
+    return {'neighborhood.py': hashlib.sha256(Path(n1.__file__).read_bytes()).hexdigest(),
+        'anchor_preelimination.py': hashlib.sha256(
+            Path(__file__).with_name('anchor_preelimination.py').read_bytes()).hexdigest()}
 
 
 def _opened(instance, opened, budget):

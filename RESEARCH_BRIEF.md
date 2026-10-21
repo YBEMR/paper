@@ -1,10 +1,18 @@
 # 研究状态
 
-更新：2026-10-21。
+更新：2026-10-22。
 
-**K.158／D183：P1统一1/f响应组已完成独立适配、185项必要预检及冻结，尚未启动调用（E603）。** [协议](research/chapter3_experiments/p1_batch/protocol.md)、[准备说明](research/chapter3_experiments/results/p1_execution01/summary.md)、[声明](research/chapter3_experiments/results/p1_execution01/declaration.json)保存，211项源绑定、14项准备核对通过。仅response_R R1—R5的40槽，各300秒、12000方法秒／19200日历秒；原203源／参数／完整安全保持，P0不重跑不改写。新输入独立重载与计费，不借P0候选／缓存。首轮185项中5个目录标签预期差异留存，修正纯夹具后全过，0研究／原生／模型／热调用。待提交冻结后按本次已确认预算执行，其他条件不自动启动。
+**K.158完成／D183：P1 response_R共40/40次完成，40份最终方案均SAFE（E603执行补充）。** 185项必要预检、14项冻结核对及489项终态存档核查通过；211源／输入保持，无技术故障、无补跑，worker／process均COMPLETED。[结果与图](research/chapter3_experiments/results/p1_execution01/summary.md)、[40次CSV](research/chapter3_experiments/results/p1_execution01/analysis01/results40.csv)、[存档核查](research/chapter3_experiments/results/p1_execution01/record_review01.json)已存。
 
-**D183：用户已单独批准P1响应组40次预算，先适配／预检／冻结，再执行。** 范围response_R__R1—R5，每题整体／联动／HEFT各1＋SA101—105各1；每次300秒，方法总上限12000秒、总日历19200秒，不补跑／延时，不改既有方法、参数及安全标准。当前仅开始独立P1接口准备，未启动新研究调用。D182的“尚缺预算”是本次确认前的记录；B／C／D其余条件仍未授权。
+联动R1—R5的U为0.901812648325／0.904029114143／1.001135476136／1.029573489263／0.970744327679 J，相对HEFT降低4.618619%／7.084054%／-6.314225%／-10.016743%／-1.209506%；2/5题严格更低，负值为更差。HEFT在5/5题更快；第二阶段5/5题有严格改善。
+
+保存热违规0／反馈0；独立全域最优0／无解0，L0高于U异常0。solver-reported和局部状态不升级为全域证明，未新增扫描或认证工作。预留12000方法秒，实际根时钟合10282.141秒；从本批启动至终态日历10645.915秒＜19200秒。启动／构模／求解／内部连续复核全部计费，停止延迟与各一次post另列；预算后新U未接纳，不补跑／延时。
+
+P1是共同真实响应输入α=1的对照条件；与P0不同问题，不把两批能量差称为共同评价下的建模节能收益。SA101—105逐次及分布保留，不作五取一等预算排名；固定五变体及单次确定性运行不外推稳定性。本阶段结束，下一项先审阅本组正反结果，再确认后续既定条件及预算；不自动启动其他批。
+
+**K.158冻结历史／D183：P1统一1/f响应组已完成独立适配、185项必要预检及冻结，已按冻结协议启动（E603）。** [协议](research/chapter3_experiments/p1_batch/protocol.md)、[准备说明](research/chapter3_experiments/results/p1_execution01/summary.md)、[声明](research/chapter3_experiments/results/p1_execution01/declaration.json)保存，211项源绑定、14项准备核对通过。仅response_R R1—R5的40槽，各300秒、12000方法秒／19200日历秒；原203源／参数／完整安全保持，P0不重跑不改写。新输入独立重载与计费，不借P0候选／缓存。首轮185项中5个目录标签预期差异留存，修正纯夹具后全过，0研究／原生／模型／热调用。待提交冻结后按本次已确认预算执行，其他条件不自动启动。
+
+**D183授权历史：用户已单独批准P1响应组40次预算，先适配／预检／冻结，再执行。** 范围response_R__R1—R5，每题整体／联动／HEFT各1＋SA101—105各1；每次300秒，方法总上限12000秒、总日历19200秒，不补跑／延时，不改既有方法、参数及安全标准。当前仅开始独立P1接口准备，未启动新研究调用。D182的“尚缺预算”是本次确认前的记录；B／C／D其余条件仍未授权。
 
 **K.157／D182：已读取最新独立建议0e8a69c，完成P0／R3零调用诊断及四类条件草案（E602）。** [只读分析报告](research/chapter3_experiments/results/p0_readonly_review01/summary.md)、[25项记录核对](research/chapter3_experiments/results/p0_readonly_review01/checks.json)、[31项来源核对](research/chapter3_experiments/results/p0_readonly_review01/source_checks.json)已存；原方法／参数／P0工件不改，0求解／热评价／研究调用。采纳先收拢已有证据、分批扩展的建议，不把750或160次作为论文硬门槛。
 

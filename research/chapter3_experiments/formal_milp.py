@@ -98,10 +98,11 @@ def add_assignment_feedback(model, candidate, evaluation):
 
 
 def solve_formal_diagnostic(model, session, accuracy, budget, *,
-                            feedback_kind='conditional', max_rounds=OUTER_ROUND_LIMIT):
+                            feedback_kind='conditional', max_rounds=OUTER_ROUND_LIMIT,
+                            recorder_factory=Recorder):
     """One common outer loop; no variant-specific candidates or initialization."""
     _require_kind(feedback_kind)
-    recorder = Recorder(model, accuracy, budget, session.workdir.parent)
+    recorder = recorder_factory(model, accuracy, budget, session.workdir.parent)
     session.event_consumer = recorder.poll
     result = {'state': 'UNRESOLVED', 'safe_candidate': None, 'safe_upper_bound_J': None,
               'evaluation': None, 'rounds': [], 'feedback': [], 'feedback_kind': feedback_kind,
@@ -177,15 +178,17 @@ def solve_formal_diagnostic(model, session, accuracy, budget, *,
 
 def execute_formal_milp(input_loader, out, *, seconds,
                         feedback_kind='conditional', clock=time.monotonic,
-                        model_builder=build_model, session_factory=MatlabSession):
+                        model_builder=build_model, session_factory=MatlabSession,
+                        diagnostic_solver=None):
     """Fresh invocation, no shared cache/witness, with a caller-declared budget.
 
     This entry is prepared for later frozen comparisons. Calling it does not
     itself authorize an experiment list or choose its wall-clock budget.
     """
     _require_kind(feedback_kind)
+    selected_solver = solve_formal_diagnostic if diagnostic_solver is None else diagnostic_solver
     solver = partial(solve_with_initial_witness,
-        diagnostic_solver=partial(solve_formal_diagnostic, feedback_kind=feedback_kind))
+        diagnostic_solver=partial(selected_solver, feedback_kind=feedback_kind))
     result = execute_warm(input_loader, out, seconds=seconds, clock=clock,
                           model_builder=model_builder, session_factory=session_factory,
                           solver=solver)

@@ -14,10 +14,43 @@
 F:/Anaconda3/python.exe -B research/chapter3_experiments/results/deadline_analysis_tools01/test_pure.py
 ```
 
-终态后（新输出目录，不覆盖）：
+原2/40停止分析已保存在旧目录的analysis01/02。K164冻结后，整个
+`deadline_execution01`严格只读；下述旧入口仅保留历史解析功能，输出必须另选新目录：
 
 ```text
-F:/Anaconda3/python.exe -B research/chapter3_experiments/results/deadline_analysis_tools01/analyse_deadline.py --out research/chapter3_experiments/results/deadline_execution01/analysis01
+F:/Anaconda3/python.exe -B research/chapter3_experiments/results/deadline_analysis_tools01/analyse_deadline.py --out research/chapter3_experiments/results/deadline_analysis_tools01/old_stopped_new_output
 ```
 
 预计执行层240源；若实际冻结数不同，显式指定`--expected-sources`，仍逐文件核源码和快照，不略过hash检查。当前工具开发阶段没有读取或分析未完成的本批结果。
+
+## K164原40槽的分段联合分析
+
+`analyse_combined_deadline.py`只读原2槽＋原序号3—40的续接，不把P0方法拼入本轮。
+核对原240源、新248源、旧目录全部冻结工件及每个封存槽的artifact hash；不读取活动ledger、
+未封存raw或method_return。没有result＋artifact清单的槽只记未封存，不提取其中能量。
+
+原第二槽通过hash绑定的`cancel_adapter`审查记录取得派生正常截止状态，并用外部原预定一次
+延迟post复核已有U；raw/stored/derived状态、原post缺失与有效post来源分列，不运行适配器、
+求解、积分或post，不产生新U。无U的NOT_APPLICABLE不计SAFE。首SAFE、阶段、界、
+精确逐请求期限裕量、25个SA种子及成功中位数/缺失数、P0两水平条件参照均单独输出。
+
+纯夹具：
+
+```text
+F:/Anaconda3/python.exe -B -m unittest discover -s research/chapter3_experiments/results/deadline_analysis_tools01 -p "test*_pure.py" -v
+```
+
+只有封存前缀可用时（不宣告整批完成）：
+
+```text
+F:/Anaconda3/python.exe -B research/chapter3_experiments/results/deadline_analysis_tools01/analyse_combined_deadline.py --prefix --out research/chapter3_experiments/results/deadline_resume01/analysis_prefix01
+```
+
+`deadline_resume01/process_terminal.json`出现后才可作完整分析：
+
+```text
+F:/Anaconda3/python.exe -B research/chapter3_experiments/results/deadline_analysis_tools01/analyse_combined_deadline.py --out research/chapter3_experiments/results/deadline_resume01/analysis01
+```
+
+所有输出要求新目录，拒绝写入旧`deadline_execution01`目录。`--no-plots`可略过静态绘图，
+不会改变证据接纳。图中缺失能量不填0，前缀图标明封存进度；P0两点比较只作独立条件比较。

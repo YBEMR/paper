@@ -2,6 +2,17 @@
 
 更新：2026-10-22。
 
+**K.170／D195：部分赋值下界接口与安全剪枝纯预检完成（E615）。** [总报告](research/chapter3_experiments/results/partial_bound_precheck01/summary.md)、[接口合同](research/chapter3_experiments/conditional_energy_bound/README.md)、[最终run05](research/chapter3_experiments/results/conditional_energy_bound_precheck01/run05/checks.json)、[稳定探针/成本run02](research/chapter3_experiments/results/partial_bound_precheck01/review/probe_cost_run02/results.json)保存。新增standalone prepare/bound/原P0 U只读接纳/严格剪枝判读；未接生产，原参数/数学/热安全保持。bounds锁定9b4fc402…de02c6e0a，19项独立数学/身份核对及9组纯预检通过。
+
+保留共享Stage所有场景/请求副本的具体设备一致，OPP逐副本；未知/冲突拒绝无界，不当原问题无解。新界max(legacy条件界,容量分摊完整界,forced驻留完整界)，背景/活动源分解及CPU M/H差分不重计。无安全U不剪；仅LB>同输入既有完整安全U时排除更优延伸，等号保留并列。
+
+固定490项后验条件中255能量排除；扣普通期限与派生旧界后新增187，其中66处于当前联动设备层兼容范围，仍不等于实际开放或已访问。forced比capacity再排22项（设备层兼容11），未被旧界/期限覆盖。R1 AB B.post CPU2/H：capacity .859641815453≤原U .860663343334，forced .860691815453>U约28.472µJ。单列3H链forced比capacity提高16.625mJ，属旧联动设备层外。
+
+固定3次算术成本：各题prepare+root中位8.72—11.80ms，98条件bound+判读116.95—137.00ms；旧U读取/hash另计，不当方法总耗时或加速。人工64组模式标签ledger与部分赋值无高估，未生成调度/热轨迹；早期夹具缺字段、旧源码及一次成本源漂移失败均保留，不作最终凭据。
+
+下一项助手建议只读回放原P0每次build时的同次已成完整U与实际局部模式域/闭锚/原过滤，判断是否真有及时可删项；若有再讨论构模前筛选接线，否则保留质量界、停止生产筛选投入，不新建B&B。此建议尚未变成实施授权。本轮0优化/模型构造/热积分/正式候选/新研究调用，无新U；原253源及旧结果保持，期限16/24、K168pending不变。新增.py可能影响未来发现式源清单，K168执行前须重核，不能复用旧准备称已可run。以下K169及更早为历史。
+
+
 **K.169／D194：主线C12型机制与C17型独立下界零调用审查完成（E614）。** [总报告](research/chapter3_experiments/results/mainline_mechanism_audit01/summary.md)、[C12账本](research/chapter3_experiments/results/mainline_mechanism_audit01/c12/summary.md)、[C17证明与五题事实](research/chapter3_experiments/results/mainline_mechanism_audit01/c17/summary.md)保存。依据主线ee26af7及P0原H／50°C／80°C、AB/AC、400ms/5ms、四节点、auto-L；只读pilot最新a8ecd41，不合并五节点模型。
 
 C12：4张R3完整安排通过资源／期限／频域及跨场景共享映射检查，完整边际能量代价随CPU高档覆盖改变；18对CPU/GPU参考模式差没有严格跨零。尚未认证正负排序翻转或80°C连续热安全，不产生SAFE/U；原B.main在主线无GPU且无U源，原例不能照搬。
@@ -1979,3 +1990,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D194（2026-10-22，用户授权零研究调用的机制与创新性核查）：** 同时审查C12设备选择上下文机制与C17安全能量下界，严格以main正式P0原H R1—R5、AB/AC共享部署、400ms/5ms、四热节点和auto-L为准，不移植A03五节点U／1s或新模式。用户允许纯检查脚本，不允许优化求解、热积分、正式候选评价或实机；可提出新算法版本建议，修改及执行再讨论。K169查明完整边际成本上下文依赖、严格热安全翻转尚未证，并重导出强于原L0的可靠热下界；条件高OPP／DAG项不能在根部强加、不能重复收费。助手建议先讨论下界接口与安全分支剪枝纯检查，尚未成为用户确认的实施选择。关联D193/E614，K168原生诊断pending及期限16/24不变。重新审查触发条件：功热计量／入口／响应／控制策略／合法域变化，或后续将界接入实际搜索；原推导数值不自动迁移。
+
+
+**D195（2026-10-22，用户确认条件下界与安全剪枝纯预检）：** 承接D194/E614，用户授权制定新界部分赋值接口，核是否排除具体条件及计算成本；原模型/参数/热安全不变，不启动优化求解/热积分，不覆盖旧结果或续24。K170助手采用两个完整松弛max以避CPU重计，未知/冲突fail-closed，设备跨副本一致而OPP逐场景，严格LB>U保留并列；新模块只standalone，不接生产。预先固定490一层模式/共享设备条件、5root及单列1个三H链，算术重复3次；与历史安全U后验比较而不借免费初解。9组最终纯预检/19项内部数学核对通过，187项超出旧界与普通期限的新增排除中66设备层兼容，尚未证明实际构模及时有U/模式开放或实际加速。助手建议下一项只读回放同次U@build与真实局部域后再决定接线，用户尚未批准新实现/执行。关联D194/E615；K168pending/16已消费24未启动保持，未来执行需重验新增源码清单。重新审查触发条件：物理/入口/共享/控制语义变更、将界用于生产删项、同次U或部分域身份变化；不把本次后验排除数量升级为算法收益。

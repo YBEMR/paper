@@ -9,7 +9,7 @@ closer=onCleanup(@() fclose(fid)); bytes=fread(fid,Inf,'*uint8');
 digest=java.security.MessageDigest.getInstance('SHA-256'); digest.update(bytes);
 actual=lower(reshape(dec2hex(typecast(digest.digest(),'uint8'),2).',1,[]));
 assert(strcmp(actual,manifest.input_sha256),'htp:A03HashMismatch','Input differs from the frozen packet.');
-packet=jsondecode(fileread(input_path));
+packet=jsondecode(native2unicode(bytes(:)','UTF-8')); % Parse the same bytes that were hashed.
 assert(strcmp(packet.schema,'htp.a03.v1'),'htp:A03Schema','Unsupported schema.');
 assert(strcmp(packet.execution.start_domain,'CONTINUOUS_NONNEGATIVE'),'htp:A03StartDomain','Unexpected start domain.');
 assert(numel(packet.mode_table)==36 && numel(packet.thermal.node_order)==5,'htp:A03Shape','Unexpected mode/node count.');

@@ -180,6 +180,32 @@ class PureTests(unittest.TestCase):
         value = {'problem_id': 'beta_1.0__R1', 'scenes': {}, 'numerical_protocol': {}, 'state': 'THERMAL_VIOLATION'}
         self.assertEqual(len(a.evaluation_records({'a': value, 'copy': value})), 1)
 
+    def test_19_blocked_execution_retains_reported_U_but_is_not_comparable(self):
+        slot, record, raw = summary_fixture(post=False)
+        record['records']['execution'].update(execution_status='TECHNICAL_FAILURE_CONFIRMED',
+                                              reasons=['OBSERVED_HARD_ERRORS'])
+        record['records']['context']['hard_errors'] = ['MISSING_MATCHING_ROOT_CANCEL_FILE']
+        record['postcheck'] = None
+        record['state'] = 'BLOCKED'
+        row = self.row((slot, record, raw))
+        self.assertEqual(row['reported_usable_U_exact_J'], '1')
+        self.assertEqual(row['safe_U_J'], 1.)
+        self.assertIsNone(row['comparison_safe_U_J'])
+        self.assertEqual(row['accepted_status'], 'RETAINED_ORIGINAL_SAFE_EXECUTION_NOT_NORMAL')
+        self.assertEqual(row['context_hard_errors'], ['MISSING_MATCHING_ROOT_CANCEL_FILE'])
+        self.assertTrue(row['current_schedule_audit']['passed'])
+
+    def test_20_unstarted_SA_is_not_reported_as_five_executed_failures(self):
+        rows = [{'problem_id': 'beta_1.0__R1', 'method': 'sa'+str(i), 'method_kind': 'sa',
+                 'slot_state': 'NOT_STARTED', 'safe_U_J': None, 'rankable_original_receipt': False,
+                 'post_passed': None, 'comparison_usable': False, 'safe_energy_interval_J': None}
+                for i in range(101, 106)]
+        c = a.cohorts(rows)[0]
+        self.assertEqual(c['SA_declared_n'], 5)
+        self.assertEqual(c['SA_observed_n'], 0)
+        self.assertEqual(c['unstarted_calls'], 5)
+        self.assertEqual(c['comparison_usable_calls'], 0)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

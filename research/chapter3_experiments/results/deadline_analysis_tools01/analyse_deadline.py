@@ -266,9 +266,14 @@ def summary_row(slot, record, raw, folder, instance, read):
     row = {'ordinal': slot['ordinal'], 'problem_id': slot['problem_id'], 'method': slot['id'],
         'method_kind': slot['method'], 'seed': slot.get('seed'), 'slot_state': record.get('state', 'NOT_STARTED'),
         'execution_status': execution.get('execution_status', 'NO_STORED_METHOD_RETURN'),
+        'execution_reasons': execution.get('reasons') or [],
+        'context_hard_errors': (evidence.get('context') or {}).get('hard_errors') or [],
+        'cutoff_audit': evidence.get('cutoff_audit') or {},
+        'reported_usable_U_exact_J': usable,
         'usable_U_exact_J': usable, 'safe_U_J': scalar(usable) if rankable else None,
         'safe_energy_interval_J': exact_pair(energy) if rankable else None,
         'rankable_original_receipt': rankable, 'stored_safe_receipt_verified': safe_receipt.get('verified'),
+        'stored_safe_formed_at_s': safe_receipt.get('formed_at_s'),
         'comparison_usable': rankable and (record.get('postcheck') or {}).get('passed') is True
                              and execution.get('execution_status') in NORMAL
                              and (evidence.get('current_schedule_audit') or {}).get('passed') is True,
@@ -330,6 +335,11 @@ def summary_row(slot, record, raw, folder, instance, read):
     if row['final_deadline_anomaly']:
         row['comparison_usable'] = False
     row['comparison_safe_U_J'] = row['safe_U_J'] if row['comparison_usable'] else None
+    row['accepted_status'] = ('COMPARISON_ELIGIBLE_SAFE' if row['comparison_usable'] else
+        'NO_ORIGINAL_RANKABLE_SAFE' if not rankable else
+        'RETAINED_ORIGINAL_SAFE_EXECUTION_NOT_NORMAL' if row['execution_status'] not in NORMAL else
+        'RETAINED_ORIGINAL_SAFE_POST_NOT_PASSED' if row['post_passed'] is not True else
+        'RETAINED_ORIGINAL_SAFE_CURRENT_DEADLINE_NOT_VERIFIED')
     return row
 
 
@@ -349,12 +359,15 @@ def cohorts(rows):
         hu = heft.get('safe_U_J') if heft.get('comparison_usable') is True else None
         result.append({'problem_id': problem, 'declared_slots': len(group),
             'observed_calls': sum(r['slot_state'] != 'NOT_STARTED' for r in group),
+            'unstarted_calls': sum(r['slot_state'] == 'NOT_STARTED' for r in group),
             'safe_calls': sum(r['rankable_original_receipt'] for r in group),
+            'comparison_usable_calls': sum(r['comparison_usable'] for r in group),
             'post_verified_SAFE_calls': sum(r['rankable_original_receipt'] and r['post_passed'] is True for r in group),
             'linked_vs_HEFT_reduction_fraction': None if lu is None or hu is None or hu <= 0 else (hu-lu)/hu,
             'linked_strictly_lower_than_HEFT': strictly_lower(linked.get('safe_energy_interval_J'), heft.get('safe_energy_interval_J'))
                 if lu is not None and hu is not None else None,
             'SA_safe_n': len(sa), 'SA_declared_n': sum(r['method_kind'] == 'sa' for r in group),
+            'SA_observed_n': sum(r['method_kind'] == 'sa' and r['slot_state'] != 'NOT_STARTED' for r in group),
             'SA_missing_or_unusable_n': sum(r['method_kind'] == 'sa' for r in group)-len(sa),
             'SA_median_J': statistics.median(sa) if sa else None,
             'SA_mean_J': statistics.mean(sa) if sa else None,
@@ -483,7 +496,9 @@ def figures(out, facts):
     names = {'whole_milp': '整体MILP', 'anchor_linked4': '联动MILP', 'heft': 'HEFT',
              **{'sa'+str(i): 'SA'+str(i) for i in range(101, 106)}}
     fig, axes = plt.subplots(1, 5, figsize=(17, 3.9), constrained_layout=True)
-    fig.suptitle('期限β=1.0：已存完整安全见证的运行最小上界')
+    partial = facts['consumed_total'] != facts['declared_slots']
+    suffix = f"（批次停止：{facts['consumed_total']}/{facts['declared_slots']}调用）" if partial else ''
+    fig.suptitle('期限β=1.0：已存完整安全见证的运行最小上界'+suffix)
     for ax, cohort in zip(axes, facts['cohorts']):
         group = [r for r in facts['rows'] if r['problem_id'] == cohort['problem_id']]
         for row in group:
@@ -493,15 +508,23 @@ def figures(out, facts):
                 t, u = zip(*curve)
                 stop = min(300, row['method_root_s'] if row['method_root_s'] is not None else t[-1])
                 ax.step([*t, max(t[-1], stop)], [*u, u[-1]], where='post',
-                        label=names[row['method']], color=colors[row['method']], alpha=.85, linewidth=1.2)
+                        label=names[row['method']]+('（未完成对照接纳）' if not row['comparison_usable'] else ''),
+                        color=colors[row['method']], alpha=.85, linewidth=1.2,
+                        linestyle='--' if not row['comparison_usable'] else '-')
             lower, formed = row.get('certified_L0_J'), row.get('certified_L0_formed_at_s')
             if lower is not None and isinstance(formed, (int, float)) and 0 <= formed < 300:
                 ax.plot([formed, 300], [lower, lower], color=colors[row['method']], ls='--',
                         linewidth=.6, alpha=.45, label='独立L0（各调用独立形成）' if row == group[0] else None)
-        absent = [names[row['method']] for row in group if not row['comparison_usable']]
-        if absent:
-            ax.text(.03, .98, '无可比较SAFE：\n'+'、'.join(absent), transform=ax.transAxes,
-                    va='top', fontsize=7)
+        if cohort['observed_calls'] == 0:
+            ax.text(.5, .5, '未启动\n'+str(cohort['declared_slots'])+'个声明槽',
+                    transform=ax.transAxes, ha='center', va='center', fontsize=10)
+            ax.set(title=cohort['problem_id'].split('__')[-1])
+            ax.set_axis_off()
+            continue
+        if cohort['comparison_usable_calls'] != cohort['declared_slots']:
+            ax.text(.03, .98, f"已调用{cohort['observed_calls']}/{cohort['declared_slots']}\n"
+                    f"可比较SAFE {cohort['comparison_usable_calls']}/{cohort['declared_slots']}",
+                    transform=ax.transAxes, va='top', fontsize=8)
         ax.set(title=cohort['problem_id'].split('__')[-1], xlabel='方法时间（s）', ylabel='完整窗口能量（J）', xlim=(0, 300))
         ax.grid(alpha=.2)
     legend = {}
@@ -516,7 +539,7 @@ def figures(out, facts):
     # plotted at zero; lines exist only for jointly successful paired levels.
     comparisons = facts['P0_deadline_separate_conditions']
     fig, axes = plt.subplots(1, 5, figsize=(17, 3.7), constrained_layout=True)
-    fig.suptitle('原响应/50°C/80°C：两个期限条件的预算内安全能耗')
+    fig.suptitle('原响应/50°C/80°C：两个期限条件的预算内安全能耗'+suffix)
     for ax, sample in zip(axes, ('R1', 'R2', 'R3', 'R4', 'R5')):
         pairs = [row for row in comparisons if row['sample'] == sample]
         for method in ('whole_milp', 'anchor_linked4', 'heft'):
@@ -554,13 +577,26 @@ def markdown(facts):
     def safe(row): return row.get('safe_U_J') if row.get('comparison_usable') else None
     out = ['# K163：β=1.0期限组结果（存档提取）', '',
         f"状态：{facts['process_terminal'].get('state')}；消费{facts['consumed_total']}/{facts['declared_slots']}次。",
-        '', '| 输入 | 整体MILP/J | 联动/J | HEFT/J | SA安全中位数/J | 原预算内安全输出 |',
-        '|---|---:|---:|---:|---:|---:|']
+        '', '| 输入 | 已调用/声明 | 整体MILP/J | 联动/J | HEFT/J | SA安全中位数/J | 原回执SAFE | 可比较SAFE |',
+        '|---|---:|---:|---:|---:|---|---:|---:|']
     for c in facts['cohorts']:
         by = {r['method']: r for r in facts['rows'] if r['problem_id'] == c['problem_id']}
-        out.append('|'+c['problem_id']+'|'+num(safe(by.get('whole_milp', {})))+'|'
+        sa_label = ('未启动' if c['SA_observed_n'] == 0 else num(c['SA_median_J']))
+        sa_label += f"（SAFE {c['SA_safe_n']}/{c['SA_declared_n']}；已调用{c['SA_observed_n']}）"
+        out.append('|'+c['problem_id']+f"|{c['observed_calls']}/{c['declared_slots']}|"+num(safe(by.get('whole_milp', {})))+'|'
             +num(safe(by.get('anchor_linked4', {})))+'|'+num(safe(by.get('heft', {})))+'|'
-            +num(c['SA_median_J'])+f"（{c['SA_safe_n']}/{c['SA_declared_n']}）|{c['safe_calls']}/{c['declared_slots']}|")
+            +sa_label+f"|{c['safe_calls']}|{c['comparison_usable_calls']}|")
+    if facts['consumed_total'] != facts['declared_slots']:
+        out += ['', '**这是技术停止后的不完整前缀，不是40次公平对照完成。未启动槽不是算法失败，未取得共同成功配对时不作方法排名。**',
+                '', '| 已调用 | 终态 | 原回执保留U/J | 可比较U/J | post | 当前期限审计 | 硬错误 |',
+                '|---|---|---:|---:|---|---|---|']
+        for row in facts['rows']:
+            if row['slot_state'] == 'NOT_STARTED':
+                continue
+            out.append('|'+row['problem_id']+' / '+row['method']+'|'+row['execution_status']+'|'
+                +num(row['safe_U_J'])+'|'+num(row['comparison_safe_U_J'])+'|'
+                +str(row['post_state'] or '未执行')+'|'+str(row['current_schedule_audit'].get('passed'))+'|'
+                +'; '.join(map(str, row['context_hard_errors']))+'|')
     out += ['', f"方法根时钟合{facts['method_root_sum_s']:.3f}秒；原预算内安全回执{facts['safe_original_receipts']}份，事后复核通过{facts['post_verified_safe_receipts']}份。",
         '', 'U只取原方法回执；post不补搜索、修复或替换U。未运行、无U、未决、故障分别保留，不填零能量。',
         '', 'SA逐种子及安全分布分列，最小值仅描述分布，不作为一次同预算竞争者。',
@@ -591,7 +627,9 @@ def main(argv=None):
         'thermal_violation_saved_records', 'thermal_unresolved_saved_records', 'independently_proven_optimal',
         'independently_proven_infeasible', 'source_folder', 'record_source',
         'normal_method_outcome', 'min_deadline_margin_exact_ms', 'min_deadline_margin_ms',
-        'final_deadline_anomaly', 'safe_curve_minimum_matches_final_U']
+        'final_deadline_anomaly', 'safe_curve_minimum_matches_final_U', 'accepted_status',
+        'reported_usable_U_exact_J', 'stored_safe_formed_at_s', 'execution_reasons',
+        'context_hard_errors', 'current_schedule_audit', 'cutoff_audit']
     write_csv(out/'results40.csv', ({k: r.get(k) for k in scalar_keys} for r in facts['rows']))
     write_csv(out/'cohorts.csv', facts['cohorts'])
     write_csv(out/'P0_deadline_separate_conditions.csv', facts['P0_deadline_separate_conditions'])

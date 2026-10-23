@@ -1,6 +1,12 @@
 # 研究状态
 
-更新：2026-10-22。
+更新：2026-10-23。
+
+**K.171／D196：P0真实构模时点下界回放完成（E616），及时排除0／180。** [总报告](research/chapter3_experiments/results/bound_build_replay01/summary.md)、[20点U时间线](research/chapter3_experiments/results/bound_build_replay01/timeline/facts.json)、[503项域核对](research/chapter3_experiments/results/bound_build_replay01/domain/facts.json)、[最终run02](research/chapter3_experiments/results/bound_build_replay01/run02/results.json)保存。5题原联动20次build全部对齐33次完整SAFE更新；只用同次已完成合并及交付的U，不取其他方法或未来最佳。第一阶段两build仅fresh seed，第二阶段AC有4题可用AB已成改善，R3未改善。
+
+原两场景固定设备＋闭OPP作基条件，起点在界中放松；只检查实际开放且原过滤后仍有非零选项的180个模式（3463开放起点列），60闭合列不计。原期限删9489、闭锚删771标签均不算新收益。全部新界≤当时U，0模式／0列及时排除，旧界之外及forced对capacity新增均0；安全x0全部保留。最近R1第二阶段AC A.main/NPU/H：LB .890499634663＜及时U .910243818382，仍差19.744184mJ；终期.860663343334当时未形成。旧B.post/H早期有开放但U粗，后期已闭L，K170后验计数不能追认为及时筛选收益。
+
+17项纯helper夹具、503域核对和独立结果／身份审查保存；首轮域提取误判Observer重复完成日志的失败及补身份门前run01均保留。最终run02只读＋算术约1.14s，不作旧300秒内成本或加速。**助手建议停止当前单模式生产筛选接线，保留新界的独立质量证据用途；不增加组合分支或起点强化。** 下一项若回到K168原生诊断，仍须单独确认待批预算，不把本轮解释为执行授权。本轮0研究调用／构模／优化／热积分／正式评价／新U；原253源、历史结果、K168 pending及期限16／24保持，新增只读脚本未来须重核源清单。以下K170及更早为历史。
 
 **K.170／D195：部分赋值下界接口与安全剪枝纯预检完成（E615）。** [总报告](research/chapter3_experiments/results/partial_bound_precheck01/summary.md)、[接口合同](research/chapter3_experiments/conditional_energy_bound/README.md)、[最终run05](research/chapter3_experiments/results/conditional_energy_bound_precheck01/run05/checks.json)、[稳定探针/成本run02](research/chapter3_experiments/results/partial_bound_precheck01/review/probe_cost_run02/results.json)保存。新增standalone prepare/bound/原P0 U只读接纳/严格剪枝判读；未接生产，原参数/数学/热安全保持。bounds锁定9b4fc402…de02c6e0a，19项独立数学/身份核对及9组纯预检通过。
 
@@ -1993,3 +1999,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D195（2026-10-22，用户确认条件下界与安全剪枝纯预检）：** 承接D194/E614，用户授权制定新界部分赋值接口，核是否排除具体条件及计算成本；原模型/参数/热安全不变，不启动优化求解/热积分，不覆盖旧结果或续24。K170助手采用两个完整松弛max以避CPU重计，未知/冲突fail-closed，设备跨副本一致而OPP逐场景，严格LB>U保留并列；新模块只standalone，不接生产。预先固定490一层模式/共享设备条件、5root及单列1个三H链，算术重复3次；与历史安全U后验比较而不借免费初解。9组最终纯预检/19项内部数学核对通过，187项超出旧界与普通期限的新增排除中66设备层兼容，尚未证明实际构模及时有U/模式开放或实际加速。助手建议下一项只读回放同次U@build与真实局部域后再决定接线，用户尚未批准新实现/执行。关联D194/E615；K168pending/16已消费24未启动保持，未来执行需重验新增源码清单。重新审查触发条件：物理/入口/共享/控制语义变更、将界用于生产删项、同次U或部分域身份变化；不把本次后验排除数量升级为算法收益。
+
+
+**D196（2026-10-23，用户授权P0实际构模时点只读回放）：** 承接D195/E615，用户确认只读原P0联动版各次build已成同次安全U、开放模式与闭锚；原模型/参数/热安全保持，不接生产、不优化或热积分、不续24。助手采用20个归档根时钟开始点、33完整aggregate及精确原选项域，严格U交付早于build；基界保留两场景固定设备/闭OPP而放松起点，逐实际开放单模式比较，不将后期U回填、不把闭锚或原已删项记收益。503域核对与最终20/180回放无及时排除，17纯helper负例及独立终审保存。建议停止当前单模式筛选接线、保留质量下界，为助手阶段建议，不扩大为所有下界或热调度无效；未授权新分支/强化/研究调用。关联D195/E616，K168 pending和期限16消费/24未启动保持。重新审查触发：若将界用于生产、使用别的时点/域/更细条件或改变模型，需另行讨论并重绑定同次U和计费。

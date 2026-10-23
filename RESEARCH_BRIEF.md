@@ -2,6 +2,14 @@
 
 更新：2026-10-23。
 
+**K.175／D200：条件性释放生产接口完成，11项纯检查通过（E620），未运行新求解。** [报告](research/chapter3_experiments/results/linked_release_integration01/summary.md)、[最终run03](research/chapter3_experiments/results/linked_release_integration01/checks_run03/checks.json)、[待批两次预算](research/chapter3_experiments/results/linked_release_integration01/next_proposal.json)保存。用户批准接入K174并要求保留原C，不改参数/初始化/安全门，不启动MATLAB；新增linked_release_policy.py与linked_release_method.py，独立入口execute_linked_conditional_release，原C/N1/过滤/计时源码字节保持。
+
+原worker与根预算门后，先冻结最后完整P1 SAFE S1，再用原condition验证seed/S1、执行一次选择并冻结mask，最终condition复用同S1；selector前后/condition前绑定input/seed/S1/receipt/source/预算，至多每scene追加一个OPP/start。所有准备仍同300根、原60片及单会话；原builder按剩余闭锚重构/预消元。选择超时或身份失败不进入P2，既有SAFE保留，不产生免费新U。
+
+纯回放生产policy+原filter AST：R1 AB216→216/AC213→213；R3仅AB B.main，227→339（自身52＋A.main恢复39＋B.pre恢复21），AC240不变。原标签域与每个S1标签均保留。真实新wrapper配假N1/假会话及原Budget/idle guard AST，核freeze/select/condition同S1一次、选择计费/不重置300、错mask/receipt/最终seed或anchor拒绝、缺S1/worker活跃/到期不进入；11/11通过，所有科学/进程guard0。run01测试AST定位错误失败、run02十项及最终run03均留存，未因夹具问题改生产。1160相关旧文件保持，内部独立终审与257源提案核对通过。
+
+下一轮仅提P0/R3原C→新版各一次300（方法600）、每SAFE唯一≤60post共120、日历1200；同物理/输入/初始化/安全门/求解选项，独立S0/S1，若S1不同仅端到端比较，不拼K173历史。提案authorized=false/执行false/消费预留0、无claim，获批后另冻结薄启动器及必要fake验收。未扩第三算法或恢复K168/期限24；无实际候选、根LP、节能收益结论。阶段完成并停止等待用户确认。以下K174及更早为历史。
+
 **K.174／D199：条件性邻域释放静态审查完成（E619），未运行新求解。** [报告](research/chapter3_experiments/results/linked_release_preparation01/summary.md)、[纯草案与四记录](research/chapter3_experiments/results/linked_release_preparation01/static_run01/facts.json)、[13项预检](research/chapter3_experiments/results/linked_release_preparation01/checks_run01/checks.json)保存。承接K173，先审查资源竞争/后继期限驱动的OPP+起点联合释放，不改生产方法/参数/安全门，不扩研究调用。
 
 吸收K148固定双场景5开1闭失败：原R1新版.962884841高于旧.910239341，AC模型/根LP成本增大；不能再把多开一个Stage当方法增量。首版纯规则只查本次S1中已闭Stage：同seed设备存在活动更低/更慢模式，原起点违反必要完成界，原网格存在必要标签且全部与当前开放锚资源冲突；每scene至多增开一个OPP/start，按加权活动差/固定标识排序，无触发保持原mask。活动差只选邻域，非系统能耗/安全/删项依据。
@@ -2035,3 +2043,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D199（2026-10-23，用户承接K173要求继续下一步）：** 本轮按此前唯一建议做约束驱动第二阶段释放规则的零调用静态准备，不把“继续”当新研究预算或生产改码授权。保留原C；复核K148固定5/1失败后，用当前S1的模式/依赖/资源/期限挑每scene0或1个闭Stage，同时释放OPP/start，单位及共享部署不变。纯草案R1均无触发、R3仅AB B.main，静态选项227→339，原标签包含。13项纯检查及内部数学/接口核对通过；266K173源未变。现入口动态selector尚缺，建议下一项实现并纯预检，尚未执行；活动分数/必要标签不是系统能耗或安全证据，不扩剪枝/邻域阶段/案例。关联E619/K174及D198；重新审查触发：增加触发范围/开放数量、修改生命周期/预算/安全门或研究求解，需另行说明并冻结；K168与期限24独立。
+
+
+**D200（2026-10-23，用户审阅K174后明确授权生产接口与纯测试）：** 用户要求将K174规则接入两阶段，原C独立可用；S1完整SAFE先冻结再决定P2范围，二者同方案，原SAFE/合法域保留，按剩余闭任务重过滤，全部准备计入原300秒；先无MATLAB实现/测试，交原C对新算法最小预算等待确认，不扩第三算法/暂停实验。新增独立入口及policy，原C源码不改，默认固定继承预消元。原K174规则核心仅增加budget检查和当前condition身份，P2至多1个、无触发原mask；同seed/S1与安全门不变。最终11纯检查+独立终审通过，研究/矩阵/热/完整新候选均0。助手建议仅R3 C/new两次方法600＋post≤120、日历1200，尚未获批；future一次性启动器/新协议审计仍须冻结验收，不复用旧claim/夜间预算。关联E620/K175，K168与期限16/24独立。重新审查触发：改变规则/开放数/阶段/cap/物理或求解标准、启动研究，需另确认冻结；实际收益未证。

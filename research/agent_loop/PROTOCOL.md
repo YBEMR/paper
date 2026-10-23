@@ -59,6 +59,8 @@ JSON字段以[gate API](gate_api.md)为准。至少包括`schema_version/mode/re
 
 ## 5. 检测、唤醒与本机边界
 
+定时轮询使用 `monitor.py --skip-if-disabled`：配置合法且 `enabled=false` 时输出 `DISABLED` 并正常退出，不检查旧轮次，保留状态artifact。配置损坏仍失败关闭；手动与PR/review事件不带此参数，仍完整检查并报告漂移。此跳过不改变旧审批、预算、执行门或真实实验开关。
+
 工作流`agent-loop-watch.yml`每15分钟、手动或PR事件检测。只checkout默认分支受信脚本（固定action SHA），contents:read，输出状态artifact；不执行PR代码，不调用ChatGPT、不写review、不启动runner或研究。GitHub调度可能延迟／遗漏，不能当精确计时器。[GitHub说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
 
 用户已报告外部审查任务每小时启用；其是否能读全文、写文件、保管签名密钥、事件触发，须通过一次真实写回证明。执行端无权冒充该聊天。Work的GitHub事件型任务适用于符合条件的web/mobile，官方文档不支持从桌面端配置该触发；本轮未证明本聊天会被GitHub事件唤醒。[Work任务](https://learn.chatgpt.com/docs/automations)

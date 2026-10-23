@@ -284,7 +284,8 @@ def inspect_round(repo: ReadOnlyRepository, request: Any, config_path: str,
 
 
 def detect(repo_root: Path | str, config_path: str = "research/agent_loop/config.json",
-           requests_path: str = "research/agent_loop/requests.json") -> dict[str, Any]:
+           requests_path: str = "research/agent_loop/requests.json", *,
+           skip_if_disabled: bool = False) -> dict[str, Any]:
     """Return advisory JSON data; never mutate the repository or consume approval."""
     result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -302,14 +303,19 @@ def detect(repo_root: Path | str, config_path: str = "research/agent_loop/config
     try:
         config_raw = repo.read(config_path)
         config = _json(config_raw, "config")
-        requests = _json(repo.read(requests_path), "requests")
-        if config.get("schema_version") != 1 or requests.get("schema_version") != 1:
-            raise DetectionError("unsupported config or requests schema_version")
+        if config.get("schema_version") != 1:
+            raise DetectionError("unsupported config schema_version")
         if config.get("ALLOW_REAL_EXPERIMENTS") is not False:
             raise DetectionError("ALLOW_REAL_EXPERIMENTS must be explicitly false")
         if not isinstance(config.get("enabled"), bool):
             raise DetectionError("config.enabled must be boolean")
         result["configured_enabled"] = config["enabled"]
+        if skip_if_disabled and not config["enabled"]:
+            result.update(status="DISABLED", reasons=["SCHEDULED_DETECTION_DISABLED_BY_CONFIG"])
+            return result
+        requests = _json(repo.read(requests_path), "requests")
+        if requests.get("schema_version") != 1:
+            raise DetectionError("unsupported requests schema_version")
         rounds = requests.get("rounds")
         if not isinstance(rounds, list):
             raise DetectionError("requests.rounds must be a list")
@@ -331,9 +337,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--config", default="research/agent_loop/config.json")
     parser.add_argument("--requests", default="research/agent_loop/requests.json")
+    parser.add_argument("--skip-if-disabled", action="store_true",
+                        help="Skip round inspection when config.enabled is false (scheduled polling)")
     parser.add_argument("--output", type=Path, help="Optional explicit output; stdout is the default")
     args = parser.parse_args(argv)
-    result = detect(args.repo_root, args.config, args.requests)
+    result = detect(args.repo_root, args.config, args.requests,
+                    skip_if_disabled=args.skip_if_disabled)
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
         args.output.write_text(rendered, encoding="utf-8")

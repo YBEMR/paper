@@ -2,6 +2,12 @@
 
 更新：2026-10-23。
 
+**K.176／D201：原C与K175条件性释放R3两次配对完成，均SAFE且独立post通过，但新版无质量改善（E621）。** [简明报告](research/chapter3_experiments/results/linked_release_execution01/summary.md)、[两结果](research/chapter3_experiments/results/linked_release_execution01/review/final_analysis01/results2.csv)、[内部独立终审](research/chapter3_experiments/results/linked_release_execution01/review/final_review.md)保存。先49项纯检查、冻结一次性执行入口，再按用户批准C→new各一次300；预留600方法秒＋120post秒，根实耗559.344秒、post评价3.797秒、整批585.096秒，均未超限、不补跑。
+
+两次fresh S0与完整P1 SAFE S1相同，S1/最终hash均2d4fd296…5999b78a；最终U同0.9996619673071785 J、P2净改善均0。根时长C285.281/new274.063秒，但new P2为132.297>C125.547秒；启动18.609→7.657秒及P1差异影响总耗时，不称释放规则加速。new在同S1冻结后仅AB追加B.main，选择0.125秒、final condition0.078秒，同根计费。原域/锚保留，AC不变；AB options227→339、vars6752→8882、rows29744→41283，构模2.297→3.375秒，rootlp首次回调7.394→32.119秒。原C AB工程收敛、新AB时间截止，均仅warm；内部状态不提升为独立最优。
+
+结果支持扩域求解成本为当前瓶颈，未证明新增域无低能安全安排。保留原C，新版暂不替代；助手建议下一项仅零调用核查13个必要标签/112新增选项的必要联合移动和更紧表达，先说明域覆盖与代价，不直接加规则/补跑。19项终审通过、5698旧文件零漂移，生产源未改；阶段已结束。K168仍0调用待批、期限16/24保持。以下K175及更早为历史。
+
 **K.175／D200：条件性释放生产接口完成，11项纯检查通过（E620），未运行新求解。** [报告](research/chapter3_experiments/results/linked_release_integration01/summary.md)、[最终run03](research/chapter3_experiments/results/linked_release_integration01/checks_run03/checks.json)、[待批两次预算](research/chapter3_experiments/results/linked_release_integration01/next_proposal.json)保存。用户批准接入K174并要求保留原C，不改参数/初始化/安全门，不启动MATLAB；新增linked_release_policy.py与linked_release_method.py，独立入口execute_linked_conditional_release，原C/N1/过滤/计时源码字节保持。
 
 原worker与根预算门后，先冻结最后完整P1 SAFE S1，再用原condition验证seed/S1、执行一次选择并冻结mask，最终condition复用同S1；selector前后/condition前绑定input/seed/S1/receipt/source/预算，至多每scene追加一个OPP/start。所有准备仍同300根、原60片及单会话；原builder按剩余闭锚重构/预消元。选择超时或身份失败不进入P2，既有SAFE保留，不产生免费新U。
@@ -2046,3 +2052,5 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D200（2026-10-23，用户审阅K174后明确授权生产接口与纯测试）：** 用户要求将K174规则接入两阶段，原C独立可用；S1完整SAFE先冻结再决定P2范围，二者同方案，原SAFE/合法域保留，按剩余闭任务重过滤，全部准备计入原300秒；先无MATLAB实现/测试，交原C对新算法最小预算等待确认，不扩第三算法/暂停实验。新增独立入口及policy，原C源码不改，默认固定继承预消元。原K174规则核心仅增加budget检查和当前condition身份，P2至多1个、无触发原mask；同seed/S1与安全门不变。最终11纯检查+独立终审通过，研究/矩阵/热/完整新候选均0。助手建议仅R3 C/new两次方法600＋post≤120、日历1200，尚未获批；future一次性启动器/新协议审计仍须冻结验收，不复用旧claim/夜间预算。关联E620/K175，K168与期限16/24独立。重新审查触发：改变规则/开放数/阶段/cap/物理或求解标准、启动研究，需另确认冻结；实际收益未证。
+
+**D201（2026-10-23，用户审阅K175后明确批准最小配对）：** 仅P0/R3原C→K175新版各1次300秒，方法600、每正常完整SAFE唯一≤60post共120、日历1200；先冻结runner/身份及fake门。所有输入/参数/初始化/选项/两阶段/热安全标准保持，选择准备同根；无改善/异常保留，不补跑、调参、扩题、K168或续期限24。已按授权49项纯检查后完成2方法/2post，均正常SAFE，root285.281/274.063、post评价1.703/2.094、批585.096秒。同S0/S1，new仅AB追加B.main，完整U均0.9996619673071785、P2均0改善；扩域规模/根LP成本上升，不能把总耗时缩短归因新规则。助手建议保留原C、暂不提升new，下一项仅先审查必要标签的更紧联合表达；尚未授权修改或新研究调用。关联K176/E621；重审触发：新规则/域/阶段/预算/模型或后续实验需另讨论，不覆盖原结果。当前阶段完成即停止。

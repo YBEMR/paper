@@ -32,10 +32,13 @@ def truth_H_post_audit(token,truth,binding,backend,registry):
         vi,vc=copy(i),copy(candidate)
         legal=backend.validator(vi,vc)
         require(sha(vi)==sha(i) and sha(vc)==sha(candidate),'VALIDATOR_MUTATED_INPUT')
+        out['legality']=copy(legal)
         budget.check()
         if legal.get('state')!='SCHEDULE_VALID_THERMAL_UNCHECKED':
-            status='TRUE_H_INVALID' if legal.get('state')=='INVALID_SCHEDULE' else 'INPUT_OR_INTERFACE_ERROR'
-            out.update(audit_status=status,reason=legal.get('reason'),legality=legal)
+            from h02_pair_b0.classification import classify_invalid_schedule
+            classified=classify_invalid_schedule(i,candidate,legal)
+            budget.check()  # Classification itself is charged; no late invalid proof.
+            out.update(classified,legality=legal)
         else:
             ei,ec,ea=copy(i),copy(candidate),copy(c['accuracy_targets'])
             receipt=backend.evaluator(ei,ec,ea,budget)

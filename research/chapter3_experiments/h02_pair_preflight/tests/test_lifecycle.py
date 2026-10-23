@@ -27,7 +27,8 @@ class Lifecycle(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(prefix='h02_mock_'); self.addCleanup(self.temp.cleanup)
         self.registry=StageARegistry(Path(self.temp.name)); self.registry.bind_pair(self.pair)
         self.packet=planner_packet(self.pair,'R'); self.clock=Clock(); self.loaded=[]
-    def run_mock(self,energies=('1',),formed=None,return_at=None,technical=False,view='R',slot='r0',mutate_result=None,invalid=False,repeat=False):
+    def run_mock(self,energies=('1',),formed=None,return_at=None,technical=False,view='R',slot='r0',mutate_result=None,invalid=False,repeat=False,conflict=False):
+        self.clock.value=0.0  # each independent method has its own fake origin
         import heuristic_runner as hr
         import partial_bounds
         packet=planner_packet(self.pair,view); n=0
@@ -41,6 +42,8 @@ class Lifecycle(unittest.TestCase):
             self.loaded.append((i,c))
             for j in range(len(energies)):
                 candidate=candidate_for(i,offset=0 if repeat else 5*j)
+                if conflict:
+                    for rows in candidate['scenes'].values(): rows[0]['start_ms']=rows[1]['start_ms']='0'
                 if invalid:
                     for rows in candidate['scenes'].values():
                         rows[0].update(unit='CPU1',opp='L',start_ms='0')
@@ -61,8 +64,8 @@ class Lifecycle(unittest.TestCase):
         backend=MockBackend(Mock(side_effect=runner),eval_mock,search_mock,self.clock)
         result=paired_heuristic_entry(packet,backend,self.registry,slot,sha(self.pair['truth_H']['instance']))
         return result,backend
-    def token(self,view='R'):
-        out,_=self.run_mock(view=view); self.assertEqual(out['plan_status'],'PLAN_SAFE'); return out['frozen_candidate']
+    def token(self,view='R',conflict=False):
+        out,_=self.run_mock(view=view,conflict=conflict); self.assertEqual(out['plan_status'],'PLAN_SAFE'); return out['frozen_candidate']
     def audit(self,token,kind='SAFE',formed=1.0,elapsed=1.0,mutate=None,legal_state='SCHEDULE_VALID_THERMAL_UNCHECKED',truth=None):
         b=AuditBudget(60)
         def evaluator(i,c,a,budget):
@@ -73,7 +76,11 @@ class Lifecycle(unittest.TestCase):
             else: r={'state':kind,'reason':'MOCK_INTERVAL_UNRESOLVED' if kind=='UNRESOLVED' else 'RESOURCE_LIMIT'}
             if mutate: mutate(r,i,c)
             return r
-        backend=MockAuditBackend(Mock(side_effect=lambda i,c:mock_legal_receipt(i) if legal_state=='SCHEDULE_VALID_THERMAL_UNCHECKED' else {'state':legal_state,'reason':'MOCK_DEADLINE_OR_RESOURCE_VIOLATION'}),Mock(side_effect=evaluator),Mock(return_value=b))
+        def legal(i,c):
+            if legal_state=='SCHEDULE_VALID_THERMAL_UNCHECKED': return mock_legal_receipt(i)
+            stages=next(iter(c['scenes'].values()))
+            return {'state':legal_state,'reason':'EXECUTION_UNIT_OVERLAP','details':{'stages':[stages[0]['stage_id'],stages[1]['stage_id']]},'thermal_status':'NOT_EVALUATED','energy_status':'NOT_EVALUATED'}
+        backend=MockAuditBackend(Mock(side_effect=legal),Mock(side_effect=evaluator),Mock(return_value=b))
         binding=None if token is None else {k:token[k] for k in ('source_commit_sha','problem_id','truth_H_sha256','policy_id','accuracy_sha256')}
         return truth_H_post_audit(token,truth or deepcopy(self.pair['truth_H']),binding,backend,self.registry),backend
     def test_best_not_last_accepted_SAFE(self):
@@ -150,11 +157,11 @@ class Lifecycle(unittest.TestCase):
     def test_audit_timely_receipt_returned_late_preserved(self):
         out,_=self.audit(self.token(),formed=59.9,elapsed=61.0); self.assertEqual(out['audit_status'],'TRUE_H_SAFE')
     def test_R_mock_invalid_triggers_anomaly_and_stop(self):
-        out,_=self.audit(self.token(),legal_state='INVALID_SCHEDULE'); self.assertEqual(out['anomaly'],'MONOTONICITY_CONTRACT_ANOMALY'); self.assertTrue(self.registry.stopped)
+        out,_=self.audit(self.token(conflict=True),legal_state='INVALID_SCHEDULE'); self.assertEqual(out['anomaly'],'MONOTONICITY_CONTRACT_ANOMALY'); self.assertTrue(self.registry.stopped)
     def test_R_mock_thermal_violation_triggers_anomaly(self):
         out,_=self.audit(self.token(),kind='THERMAL_VIOLATION'); self.assertEqual(out['anomaly'],'MONOTONICITY_CONTRACT_ANOMALY')
     def test_H_mock_invalid_is_not_monotonicity_counterexample(self):
-        out,_=self.audit(self.token(view='H'),legal_state='INVALID_SCHEDULE'); self.assertEqual(out['audit_status'],'TRUE_H_INVALID'); self.assertNotIn('anomaly',out)
+        out,_=self.audit(self.token(view='H',conflict=True),legal_state='INVALID_SCHEDULE'); self.assertEqual(out['audit_status'],'TRUE_H_INVALID'); self.assertNotIn('anomaly',out)
     def test_audit_unresolved_does_not_claim_violation(self):
         out,_=self.audit(self.token(),kind='UNRESOLVED'); self.assertEqual(out['audit_status'],'TRUE_H_UNRESOLVED'); self.assertFalse(out['stop_required'])
     def test_audit_technical_error_stops(self):

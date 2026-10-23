@@ -82,6 +82,8 @@ def paired_heuristic_entry(packet,backend,registry,slot,truth_sha):
     try:
         result=backend.runner(input_loader,folder/'planner',method='heft',seconds=120,seed=None,clock=backend.clock,evaluator=backend.evaluator,search=backend.search,allow_auto_low=True)
         require(sha(packet)==registry.allocated[slot]['packet_sha256'],'PLANNER_MUTATED_PUBLIC_INPUT')
+        from h02_pair_b0.exports import verify_final_export
+        checked=verify_final_export(packet,result)
         c,i=packet['planner']['config'],packet['planner']['instance']; candidate=result.get('safe_candidate')
         technical=bool(technical_issues(result))
         out=dict(evidence_kind='MOCK_ONLY',usable_as_research_evidence=False,plan_status='PLAN_UNRESOLVED',slot=slot,raw_method_result=copy(result),technical_failure=technical,stop_required=technical,frozen_candidate=None)
@@ -89,14 +91,7 @@ def paired_heuristic_entry(packet,backend,registry,slot,truth_sha):
             require(not any(r.get('accepted_safe') for r in result.get('evaluations',[])),'RECORDER_BEST_MISSING')
             out['plan_status']='PLAN_NO_SAFE' if result.get('reason')=='DECLARED_SEARCH_COMPLETED' and not technical else 'PLAN_UNRESOLVED'
         else:
-            require(result.get('method')=='heft' and result.get('seed') is None and result.get('problem_id')==i['id'] and result.get('input_sha256')==sha(i),'METHOD_RESULT_IDENTITY')
-            safe=[]
-            for row in result.get('evaluations',[]):
-                if row.get('accepted_safe') is True:
-                    cand=row['candidate']; candidate_identity(i,cand); require(row.get('candidate_sha256')==sha(cand),'RECORDER_CANDIDATE_HASH')
-                    safe_receipt(i,cand,row['evaluation'],c['accuracy_targets'],120); safe.append(row)
-            require(safe,'NO_ACCEPTED_SAFE_RECORD'); best=min(safe,key=lambda r:exact(r['evaluation']['safe_upper_bound_J']))
-            require(candidate==best['candidate'] and result.get('evaluation')==best['evaluation'] and exact(result['safe_upper_bound_J'])==exact(best['evaluation']['safe_upper_bound_J']),'NOT_CANDIDATE_RECORDER_BEST')
+            best=checked['best']
             identity=candidate_identity(i,candidate); raw=encoded(candidate)
             token=dict(token_id=uuid.uuid4().hex,evidence_kind='MOCK_ONLY',source_commit_sha=BASE_SHA,problem_id=i['id'],view=packet['view'],plan_sha256=packet['plan_sha256'],truth_H_sha256=truth_sha,
                 physical_projection_sha256=packet['physical_projection_sha256'],policy_id=POLICY,accuracy_sha256=packet['accuracy_sha256'],candidate_raw_sha256=byte_sha(raw),candidate_semantic_sha256=identity['candidate_semantic_sha256'],

@@ -1,3 +1,5 @@
+当前结果：见[K.184宿主续接与算法对照](results/resume_analysis01/summary.md)。七份SAFE及post全部通过；R1成对仅节能0.003152%，R3无图改善。原八次额度已消费（含旧故障首槽），本阶段完成停止，未扩实验。以下K.183及更早的“当前”均为历史状态。
+
 当前环境排查：见[K.183宿主启动自检](results/environment_diagnostic01/summary.md)。原桥已在宿主环境READY并正常关闭，研究批次尚未续接。
 
 当前实测：见[K.182首槽启动故障报告](results/execution_report01/summary.md)。本批已按技术故障规则停止，后续7槽未启动。

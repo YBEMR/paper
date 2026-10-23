@@ -285,19 +285,27 @@ def _save(path, value):
 
 
 def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
-                           clock=time.monotonic, variant="pair"):
+                           clock=time.monotonic, variant="pair", budget=None):
     """Reusable method interface, not a research launcher or budget grant.
 
     A separate, approved one-shot launcher remains necessary for real research.
     Supplying test backends always produces MOCK_ONLY, nonresearch outputs.
     """
-    entered = clock()
+    entered = clock() if budget is None else None
     from timing import MethodBudget
     from thermal import Exhausted
     if isinstance(seconds, bool) or not math.isfinite(seconds) or not 0 < seconds <= 300:
         raise ValueError("one finite root budget in (0,300] is required")
-    budget = MethodBudget(seconds, clock=clock)
-    budget.start, budget.deadline = entered, entered + float(seconds)
+    if budget is None:
+        budget = MethodBudget(seconds, clock=clock)
+        budget.start, budget.deadline = entered, entered + float(seconds)
+    elif not isinstance(budget, MethodBudget):
+        raise TypeError("caller budget must be the original MethodBudget")
+    elif float(seconds) != float(budget.seconds):
+        raise ValueError("method seconds must equal caller root budget seconds")
+    else:
+        clock = budget.clock
+        budget.check()
     workdir = Path(workdir)
     if workdir.exists():
         raise FileExistsError(str(workdir))
@@ -389,7 +397,7 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
         graph_strict_improvements=graph_accepted,
         budget_exhausted=stopped >= budget.seconds)
     result["timing"]["clock_origin"] = (
-        "method entry, before legacy imports, input read, HEFT and graph preparation")
+        "one caller root or method entry, before selected imports, input read, HEFT and graph preparation")
     if recorder is not None:
         final = recorder.current if recorder.current is not None else recorder.best
         if final is not None:

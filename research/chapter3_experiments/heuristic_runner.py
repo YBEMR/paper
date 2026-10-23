@@ -95,14 +95,23 @@ class CandidateRecorder:
 
 def execute_heuristic(input_loader, workdir, *, method, seconds, seed=None,
                        clock=time.monotonic, evaluator=evaluate_candidate, search=None,
-                       allow_auto_low=False):
+                       allow_auto_low=False, budget=None):
     """No research workload or budget is selected by this reusable lifecycle."""
     if method not in ('heft', 'sa'): raise ValueError('unknown heuristic')
     if method == 'sa' and (isinstance(seed, bool) or not isinstance(seed, int)):
         raise ValueError('SA requires an explicit integer seed')
     if method == 'heft' and seed is not None: raise ValueError('HEFT is deterministic')
     if type(allow_auto_low) is not bool: raise ValueError('allow_auto_low must be boolean')
-    budget = MethodBudget(seconds, clock=clock)
+    caller_owned_budget = budget is not None
+    if budget is None:
+        budget = MethodBudget(seconds, clock=clock)
+    elif not isinstance(budget, MethodBudget):
+        raise TypeError('caller budget must be the original MethodBudget')
+    elif float(seconds) != float(budget.seconds):
+        raise ValueError('method seconds must equal caller root budget seconds')
+    else:
+        clock = budget.clock
+        budget.check()
     workdir = Path(workdir)
     if workdir.exists(): raise FileExistsError(str(workdir))
     workdir.mkdir(parents=True)
@@ -154,6 +163,8 @@ def execute_heuristic(input_loader, workdir, *, method, seconds, seed=None,
         result.update(reason='INTERFACE_ERROR', error=f'{type(error).__name__}: {error}')
     stopped = budget.elapsed
     result.update(stop_stage=active, timing=budget.summary(stopped), budget_exhausted=stopped >= budget.seconds)
+    if caller_owned_budget:
+        result['timing']['clock_origin'] = 'caller root, before selected imports, input and initialization'
     if recorder is not None:
         if recorder.best is not None:
             result.update(state='SAFE', safe_candidate=recorder.best['candidate'],

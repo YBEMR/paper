@@ -1,4 +1,5 @@
-"""Read-only acceptance of complete mock receipts, not thermal mathematics."""
+"""Read-only receipt contracts; no schedule search or temperature propagation."""
+from decimal import Decimal, Context, ROUND_FLOOR, ROUND_CEILING
 from .common import require,exact,sha,timely,POLICY
 TECHNICAL={'INTERFACE_ERROR','INTERNAL_CONSISTENCY_ERROR','NUMERICAL_ERROR','RESOURCE_LIMIT','INVALID_INPUT'}
 COMPONENTS={'baseline','activity','external_common','temperature_correction'}
@@ -20,6 +21,41 @@ def technical_issues(value,path=()):
 def interval(v):
     require(isinstance(v,list) and len(v)==2,'ENERGY_INTERVAL_SHAPE'); a,b=map(exact,v); require(0<=a<=b,'ENERGY_INTERVAL_ORDER'); return a,b
 
+
+def external_common_energy_interval(scene,power_W,window_s):
+    """Check constant external energy against its existing Decimal60 protocol.
+
+    Exact P*W must be enclosed. For a nonpoint receipt, replay only the scalar
+    directed conversion/addition at the saved panel boundaries, never the heat
+    equations. This supplies a rounding envelope without an invented epsilon.
+    Exact singleton receipts remain compatible with mock and legacy evidence.
+    """
+    power,window=exact(power_W),exact(window_s)
+    require(power>=0 and window>0,'EXTERNAL_POWER_OR_WINDOW')
+    lo,hi=interval(scene.get('energy_components_J',{}).get('external_common'))
+    expected=power*window
+    require(lo<=expected<=hi,'EXTERNAL_POWER_ACCOUNTING')
+    if lo==hi: return lo,hi
+    trace=scene.get('trace')
+    require(isinstance(trace,list) and len(trace)>0,'EXTERNAL_ENERGY_TRACE')
+    down=Context(prec=60,rounding=ROUND_FLOOR)
+    up=Context(prec=60,rounding=ROUND_CEILING)
+    lower=upper=Decimal(0); previous=exact(0)
+    for panel in trace:
+        require(isinstance(panel,dict) and 'time_s' in panel,'EXTERNAL_ENERGY_TRACE')
+        end=exact(panel['time_s'])
+        require(previous<end<=window,'EXTERNAL_ENERGY_TRACE')
+        quantity=power*(end-previous)
+        numerator,denominator=Decimal(quantity.numerator),Decimal(quantity.denominator)
+        lower=down.add(lower,down.divide(numerator,denominator))
+        upper=up.add(upper,up.divide(numerator,denominator))
+        previous=end
+    require(previous==window,'EXTERNAL_ENERGY_TRACE')
+    require(exact(str(lower))<=lo<=hi<=exact(str(upper)),
+            'EXTERNAL_ROUNDING_ENCLOSURE')
+    return lo,hi
+
+
 def safe_receipt(instance,candidate,receipt,accuracy,seconds):
     require(receipt.get('state')=='SAFE' and receipt.get('rankable_energy') is True,'NOT_SAFE_RECEIPT')
     require(timely(receipt.get('completed_at_elapsed_s'),seconds),'LATE_OR_INVALID_SAFE_TIMESTAMP')
@@ -31,7 +67,7 @@ def safe_receipt(instance,candidate,receipt,accuracy,seconds):
     scenes={s['id']:s for s in instance['scenarios']}; results=receipt.get('scenes',{})
     require(set(results)==set(scenes),'INCOMPLETE_SCENE_RECEIPT')
     legality=receipt.get('legality',{}); require(legality.get('state')=='SCHEDULE_VALID_THERMAL_UNCHECKED' and set(legality.get('scenes',{}))==set(scenes),'RECEIPT_LEGALITY')
-    low=high=exact(0); ext=exact(instance['platform']['external_common_power_W'])*exact(instance['window_ms'])/1000
+    low=high=exact(0)
     nodes=instance['platform']['node_order']; valid=list(map(exact,instance['platform']['power_model_temperature_range_degC']))
     for sid,scene in scenes.items():
         r=results[sid]; require(r.get('state')=='SAFE' and r.get('complete') is True and r.get('rankable_energy') is True and r.get('energy_accuracy_met') is True,'SCENE_NOT_COMPLETE_SAFE')
@@ -40,7 +76,7 @@ def safe_receipt(instance,candidate,receipt,accuracy,seconds):
         parts=r.get('energy_components_J',{}); require(set(parts)==COMPONENTS,'ENERGY_COMPONENTS')
         values=[interval(v) for v in parts.values()]
         require(lo<=sum(v[0] for v in values) and hi>=sum(v[1] for v in values),'SCENE_ENERGY_COMPONENT_ENCLOSURE')
-        require(interval(parts['external_common'])==(ext,ext),'EXTERNAL_POWER_ACCOUNTING')
+        external_common_energy_interval(r,instance['platform']['external_common_power_W'],exact(instance['window_ms'])/1000)
         require(set(r.get('peaks_degC',{}))==set(r.get('minimum_degC',{}))==set(nodes),'TEMPERATURE_NODE_COVERAGE')
         for j,node in enumerate(nodes):
             a,b=interval(r['peaks_degC'][node]); c,d=interval(r['minimum_degC'][node]); limit=exact(scene['maximum_temperature_degC'][j]); entry=exact(scene['entry']['temperature_degC'][j])

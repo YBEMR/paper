@@ -43,7 +43,8 @@ class WorkflowStaticTests(unittest.TestCase):
         commands = re.findall(r"(?m)^\s+run:\s*(.+)$", self.workflow)
         self.assertEqual(commands, [
             'python3 -B research/agent_loop/monitor.py --repo-root "$GITHUB_WORKSPACE" '
-            '--output "$RUNNER_TEMP/agent-loop-status.json"'
+            '--output "$RUNNER_TEMP/agent-loop-status.json" '
+            "${{ github.event_name == 'schedule' && '--skip-if-disabled' || '' }}"
         ])
         # runner is allowed in jobs.<job_id>.steps.with, where upload reads it.
         self.assertIn("path: ${{ runner.temp }}/agent-loop-status.json", self.workflow)
@@ -300,6 +301,61 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(stdout.getvalue()), json.loads(destination.read_text()))
         self.assertEqual(json.loads(stdout.getvalue())["status"], "WAITING_REVIEW")
+
+    def test_disabled_polling_does_not_read_requests_or_git(self):
+        self.put("inputs/fixture.txt", b"changed synthetic input")
+        # Manual inspection still catches drift even when execution is disabled.
+        self.assert_status("STOP")
+        (self.root / self.base / "requests.json").unlink()
+        with patch.object(monitor.subprocess, "run", side_effect=AssertionError("Git forbidden")), \
+                patch.object(monitor.ReadOnlyRepository, "read", return_value=json.dumps(self.config).encode()) as read:
+            result = monitor.detect(self.root, skip_if_disabled=True)
+        read.assert_called_once_with(f"{self.base}/config.json")
+        self.assertEqual(result["status"], "DISABLED")
+        self.assertEqual(result["rounds"], [])
+        self.assertFalse(result["configured_enabled"])
+        self.assertFalse(result["real_experiments_started"])
+        self.assertTrue(result["machine_gate_required"])
+
+    def test_disabled_polling_still_rejects_invalid_or_unsafe_config(self):
+        path = f"{self.base}/config.json"
+        invalid = [b"{ truncated", b'{"enabled":false,"enabled":true}']
+        for key, value in (("schema_version", 2), ("enabled", "false"),
+                           ("enabled", None), ("ALLOW_REAL_EXPERIMENTS", True)):
+            invalid.append(json.dumps({**self.config, key: value}).encode())
+        for raw in invalid:
+            with self.subTest(raw=raw):
+                self.put(path, raw)
+                self.assertEqual(monitor.detect(self.root, skip_if_disabled=True)["status"], "STOP")
+
+    def test_enabled_polling_still_checks_round_drift(self):
+        self.config["enabled"] = True
+        self.put_json(f"{self.base}/config.json", self.config)
+        self.manifest["config_sha256"] = digest(self.read(f"{self.base}/config.json"))
+        self.put_json(self.manifest_path, self.manifest)
+        self.git("add", ".")
+        self.git("commit", "-qm", "TEST_ONLY enabled detector fixture")
+        self.request["subject_commit_sha"] = self.git("rev-parse", "HEAD").strip()
+        self.write_requests()
+        self.assertEqual(monitor.detect(self.root, skip_if_disabled=True)["status"], "WAITING_REVIEW")
+        self.put("inputs/fixture.txt", b"changed synthetic input")
+        result = monitor.detect(self.root, skip_if_disabled=True)
+        self.assertEqual(result["status"], "STOP")
+        self.assertIn("CURRENT_BOUND_FILE_CHANGED: inputs/fixture.txt", result["rounds"][0]["reasons"])
+
+    def test_cli_disabled_polling_writes_status_and_exits_successfully(self):
+        self.put("inputs/fixture.txt", b"changed synthetic input")
+        destination = self.root / "disabled-detector-output.json"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = monitor.main(["--repo-root", str(self.root), "--skip-if-disabled",
+                                 "--output", str(destination)])
+        self.assertEqual(code, 0)
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(result, json.loads(destination.read_text()))
+        self.assertEqual(result["status"], "DISABLED")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(monitor.main(["--repo-root", str(self.root)]), 2)
 
 
 if __name__ == "__main__":

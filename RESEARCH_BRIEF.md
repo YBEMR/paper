@@ -2,6 +2,12 @@
 
 更新：2026-10-23。
 
+**K.183／D208：环境排查找到可用宿主执行路径，单次无求解握手成功（E628）。** 用户要求先排查环境；先对比历史与只读令牌，再事先声明唯一技术自检（120秒启动／150秒监督，无研究输入/优化/热积分）。[简明报告](research/chapter4_scheduler/results/environment_diagnostic01/summary.md)、[握手](research/chapter4_scheduler/results/environment_diagnostic01/host_handshake.json)、[独立只读核查](research/chapter4_scheduler/results/environment_diagnostic01/independent_review.json)保存。
+
+本次默认工具进程实际为AppContainer且TMP/TEMP重定向，宿主只读进程非AppContainer。原安装/桥/solve_model/偏好目录与K173/K176成功调用相同；新失败路径也短于历史成功，不支持代码改动/简单路径过长解释。随后仅在宿主构造原MatlabSession→READY→close：14.531秒READY、R2023b/许可有效、0请求、正常退出0，3个已捕获进程身份全部确认结束；技术子进程32.782秒、无重试，277源/1依赖/8保护档案保持。
+
+已验证宿主执行可用，建议后续整个公平批次采用同一宿主上下文并记录令牌/TEMP检查，不改算法/物理/容差或全局配置。没有单独分离权限/TEMP/DDUX状态，不能把沙箱写成唯一已证根因或保证后续求解成功。未重置偏好、未读证书/密钥，原始技术日志留.runtime。本轮1技术启动、0新研究调用；K182仍STOPPED、1研究槽已耗/0post/7未启，未补跑/续接，K168及期限24保持暂停。下一项先明确剩余7槽的独立续接协议与环境核对，不能直接重启旧批次。以下K182及更早为历史。
+
 **K.182／D207：四方法实测首槽MATLAB启动崩溃，按协议停批，1调用／0post／7未启动（E627）。** 用户在K181明确8×300、最多8×60post、4800日历后回复“继续吧”，随后异步明确“确认预算，预检通过后执行”，均记同一批，非追加或失败重启。[简明故障报告](research/chapter4_scheduler/results/execution_report01/summary.md)、[只读事实](research/chapter4_scheduler/results/execution_report01/facts.json)、[独立内部审查](research/chapter4_scheduler/results/execution_report01/independent_review.json)、[批次终态](research/chapter4_scheduler/results/execution_preparation01/frozen/batch_terminal.json)保存。
 
 277源/8保护入口、原R1输入/config及环境核对通过，按冻结次序真实启动C。5.359秒原构造聚合已成，raw U=1.080823451833 J；随后MATLAB启动69.343秒，在ready前原生退出0xC0000005（日志Access violation/首帧mwddux_logging.dll），solver_request_attempts/session_total_request_count均0。C内部计时81.015秒，worker根至返回81.234秒、方法进程墙钟82.078秒、批次82.812秒；清理unresolved，故障原因尚未确定。
@@ -2112,3 +2118,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D207（2026-10-23，用户确认K181本批预算并执行至技术停批）：** 明确预算提案后用户“继续吧”，随后同一预算异步回答“确认预算，预检通过后执行”；按8×300/最多480post/4800日历接冻结声明43fa8896…32da，授权另存、不改准备声明，不当第二批。输入/源/环境核过后仅R1/C启动，MATLAB在READY前0xC0000005，0优化请求；1槽已消费、0post、7未启，原构造U留raw不排名。遵守技术故障即停、无退款/补跑/延时，未把后到同批确认当续接授权。独立只读审查认可；下一项仅建议隔离启动环境，真实复现需另约技术范围，剩余7槽需明确续接安排，原C/图/模型不因启动故障调整。K168/期限24继续暂停。
+
+
+**D208（2026-10-23，用户授权环境排查）：** 用户“那你先排查一下环境问题”。选择先静态对比历史及进程令牌，再一次事先声明、无研究输入/求解/热积分的宿主READY技术自检；不把技术自检当研究槽重跑。原MATLAB/桥/偏好目录不改，宿主14.531秒READY且正常清理，技术启动仅1次，研究调用0。确认可用执行路径，不宣称DDUX唯一根因已证或求解性能已恢复。后续建议所有对比方法统一宿主环境及根计费、补上下文核对；真正剩余7槽续接尚未执行，需要明确协议，旧首槽不补跑，K168/期限24不恢复。D207已耗1/7未启保持，不退款或覆盖。

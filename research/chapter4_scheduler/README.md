@@ -1,3 +1,5 @@
+当前环境排查：见[K.183宿主启动自检](results/environment_diagnostic01/summary.md)。原桥已在宿主环境READY并正常关闭，研究批次尚未续接。
+
 当前实测：见[K.182首槽启动故障报告](results/execution_report01/summary.md)。本批已按技术故障规则停止，后续7槽未启动。
 
 当前进度：见[K.181四方法执行准备](execution/README.md)。以下K.180为已完成的接口阶段记录；真实实验预算仍待确认。

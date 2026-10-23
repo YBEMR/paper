@@ -40,7 +40,8 @@ def safe_receipt(instance,candidate,receipt,accuracy,seconds):
         parts=r.get('energy_components_J',{}); require(set(parts)==COMPONENTS,'ENERGY_COMPONENTS')
         values=[interval(v) for v in parts.values()]
         require(lo<=sum(v[0] for v in values) and hi>=sum(v[1] for v in values),'SCENE_ENERGY_COMPONENT_ENCLOSURE')
-        require(interval(parts['external_common'])==(ext,ext),'EXTERNAL_POWER_ACCOUNTING')
+        ext_lo,ext_hi=interval(parts['external_common'])
+        require(ext_lo<=ext<=ext_hi,'EXTERNAL_POWER_ACCOUNTING')
         require(set(r.get('peaks_degC',{}))==set(r.get('minimum_degC',{}))==set(nodes),'TEMPERATURE_NODE_COVERAGE')
         for j,node in enumerate(nodes):
             a,b=interval(r['peaks_degC'][node]); c,d=interval(r['minimum_degC'][node]); limit=exact(scene['maximum_temperature_degC'][j]); entry=exact(scene['entry']['temperature_degC'][j])

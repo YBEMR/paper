@@ -1,11 +1,9 @@
-# H02实验执行与技术封版
+# H02探索分支状态
 
-**最新状态：首槽结果检查故障已修复，277项静态／mock回归通过。后三槽和所有独立后验仍未启动，执行开关保持关闭。**
+**最新：停止继续修复和重复实验，改用main K178已完成四槽的真H证据。**
 
-[修复结果与恢复建议](repair_external_accounting01/summary.md)。本轮0研究调用，不改原失败归档；等待独立审查及用户确认恢复安排。
+[K178独立证据审查与贡献判断](../../hetero_thermal_pilot/K178_真实H证据只读审查与响应建模贡献判断_20261024.md)确认R1准确H方案严格节能约3.9539%，R2统一R方案微优约0.001507%。它支持响应信息的条件性决策价值，不证明H规划逐题占优、公式原创或热约束／反馈收益。
 
-[本次结果与故障说明](../results/h02_same_truth_execution01/analysis/summary.md)、[真实调用账本](../results/h02_same_truth_execution01/analysis/run_ledger.json)、[授权及H05](stage_B_authorization01/README.md)。1次正式方法调用，44份原核心SAFE回执保留；本次独立后验SAFE和可比较配对均为0。
+此前待执行完整新批H02-B-20261024-02已被用户明确取代，取消且未消费；[历史确认及取消记录](stage_B_authorization02/README.md)保存。两个执行开关保持false，不自动激活。
 
-原[B0技术封版报告](evidence/B0_技术封版报告.md)、[B0零调用账本](evidence/run_ledger.json)及228项回归保持历史提交f68787e的含义，不代表本次真实执行仍为零。B0原关闭policy/gate/runtime字节保存在stage_B_authorization01，授权时的29源清单与策略hash也单独保存，后续只重绑授权状态。
-
-Python、原参数和数学核心未改。公共能耗接纳修复与mock已完成；建议待批完整新四项对照，须另行讨论恢复范围，不能将已消费首槽自动重跑。当前无新执行入口／授权可重用。
+本分支原故障和修复：[故障档案](../results/h02_same_truth_execution01/analysis/summary.md)、[277项纯回归修复](repair_external_accounting01/summary.md)。原44份核心SAFE及全部历史证据保留，不混入K178的调用或耗时。main和生产模型不改，未合并分支。

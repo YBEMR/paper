@@ -1,0 +1,646 @@
+% !TeX root = main.tex
+% 第三章独立编译工程。依据2026-10-24审查意见与已归档实验材料。
+% 内容依据：研究进展审查稿、2026-10-24第三章写作交接意见、P0/P1/P2与H02存档。
+% 正式控制规则：auto_low_immediate_v1；每个控制域完全空闲即回唯一最低档L。
+\chapter{多场景端侧推理的热约束节能联合规划}
+\label{ch:joint-thermal}
+
+\section{本章引言}
+
+端侧推理任务通常由若干具有数据依赖关系的计算阶段组成。不同阶段可以使用的处理器及其执行速度、功率各不相同，多个应用同时运行时还会争用计算资源。上一章介绍了异构处理器、图任务、功耗管理和瞬态热模型的基本关系，本章进一步考虑这些关系如何共同决定一个完整推理请求的执行安排。
+
+在实际使用中，设备可能需要支持不同的应用组合。例如，一种运行场景包含应用A与B，另一种包含A与C。应用A在两个场景中的计算内容并未改变，但面临的资源竞争不同。若A的计算阶段需要维持同一处理器部署，则A+B和A+C不能分别决定A的执行位置；另一方面，各场景又可以依据自身的请求期限、设备占用与温度条件，分别选择频率和启动时刻。Kim等对多场景共享映射和逐场景调频进行了研究\cite{kim2023scenario}，为这类部署关系提供了基础。
+
+在共享部署之外，运行时序还影响能耗和热安全。同一执行阶段采用较低频率时，功率可能下降而执行时间增加；不同阶段对降频的敏感程度也不相同。执行时间改变后，设备的忙闲分布、后续任务的等待和芯片内部的发热位置均可能变化。温度随功率历史持续演化，并通过漏电作用于后续电能消耗。因此，只比较各阶段孤立运行时的能量，难以描述共享频率域、持续基准功率与温度变化共同形成的系统代价。
+
+基于以上关系，本章以预先给定的场景、请求和设备参数为输入，联合确定同一计算阶段跨场景共享的执行单元，以及各场景中的运行模式与启动时刻。在满足资源、依赖、请求期限和连续温度限制的前提下，以多个场景的完整窗口加权系统能量作为目标。随后利用有限启动集合建立混合整数线性规划（Mixed-Integer Linear Programming，MILP）表达，并结合连续时间温度检查评价候选安排。最后通过已经完成的仿真与数学见证分析模型中频率响应、时序相关能量及热安全条件的作用。
+
+\section{系统模型}
+
+\subsection{推理任务与多场景组织}
+
+设需要部署的推理应用集合为$\mathcal A$。每个应用在规划前具有固定的模型结构、输入规格和计算阶段划分，其计算关系由有向无环图表示：
+\begin{equation}
+ G_a=(V_a,E_a),\qquad a\in\mathcal A.
+ \label{eq:c3-app}
+\end{equation}
+其中，$V_a$为计算阶段集合，$E_a$为阶段之间的数据依赖边。一个阶段由能够连续执行的一组算子组成，在下文简称Stage。若$(i,j)\in E_a$，则阶段$j$必须在阶段$i$产生必要结果后才能开始。图结构允许链式、分支和汇合关系，其划分在求解期间保持不变。
+
+端侧设备的运行需求用有限场景集合$\mathcal C$描述。场景$c$包含预先给定的应用组合和请求集合$\mathcal R_c$。同一应用可以在一个场景中被多次调用；每次调用形成一个独立请求，因而需要重新执行该应用的全部必要计算阶段。设请求$r$的所属应用为$a(r)$，释放时刻为$r_{cr}$，相对截止时间为$d^{\rm rel}_{cr}$，其绝对截止时刻为
+\begin{equation}
+ D_{cr}=r_{cr}+d^{\rm rel}_{cr}.
+ \label{eq:c3-deadline}
+\end{equation}
+请求只有在全部必需输出产生后才算完成，不能以其中一条并行分支先结束作为完成条件。
+
+将场景中的所有请求展开，得到阶段实例集合$\mathcal I_c$与依赖集合$\mathcal E_c$。记$r(c,i)$为实例$i$所属请求，$\mathcal O_{cr}\subseteq\mathcal I_c$为该请求的必需输出阶段实例集合。每个实例都有独立的执行过程，即使它们来自同一应用、同一阶段，也分别占用处理器资源。不同请求之间仅保留实际存在的数据依赖，不因共同规划而额外添加先后约束。
+
+多场景部署中的共同决策发生在应用的固定阶段层面。为此，定义阶段身份集合
+\begin{equation}
+ \mathcal J=\{(a,j):a\in\mathcal A,\ j\in V_a\},\qquad
+ \tau(c,i)\in\mathcal J,
+ \label{eq:c3-stage-id}
+\end{equation}
+其中$\tau(c,i)$指出实例$i$属于哪个应用的哪个阶段。相同身份$\tau$在所有场景和请求中绑定同一个\emph{具体执行单元}，而不是仅要求选择相同的CPU、GPU或NPU类别。
+
+以A+B和A+C为例，假设A包含预处理、主计算与后处理三个阶段。如果A的主计算阶段部署到NPU0，那么该阶段在两个场景中都使用NPU0；B和C可以分别选择适合自身的设备。由于两个场景的设备竞争不同，A的主计算阶段在各场景中仍可采用不同合法工作点，并安排在不同启动时刻。这样，共同部署决定阶段在各场景中的资源位置，场景内调度决定这些资源在各个请求到达后如何使用。
+
+
+
+\begin{figure}[htbp]
+ \centering
+ \begin{tikzpicture}[>=Latex,font=\small,
+     st/.style={draw,rounded corners=2pt,fill=blue!6,minimum width=1.7cm,minimum height=.70cm,align=center},
+     side/.style={draw,rounded corners=2pt,fill=gray!7,minimum width=1.8cm,minimum height=.60cm,align=center}]
+  \node[font=\bfseries] at (2.9,2.20) {场景一：A与B};
+  \node[font=\bfseries] at (10.3,2.20) {场景二：A与C};
+  \draw[rounded corners=4pt,gray!60] (-.55,-1.30) rectangle (6.45,1.72);
+  \draw[rounded corners=4pt,gray!60] (6.85,-1.30) rectangle (13.85,1.72);
+  \node[st] (a1) at (.65,.55) {A.pre\\CPU1};
+  \node[st] (a2) at (2.95,.55) {A.main\\NPU0};
+  \node[st] (a3) at (5.25,.55) {A.post\\CPU1};
+  \node[st] (b1) at (8.05,.55) {A.pre\\CPU1};
+  \node[st] (b2) at (10.35,.55) {A.main\\NPU0};
+  \node[st] (b3) at (12.65,.55) {A.post\\CPU1};
+  \draw[-Latex] (a1)--(a2);
+  \draw[-Latex] (a2)--(a3);
+  \draw[-Latex] (b1)--(b2);
+  \draw[-Latex] (b2)--(b3);
+  \node[side] at (2.95,-.62) {B：场景内独立调度};
+  \node[side] at (10.35,-.62) {C：场景内独立调度};
+  \node[font=\scriptsize,align=center] at (6.65,-1.85)
+      {A各阶段共用具体设备，工作点及启动时刻由各场景分别选择};
+ \end{tikzpicture}
+ \caption{跨场景共享部署与场景内运行配置的关系}
+ \label{fig:c3-scenes}
+\end{figure}
+
+各场景分别给定初始温度与固定评价窗口$[0,W_c]$，入口不遗留未完成任务。按本章采用的空闲立即最低档策略，入口时各控制域均处于$L_h$。本文评价的是各场景分别运行的完整时间段，不在这些时间段之间引入实际场景切换、数据迁移或温度继承。场景之间的联系由相同阶段的共享部署以及最终加权能量目标建立。
+
+\subsection{异构处理器与频率控制}
+
+端侧平台的计算资源由CPU、GPU与NPU组成。记三类具体执行单元的集合分别为$\mathcal U_C$、$\mathcal U_G$和$\mathcal U_N$，全部资源集合为
+\begin{equation}
+ \mathcal U=\mathcal U_C\cup\mathcal U_G\cup\mathcal U_N.
+ \label{eq:c3-unit-set}
+\end{equation}
+CPU执行单元可以是一个处理器核心，也可以是预先确定的固定核心组；不同单元所占核心不重叠。GPU和NPU按完整设备进行映射，其内部计算并行度体现在对应阶段的时长和功率参数中。一个执行单元同一时刻至多执行一个Stage，不同单元上的Stage在依赖和控制条件允许时可以并行。
+
+处理器还具有一定粒度的电压--频率控制能力。记控制域集合为$\mathcal H$，以$\gamma(u)$表示执行单元$u$所属控制域，$\mathcal K_h$为域$h$的有限合法工作点集合。一个工作点$k$提供配套的频率$f_h(k)$和电压$v_h(k)$，二者不能作为互不关联的自由变量分别选择。对只支持固定服务状态的设备，$\mathcal K_h$可以只有一个元素。
+
+执行单元的粒度与频率域的粒度可能不同。在本章所用平台抽象中，CPU1和CPU2可分别运行Stage，但共享一个CPU频率域；GPU0和NPU0分别使用独立的控制域。同域单元若有重叠运行时间，必须采用相容的工作点。Stage开始执行后不可抢占、迁移或中途换档，当前域中存在持续执行的Stage时，该域也不能改变工作点。当同域所有Stage都结束时，便可以在下一批任务启动时选择新的工作点。
+
+空闲期间的控制规则直接影响等待能量。本章采用的正式控制策略为：\emph{当一个控制域内没有正在执行的Stage时，域立即回到其唯一的最低频率工作点$L_h$；再次启动Stage时按被选模式恢复相应工作点。}这一策略不把空闲视为零功率，且不要求域保留上一忙段的频率。为聚焦部署、工作点与执行时序的关系，本章设定合法工作点转换、阶段交接和额外设备间传输的时间及能量开销均为零；阶段自身已经包含的预处理、后处理等计算仍完整计入。所有执行区间采用左闭右开约定$[s,F)$，允许某阶段完成时另一阶段立即开始。
+
+\subsection{执行模式与频率响应}
+
+同一个阶段在不同处理器上的运行时间和功率可能不同，且并不是所有处理器都支持全部阶段。设身份$\tau$可用的执行单元及合法工作点组合构成模式集合$\mathcal M_\tau$；对某场景实例$i$，其模式集合记为$\mathcal M_{ci}$。模式$m$确定具体执行单元$u(m)$及所属域的工作点$\kappa(m)$。阶段一旦选定模式，其运行时间$d_{\tau}(m)$和活动功率增量$q_{\tau}(m)$均由已知参数确定，调度器再为它安排启动时刻。
+
+频率降低通常会延长计算时间，但不同任务的延长比例并不一致。参照Da Costa对频率敏感部分和相对固定部分的划分\cite{source2}，对固定阶段$\tau$在执行单元$u$上的时长采用
+\begin{equation}
+ d_{\tau u}(f)=d^{\rm ref}_{\tau u}
+ \left[(1-\alpha_{\tau u})
+       +\alpha_{\tau u}\frac{f_u^{\rm ref}}{f}\right],
+ \qquad 0\le\alpha_{\tau u}\le1.
+ \label{eq:c3-duration}
+\end{equation}
+其中$d^{\rm ref}_{\tau u}$为参考频率$f_u^{\rm ref}$下的时长，$\alpha_{\tau u}$表示随频率成反比变化的时长比例。两项参数都随阶段与执行单元变化，因而同样的降频比例可以产生不同的执行时间变化。例如，频率减为参考值的一半时，$\alpha=1$的任务时长变为两倍，而$\alpha=0.4$的任务变为$1.4$倍。
+
+式\eqref{eq:c3-duration}给出了模式的执行时间；活动功率增量由对应工作点的功率画像或声明的参数生成方法另行确定，不用时长公式推算。对相同阶段、工作量、设备和工作点，各场景复用相同的时长及活动功率参数。本文将它们视为离线规划时给定的确定参数，不在一次阶段运行中再次随温度或并发程度重新估计。
+
+对场景$c$的实例$i$，若选择模式$m_{ci}\in\mathcal M_{ci}$，并在$s_{ci}$时刻启动，则结束时刻与实际执行区间为
+\begin{equation}
+ F_{ci}=s_{ci}+d_{\tau(c,i)}(m_{ci}),\qquad
+ I_{ci}=[s_{ci},F_{ci}).
+ \label{eq:c3-stage-time}
+\end{equation}
+任务依赖决定某个阶段最早何时具备输入，设备占用和共享频率域进一步决定它何时能够启动。不同阶段之间允许合法等待；等待虽不直接完成计算，却会影响域的忙闲状态以及随后温度和能量的变化。
+
+\section{功耗与温度模型}
+
+\subsection{运行功耗的组成}
+
+处理器的动态开关功耗与电压、频率和工作负载活动相关，漏电功耗还随温度变化。前一章已介绍这些物理关系，本节将它们组织为能够沿完整任务时间表计算的电功率模型。为区分设备运行时始终存在的功率和新增计算活动带来的功率，把处理器功率分为参考基准功率、温度相关修正和Stage活动增量。三项分别对应运行工作点、局部温度以及当前实际执行的Stage。
+
+一个异构片上系统可能存在共享的功率部分。例如，CPU1与CPU2可以使用同一频率域及一份共享基准，两个CPU同时工作并不意味着该基准需要计两次。为此，以$\mathcal B$表示互不重叠的功率计量组，$\pi(u)\in\mathcal B$为执行单元$u$所属的组，$\xi_{cg}(t)$为决定组$g$功率参数的联合控制状态。对工作点组合$\xi$，$B_g(\xi)$表示参考温度下的组基准功率，已包含相应的参考漏电。
+
+CPU的不同执行单元、GPU与NPU还可以分别对应不同的局部热节点。记热节点集合为$\mathcal N$，节点$n$在场景$c$、时刻$t$的温度为$T_{cn}(t)$。以$\lambda_{gn}(\xi)\ge0$表示功率组$g$在节点$n$上的温度相关系数，以$T_g^{\rm ref}$表示该组的参考温度。相对参考状态的温度功率修正为
+\begin{equation}
+ \Delta P^\lambda_{cgn}(t)=
+ \lambda_{gn}(\xi_{cg}(t))
+ \bigl[T_{cn}(t)-T_g^{\rm ref}\bigr].
+ \label{eq:c3-leak}
+\end{equation}
+该式采用温区内的线性近似：温度升高时修正项增大；温度低于参考值时可为负，但完整功率必须处于声明参数的有效范围。由于参考基准已经包含参考温度下的漏电，温度修正不能再次作为一份完整漏电重复计入。
+
+设$\iota_{ci}(t)=\mathbf1_{[s_{ci},F_{ci})}(t)$为阶段实例是否正在执行的指示函数，其活动功率为$q_{ci}=q_{\tau(c,i)}(m_{ci})$。于是组$g$在时刻$t$的电功率为
+\begin{equation}
+ P_{cg}(t)=B_g(\xi_{cg}(t))
+ +\sum_{n\in\mathcal N}\Delta P^\lambda_{cgn}(t)
+ +\sum_{\substack{i\in\mathcal I_c\\\pi(u(m_{ci}))=g}}
+       q_{ci}\iota_{ci}(t).
+ \label{eq:c3-group-power}
+\end{equation}
+组基准按计量边界只累加一次，活动增量则随各阶段的实际执行区间出现。域空闲时立即进入$L_h$，对应的最低档基准及温度修正继续存在。因此，无论计算工作是否已经全部完成，系统在评价窗口内仍可能消耗电能。
+
+\subsection{热节点与瞬态温度}
+
+电能消耗的位置决定了热量注入芯片的空间分布。以$a^B_{ng}(\xi)\ge0$表示计量组$g$在状态$\xi$下的基准功率向热节点$n$的分配比例；边界内组满足$\sum_n a^B_{ng}(\xi)=1$。以$h_{nu}$表示执行单元$u$的活动功率注入节点$n$的比例，满足$\sum_n h_{nu}=1$。本章实验中每个执行单元的活动增量注入其对应的单个热节点，CPU域共享基准则依据输入给定的分布注入两个CPU节点。
+
+节点$n$的发热功率因此为
+\begin{equation}
+ p^{\rm heat}_{cn}(t)=
+ \sum_{g\in\mathcal B}a^B_{ng}(\xi_{cg}(t))B_g(\xi_{cg}(t))
+ +\sum_{g\in\mathcal B}\Delta P^\lambda_{cgn}(t)
+ +\sum_{i\in\mathcal I_c}h_{n,u(m_{ci})}q_{ci}\iota_{ci}(t).
+ \label{eq:c3-heat-power}
+\end{equation}
+组基准和活动功率只向热网络分配一次，热节点之间的传热由后续热方程计算，而不是通过重复分摊电功率实现。对边界内的来源，节点注热之和等于对应计量组的总电功率。
+
+处理器节点之间通过材料和封装传递热量，温度也受到当前功率之前的储热状态影响。采用多节点热阻热容（RC）网络\cite{source1,chantem2011,fdtm2022}，记节点热容矩阵为$C=\operatorname{diag}(C_n)$，$C_n>0$；以$g_{nj}=g_{jn}\ge0$表示节点间导热系数，$g_{na}\ge0$表示节点对环境的导热系数，并令
+\begin{equation}
+ G_{nn}=g_{na}+\sum_{j\ne n}g_{nj},\qquad
+ G_{nj}=-g_{nj}\quad(n\ne j).
+ \label{eq:c3-G}
+\end{equation}
+若环境温度为$T_a$，令$\boldsymbol\theta_c(t)=
+\boldsymbol T_c(t)-T_a\mathbf1$，则温度变化满足
+\begin{equation}
+ C\dot{\boldsymbol\theta}_c(t)=
+ -G\boldsymbol\theta_c(t)+\boldsymbol p^{\rm heat}_c(t),
+ \qquad
+ \boldsymbol\theta_c(0)=\boldsymbol T_c^0-T_a\mathbf1.
+ \label{eq:c3-thermal-ode}
+\end{equation}
+节点温度通过$G$相互耦合，而温度相关漏电又通过式\eqref{eq:c3-heat-power}反馈到注热。每个场景使用自身的已知初始温度，不把一个场景运行结束后的温度直接传递给另一个场景。
+
+当活动集合和域工作点在一段时间内不变时，各组参考基准和温度系数均为常数。将式\eqref{eq:c3-leak}代入热方程，可把该段写成
+\begin{equation}
+ \dot{\boldsymbol\theta}_c(t)=
+ A_\omega\boldsymbol\theta_c(t)
+ +\boldsymbol b_\omega+D_c\boldsymbol a_c(t),
+ \label{eq:c3-affine-ode}
+\end{equation}
+其中$\omega$表示本段的合法联合工作点状态，$\boldsymbol a_c(t)$记录各阶段的活动指示。$A_\omega$由$C^{-1}(-G+\operatorname{diag}(\boldsymbol\ell_\omega))$确定，$\boldsymbol\ell_\omega$为各节点的温度系数之和；$\boldsymbol b_\omega$包含基准注热及参考温度偏置，$D_c$描述阶段活动功率的注入位置。这一分段常系数关系使得给定完整时间表后，可以沿全部工作与空闲区间连续计算温度。
+
+\subsection{完整窗口系统能耗}
+
+能量评价需要覆盖整个运行时间段，而不只是各阶段执行的区间。对场景$c$，设其评价窗口为$[0,W_c]$，其中$W_c$不小于该场景所有请求的截止时刻，且不会随着候选方案完成得更早而缩短。除计量组功率外，记$P_{{\rm ext},c}(t)$为需要计入系统电能、但位于本章热网络边界之外的公共功率。完整场景能量与系统功率为
+\begin{equation}
+ \begin{aligned}
+ P_{{\rm sys},c}(t)
+    &=P_{{\rm ext},c}(t)+\sum_{g\in\mathcal B}P_{cg}(t),\\
+ E_c&=\int_0^{W_c}P_{{\rm sys},c}(t)\,\mathrm dt.
+ \end{aligned}
+ \label{eq:c3-scene-energy}
+\end{equation}
+外部公共功率只进入电能统计，不在没有物理依据时被当作芯片内部发热源再次注入RC网络。
+
+不同场景的使用频率通过给定权重$p_c$表示，满足$p_c\ge0$与$\sum_cp_c=1$。因此，跨场景的目标能量定义为
+\begin{equation}
+ \overline E=\sum_{c\in\mathcal C}p_cE_c.
+ \label{eq:c3-weighted-energy}
+\end{equation}
+对所有候选，窗口、权重、初温及功热参数均为固定输入。即使某场景的权重为零，其请求和温度安全要求也不会因此被取消。
+
+根据式\eqref{eq:c3-group-power}，场景能量还可分为
+\begin{equation}
+ E_c=E_c^{\rm base}+E_c^{\rm act}
+     +E_c^{\rm temp}+E_c^{\rm ext}.
+ \label{eq:c3-energy-parts}
+\end{equation}
+四项分别为各计量组工作点相关基准的积分、全部Stage活动增量的积分、温度修正的积分和公共电功率的积分。对已经选定的模式，活动能量满足
+\begin{equation}
+ E_c^{\rm act}
+ =\sum_{i\in\mathcal I_c}
+ q_{\tau(c,i)}(m_{ci})\,d_{\tau(c,i)}(m_{ci}).
+ \label{eq:c3-act-energy}
+\end{equation}
+该项在模式不变时不随启动时刻变化。但域是否处于最低档、某段工作持续多久及各节点的温度轨迹都由实际时序决定，因此基准与温度修正的积分仍可能变化。完整窗口能量不能普遍表示为一组与时序无关的Stage常数简单相加。
+
+\section{热约束节能联合优化问题}
+
+\subsection{决策与可行性要求}
+
+给定场景、请求DAG、合法模式、响应参数、功热参数及入口状态之后，规划器需要作出两层相互关联的选择：一是为每个固定Stage确定跨场景共用的具体执行单元$u_\tau$；二是为每个场景的每个实例选择合法模式$m_{ci}$及开始时间$s_{ci}$。工作点和时长由模式确定，结束时刻、忙闲轨迹、温度与能量由这些决策和输入共同导出。
+
+完整调度必须同时满足以下要求。每个实例使用的设备应与其固定Stage身份的共享部署相同，且模式属于合法支持集合；阶段不得早于所属请求释放，后继必须等待全部前驱完成；一个执行单元的工作区间不能相互重叠，同一频率域的并发工作应使用相容工作点，并在完全空闲时回到$L_h$。对于每个请求，全部必需输出阶段的结束时刻都不得超过其绝对截止时刻，即
+\begin{equation}
+ F_{ci}\le D_{cr},
+ \qquad i\in\mathcal O_{cr},\ c\in\mathcal C,\ r\in\mathcal R_c.
+ \label{eq:c3-output-deadline}
+\end{equation}
+
+在期限之外，全部热节点还需要在完整窗口内满足温度上限：
+\begin{equation}
+ T_{cn}(t)\le T_n^{\max},
+ \qquad c\in\mathcal C,\ n\in\mathcal N,\ t\in[0,W_c].
+ \label{eq:c3-continuous-safe}
+\end{equation}
+该条件覆盖初始时刻、工作段、等待段和任务完成后的空闲尾段。功耗和热模型声明的有效温区及完整电功率的物理有效性同样属于可行性要求。温度是由当前安排诱导的连续状态，不能只凭若干离散的事件时刻判断全过程是否安全。
+
+记满足上述全部要求的决策集合为$\mathcal F$。在起点允许连续选择时，完整联合问题为
+\begin{equation}
+ \begin{aligned}
+ (P)\qquad
+ \min_{\{u_\tau\},\{m_{ci},s_{ci}\}}\quad&
+       \sum_{c\in\mathcal C}p_cE_c\\
+ \mathrm{s.t.}\qquad&
+       (u,m,s)\in\mathcal F,\qquad s_{ci}\ge0.
+ \end{aligned}
+ \label{eq:c3-continuous-P}
+\end{equation}
+目标只包含系统能量；任务期限和温度上限均作为必须满足的约束。所有场景都需要可行，包括权重为零的场景。
+
+\subsection{有限启动集合与优化范围}
+
+连续时间问题中，Stage起点可以在合法区间内变化，随之改变的事件时刻和功率片段长度也将影响温度传播。为了建立有限规模的数学规划模型，对每个场景实例$i$及其模式$m$声明有限合法启动集合$\mathcal G_{cim}$。采用该集合后，受限问题为
+\begin{equation}
+ \begin{aligned}
+ (P_{\mathcal G})\qquad
+ \min\quad&\overline E\\
+ \mathrm{s.t.}\quad&
+   (u,m,s)\in\mathcal F,\qquad
+   s_{ci}\in\mathcal G_{ci,m_{ci}}.
+ \end{aligned}
+ \label{eq:c3-finite-P}
+\end{equation}
+有限集合只限制启动时刻；模式对应的实际持续时间和完成时刻保持精确值，不强行取整。正式实验采用5\,ms间隔的合法启动格点，但阶段结束可能落在两个格点之间，温度仍在连续时间上计算。
+
+由于有限起点形成的可行安排是连续起点可行集的子集，若两问题均有最优值，便有
+\begin{equation}
+ \mathcal F_{\mathcal G}\subseteq\mathcal F,\qquad
+ E^*(P)\le E^*(P_{\mathcal G}).
+ \label{eq:c3-restricted-bound}
+\end{equation}
+因此，有限域的安全安排也是连续域的一份合法安排，但有限域的最优值不自动等于连续域最优值；有限域无解也不意味着连续域必然无解。下节围绕$P_{\mathcal G}$构造MILP，并采用完整时间轴上的热检查判定候选方案。
+
+
+\section{有限启动模型的MILP表达}
+
+\subsection{执行选项与统一事件轴}
+
+在有限启动域中，每个实例只需要从一组预先列出的合法选择中确定实际执行方式。对场景$c$的实例$i$，定义选项集合
+\begin{equation}
+ \begin{aligned}
+ \mathcal Q_{ci}
+ =\bigl\{o=(i,m,t):\;&m\in\mathcal M_{ci},\
+ t\in\mathcal G_{cim},\\[-1mm]
+ &r_{c,r(c,i)}\le t,\
+ t+d_{\tau(c,i)}(m)\le W_c\bigr\},\\
+ \mathcal Q_c&=\bigcup_{i\in\mathcal I_c}\mathcal Q_{ci}.
+ \end{aligned}
+ \label{eq:c3-options}
+\end{equation}
+每个选项$o$都带有确定的单元$u_o$、频率域$h_o=\gamma(u_o)$、工作点$\kappa_o$、起点$t_o$、时长$d_o$、终点$f_o=t_o+d_o$和活动增量$q_o$。同一实例的不同选项可以采用不同设备、频率或起点，但最后只选择其中一个。上述集合首先排除了单个选项已经违反释放时间或窗口边界的情况，依赖、资源与温度关系由后续约束共同决定。
+
+由于全部合法选项的起止时刻已知，可以提前将它们与窗口两端一起排序去重，得到固定事件序列
+\begin{equation}
+ 0=e_{c0}<e_{c1}<\cdots<e_{cL_c}=W_c,\qquad
+ \delta_{c\ell}=e_{c,\ell+1}-e_{c\ell}>0.
+ \label{eq:c3-events}
+\end{equation}
+对片段$[e_{c\ell},e_{c,\ell+1})$，定义已知常数$\chi_{co\ell}$：若选项$o$的执行区间覆盖该片段，则取1，否则取0。因为事件序列包含全部选项的真实终点，活动集合不会在片段内部发生改变。即使最终选中的起点都属于5\,ms网格，某个Stage也可能在106.5\,ms等非网格时刻结束，该时刻仍作为事件保留。
+
+为了表达跨场景的共享部署，为每个固定Stage $\tau$和具体单元$u$引入二元变量$x_{\tau u}$；对每个执行选项引入二元变量$y_{co}$。二者分别表示固定阶段是否部署到单元$u$以及选项$o$是否被采用。由“每个固定阶段选择一个设备”和“每个实例选择一个选项”得到
+\begin{equation}
+ \begin{aligned}
+ &\sum_{u\in\mathcal U}x_{\tau u}=1,
+ &&\tau\in\mathcal J,\\
+ &\sum_{o\in\mathcal Q_{ci}}y_{co}=1,
+ &&i\in\mathcal I_c,\ c\in\mathcal C,\\
+ &\sum_{\substack{o\in\mathcal Q_{ci}\\u_o=u}}y_{co}
+       =x_{\tau(c,i),u},
+ &&i\in\mathcal I_c,\ u\in\mathcal U,\ c\in\mathcal C.
+ \end{aligned}
+ \label{eq:c3-link}
+\end{equation}
+最后一组等式将实例选择与跨场景部署相连。对于某Stage不支持的设备，等式左侧为空和零，对应的部署变量也必须为零。同一阶段在不同场景中因而共用实际设备，但其工作点和起点由各自的$y$变量分别选择。
+
+\subsection{时序、资源与工作点约束}
+
+选项终点已包含对应模式的执行时长，因此实例的开始和完成时间可以写成线性表达式：
+\begin{equation}
+ s_{ci}=\sum_{o\in\mathcal Q_{ci}}t_o y_{co},\qquad
+ F_{ci}=\sum_{o\in\mathcal Q_{ci}}f_o y_{co}.
+ \label{eq:c3-option-time}
+\end{equation}
+每个实例都应满足所属请求的释放时刻，且后继须在全部前驱完成后启动；所有必需输出在期限内完成：
+\begin{equation}
+ \begin{aligned}
+ s_{ci}&\ge r_{c,r(c,i)},\\
+ s_{cj}&\ge F_{ci},\qquad(i,j)\in\mathcal E_c,\\
+ F_{ci}&\le D_{cr},\qquad i\in\mathcal O_{cr}.
+ \end{aligned}
+ \label{eq:c3-schedule-constraints}
+\end{equation}
+最后一项逐个约束必需输出实例，直接保证请求的实际完成时刻不超过截止期限。
+
+同一执行单元的Stage不能占用重叠的时间区间。由于事件片段内部的活动指示为常数，可以对每个单元和片段写出容量约束：
+\begin{equation}
+ \sum_{\substack{o\in\mathcal Q_c\\u_o=u}}
+       \chi_{co\ell}y_{co}\le1,
+ \qquad u\in\mathcal U,\quad 0\le\ell<L_c.
+ \label{eq:c3-occupancy}
+\end{equation}
+采用左闭右开区间后，前一Stage的终点与后一Stage的起点相同不会构成重叠。不同单元上的并行只需再满足共享频率域的兼容要求。
+
+对控制域$h$在片段$\ell$采用工作点$k\in\mathcal K_h$，引入二元状态变量$\rho_{ch\ell k}$。每个片段只能有一个实际工作点：
+\begin{equation}
+ \sum_{k\in\mathcal K_h}\rho_{ch\ell k}=1.
+ \label{eq:c3-onehot}
+\end{equation}
+某个选项若被选中，并覆盖片段$\ell$，该域必须采用选项的工作点：
+\begin{equation}
+ y_{co}\le \rho_{c,h_o,\ell,\kappa_o},
+ \qquad\text{当 }\chi_{co\ell}=1.
+ \label{eq:c3-lock}
+\end{equation}
+这同时禁止同域的不同频点Stage在同一片段重叠。当某个Stage跨越事件持续执行时，它在事件前后的片段都锁定同一个工作点，因而实现运行期间不换档的要求。
+
+空闲控制使用本章已确定的立即最低档策略。为使域在片段内\emph{没有活动Stage时只能处于$L_h$}，对每个非最低档$k\ne L_h$施加支持约束：
+\begin{equation}
+ \rho_{ch\ell k}\le
+ \sum_{\substack{o\in\mathcal Q_c\\h_o=h,\ \kappa_o=k}}
+      \chi_{co\ell}y_{co},
+ \qquad k\in\mathcal K_h\setminus\{L_h\}.
+ \label{eq:c3-auto-low}
+\end{equation}
+如果域在某段完全空闲，右侧全部为零，所有非$L_h$状态都不能被选取，再由式\eqref{eq:c3-onehot}确定该段状态为$L_h$。如果存在运行中的Stage，式\eqref{eq:c3-lock}使状态与所选模式一致。由此，忙段工作点保持、忙段结束后的即时降至$L_h$以及下一忙段的重新选频均能通过同一组约束表达，而不需要加入历史版本中“空闲时保持上一工作点”的条件。
+
+不同控制域的状态可能共同决定某一计量组的基准或温度系数。记$\Omega$为输入给定的物理相容联合状态集合，$\omega_h$表示状态$\omega$在域$h$上的工作点。对每个片段设置联合状态二元变量$w_{c\ell\omega}$，并与逐域状态保持一致：
+\begin{equation}
+ \sum_{\omega\in\Omega}w_{c\ell\omega}=1,\qquad
+ \sum_{\substack{\omega\in\Omega\\\omega_h=k}}
+ w_{c\ell\omega}=\rho_{ch\ell k}.
+ \label{eq:c3-combined}
+\end{equation}
+这里的联合状态描述各域工作点的组合，并不要求CPU、GPU和NPU使用相同的频率。联合状态一旦确定，片段的基准功率、温度漏电系数及注热参数也随之确定。
+
+\subsection{温度传播与目标函数的线性表达}
+
+在片段$\ell$内，若联合状态取$\omega$，对应的热方程系数$A_\omega$与$\boldsymbol b_\omega$均已知。记$\boldsymbol\theta_{c\ell}$为片段入口温升，$\boldsymbol v_{c\ell}$为选项活动向量，其分量为$\chi_{co\ell}y_{co}$。由常系数线性系统的解，可得
+\begin{equation}
+ \boldsymbol\theta_{c,\ell+1}
+ =\Phi_{\omega}(\delta_{c\ell})\boldsymbol\theta_{c\ell}
+  +\boldsymbol\psi_{\omega}(\delta_{c\ell})
+  +\Gamma_{\omega}(\delta_{c\ell})\boldsymbol v_{c\ell},
+ \label{eq:c3-segment-flow}
+\end{equation}
+其中
+\begin{equation}
+ \begin{aligned}
+ \Phi_{\omega}(\delta)&=e^{A_\omega\delta},\\
+ \boldsymbol\psi_{\omega}(\delta)
+  &=\int_0^\delta e^{A_\omega(\delta-t)}
+                         \boldsymbol b_\omega\,\mathrm dt,\\
+ \Gamma_{\omega}(\delta)
+  &=\int_0^\delta e^{A_\omega(\delta-t)}
+                         D_c\,\mathrm dt.
+ \end{aligned}
+ \label{eq:c3-segment-coeff}
+\end{equation}
+这里时间单位须与热容及导热参数一致，实验采用秒计算温度方程。由于片长和联合状态来自有限已知集合，以上系数可在建模前计算。式\eqref{eq:c3-segment-flow}在固定$\omega$的条件下对温度与活动选择变量均为仿射表达。
+
+通过$w_{c\ell\omega}$可以使所选联合状态的传播关系生效，而未选状态的等式不约束当前轨迹。具体可采用带有有效变量界的指示约束或大$M$线性表达。例如，记状态$\omega$下第$n$个温度传播等式的残差为$R_{c\ell\omega n}$，则
+\begin{equation}
+ -M_{c\ell\omega n}(1-w_{c\ell\omega})
+ \le R_{c\ell\omega n}
+ \le M_{c\ell\omega n}(1-w_{c\ell\omega}).
+ \label{eq:c3-bigM}
+\end{equation}
+当$w=1$时残差必须为零，温度恰按该状态传播；当$w=0$时对应等式被松弛。常数$M$需要覆盖声明的温度有效范围和未激活行的全部可能残差，不能把数值容差当成允许超温的余量。
+
+给定片段的状态、入口温度和选项活动向量后，节点温度在段内的解析表达也是仿射的。将这一表达代入式\eqref{eq:c3-group-power}并对固定片段积分，可将该片段的基准能量、温度修正能量和活动能量写成相应状态下的仿射函数。再利用联合状态变量选择实际发生的片段能量，并将全部片段及场景按式\eqref{eq:c3-weighted-energy}加权求和，便得到MILP目标。这样，阶段时长对频率的非线性响应已在有限模式表中预先确定，固定时长的温度传播系数也已预计算，MILP内部无需直接优化矩阵指数的未知时间参数。
+
+事件端点上的温度上限是连续热安全的必要条件，因此MILP同时限制
+\begin{equation}
+ T_a+\theta_{c\ell n}\le T_n^{\max},
+ \qquad c\in\mathcal C,\quad 0\le\ell\le L_c,\quad n\in\mathcal N.
+ \label{eq:c3-endpoint}
+\end{equation}
+所有场景的入口温度作为初始等式固定。需要注意，端点约束并不覆盖每个片段内部可能出现的局部温度峰值，所以MILP生成的安排仍需接受下一节的连续时间检查。
+
+\section{连续热安全评价与求解过程}
+
+\subsection{完整时间表的热安全检查}
+
+通过MILP的离散选项可以恢复各实例的具体执行单元、工作点和启动时刻，进而得到全部真实起止事件。对每个场景，从给定初温出发，按照所选执行活动及域空闲立即$L_h$的控制规则，计算计量组功率和各热节点注热；在两个相邻实际事件之间，工作状态不变，温度满足式\eqref{eq:c3-affine-ode}。因此，检查器可以逐段计算解析温度轨迹，直至固定评价窗口结束。
+
+为判断一段连续轨迹中的最高温度，除了检查各段起点与终点，还需检查节点温度在段内部可能达到局部极值的位置。对可微的内部时间点，节点$n$的极值候选满足
+\begin{equation}
+ \frac{\mathrm d}{\mathrm dt}T_{cn}(t)=0.
+ \label{eq:c3-stationary}
+\end{equation}
+若某段导数恒为零，检查端点即可覆盖该段；一般情形则通过解析传播与可靠数值界定位可能的内部峰值。对边界与内部的全部候选求得每个节点在$[0,W_c]$内的温度上界，并同时核查功率、温度有效范围。真实完成时刻即使落在启动网格之外，也不会改变这一连续评价口径。
+
+经过完整检查的候选分为三种情况：全部场景资源、期限、功率和连续热条件均满足时，得到一份可以接受的安全安排；存在明确超温或其他违规时，候选被拒绝；在当前数值精度下尚不能可靠判定时，则记录为未决，而不将其自动升级为安全。这样，优化模型用于产生安排，连续检查则提供最终可用方案的安全判定依据。
+
+\subsection{热违规反馈与有限预算求解}
+
+如果MILP输出的候选在连续检查中明确超温，单纯重复求解同一模型可能再次产生该安排。最直接的处理方式，是排除该场景中已经被选中的完整选项集合。若$\mathcal S_c^*$为超温候选在场景$c$内每个实例所选选项的集合，且该场景包含$|\mathcal I_c|$个实例，则可添加
+\begin{equation}
+ \sum_{o\in\mathcal S_c^*}y_{co}
+       \le |\mathcal I_c|-1.
+ \label{eq:c3-no-good}
+\end{equation}
+它只排除相同的场景内完整选项组合，保留其他可能满足热安全的安排。由于给定场景入口、模式、起点和物理参数后温度轨迹已确定，明确违规的同一组合不可能仅因其他场景的局部配置改变而变为安全。对于能够从违规节点、时刻与温度传播关系导出对全部安全安排均成立的必要条件，也可以把相应的有效限制反馈给MILP，以同时排除一类具有共同违规原因的候选。
+
+上述反馈用于缩小搜索范围，但它本身不是安全性的充分判据。有限个事件端点或反馈时刻无法代替完整窗口的连续热评价。每个新的候选仍需沿真实时间轴检查；只有得到完整安全结果，才能用于更新当前最好能量上界。若求解器在计算预算耗尽时仍没有新候选，可保留已完成独立安全复核的初始化方案，而不能据此判断所有其他可行方案的质量。
+
+本章采用统一的方法计算预算，计入输入处理、初始化、MILP构模和求解、候选热能量评价以及必要反馈等环节。对于给定有限域，预算内最好的安全安排提供目标的可行上界；求解器内部报告的松弛界与停止状态仍应按其适用的模型和搜索范围解释。有限预算内取得安全方案，并不意味着已证明完整连续问题的全局最优。第四章将在同一电热模型和安全接纳要求下，进一步研究怎样减少高质量安全安排的搜索成本。
+
+
+\section{仿真结果与分析}
+
+\subsection{实验平台与评价设置}
+
+为考察上述模型的实际作用，构造包含CPU、GPU和NPU的端侧异构仿真平台。平台具有CPU1、CPU2、GPU0和NPU0四个执行单元，其中两个CPU单元共享一个频率控制域，GPU0和NPU0分别具有独立频率域。温度网络为四节点耦合RC模型，各节点分别记录一个执行单元所在区域的温度。功率参数包括域基准、Stage活动增量、本地温度漏电系数和位于热网络边界外的公共功率。
+
+本章采用A+B和A+C两种预先给定的应用组合。A、B、C均以预处理、主计算、后处理三个连续阶段构成链式任务图；每个场景各有两次应用请求，因而每个场景包含六个实际执行的Stage实例。A的三个固定阶段在两个场景中共用具体执行单元，工作点和启动时刻仍可分别安排。这一任务集是Stage级DAG模型的一组链式实例，尚不用于评价分支拓扑或更大任务规模下的算法表现。
+
+表\ref{tab:c3-platform}给出三个控制域的频率和最低档基准功率。所有数值来自预先声明的抽象参数集，并非某一商用移动SoC的实测结果。各Stage还具有不同的合法设备支持、参考执行时长、活动功率和频率响应系数。例如，A的主计算阶段支持CPU、GPU和NPU，B的主计算阶段不支持GPU，C的主计算阶段不支持NPU。这些差异使异构设备选择在当前任务集中成为实际的规划决策。
+
+\begin{table}[htbp]
+ \centering
+ \caption{异构控制域的仿真参数概况}
+ \label{tab:c3-platform}
+ \begin{tabular}{lccc}
+ \toprule
+ 控制域 & $f_L/f_M/f_H$（GHz） & 最低档组基准（W） & 对应执行单元\\
+ \midrule
+ CPU & $0.8/1.2/1.6$ & $0.60$ & CPU1、CPU2\\
+ GPU & $0.4/0.6/0.8$ & $0.40$ & GPU0\\
+ NPU & $0.5/0.75/1.0$ & $0.25$ & NPU0\\
+ \bottomrule
+ \end{tabular}
+\end{table}
+
+三个域的最低档分别记为$L$，并在完全空闲时立即采用该档；档位转换、额外设备交接及额外数据搬运开销为零。每个场景的完整评价窗口为400\,ms，合法启动起点按5\,ms间隔给定，实际结束时刻与温度变化均不取整。环境与功率参考温度为25\,$^\circ$C，功率模型的声明有效温区为20--100\,$^\circ$C；场景权重采用等权重，温度限值和入口温度根据实验条件确定。公共电功率为0.30\,W，计入能量但不注入当前四节点热网络。
+
+在这些基本设置下，共准备五种已冻结的请求和期限参数变体，分别记为R1至R5。为区分频率响应与初始热状态的作用，进一步形成表\ref{tab:c3-experiment-groups}中的三组实验。P0采用逐Stage、逐设备的原始响应参数H和50\,$^\circ$C入口；P1将\emph{真实执行输入}换成统一反比时长响应R，入口仍为50\,$^\circ$C；P2恢复H响应，只将入口温度提高至78\,$^\circ$C，温限仍为80\,$^\circ$C。P0与P2的比较因而可以控制同一时间表下入口温度的影响，P0与P1则属于真实任务时长不同的两组问题，不能直接以两批能量差表示某种响应预测的收益。
+
+\begin{table}[htbp]
+ \centering
+ \caption{三组正式仿真条件}
+ \label{tab:c3-experiment-groups}
+ \begin{tabular}{lcccc}
+ \toprule
+ 组别 & 实际频率响应 & 入口温度 & 温度上限 & 冻结输入\\
+ \midrule
+ P0 & 阶段相关H & $50\,^\circ$C & $80\,^\circ$C & R1--R5\\
+ P1 & 统一反比R & $50\,^\circ$C & $80\,^\circ$C & R1--R5\\
+ P2 & 阶段相关H & $78\,^\circ$C & $80\,^\circ$C & R1--R5\\
+ \bottomrule
+ \end{tabular}
+\end{table}
+
+每组的五个输入分别运行整体MILP、既有两阶段联动MILP、改编的异构最早完成时间算法HEFT以及五个独立随机种子的模拟退火算法（SA），合计每组40次、三组120次方法调用。每次方法计算预算为300\,s，包括输入展开、初始化、构模、求解和必要的候选评价；方法运行结束后，对最终安全安排另作一次完整窗口的独立复核。300\,s是离线规划的方法预算，400\,ms才是模拟推理运行的能量评价窗口，两者不属于同一个实时执行尺度。第三章使用这些方法作为建模和安全评价的证据来源，算法内部的阶段设计与质量效率比较将在第四章进一步讨论。
+
+% 数据来源：research/chapter3_experiments/results/p0_resume01/summary.md；
+% p1_execution01/summary.md；p2_execution01/summary.md。
+\subsection{频率响应信息对调度决策的影响}
+
+式\eqref{eq:c3-duration}使不同阶段在降频时具有不同的时间代价。对计算相对不敏感的阶段，较低工作点可能用较小的时长增加换取功率下降；而对强频率敏感阶段，同样的降频会带来更明显的等待与期限压力。要判断这种差异是否影响节能选择，不能仅比较不同真实响应输入下的结果，还需要让不同规划方式在\emph{同一个真实执行模型}中接受评价。
+
+为此，采用R1和R2两个固定输入，以原始H响应作为实际执行和后验评价的共同模型。使用同一改编HEFT算法分别以H响应和统一反比R响应信息构造安排，再将所得两套方案都放回真实H模型中重新检查资源、期限、连续温度及完整窗口能耗。这样两次规划的区别在于所采用的响应信息，而不是实际物理任务被改成了另一套输入。表\ref{tab:c3-response-evidence}列出两种规划所得到的独立安全能量。
+
+\begin{table}[htbp]
+ \centering
+ \caption{相同真实H模型下不同规划响应信息的能耗比较}
+ \label{tab:c3-response-evidence}
+ \begin{tabular}{lccc}
+ \toprule
+ 输入 & H信息规划方案（J） & R信息规划方案（J） & 相对R方案差异\\
+ \midrule
+ R1 & $0.8810879973$ & $0.9173594769$ & H低$3.953900\%$\\
+ R2 & $0.9554599350$ & $0.9554455369$ & H高$0.001507\%$\\
+ \bottomrule
+ \end{tabular}
+\end{table}
+
+在R1中，两套方案最终采用的具体执行单元相同，变化主要发生在工作点与启动时间。A+B场景的B预处理阶段在H信息规划下使用CPU1的L档，而R信息规划使用H档；B主计算阶段分别使用NPU0的M档和H档。H信息方案的完整系统能量少约0.03627148\,J，其中活动能量与域基准能量均有降低，温度修正能量也随时序变化。这说明任务相关时长信息能够在该输入中改变频率配置，使同一搜索方法得到更节能的完整安排。
+
+R2给出了不同结果。两套方案的设备映射和工作点完全一致，只在A+C场景中四个Stage的启动时间上存在差异；R信息方案的真实系统能耗反而低约14.398\,$\mu$J，差别来自温度修正积分。该差异很小，却说明即便规划器获得了更符合真实输入的响应信息，在有限搜索过程中也不必然对每个问题取得更低的最终能量。两种结果共同支持按阶段刻画频率响应的决策价值，同时限定了当前证据能够得出的结论。
+
+% 数据来源：research/chapter3_experiments/results/response_information_resume01/summary.md
+% 四份方案在同一真实H物理输入中完成独立连续SAFE复核。
+
+\subsection{完整系统能耗对执行时序的依赖}
+
+在只把每个Stage的活动功率乘以持续时间后相加的模型中，只要Stage模式不变，阶段能量总和就保持不变。共享频率域和温度漏电进入完整窗口评价后，这一结论不能直接推广到系统能量，因为两个具有相同模式的安排可能产生不同的域忙闲轨迹。
+
+以P0中R1的模式参数构造两套合法时间表，记为并行安排P和接力安排S。二者在A+B和A+C两种场景中采用完全相同的Stage设备与工作点；A+C的所有启动时间也相同。唯一差别是A+B场景中B的预处理Stage：P安排在0\,ms启动，与A的预处理在不同CPU单元上同时执行；S安排在10\,ms启动，接在A的预处理之后。两个Stage均采用同一个共享CPU域的H档，依赖、互斥与请求期限均得到满足。
+
+
+\begin{figure}[htbp]
+ \centering
+ \begin{tikzpicture}[x=.70cm,y=.72cm,>=Latex,font=\small]
+    \node[anchor=east] at (0,2.0) {并行安排P};
+    \node[anchor=east] at (0,.60) {接力安排S};
+    \fill[blue!23] (0,1.64) rectangle (6,2.34);
+    \draw[blue!65!black,thick] (0,1.64) rectangle (6,2.34);
+    \fill[blue!23] (0,.24) rectangle (10,.94);
+    \draw[blue!65!black,thick] (0,.24) rectangle (10,.94);
+    \node at (3,1.98) {共享CPU域H档};
+    \node at (5,.58) {共享CPU域H档};
+    \draw[->] (0,-.12)--(10.9,-.12) node[right] {时间/ms};
+    \foreach \x/\lab in {0/0,4/10,6/15,10/25}{
+       \draw (\x,-.18)--(\x,-.38);
+       \node[below,font=\scriptsize] at (\x,-.38) {\lab};
+    }
+    \draw[densely dashed,gray] (6,1.62)--(6,-.05);
+    \draw[densely dashed,gray] (10,.23)--(10,-.05);
+ \end{tikzpicture}
+ \caption{两种合法时序下共享CPU域的高频驻留区间}
+ \label{fig:c3-timing}
+\end{figure}
+
+
+由于B预处理在H档运行15\,ms，P安排中的CPU域H档忙区间为$[0,15)$\,ms，S安排则为$[0,25)$\,ms。两安排的活动能量完全相同，但CPU域在H档停留的时间增加了10\,ms。CPU域的H档与最低L档基准功率分别为1.30\,W与0.60\,W，因此A+B场景的直接基准能量差为
+\begin{equation}
+ E^{\rm base}_{AB,S}-E^{\rm base}_{AB,P}
+  =(1.30-0.60)\times0.010
+  =0.007\ {\rm J}.
+ \label{eq:c3-c19-base}
+\end{equation}
+在两个场景等权的条件下，直接基准差为3.5\,mJ。进一步使用当前四节点RC网络和温度相关漏电参数，可以为完整窗口能量差给出保守解析界：
+\begin{equation}
+ \overline E_S-\overline E_P>0.003254\ {\rm J}.
+ \label{eq:c3-c19-total}
+\end{equation}
+这一界已经计入时序改变对后续温度与漏电的影响。两套安排的所有节点在完整窗口内均满足80\,$^\circ$C温限；因此，它们是同一有限模式与共享部署条件下两份合法、安全但完整系统能耗严格不同的安排。
+
+这个例子说明，最小化完整窗口能耗需要同时关心模式选择和任务时序。共享域处于不同档位的持续时间以及温度状态的历史影响，无法由每个Stage预先固定的独立活动能量常数完全表示。式\eqref{eq:c3-c19-total}来自同一组已声明参数下的数学构造，用于说明模型表达的必要性，不代表某种调度算法已经在实验中额外节省了3.254\,mJ。
+
+% C19数学来源：research/hetero_thermal_pilot/
+% C19_C12机制迁移与C17下界强化_面向主线7数学算法交接_20261022.md
+% AB两个方案对应的加权参考基准差3.5mJ；含漏电严格下界>3.254mJ。
+
+\subsection{温度相关能耗与热安全作用}
+
+温度既影响候选能否满足上限，也影响完整时间窗口中的漏电能耗。P0和P2只改变场景入口温度，因而可以利用完全相同的时间表比较温度状态对电能的作用。以R1最终HEFT安排为例，两批记录中的Stage部署、工作点和所有起点相同，基准能量、活动能量和公共能量也相同。表\ref{tab:c3-temp-energy}列出了其完整窗口加权能量的组成。
+
+\begin{table}[htbp]
+ \centering
+ \caption{相同R1时间表在不同入口温度下的能量组成}
+ \label{tab:c3-temp-energy}
+ \begin{tabular}{lcc}
+ \toprule
+ 能量组成 & P0：$50\,^\circ$C（J） & P2：$78\,^\circ$C（J）\\
+ \midrule
+ 基准能量 & $0.503150000$ & $0.503150000$\\
+ Stage活动能量 & $0.156587033$ & $0.156587033$\\
+ 公共能量 & $0.120000000$ & $0.120000000$\\
+ 温度修正能量 & $0.101350965$ & $0.207116548$\\
+ \midrule
+ 完整系统能量 & $0.881087997$ & $0.986853581$\\
+ \bottomrule
+ \end{tabular}
+\end{table}
+
+入口温度从50\,$^\circ$C提高至78\,$^\circ$C后，该相同安排的温度修正能量增加约0.105765583\,J，其余能量组成保持一致。这表明，即使任务执行模式与时刻完全不变，入口热状态仍能够通过温度相关漏电影响整个运行窗口的电能。这里得到的是相同方案在两种热入口下的模型能量差，并不是启用某种温度感知算法所获得的净节能量。
+
+温度上限还会改变候选的接纳结果。在P0与P2中，五个R输入的HEFT均保存了某个相同的中间候选，其设备、工作点和时间表逐字段一致。这些候选在P0均完整安全，而在P2均出现明确超过80\,$^\circ$C的节点温度。例如R1的同一候选在P0的A+B场景中CPU1峰温约55.558515\,$^\circ$C，P2时CPU1在95\,ms约达到81.209166\,$^\circ$C，因此不能接纳。P2的40次方法调用中，有17次保存了明确的热违规记录，涉及46条按调用内评价对象去重的违规记录。最终40份方案则全部通过连续温度复核，其节点峰温上界均低于80\,$^\circ$C。
+
+需要把候选接纳与最终调度变化区分开来。P0、P2中五个R输入的最终HEFT安排仍然相同，P2被拒绝的中间候选并不是P0的最终输出。因此，上述配对说明初温会改变某些候选的安全性，却不能据此认定P2最终HEFT部署因热约束而发生了变化。另一组预先声明的52\,$^\circ$C温限压力实例中，原H档初始化在NPU或GPU节点明确超温，调度器转而尝试M档并取得完整安全安排，进一步说明温度条件能够影响初始化选择；这一人为压力条件也不代表实际芯片的通用温限。
+
+对本章MILP求解框架，连续热评价已用于安全接纳，约束反馈也具有对应的模型接口。但在P0、P1、P2共120次正式方法调用中，\emph{MILP外层连续热反馈新增约束行数全部为零}。上面提到的HEFT或模拟退火中间候选热违规，是各自候选评价中的拒绝事件，不能替代MILP反馈曾实际触发的证据。因此，目前可以确认的是模型下温度相关能量及热安全检查的作用，尚不能把连续反馈描述成已经取得净节能或加速收益的实验结果。
+
+% 数据来源：P2 thermal_acceptance_review.json；
+% p2_execution01/summary.md；K127 night_summary.md。
+% P0/P2匹配HEFT最终排程温度项分别为0.101350964729/0.207116548011 J。
+% 120次正式方法调用MILP外层反馈数均为0。
+
+\subsection{预算内求解结果与模型适用范围}
+
+三组正式仿真分别取得40份可用安全方案，合计120份；每份均经过预定的一次独立完整窗口复核。为说明在同一模型下不同求解方法取得安全方案所需的计算代价，表\ref{tab:c3-budget}归纳既有两阶段联动MILP与HEFT的预算内能量比较。表中数值是五个冻结输入的逐题对照数量，而不是随机抽样下的总体胜率。
+
+\begin{table}[htbp]
+ \centering
+ \caption{三组条件下的预算内方法结果概况}
+ \label{tab:c3-budget}
+ \begin{tabular}{lcccc}
+ \toprule
+ 实验组 & 方法调用数 & 最终安全数 & 联动低于HEFT & HEFT运行更快\\
+ \midrule
+ P0：H、50\,$^\circ$C & 40 & 40 & $4/5$ & $5/5$\\
+ P1：R、50\,$^\circ$C & 40 & 40 & $2/5$ & $5/5$\\
+ P2：H、78\,$^\circ$C & 40 & 40 & $1/5$ & $5/5$\\
+ \bottomrule
+ \end{tabular}
+\end{table}
+
+联动MILP在部分条件下可以找到比HEFT更低的完整安全能量，但也存在明显失利。例如，P0的R3输入中，联动方案为0.936947396\,J，HEFT为0.862251326\,J；P1的R4输入中，联动方案为1.029573489\,J，HEFT为0.935833456\,J。三组共15个对应输入中，联动方法有7个严格低于HEFT，而HEFT的实际方法耗时在全部15个配对中更短。因此，有限预算下的方法质量与搜索成本之间仍存在需要进一步处理的关系。
+
+整体MILP在本批次内返回的安全能量上界也没有与独立的全域下界闭合，不能因其使用数学规划求解器，就把预算内输出写成完整问题的全局最优解。三组实验采用的任务与功热参数均为设备级抽象仿真输入，已经覆盖不同的合法后端支持、Stage相关响应、共享频率域和四节点热耦合，但尚未包括GPU/NPU内部微架构、实际设备搬运代价及真实SoC联合标定。链式三阶段任务也不能代表一般分支DAG的全部求解规模。
+
+综上，现有结果支持三个与本章模型直接相关的结论：任务相关响应信息能够在一些条件下改变工作点选择和完整系统能耗；共享域与温度历史使相同Stage模式的不同合法时序具有不同能量；连续温度要求能够拒绝特定超温候选，并使入口热状态对安全性和漏电能量产生影响。至于怎样在相同物理模型、相同安全标准和有限计算预算下，稳定取得质量更高的完整安排，则是下一章的主要研究内容。
+
+\section{本章小结}
+
+本章针对端侧设备在不同应用组合下执行多请求推理的需求，建立了跨场景共享部署、场景内工作点与启动时刻联合选择的热约束节能模型。模型利用固定Stage身份连接不同场景的具体处理器部署，结合Stage与设备相关的频率响应、共享频率控制域和域空闲自动最低档策略，描述任务依赖、处理器占用及运行状态变化。在功耗与温度方面，采用参考基准、活动增量和本地温度漏电构成完整电功率，并通过耦合RC网络沿运行时间轴传播节点温度，形成完整窗口加权能量目标和连续热安全约束。
+
+在此基础上，本章区分了连续起点的原问题与有限启动集合下的受限问题，利用执行选项、固定事件片段和域状态变量建立MILP表达，并通过连续热检查评价候选时间表。正式仿真与数学构造分别展示了响应信息、共享域忙闲分布、温度相关能耗和热安全条件的作用；同时，现有数据并未给出完整问题的全域最优证明或MILP外层反馈的净优化收益。
+
+上述统一模型为后续算法提供了一致的候选评价和安全接纳依据。第四章将在保持任务、功耗、热网络及期限条件不变的前提下，进一步研究如何利用资源关联和已知安全方案组织搜索，在有限计算预算内获得低能耗的完整调度安排。

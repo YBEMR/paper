@@ -13,9 +13,8 @@
 | 3.7.3 | C19同Stage模式、仅合法时序不同导致加权完整电热能量严格差>3.254mJ | [C19数学见证](https://github.com/YBEMR/paper/blob/db34b46bc2499fcd10f6f7ec6235cd0b6b89555a/research/hetero_thermal_pilot/C19_C12机制迁移与C17下界强化_面向主线7数学算法交接_20261022.md) |
 | 3.7.3 | 相同R1 HEFT排程在P0/P2温度漏电项0.101350965→0.207116548J，17次调用热违规，最终P2全安全 | [P2归档](../../chapter3_experiments/results/p2_execution01/summary.md) |
 | 3.7.3 | 52°C温限拒绝原H模板、改用M模板；外层反馈仍为0 | [K127热证据](../../chapter3_experiments/results/night_k127_run02/night_summary.md) |
-| 3.7.4 | P0/R3、P1/R4等联动MILP弱于HEFT的具体边界和归因 | [论文结果综合审查](../../第三章P0-P2_120次正式实验_综合分析与论文正文初稿_独立审查_20261022.md) |
-
 | 3.7.3 新增温度记录图 | R1最终HEFT方案的P0/P2候选哈希相同；A+B场景0ms入口及14个后验温度记录点，不能替代连续热检查 | [P0原始后验](../../chapter3_experiments/results/p0_execution01/calls/base__R1/heft/postcheck.json)、[P2原始后验](../../chapter3_experiments/results/p2_execution01/calls/initial_78__R1/heft/postcheck.json) |
+| 3.7.4 | P0/R3、P1/R4等联动MILP弱于HEFT的具体边界和归因 | [论文结果综合审查](../../第三章P0-P2_120次正式实验_综合分析与论文正文初稿_独立审查_20261022.md) |
 | 3.7.4 新增相对能量图 | 15个条件—变体组合的联动MILP和HEFT同输入SAFE能量配对，R1--R5非规模扫描 | [P0](../../chapter3_experiments/results/p0_resume01/analysis01/results40.csv)、[P1](../../chapter3_experiments/results/p1_execution01/analysis01/results40.csv)、[P2](../../chapter3_experiments/results/p2_execution01/analysis01/results40.csv) |
 
 论文中的“低于”按保存的高精度安全能量区间作严格比较；表格中6位小数仅便于阅读，小于0.1%的差异不据此推断应用中的稳定优势。三批P0/P1/P2的真实执行参数不同，不能以不同批次的系统能量差充当同真实H预测信息消融。

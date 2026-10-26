@@ -4,7 +4,12 @@ from h02_pair_preflight.common import require, sha, timely
 from .scoring import score_candidate
 
 
-def verify_export(instance, config, result, seconds=300):
+def verify_export(instance, config, result, seconds=300, *, evidence_seconds=None):
+    # Earlier slot/batch deadlines restrict evidence, without resetting root time.
+    import math
+    effective=seconds if evidence_seconds is None else evidence_seconds
+    require(type(effective) in (int,float) and math.isfinite(effective) and 0<effective<=seconds,
+            'INVALID_EFFECTIVE_EVIDENCE_LIMIT')
     require(result.get('method') == 'e1-adapted-heft' and result.get('seed') is None, 'METHOD')
     if 'archive' not in result:
         require(result.get('state') == 'UNRESOLVED' and all(result.get(k) is None for k in
@@ -12,7 +17,7 @@ def verify_export(instance, config, result, seconds=300):
         require(result.get('timing',{}).get('limit_s') == seconds, 'EARLY_BUDGET')
         require(result.get('stop_required') is True or
                 (result.get('reason') == 'METHOD_BUDGET_EXHAUSTED' and
-                 result['timing']['method_elapsed_s'] >= seconds), 'EARLY_STOP_CLASSIFICATION')
+                 result['timing']['method_elapsed_s'] >= effective), 'EARLY_STOP_CLASSIFICATION')
         return dict(state='NO_SELECTED_SAFE_INPUT_UNFINISHED', stop_required=result.get('stop_required') is True)
     require(result.get('input_sha256') == sha(instance) and
             result.get('config_sha256') == sha(config), 'EXPORT_INPUT')
@@ -27,14 +32,14 @@ def verify_export(instance, config, result, seconds=300):
     for row in archive.get('evaluations', []):
         if not row.get('eligible_for_selection'): continue
         stamp, returned = row.get('selection_formed_at_s'), row.get('returned_at_s')
-        require(timely(stamp, seconds) and timely(returned, seconds) and
+        require(timely(stamp, effective) and timely(returned, effective) and
                 last <= returned <= stamp, 'SELECTION_TIME')
         last = stamp
         require(row.get('accepted_safe') is True and row['candidate_sha256'] == sha(row['candidate']),
                 'ROW_CANDIDATE')
         require(row['evaluation']['completed_at_elapsed_s'] <= returned, 'RECEIPT_TIME')
         expected = score_candidate(instance, row['candidate'], row['legality'], row['evaluation'],
-                                   config['accuracy_targets'], seconds, result['objective'])
+                                   config['accuracy_targets'], effective, result['objective'])
         require(expected == row.get('score'), 'SCORE_REPLAY')
         if selected is None or F(expected['planning_score_J'][1]) < F(selected['score']['planning_score_J'][1]):
             selected = row  # Earliest on ties. True U is never a tiebreaker.

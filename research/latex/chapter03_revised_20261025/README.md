@@ -16,7 +16,7 @@
 
 ## 编译
 
-需要 **XeLaTeX** 和 TeX Live/MiKTeX 的 `ctex`、`amsmath`、`booktabs`、`tikz`、`pgfplots`、`hyperref` 等组件。中文字体优先用 Noto CJK；不具备时回退至 Windows 常见字体或 TeX Live Fandol。**不分发字体文件**。
+需要 **XeLaTeX** 和 TeX Live/MiKTeX 的 `ctex`、`amsmath`、`booktabs`、`tikz`、`pgfplots`、`placeins`、`hyperref` 等组件。中文字体优先用 Noto CJK；不具备时回退至 Windows 常见字体或 TeX Live Fandol。**不分发字体文件**。
 
 在本目录中打开PowerShell：
 

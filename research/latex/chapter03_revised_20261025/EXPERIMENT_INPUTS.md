@@ -91,3 +91,20 @@ H02同真实H信息对照每次规划**120秒**、对应最终真实H独立后�
 K.194：[冻结输入](../../chapter3_experiments/results/small_exact_execution01/input_instance.json)、[原参照](../../chapter3_experiments/results/small_exact_execution01/reference.json)、[独立审查](../../chapter3_experiments/results/small_exact_execution01/internal_review.json)。AB/CPU1=450、AB/NPU0=650、AC/CPU1=90、AC/NPU0=360，共1550次单场景连续安全评价，全部SAFE；跨场景保持A.main同一具体设备可组合成274500份合法联合排程。枚举根预算2400 s，实际931.703 s，形成参考时刻931.641 s；下界和上界均约0.986251057947 J，宽度2.145509663e-29 J，低于预先设定1e-6 J容差。枚举与MILP共用原连续电热核，但候选集合独立枚举，未从MILP读取时间表。
 
 K.196：[完整归档分析](../../chapter3_experiments/results/small_whole_execution01/analysis.json)、[方法回执](../../chapter3_experiments/results/small_whole_execution01/method_return.json)、[唯一独立post](../../chapter3_experiments/results/small_whole_execution01/postcheck.json)、[总结](../../完整链小域整体MILP结果_K196.md)。同域运行1次原整体MILP（300 s共同方法根）及1次独立后验（60 s上限），没有载入K.194最优时间表。初始化SAFE=1.088852027249 J，形成于68.547 s；在85.703 s接收不同于初始化的第二整数候选，88.437 s确认完整安全能量0.986251057947 J，下降0.102600969302 J，即9.422857%。构模5.015 s、MATLAB启动61.391 s、方法根截止300.000 s、单次post 2.594 s、实际日历318.297 s。原生求解器按时间上限停止，独立参照证明的是`epsilon`范围内的有限域能量质量，不是原生求解器证明最优；热反馈新增行数仍为0。**与K.194预算不同，不比较等预算算法速度。**
+
+## E1--E4独立HEFT模型因素验证（来源提交`1cbb3559`）
+
+本系列来源于[锁定研究交接](https://github.com/YBEMR/paper/blob/1cbb3559a74cd42e1c382f1cb772040429440857/research/e1_e4_validation/E1-E4_证据汇总与写作交接.md)，当时保存在`codex/e1-e4-preparation`分支，未与main科研数据合并；论文只引用已经冻结的结构化结果。它不属于P0--P2正式120次调用，也不属于K.194穷举及K.196整体MILP小域验证。本轮未重新规划、没有重做热积分。
+
+**共同不变条件**：CPU1、CPU2、GPU0、NPU0四执行单元与四节点RC温度网络；CPU1/2共享频率域，其他独立；H真实Stage相关频率响应、auto_low_immediate_v1空闲最低档、400 ms完整能量窗口、5 ms起点网格、每个场景50°C独立初温、80°C温限、A+B及A+C等权、请求释放0ms以及pre/main/post完整链。默认R1（A/B/C时长倍率1/1/1）、每应用1请求、期限系数$β=1.3$；E1额外使用R3（1.2/0.8/1），E4a变化$β$，E4b将每应用同时释放请求变为2。每次规划300 s上限、最后独立后验最多60 s上限，提前自然结束不强行耗满。异构设备“不可映射”不意味着物理关闭，其低档功热计量仍保留。
+
+| 对照 | 唯一主变化 | 结果解释 |
+|---|---|---|
+| E1 | FULL（四分项评分）与OMIT_TEMP（三分项评分） | 真实能耗和热安全仍含温度漏电，R1/R3差额16.343627/17.442411 μJ（对应0.001855%/0.002023%），非关热或实机节能 |
+| E2 | CPU-only、CPU+GPU、CPU+NPU、全部可映射 | 分别1.353653、1.213262、0.988809、0.881088 J；同一物理平台、同一适配HEFT，CPU-only是映射受限基线 |
+| E3 | A的固定Stage同单元跨场景共享／允许分场景 | 保存的全能量区间及分项相同，但AB A.post具体CPU单元不同；不等于原共享问题最佳能耗的证明 |
+| E4a | 期限$β=1.0,1.3,1.6$ | 安全U=0.936682、0.881088、0.860767 J；三点代表离散已跑条件，设备映射不变，12次Stage的L/M/H使用数发生变化 |
+| E4b | 每应用1个／2个同时释放请求 | 原HEFT仅单请求得到完整SAFE；双请求无完整候选，不能据此判定物理或数学不可行 |
+| E4b-DF | 双请求、相同输入下增加至多一次期限优先回退 | 原无完整候选；回退版本后验SAFE U=1.444147367589 J，不能与原版本单请求连成规模能耗曲线 |
+
+每景加权系统能量$̄E=(E_{AB}+E_{AC})/2$包含基准、活动、公共及温度项。E4b单请求和双请求的加权请求数分别为2和4；均摊值比较须另考虑400ms固定功耗。原六批合计17次规划、15次独立后验，其中15份SAFE与2份未决，589条仅为规划内部保存候选评价次数。批次和版本身份见[结构化交接索引](https://github.com/YBEMR/paper/blob/1cbb3559a74cd42e1c382f1cb772040429440857/research/e1_e4_validation/evidence/consolidation_e1_e4/evidence_index.json)。

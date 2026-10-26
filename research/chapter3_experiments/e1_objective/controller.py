@@ -1,10 +1,10 @@
-"""E1 frozen process handoff. Default REAL gate is closed; mocks are distinct."""
+"""Frozen E1/E2 process handoff. Default REAL gate is closed; mocks are distinct."""
 import argparse
 from copy import deepcopy
 from pathlib import Path
 import sys
 import time
-from .execution_io import (CORE,DEFAULT_GATE,BUDGETS,SLOTS,read_json,save,sha,require,
+from .execution_io import (CORE,DEFAULT_GATE,BUDGETS,protocol_slots,read_json,save,sha,require,
                             validate_gate,build_bundle,selected_token)
 from .ledger import Ledger
 from .process_control import supervise
@@ -138,7 +138,7 @@ def run_phase(ledger,gate,manifest,run_dir,ordinal,phase,*,slot_origin,batch_ori
     validate_gate(gate,manifest,mode,run_dir)
     limit=BUDGETS[phase.lower()+'_s']; slot_deadline=slot_origin+420;batch_deadline=batch_origin+1800
     out=Path(run_dir)/('slot_'+str(ordinal))/phase.lower()
-    problem,objective=SLOTS[ordinal-1]
+    problem,objective=protocol_slots(manifest)[ordinal-1]
     if phase=='PLAN':
         expected=manifest['inputs'][problem] if mode=='REAL_RESEARCH' else manifest['mock_input']
         ctx=dict(input_sha256=expected['input_sha256'],config_sha256=expected['config_sha256'],

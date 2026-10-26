@@ -1,4 +1,4 @@
-"""Frozen file identities and explicit E1 stage boundary; no science imports."""
+"""Frozen identities and explicitly selected E1/E2 protocols; no science imports."""
 import hashlib
 import json
 import os
@@ -9,7 +9,8 @@ CORE=Path(__file__).resolve().parents[1]
 REPO=CORE.parents[1]
 DEFAULT_GATE=Path(__file__).with_name('execution_gate.json')
 BUDGETS=dict(plan_s=300,post_s=60,plan_calls=4,post_calls=4)
-SLOTS=[['base__R1','FULL'],['base__R1','OMIT_TEMP'],['base__R3','OMIT_TEMP'],['base__R3','FULL']]
+_E1_SLOTS=(('base__R1','FULL'),('base__R1','OMIT_TEMP'),('base__R3','OMIT_TEMP'),('base__R3','FULL'))
+SLOTS=[list(slot) for slot in _E1_SLOTS]
 CORE_FILES=['heft_method.py','schedules.py','start_domain.py','auto_heuristic_policy.py',
             'control_policy.py','thermal.py','timing.py','inputs.py',
             'h02_pair_preflight/__init__.py','h02_pair_preflight/common.py','h02_pair_preflight/receipts.py',
@@ -44,11 +45,24 @@ def save(path,value):
     os.replace(temp,path)
 
 
+def protocol_slots(manifest):
+    # Missing ID is permitted only for historical E1 manifests. An explicit
+    # unknown or mixed protocol must never silently fall back to E1.
+    protocol=manifest.get('protocol_id','E1_OBJECTIVE_V1')
+    if protocol=='E1_OBJECTIVE_V1': slots=_E1_SLOTS
+    elif protocol=='E2_RESOURCES_V1':
+        from e2_resources.protocol import SLOTS as slots
+    else: raise ValueError('UNKNOWN_EXECUTION_PROTOCOL')
+    return [list(slot) for slot in slots]
+
+
 def runtime_paths(mode):
     require(mode in ('MOCK_PROCESS','REAL_RESEARCH'),'EXECUTION_MODE')
     relative=['research/chapter3_experiments/'+x for x in CORE_FILES]
     relative+=['research/chapter3_experiments/e1_objective/'+x for x in E1_FILES]
-    relative+=['research/v1_evaluator/interval.py']
+    relative+=['research/v1_evaluator/interval.py',
+               'research/chapter3_experiments/e2_resources/__init__.py',
+               'research/chapter3_experiments/e2_resources/protocol.py']
     if mode=='MOCK_PROCESS': relative+=['research/chapter3_experiments/e1_objective/mock_fixtures.py']
     return relative
 
@@ -65,7 +79,7 @@ def validate_gate(gate,manifest,mode,run_dir):
     require(gate.get('source_sha')==manifest.get('source_sha') and
             gate.get('scope_sha256')==sha(manifest),'SOURCE_OR_SCOPE_DRIFT')
     require(gate.get('budgets')==BUDGETS and manifest.get('budgets')==BUDGETS and
-            manifest.get('slots')==SLOTS,'BUDGET_OR_SLOTS_DRIFT')
+            manifest.get('slots')==protocol_slots(manifest),'BUDGET_OR_SLOTS_DRIFT')
     require(isinstance(gate.get('authorization_id'),str) and gate['authorization_id'],'AUTHORIZATION_ID')
     for key in ('authority_store','allowed_run_directory'):
         require(isinstance(gate.get(key),str) and Path(gate[key]).is_absolute(),'FIXED_ABSOLUTE_'+key)
@@ -108,7 +122,7 @@ def verify_job(job,gate,manifest,output):
     require(set(packet)=={'instance','config','objective'},'PACKET_FIELDS')
     if mode=='REAL_RESEARCH':
         require(job.get('mock_behavior') is None and job.get('mock_prior_elapsed_s',0)==0,'MOCK_CONTROL_IN_REAL_JOB')
-        problem,objective=SLOTS[job['ordinal']-1]
+        problem,objective=protocol_slots(manifest)[job['ordinal']-1]
         require(i['id']==problem and packet['objective']==objective,'REAL_SLOT_IDENTITY')
         expected=manifest['inputs'][problem]
         require(sha(i)==expected['input_sha256'] and sha(c)==expected['config_sha256'],'FROZEN_INPUT_DRIFT')

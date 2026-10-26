@@ -2,6 +2,13 @@
 
 更新：2026-10-26。
 
+**K.191／D216：K190唯一独立LP调用正常时间截止未决；完整链小域设计另存（E636）。** [简明报告](research/独立连续LP诊断结果与小域对照设计_K191.md)、[实际分析](research/chapter3_experiments/results/lp_relaxation_native01/analysis.json)、[内部核查](research/chapter3_experiments/results/lp_relaxation_native01/independent_review.json)。用户确认一次300秒LP且0其他求解/热积分，先原生选项guard。13项纯预检通过，七原数组与未固定界保持，仅去1681项整数性；同R2023b独立dual-simplex，none、1e-9/1e-7、2049240，实际MaxTime275.9429926秒，动态读回PASS。
+
+原生277.8816207秒/45727迭代后exit0（time limit），x/fval/lambda空；300根内未有完整回执，Python300.016秒停止接纳，状态LATE_OR_TIMEOUT_UNRESOLVED。最终回执迟到只留档；非−2，非最优/有效下界/新SAFE/U，不能据45727迭代定位内部阶段或宣告数值已修好。root options_match=false只是未完成预算内读回默认值，事后原始选项一致；returncode2和ERROR_OR_UNRESOLVED不单独判技术故障。启动17.140、清理8.469、日历310.234<480；全部5捕获进程退出，1方法/1请求/0重试/0热积分/post。首次内存门槛不足仅0launch预检，用户释放后才作唯一调用。内部独立46项通过。
+
+独立小域零调用设计[small_full_chain_design01](research/chapter3_experiments/results/small_full_chain_design01/README.md)：原P0/R1 AB/AC完整12次执行/9共享身份、四节点/400ms/5ms/auto-L保持，62模式-起点选项、AB548/AC139静态合法场景，按共享A设备有36798联合安排；可组织687份完整场景热评价后组合包络，尚未热覆盖，8纯测试通过。当前草案A.main CPU1/GPU0与原C固定NPU0不兼容，不能直接比；完整MILP辅助规模及热成本未知，需先完成同域接口/范围确认再独立预算。没有小域求解或新SAFE。按用户分支规则，本次LP落在超时未决，不自动整数释放/增广/加时；3600、K168、期限24及其他实验均保持暂停。以下K190待批描述保留为获批前历史。
+
+
 **K.190／D215：独立连续松弛LP协议与零调用预检完成，实际运行待用户另批（E635）。** [报告与小域参照评估](research/连续松弛数值诊断与小域精确对照准备_K190.md)、[机器提案](research/chapter3_experiments/results/k190_lp_preparation01/protocol_proposal.json)、[预检](research/chapter3_experiments/results/k190_lp_preparation01/precheck.json)、[内部静态审查](research/chapter3_experiments/results/k190_lp_preparation01/internal_review.json)。15项纯夹具通过；原K187七数组c/A/b/Aeq/beq/lb/ub逐项保持，只拟取消1681项整数性，明确拒收K189固定界。原x0/K189向量在原行与界均数值接纳，不称精确证书。全部27971变量原双界有限。
 
 拟用同R2023b独立linprog dual-simplex、隐藏Preprocess=none、ConstraintTolerance1e-9/OptimalityTolerance1e-7、MaxIterations2049240、MaxTime仅根剩余；本机源与validator静态核明，原生options对象尚未创建/读回。该接口拒绝x0，所以两份历史向量仅作静态见证；不称与intlinprog内部根LP等同。LP分数结果不生成SAFE/U，可行原始目标不是MILP有效下界；状态/最优及lambda只归档为solver-reported，不替代独立L0。
@@ -2192,3 +2199,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D215（2026-10-26，用户要求优先准备K190独立LP诊断）：** 接续D214固定配置成功，用户要求只取消原整数性、原七数组和原变量界保持，独立LP接口须明确不等同intlinprog内部根LP；先交付预检，建议300秒但实际运行另批。已完成15项纯测试、原载荷/两份向量静态核查及R2023b选项来源审查，未求解。助手提出1请求×300根/480日历、dual-simplex/none/原约束与LP最优性容差，均仍是待审执行提案；独立linprog拒绝x0，不虚称沿原初始化。小域完整链auto-L参照值得另建只是助手建议，具体输入/预算均待后续讨论。重审触发：批准独立LP、改接口/数组/界/选项，或希望进入整数释放/增广/小域求解；不复用K189余额，不恢复3600/K168/期限24。
+
+
+**D216（2026-10-26，用户确认优先执行K190并独立准备小域）：** 接续D215，用户要求一次300总预算LP、同进程先核原生选项、0热/其他求解；沿报告480日历停机上限。首次资源不足无launch，用户明确已释放后复查通过，唯一调用执行。原七数组/原界保持，独立LP normal time limit，native277.882/45727iter/exit0空向量；根300.016停止接纳，日历310.234，不认迟到结果。按用户选择路径“LP超时则保留未决，不自动延时”，不触发整数释放或增广。小域只静态设计/计数/8纯测试：当前域与原C固定NPU不兼容，后续要确认/修订共同域，不暗改C；热成本/完整MILP规模及独立实验预算仍待定。重审触发：申请任何新研究调用、改变受限域/方法兼容处理或想恢复长预算；本次余量不转移，K168/期限24继续暂停。

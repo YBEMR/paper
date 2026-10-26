@@ -83,3 +83,11 @@ H02同真实H信息对照每次规划**120秒**、对应最终真实H独立后�
 - [K.127温限压力](../../chapter3_experiments/results/night_k127_run02/night_summary.md)
 - [P0/R1整体MILP原始结果](../../chapter3_experiments/results/p0_execution01/calls/base__R1/whole_milp/result.json)
 - [正式控制策略](../../chapter3_experiments/control_policy.py)
+
+## 单独的K.194／K.196受限小域质量验证
+
+这组实验是基于R1/H响应及同一四节点电热模型的**独立质量验证**，不是P0--P2正式120次调用的一部分。保留原A+B、A+C各六个Stage实例及跨场景共享具体设备、相同期限、50°C入口、80°C上限、400 ms窗口、5 ms起点网格、auto-L和温度漏电；仅对各Stage合法模式--起点选择采用K.192/K.193预先冻结的子集。初始目录共78项，原期限预处理排除6个必超期项，整体MILP保留72个Stage整数选择，未把A.main设备固定到K.194最优设备。**受限域结果不得写成P0完整候选域或连续起点原问题的全局最优。**
+
+K.194：[冻结输入](../../chapter3_experiments/results/small_exact_execution01/input_instance.json)、[原参照](../../chapter3_experiments/results/small_exact_execution01/reference.json)、[独立审查](../../chapter3_experiments/results/small_exact_execution01/internal_review.json)。AB/CPU1=450、AB/NPU0=650、AC/CPU1=90、AC/NPU0=360，共1550次单场景连续安全评价，全部SAFE；跨场景保持A.main同一具体设备可组合成274500份合法联合排程。枚举根预算2400 s，实际931.703 s，形成参考时刻931.641 s；下界和上界均约0.986251057947 J，宽度2.145509663e-29 J，低于预先设定1e-6 J容差。枚举与MILP共用原连续电热核，但候选集合独立枚举，未从MILP读取时间表。
+
+K.196：[完整归档分析](../../chapter3_experiments/results/small_whole_execution01/analysis.json)、[方法回执](../../chapter3_experiments/results/small_whole_execution01/method_return.json)、[唯一独立post](../../chapter3_experiments/results/small_whole_execution01/postcheck.json)、[总结](../../完整链小域整体MILP结果_K196.md)。同域运行1次原整体MILP（300 s共同方法根）及1次独立后验（60 s上限），没有载入K.194最优时间表。初始化SAFE=1.088852027249 J，形成于68.547 s；在85.703 s接收不同于初始化的第二整数候选，88.437 s确认完整安全能量0.986251057947 J，下降0.102600969302 J，即9.422857%。构模5.015 s、MATLAB启动61.391 s、方法根截止300.000 s、单次post 2.594 s、实际日历318.297 s。原生求解器按时间上限停止，独立参照证明的是`epsilon`范围内的有限域能量质量，不是原生求解器证明最优；热反馈新增行数仍为0。**与K.194预算不同，不比较等预算算法速度。**

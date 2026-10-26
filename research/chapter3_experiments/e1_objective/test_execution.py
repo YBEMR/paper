@@ -64,7 +64,9 @@ class ExecutionTests(unittest.TestCase):
 
     def test_watchdog_reaps_hang_preserves_selection(self):
         with tempfile.TemporaryDirectory(prefix='e1_hang_') as tmp:
-            *_,out=plan_case(Path(tmp),'hang_after_checkpoint',299,.2)
+            # MOCK only: leave 3 seconds to form the checkpoint before hanging.
+            # The inherited 300 second root and .2 second archive grace stay fixed.
+            *_,out=plan_case(Path(tmp),'hang_after_checkpoint',297,.2)
             self.assertEqual(out['process']['classification'],'WATCHDOG_KILLED',out)
             self.assertTrue(out['process']['reaped']);self.assertTrue(out['process']['killed'])
             self.assertEqual(out['result']['state'],'SAFE',out);self.assertLess(out['result']['selected_at_s'],300)
@@ -72,7 +74,8 @@ class ExecutionTests(unittest.TestCase):
 
     def test_late_archive_preserves_old_selection(self):
         with tempfile.TemporaryDirectory(prefix='e1_late_') as tmp:
-            *_,out=plan_case(Path(tmp),'late_archive',299,.3)
+            # MOCK only: receipt formation must precede the late-archive phase.
+            *_,out=plan_case(Path(tmp),'late_archive',297,.3)
             self.assertEqual(out['result']['state'],'SAFE',out);self.assertFalse(out['result']['stop_required'])
             self.assertGreaterEqual(out['process']['receipt_observed_elapsed_s'],300)
             self.assertLess(out['result']['selected_at_s'],300)

@@ -11,7 +11,7 @@ def main():
     labels=['1 per application','2 per application']
     fig,(left,right)=plt.subplots(1,2,figsize=(9,3.6),layout='constrained')
     for ax,field,ylabel,title in [(left,'post_U_approx_J','System energy (J)','Weighted full-window energy'),
-        (right,'per_request_U_approx_J','Energy per request (J)','Same window; fixed costs amortize')]:
+        (right,'per_request_U_approx_J','Energy per request (J)','Per-request energy; valid schedules only')]:
         for x,v in zip(xs,s):
             if v['state']=='POST_SAFE':
                 y=v[field];ax.bar(x,y,width=.6,color='#366a91');ax.text(x,y*1.02,f'{y:.6f}',ha='center',fontsize=9)

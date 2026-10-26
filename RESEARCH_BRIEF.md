@@ -2,6 +2,10 @@
 
 更新：2026-10-26。
 
+**K.196／D221：K195实验已获批，资源预检未过，用户明确暂停；尚无真实调用（E641）。** 用户批准原whole 1×300方法／正常SAFE最多1×60post／480日历，不加时或补跑。两次宿主只读核对均确认MATLAB二进制、Python依赖、197份源、8份执行层及原受限input/config一致；仅冻结内存门2GiB物理／4GiB提交余量未过。[首次预检](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196.json)、[释放后重查](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196_recheck02.json)、[暂停检查点](research/chapter3_experiments/results/small_whole_preparation01/pause_k196.json)留存。
+
+第一次物理约1.932／commit1.901GiB，用户释放后第二次物理约1.582／commit2.794GiB，均无既有MATLAB进程；未降低资源门，未生成approval或真实输出/launch/method/post claim。随后用户明确“先暂停，稍后再运行”，已停止资源探测和执行准备。300/60秒预算及唯一方法/post次数均未消费，无构模／优化／热积分，不能归类为一次MILP失败。恢复须用户明确继续，先重新核源与资源，沿用尚未消费的300/60/480授权；不自动运行或扩大到900/3600、K168、期限24等。以下K195为获批前准备历史。
+
 **K.195／D220：同域whole执行入口与97项纯预检完成，真实300秒预算仍待确认（E640）。** [简明协议](research/完整链小域整体MILP执行准备_K195.md)、[关闭的冻结计划](research/chapter3_experiments/results/small_whole_preparation01/plan.json)、[最终预检](research/chapter3_experiments/results/small_whole_preparation01/pure_checks.json)、[内部最终复核](research/chapter3_experiments/results/small_whole_preparation01/internal_final_review03.json)。用户承接K194回复“继续”，本轮只准备原whole同域真实执行链，不解释为新增求解预算；无MATLAB／构模／热评价／求解。
 
 沿K193相同受限input/config，78→72仅删6个必超期项，1550安排／274500组合保持。实际构模后须核72个Stage y整数、原辅助连续化和全部AB/AC物理变量，部署／邻域／闭锚／增广关闭；不读枚举见证作初解。197来源中195与K187逐字同，2处为不启用的可选接口扩展，冻结当前完整源并核默认Recorder/solver；25个冻结科学模块在禁止进程／科学操作的新解释器中导入成功。真实数值模型规模／可行性和原生启动仍未验收，纯fake不得当真实通过。
@@ -2240,3 +2244,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D220（2026-10-26，用户承接K194建议准备同域whole回复“继续”）：** 接续D219，选择仅实现一次性同域原whole入口和纯预检；不把继续准备视为300秒研究授权。保持模型/域/原初始化及原生选项，当前197源完整冻结，默认Recorder及solver路径不变；实际构模后的72y整数、物理变量及候选域成员由薄guard核对，不引入新的搜索限制。97纯项及冻结导入通过；监督异常收口和日历余量是必要工程修复，原审查/测试留存，0新科研。下一步待单独批准1方法300秒、正常SAFE最多1post60秒、480日历；没有批准文件不得启动，消费一次不补跑。重审触发：研究预算/域/初始化/参数/安全/原生数值表达改变，或希望改用增广/局部/历史见证；K168/期限24/大域/HEFT-C不恢复。
+
+
+**D221（2026-10-26，用户批准K195唯一正式实验，随后因资源不足明确暂停）：** 用户授予原whole 1次300秒、正常完整SAFE最多1次60秒post、480日历，保持冻结源/受限输入，不导入K194最优，不加时/补跑。只读宿主预检两次均仅资源门未过；用户先释放内存要求重查，重查仍不足，继而选择“先暂停，稍后再运行”。已按明确暂停停止探测/启动，保存checkpoint；无approval文件/实际输出/真实claim/MATLAB/研究调用，预算全部未消费。恢复以用户明确继续为前提，再测源/资源，沿本项原授权，不重新要求同额度批准；改变范围/门槛/预算须再讨论。K194与历史实验不变，其他暂停队列不恢复。

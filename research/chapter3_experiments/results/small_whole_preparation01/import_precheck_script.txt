@@ -1,0 +1,41 @@
+"""Run through stdin in a fresh Python process: import/identity checks only."""
+from pathlib import Path
+from unittest.mock import patch
+import json
+import sys
+import time
+
+root=Path.cwd()
+folder=root/'research/chapter3_experiments/results/small_whole_preparation01'
+here=root/'research/chapter3_experiments/small_whole_execution'
+sys.path.insert(0,str(here))
+import run_once
+
+forbidden={'build_model','build_instance','evaluate_candidate','evaluate_scene',
+           'execute_formal_milp','solve_formal_diagnostic','construct_seed','solve'}
+def profile(frame,event,arg):
+    if event=='call' and frame.f_code.co_name in forbidden:
+        source=Path(frame.f_code.co_filename).resolve()
+        if source.is_relative_to(root/'research'):
+            raise AssertionError('Scientific operation during import precheck: '+str(source)+':'+frame.f_code.co_name)
+
+started=time.monotonic()
+plan=run_once.read(folder/'plan.json')
+assert plan['authorized'] is False and plan['execution_enabled'] is False
+run_once.verify_frozen(folder,plan)
+with patch('subprocess.Popen',side_effect=AssertionError('Native/process launch forbidden')) as launch:
+    sys.setprofile(profile)
+    try:
+        engine=run_once.bind(folder,plan)
+        loaded=run_once.loaded_sources(folder,plan)
+    finally:sys.setprofile(None)
+    assert not launch.called
+run_once.write_new(folder/'import_precheck.json',{
+    'passed':True,'scope':'fresh frozen science imports/default-interface identity only',
+    'plan_sha256':run_once.digest(folder/'plan.json'),
+    'loaded_scientific_modules':loaded,'loaded_count':len(loaded),
+    'elapsed_s':time.monotonic()-started,'original_recorder_default':True,
+    'diagnostic_solver_default_None':True,'MATLAB_starts':0,'model_constructions':0,
+    'solver_calls':0,'thermal_evaluations':0,'candidate_evaluations':0,
+    'subprocess_launches_inside_precheck':0,'actual_numeric_model_validated':False})
+print(json.dumps({'import_precheck':'PASS','loaded_count':len(loaded),'new_research_calls':0}))

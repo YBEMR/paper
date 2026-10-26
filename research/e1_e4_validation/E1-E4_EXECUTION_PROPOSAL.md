@@ -1,3 +1,5 @@
+> E3正式状态（2026-10-26）：用户明确批准后完成2规划＋2后验，均SAFE/POST_SAFE，本次能耗区间相同；见[正式结果](E3_DEPLOYMENT_EXPERIMENT_RESULTS.md)。以下待批描述保留为历史，原关闭模板不改。
+
 > E3更新（2026-10-26）：共享/分场景A部署适配及236项静态/mock预检完成，[准备与预算](E3_DEPLOYMENT_PREPARATION.md)。正式两次规划及最多两次后验仍未批准，原E1/E2额度不续用。
 
 > E2正式状态（2026-10-26）：用户单独批准后已完成4规划＋4后验，均SAFE/POST_SAFE；见[正式结果](E2_RESOURCE_EXPERIMENT_RESULTS.md)。以下准备/待批表述保留为历史，原关闭模板不改。

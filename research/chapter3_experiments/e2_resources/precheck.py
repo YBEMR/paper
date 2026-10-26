@@ -20,6 +20,10 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
         from e4_deadline.protocol import SLOTS
         from e4_deadline.input_contract import prepare_inputs,validate_inputs
         from e4_deadline.test_protocol import mock_materials
+    elif protocol_id=='E4_REQUESTS_V1':
+        from e4_requests.protocol import SLOTS
+        from e4_requests.input_contract import prepare_inputs,validate_inputs
+        from e4_requests.test_protocol import mock_materials
     else: raise ValueError('UNKNOWN_PRECHECK_PROTOCOL')
     limits=protocol_limits(dict(protocol_id=protocol_id));budgets=limits['budgets']
     out=Path(destination).resolve()
@@ -38,7 +42,7 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
     # Bind every executable dependency and test to committed bytes; results can
     # be committed subsequently without rewriting this immutable source SHA.
     all_source=set(runtime_paths('MOCK_PROCESS'))
-    for folder in ('e1_objective','e2_resources','e3_deployment','e4_deadline'):
+    for folder in ('e1_objective','e2_resources','e3_deployment','e4_deadline','e4_requests'):
         all_source.update(str(p.relative_to(REPO)).replace('\\','/') for p in (CORE/folder).glob('*.py'))
     dirty=subprocess.run(['git','diff','--name-only','HEAD','--',*sorted(all_source)],cwd=REPO,
                          capture_output=True,text=True,check=True).stdout
@@ -86,7 +90,8 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
             'e1_objective.test_ledger','e1_objective.test_process_control','e1_objective.test_execution',
             'e2_resources.test_input_contract','e2_resources.test_protocol',
             'e3_deployment.test_input_contract','e3_deployment.test_protocol',
-            'e4_deadline.test_input_contract','e4_deadline.test_protocol'])
+            'e4_deadline.test_input_contract','e4_deadline.test_protocol',
+            'e4_requests.test_input_contract','e4_requests.test_protocol'])
         result=unittest.TextTestRunner(stream=stream,verbosity=2).run(suite)
         if not result.wasSuccessful():raise AssertionError('STATIC_MOCK_REGRESSIONS_FAILED')
         from e1_objective.controller import run_phase

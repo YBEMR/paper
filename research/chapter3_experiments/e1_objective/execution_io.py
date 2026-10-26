@@ -56,6 +56,8 @@ def protocol_slots(manifest):
         from e3_deployment.protocol import SLOTS as slots
     elif protocol=='E4_DEADLINE_V1':
         from e4_deadline.protocol import SLOTS as slots
+    elif protocol=='E4_REQUESTS_V1':
+        from e4_requests.protocol import SLOTS as slots
     else: raise ValueError('UNKNOWN_EXECUTION_PROTOCOL')
     return [list(slot) for slot in slots]
 
@@ -71,6 +73,9 @@ def protocol_limits(scope):
     if protocol=='E4_DEADLINE_V1':
         from e4_deadline.protocol import BUDGETS as budgets,SUPERVISION
         return dict(budgets=dict(budgets),supervision=dict(SUPERVISION))
+    if protocol=='E4_REQUESTS_V1':
+        from e4_requests.protocol import BUDGETS as budgets,SUPERVISION
+        return dict(budgets=dict(budgets),supervision=dict(SUPERVISION))
     raise ValueError('UNKNOWN_EXECUTION_PROTOCOL')
 
 
@@ -85,7 +90,9 @@ def runtime_paths(mode):
                'research/chapter3_experiments/e3_deployment/protocol.py',
                'research/chapter3_experiments/e3_deployment/input_contract.py',
                'research/chapter3_experiments/e4_deadline/__init__.py',
-               'research/chapter3_experiments/e4_deadline/protocol.py']
+               'research/chapter3_experiments/e4_deadline/protocol.py',
+               'research/chapter3_experiments/e4_requests/__init__.py',
+               'research/chapter3_experiments/e4_requests/protocol.py']
     if mode=='MOCK_PROCESS': relative+=['research/chapter3_experiments/e1_objective/mock_fixtures.py']
     return relative
 
@@ -94,7 +101,7 @@ def validate_gate(gate,manifest,mode,run_dir):
     require(mode in ('MOCK_PROCESS','REAL_RESEARCH'),'EXECUTION_MODE')
     require(gate.get('kind')==mode,'AUTHORIZATION_KIND_MISMATCH')
     if mode=='REAL_RESEARCH':
-        approved=gate.get('stage_authorized') if manifest.get('protocol_id') in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1') else gate.get('four_slot_authorized')
+        approved=gate.get('stage_authorized') if manifest.get('protocol_id') in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1') else gate.get('four_slot_authorized')
         require(gate.get('authorized') is True and approved is True and
                 isinstance(gate.get('approval_reference'),str) and gate['approval_reference'].strip(),
                 'E1_REAL_RESEARCH_NOT_AUTHORIZED')
@@ -104,11 +111,11 @@ def validate_gate(gate,manifest,mode,run_dir):
             gate.get('scope_sha256')==sha(manifest),'SOURCE_OR_SCOPE_DRIFT')
     limits=protocol_limits(manifest)
     protocol=manifest.get('protocol_id','E1_OBJECTIVE_V1')
-    if 'protocol_id' in gate or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1'):
+    if 'protocol_id' in gate or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1'):
         require(gate.get('protocol_id')==protocol,'AUTHORIZATION_PROTOCOL_MISMATCH')
     require(gate.get('budgets')==limits['budgets'] and manifest.get('budgets')==limits['budgets'] and
             manifest.get('slots')==protocol_slots(manifest),'BUDGET_OR_SLOTS_DRIFT')
-    if 'supervision' in manifest or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1'):
+    if 'supervision' in manifest or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1'):
         require(manifest.get('supervision')==limits['supervision'],'SUPERVISION_DRIFT')
     require(isinstance(gate.get('authorization_id'),str) and gate['authorization_id'],'AUTHORIZATION_ID')
     for key in ('authority_store','allowed_run_directory'):

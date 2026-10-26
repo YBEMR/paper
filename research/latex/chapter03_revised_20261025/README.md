@@ -16,7 +16,7 @@
 
 ## 编译
 
-需要 **XeLaTeX** 和 TeX Live/MiKTeX 的 `ctex`、`amsmath`、`booktabs`、`tikz`、`hyperref` 等组件。中文字体优先用 Noto CJK；不具备时回退至 Windows 常见字体或 TeX Live Fandol。**不分发字体文件**。
+需要 **XeLaTeX** 和 TeX Live/MiKTeX 的 `ctex`、`amsmath`、`booktabs`、`tikz`、`pgfplots`、`hyperref` 等组件。中文字体优先用 Noto CJK；不具备时回退至 Windows 常见字体或 TeX Live Fandol。**不分发字体文件**。
 
 在本目录中打开PowerShell：
 
@@ -62,3 +62,9 @@ bash build.sh
 ## 2026-10-26：补充图形说明
 
 本轮根据第一、二章和师兄论文的图文组织方式，补充**六幅可编辑TikZ图**：两幅模型图、固定事件图、片段内部峰值概念图、H02真实时间表甘特图、C19时序数学见证图。新图与正文按说明—图—公式或结果的顺序相互衔接；连同原有两幅图，第三章共八幅。所有图的事实依据及与抽象示意的区别列于[FIGURES.md](FIGURES.md)。图形源码位于figures目录，XeLaTeX编译时自动加载。
+
+## 2026-10-26：补充两幅正式数据图
+
+本次保留3.1--3.8既定章节与原有八幅图，在3.7.3加入P0/P2同一R1 HEFT时间表四节点温度后验记录点，在3.7.4加入15个变体/条件配对中联动MILP相对HEFT完整SAFE能量降低比例图。新增两份PGFPlots源码与对应CSV，原有表格和研究条件不变，现共十幅图。图前图后重组了比较目的、数据观察与结论说明。
+
+温度图中连线不是连续安全证书；R1--R5为类别负载，不能解释为任务规模趋势。原始后验与取数规则见[FIGURES.md](FIGURES.md)。本次只修改写作和图表，未启动新求解、新热积分或参数扫描。

@@ -6,7 +6,7 @@
 - `search.py`：原HEFT一轮邻域的局部接纳只改评分读取，AST规范化检查约束改动范围。
 - `runner.py`：每次调用独立缓存，外层按规划分数上界择优，同分保留先出现者；真实U不是去温度组的裁决因素。
 - `exports.py`：核查最终方案正是规划分数优选方案及其原真实回执；与局部严格区间下降的规则区分。
-- `boundary.py`：300/60秒根、截止后归档、四槽与一次消费的mock合同。真实调用一律拒绝，未安装持久授权账本或真实进程监督器。
+- `boundary.py`：前阶段mock合同保持关闭；实际执行链在`controller.py`／`worker.py`，由`ledger.py`与`process_control.py`提供持久消费、统一计时、STOP及进程回收。
 - `mock_fixtures.py`：手写的单节点双场景测试数据，无RC矩阵；模拟SAFE不构成研究SAFE。
 
 复跑（仓库根目录；输出必须是新目录）：
@@ -17,4 +17,4 @@ F:/Anaconda3/python.exe -B research/chapter3_experiments/e1_objective/precheck.p
 
 预检验证15份原源码/配置与固定提交完全一致，运行66项静态/mock测试，展开R1/R3参数并检查双臂仅objective字段不同。科学函数保护拒绝真实HEFT构造、热积分与外部进程；测试对原HEFT控制流的调用全部使用mock构造器。
 
-本实现尚不能直接运行正式四槽。下一项只需接入已声明的真实进程监督与持久消费记录，进行纯模拟接线验收；不得改搜索规则，也不需新研究参数。正式4×300秒＋至多4×60秒仍需单独确认，不继承其他分支额度。
+实际执行接线与120项保护性预检已完成，见[执行控制交付](../../e1_e4_validation/E1_PROCESS_CONTROL_DELIVERY.md)。`execution_precheck.py --out <新目录>`复跑含真实mock进程的检查，科研闸门保持关闭。正式4×300秒＋至多4×60秒仍需单独确认，不继承其他分支额度；模拟SAFE不形成真实研究证据。

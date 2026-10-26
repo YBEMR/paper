@@ -2,6 +2,13 @@
 
 更新：2026-10-26。
 
+**K.190／D215：独立连续松弛LP协议与零调用预检完成，实际运行待用户另批（E635）。** [报告与小域参照评估](research/连续松弛数值诊断与小域精确对照准备_K190.md)、[机器提案](research/chapter3_experiments/results/k190_lp_preparation01/protocol_proposal.json)、[预检](research/chapter3_experiments/results/k190_lp_preparation01/precheck.json)、[内部静态审查](research/chapter3_experiments/results/k190_lp_preparation01/internal_review.json)。15项纯夹具通过；原K187七数组c/A/b/Aeq/beq/lb/ub逐项保持，只拟取消1681项整数性，明确拒收K189固定界。原x0/K189向量在原行与界均数值接纳，不称精确证书。全部27971变量原双界有限。
+
+拟用同R2023b独立linprog dual-simplex、隐藏Preprocess=none、ConstraintTolerance1e-9/OptimalityTolerance1e-7、MaxIterations2049240、MaxTime仅根剩余；本机源与validator静态核明，原生options对象尚未创建/读回。该接口拒绝x0，所以两份历史向量仅作静态见证；不称与intlinprog内部根LP等同。LP分数结果不生成SAFE/U，可行原始目标不是MILP有效下界；状态/最优及lambda只归档为solver-reported，不替代独立L0。
+
+待批建议1请求×300方法秒、480日历、0热积分/post，不重试/续接；源码仅有纯检查/协议生成，无实际执行入口，authorized/execution_enabled=false。本轮新增优化/MATLAB/热积分/正式候选评价均0，12项内部静态审查仅通过准备范围。另建议后续单独定义一个保留AB/AC完整三Stage链和auto-L、显式缩小模式/起点域的参照；旧Q1是main-only/hold，不能覆盖当前完整模型。新小实例尚未构造/构模/求解，具体预算未定。本阶段停止，不自动整数释放、增广、3600秒、K168或期限24。以下K189及更早为历史。
+
+
 **K.189／D214：已执行K188唯一固定整数原矩阵诊断，本次未重现数值状态冲突（E634）。** [简明报告](research/固定整数配置原生诊断_K189.md)、[实际结果](research/chapter3_experiments/results/fixed_integer_native03/analysis.json)、[完整方法回执](research/chapter3_experiments/results/fixed_integer_native03/method_return.json)。40项纯预检与实际传输逐项核对通过；仅固定原1681个intcon为原x0，保留27971列/176953行、原矩阵/目标/x0/其余界及选项，只有MaxTime按剩余预算变化。物理模型、输入、热安全与历史结果保持。
 
 原生15.279秒返回exitflag1及完整向量；原矩阵/固定界接纳通过，最大正残差2.8422e-14，原界/固定界/整数违反0。2897个辅助坐标微变，最大2.1707e-12，实际整数选择完全相同；辅助目标差约−6.44e-15，不记新调度/SAFE/U或节能。solver报告仅固定子问题gap0，不是独立最优证书或开放域修复。方法57.297秒、启动33.453秒、总日历65.313秒，1请求/0热积分/0post/0重试，清理已核；01/02仅保存预检工具系统探测被屏蔽的失败，无真实调用。
@@ -2182,3 +2189,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D214（2026-10-26，用户批准执行K188固定整数诊断）：** 接续D213，用户确认1×300方法、480日历，只有原intcon固定、原目标/矩阵/x0/容差不变，0热积分/不重试/不延时。实际冻结03后执行1请求，数值接纳成功；两次早期冻结仅纯预检系统探测屏蔽失败，无launch及native。原生15.279秒/方法57.297秒/日历65.313秒。固定配置可用，不把辅助微变记新物理收益，不称开放整体已修复。重审触发：准备恢复自由整数原生求解、改数值表达/目标/固定列/容差或希望做长预算比较，须独立提出协议与新授权；未用预算不转移。当前停止，K168及期限24继续暂停。
+
+
+**D215（2026-10-26，用户要求优先准备K190独立LP诊断）：** 接续D214固定配置成功，用户要求只取消原整数性、原七数组和原变量界保持，独立LP接口须明确不等同intlinprog内部根LP；先交付预检，建议300秒但实际运行另批。已完成15项纯测试、原载荷/两份向量静态核查及R2023b选项来源审查，未求解。助手提出1请求×300根/480日历、dual-simplex/none/原约束与LP最优性容差，均仍是待审执行提案；独立linprog拒绝x0，不虚称沿原初始化。小域完整链auto-L参照值得另建只是助手建议，具体输入/预算均待后续讨论。重审触发：批准独立LP、改接口/数组/界/选项，或希望进入整数释放/增广/小域求解；不复用K189余额，不恢复3600/K168/期限24。

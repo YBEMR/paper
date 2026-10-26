@@ -1,10 +1,10 @@
-"""Frozen E1/E2 process handoff. Default REAL gate is closed; mocks are distinct."""
+"""Frozen E1/E2/E3 process handoff. Default REAL gate is closed; mocks are distinct."""
 import argparse
 from copy import deepcopy
 from pathlib import Path
 import sys
 import time
-from .execution_io import (CORE,DEFAULT_GATE,BUDGETS,protocol_slots,read_json,save,sha,require,
+from .execution_io import (CORE,DEFAULT_GATE,protocol_slots,protocol_limits,read_json,save,sha,require,
                             validate_gate,build_bundle,selected_token)
 from .ledger import Ledger
 from .process_control import supervise
@@ -15,7 +15,11 @@ def _fresh_packet(problem,objective):
     from inputs import load_config,build_instance
     from control_policy import with_auto_low_idle
     config=with_auto_low_idle(load_config(CORE/'config_v01.json'))
-    return dict(config=config,instance=build_instance(config,problem),objective=objective)
+    if problem=='base__R1__E3_SCENE_LOCAL_A':
+        from e3_deployment.input_contract import derive_scene_local_a
+        instance=derive_scene_local_a(build_instance(config,'base__R1'))
+    else: instance=build_instance(config,problem)
+    return dict(config=config,instance=instance,objective=objective)
 
 
 def _root_check(origin,limit,slot_deadline,batch_deadline):
@@ -136,7 +140,10 @@ def run_phase(ledger,gate,manifest,run_dir,ordinal,phase,*,slot_origin,batch_ori
             'MOCK_CONTROLS_CANNOT_CHANGE_REAL_LIMITS')
     origin=time.monotonic()-mock_prior_elapsed_s  # Nonzero offset is explicitly MOCK only.
     validate_gate(gate,manifest,mode,run_dir)
-    limit=BUDGETS[phase.lower()+'_s']; slot_deadline=slot_origin+420;batch_deadline=batch_origin+1800
+    require(type(ordinal) is int and 1<=ordinal<=len(protocol_slots(manifest)),'PHASE_SLOT')
+    limits=protocol_limits(manifest);supervision=limits['supervision']
+    limit=limits['budgets'][phase.lower()+'_s']
+    slot_deadline=slot_origin+supervision['slot_wall_s'];batch_deadline=batch_origin+supervision['batch_wall_s']
     out=Path(run_dir)/('slot_'+str(ordinal))/phase.lower()
     problem,objective=protocol_slots(manifest)[ordinal-1]
     if phase=='PLAN':
@@ -219,8 +226,9 @@ def run_batch(manifest_path,authorization_path,run_dir):
     ledger=Ledger(gate['authority_store'],gate,run_dir,kind='REAL_RESEARCH')
     ledger.claim_batch(dict(manifest_sha256=sha(manifest),batch_origin=batch_origin))
     outputs=[]
-    for ordinal in range(1,5):
-        if time.monotonic()>=batch_origin+1800:ledger.stop('BATCH_WALL_LIMIT');break
+    slots=protocol_slots(manifest);limits=protocol_limits(manifest)
+    for ordinal in range(1,len(slots)+1):
+        if time.monotonic()>=batch_origin+limits['supervision']['batch_wall_s']:ledger.stop('BATCH_WALL_LIMIT');break
         slot_origin=time.monotonic()
         plan=run_phase(ledger,gate,manifest,run_dir,ordinal,'PLAN',slot_origin=slot_origin,batch_origin=batch_origin)
         outputs.append(dict(ordinal=ordinal,phase='PLAN',result=plan['result']))
@@ -231,7 +239,7 @@ def run_batch(manifest_path,authorization_path,run_dir):
             outputs.append(dict(ordinal=ordinal,phase='POST',result=post['result']))
             if post['result'].get('stop_required'):break
     save(Path(run_dir)/'batch_summary.json',dict(outputs=outputs,wall_s=time.monotonic()-batch_origin,
-          planned_slots=4,retries=0,authorization_id=gate['authorization_id']))
+          planned_slots=len(slots),retries=0,authorization_id=gate['authorization_id']))
     return outputs
 
 if __name__=='__main__':

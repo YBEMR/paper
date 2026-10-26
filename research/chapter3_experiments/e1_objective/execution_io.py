@@ -1,4 +1,4 @@
-"""Frozen identities and explicitly selected E1/E2 protocols; no science imports."""
+"""Frozen identities and explicitly selected E1/E2/E3 protocols; no science imports."""
 import hashlib
 import json
 import os
@@ -52,8 +52,21 @@ def protocol_slots(manifest):
     if protocol=='E1_OBJECTIVE_V1': slots=_E1_SLOTS
     elif protocol=='E2_RESOURCES_V1':
         from e2_resources.protocol import SLOTS as slots
+    elif protocol=='E3_DEPLOYMENT_V1':
+        from e3_deployment.protocol import SLOTS as slots
     else: raise ValueError('UNKNOWN_EXECUTION_PROTOCOL')
     return [list(slot) for slot in slots]
+
+
+def protocol_limits(scope):
+    protocol=scope.get('protocol_id','E1_OBJECTIVE_V1')
+    if protocol in ('E1_OBJECTIVE_V1','E2_RESOURCES_V1'):
+        return dict(budgets=dict(plan_s=300,post_s=60,plan_calls=4,post_calls=4),
+                    supervision=dict(slot_wall_s=420,batch_wall_s=1800,archive_only_grace_s=5))
+    if protocol=='E3_DEPLOYMENT_V1':
+        from e3_deployment.protocol import BUDGETS as budgets,SUPERVISION
+        return dict(budgets=dict(budgets),supervision=dict(SUPERVISION))
+    raise ValueError('UNKNOWN_EXECUTION_PROTOCOL')
 
 
 def runtime_paths(mode):
@@ -62,7 +75,10 @@ def runtime_paths(mode):
     relative+=['research/chapter3_experiments/e1_objective/'+x for x in E1_FILES]
     relative+=['research/v1_evaluator/interval.py',
                'research/chapter3_experiments/e2_resources/__init__.py',
-               'research/chapter3_experiments/e2_resources/protocol.py']
+               'research/chapter3_experiments/e2_resources/protocol.py',
+               'research/chapter3_experiments/e3_deployment/__init__.py',
+               'research/chapter3_experiments/e3_deployment/protocol.py',
+               'research/chapter3_experiments/e3_deployment/input_contract.py']
     if mode=='MOCK_PROCESS': relative+=['research/chapter3_experiments/e1_objective/mock_fixtures.py']
     return relative
 
@@ -71,15 +87,22 @@ def validate_gate(gate,manifest,mode,run_dir):
     require(mode in ('MOCK_PROCESS','REAL_RESEARCH'),'EXECUTION_MODE')
     require(gate.get('kind')==mode,'AUTHORIZATION_KIND_MISMATCH')
     if mode=='REAL_RESEARCH':
-        require(gate.get('authorized') is True and gate.get('four_slot_authorized') is True and
+        approved=gate.get('stage_authorized') if manifest.get('protocol_id')=='E3_DEPLOYMENT_V1' else gate.get('four_slot_authorized')
+        require(gate.get('authorized') is True and approved is True and
                 isinstance(gate.get('approval_reference'),str) and gate['approval_reference'].strip(),
                 'E1_REAL_RESEARCH_NOT_AUTHORIZED')
     else: require(gate.get('mock_only') is True and gate.get('authorized') is not True,'MOCK_GATE')
     require(manifest.get('mode')==mode,'MANIFEST_MODE')
     require(gate.get('source_sha')==manifest.get('source_sha') and
             gate.get('scope_sha256')==sha(manifest),'SOURCE_OR_SCOPE_DRIFT')
-    require(gate.get('budgets')==BUDGETS and manifest.get('budgets')==BUDGETS and
+    limits=protocol_limits(manifest)
+    protocol=manifest.get('protocol_id','E1_OBJECTIVE_V1')
+    if 'protocol_id' in gate or protocol=='E3_DEPLOYMENT_V1':
+        require(gate.get('protocol_id')==protocol,'AUTHORIZATION_PROTOCOL_MISMATCH')
+    require(gate.get('budgets')==limits['budgets'] and manifest.get('budgets')==limits['budgets'] and
             manifest.get('slots')==protocol_slots(manifest),'BUDGET_OR_SLOTS_DRIFT')
+    if 'supervision' in manifest or protocol=='E3_DEPLOYMENT_V1':
+        require(manifest.get('supervision')==limits['supervision'],'SUPERVISION_DRIFT')
     require(isinstance(gate.get('authorization_id'),str) and gate['authorization_id'],'AUTHORIZATION_ID')
     for key in ('authority_store','allowed_run_directory'):
         require(isinstance(gate.get(key),str) and Path(gate[key]).is_absolute(),'FIXED_ABSOLUTE_'+key)
@@ -110,8 +133,8 @@ def verify_bundle(bundle,manifest):
 def verify_job(job,gate,manifest,output):
     mode=job['mode']; validate_gate(gate,manifest,mode,job['run_dir'])
     require(job['scope_sha256']==sha(manifest),'JOB_MANIFEST')
-    require(job['phase'] in ('PLAN','POST') and type(job['ordinal']) is int and 1<=job['ordinal']<=4,'JOB_SLOT')
-    require(job['limit_s']==BUDGETS[job['phase'].lower()+'_s'],'JOB_FIXED_ROOT_LIMIT')
+    require(job['phase'] in ('PLAN','POST') and type(job['ordinal']) is int and 1<=job['ordinal']<=len(protocol_slots(manifest)),'JOB_SLOT')
+    require(job['limit_s']==protocol_limits(manifest)['budgets'][job['phase'].lower()+'_s'],'JOB_FIXED_ROOT_LIMIT')
     claim=job['claim']
     require(all(claim.get(k)==job[k] for k in ('phase','ordinal','root_origin','limit_s')),'CLAIM_JOB_TIMING_OR_SLOT')
     require(claim.get('source_sha')==manifest['source_sha'] and claim.get('kind')==mode and

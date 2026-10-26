@@ -85,7 +85,12 @@ class Ledger:
         source = authorization.get("source_sha")
         _require(isinstance(source, str) and re.fullmatch(r"[0-9a-f]{40}", source) is not None,
                  "SOURCE_SHA")
-        _require(authorization.get("budgets") == BUDGETS, "AUTHORIZATION_BUDGETS")
+        from .execution_io import protocol_limits
+        try:
+            self.budgets=protocol_limits(authorization)['budgets']
+        except ValueError as error:
+            raise LedgerError('AUTHORIZATION_PROTOCOL') from error
+        _require(authorization.get("budgets") == self.budgets, "AUTHORIZATION_BUDGETS")
         self.authorization = deepcopy(authorization)
         self.authorization_sha256 = digest(authorization)
         self.kind = kind
@@ -131,9 +136,8 @@ class Ledger:
                 raise LedgerError("BATCH_AUTHORIZATION_ALREADY_CONSUMED") from error
             return record
 
-    @staticmethod
-    def _ordinal(ordinal):
-        _require(type(ordinal) is int and 1 <= ordinal <= 4, "SLOT_ORDINAL")
+    def _ordinal(self, ordinal):
+        _require(type(ordinal) is int and 1 <= ordinal <= self.budgets["plan_calls"], "SLOT_ORDINAL")
 
     def _record(self, name):
         return _read(self.root / name)
@@ -146,7 +150,7 @@ class Ledger:
         batch = self._batch()
         record = dict(schema="E1_CALL_CLAIM_V1", authorization_sha256=self.authorization_sha256,
                       batch_sha256=digest(batch), kind=self.kind, phase=phase, ordinal=ordinal,
-                      root_origin=root_origin, limit_s=BUDGETS[phase.lower() + "_s"],
+                      root_origin=root_origin, limit_s=self.budgets[phase.lower() + "_s"],
                       run_dir=self.run_dir, source_sha=self.authorization["source_sha"],
                       job_context=deepcopy(context), context_sha256=digest(context))
         record["claim_sha256"] = digest(record)

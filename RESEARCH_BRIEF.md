@@ -2,6 +2,10 @@
 
 更新：2026-10-26。
 
+**K.196续接资源波动：预检04通过，实际启动前资源门再次拦截，仍0调用（E642补记）。** [预检04](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196_recheck04.json)、[启动门回执](research/chapter3_experiments/results/small_whole_preparation01/launch_resource_gate_k196_01.json)。宿主12:40:03Z物理2.249GiB／提交4.037GiB一度达标；12:40:52Z实际launch复查降至1.976／3.705GiB，返回NOT_STARTED_RESOURCE_GATE，未创建实际输出、claim或worker，无MATLAB/热评价/求解。已按原用户授权保存独立approval，但尚未消费；冻结计划未改。用户恢复有效，等待更多内存余量；下一次仍先只读重查，不降低门槛、不新增预算，也不将资源门失败当科学重跑。
+
+**K.196／D222续接：用户已明确恢复，但第三次资源门仍未过，等待释放内存（E642）。** [重查03](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196_recheck03.json)、[恢复检查点](research/chapter3_experiments/results/small_whole_preparation01/resume_k196_01.json)。此前暂停已被用户“可以恢复了”撤销；原1×300方法／最多1×60post／480日历授权仍有效、全部未消费。第三次物理1999011840B约1.862GiB、提交3867209728B约3.602GiB，仍低于冻结2/4GiB门；MATLAB二进制、Python依赖、197源、原受限input/config均一致，无既有MATLAB进程。没有approval/实际输出/真实claim或研究调用，不能称MILP失败。已请用户再释放约0.5GiB，回复尚待；不降低门槛、不自动增加预算。以下D221暂停为历史。
+
 **K.196／D221：K195实验已获批，资源预检未过，用户明确暂停；尚无真实调用（E641）。** 用户批准原whole 1×300方法／正常SAFE最多1×60post／480日历，不加时或补跑。两次宿主只读核对均确认MATLAB二进制、Python依赖、197份源、8份执行层及原受限input/config一致；仅冻结内存门2GiB物理／4GiB提交余量未过。[首次预检](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196.json)、[释放后重查](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196_recheck02.json)、[暂停检查点](research/chapter3_experiments/results/small_whole_preparation01/pause_k196.json)留存。
 
 第一次物理约1.932／commit1.901GiB，用户释放后第二次物理约1.582／commit2.794GiB，均无既有MATLAB进程；未降低资源门，未生成approval或真实输出/launch/method/post claim。随后用户明确“先暂停，稍后再运行”，已停止资源探测和执行准备。300/60秒预算及唯一方法/post次数均未消费，无构模／优化／热积分，不能归类为一次MILP失败。恢复须用户明确继续，先重新核源与资源，沿用尚未消费的300/60/480授权；不自动运行或扩大到900/3600、K168、期限24等。以下K195为获批前准备历史。
@@ -2247,3 +2251,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D221（2026-10-26，用户批准K195唯一正式实验，随后因资源不足明确暂停）：** 用户授予原whole 1次300秒、正常完整SAFE最多1次60秒post、480日历，保持冻结源/受限输入，不导入K194最优，不加时/补跑。只读宿主预检两次均仅资源门未过；用户先释放内存要求重查，重查仍不足，继而选择“先暂停，稍后再运行”。已按明确暂停停止探测/启动，保存checkpoint；无approval文件/实际输出/真实claim/MATLAB/研究调用，预算全部未消费。恢复以用户明确继续为前提，再测源/资源，沿本项原授权，不重新要求同额度批准；改变范围/门槛/预算须再讨论。K194与历史实验不变，其他暂停队列不恢复。
+
+
+**D222（2026-10-26，用户明确恢复K196并要求重查资源）：** 用户“可以恢复了，你再看看够不够”撤销D221暂停；沿用原未消费的300/60/480授权，不重新要求同额度批准。第三次只读宿主核对仅2/4GiB内存门未过，其余身份通过；等待用户再释放约0.5GiB，0MATLAB/方法/post调用。恢复不等于降低资源门或重启其他队列；通过新预检才执行唯一原whole调用，历史pause/两次预检不覆盖。

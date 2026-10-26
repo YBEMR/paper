@@ -2,6 +2,12 @@
 
 更新：2026-10-26。
 
+**K.196／D223：唯一小域whole真实调用完成，88.437秒取得新SAFE并达到独立ε最优参照（E643）。** [简明结果](research/完整链小域整体MILP结果_K196.md)、[原始结果](research/chapter3_experiments/results/small_whole_execution01/method/wrapper_raw_result.json)、[归档分析](research/chapter3_experiments/results/small_whole_execution01/analysis.json)、[内部独立审查](research/chapter3_experiments/results/small_whole_execution01/internal_review_k196.json)。用户再次确认内存释放并允许自行启动；预检05及实际host门通过后，沿K195原冻结whole执行1×300根＋1×60上限post，0补跑。模型2201列／72Stage整数／9215行，源、输入及原生选项一致。
+
+同次初解1.088852027249J；首回调重复初解，第二回调85.703秒收到、88.437秒完整SAFE，最终0.986251057947J，严格改善9.422857%。与K194枚举U精确相同，距枚举L上界2.14551e-29J≤1e-6J，质量证明归独立枚举，原生未证明最优。全程保留原三Stage链／四节点／400ms／原网格子集／H／50–80°C／auto-L／漏电，未导入枚举初解。
+
+根300秒正常截止，末请求未决；仅保留预算内已形成SAFE，不接纳清理期间晚回执。原生最终exitflag2、21189节点、reported gap5.590115%，无数值冲突。方法返回311.484秒含11.328秒清理，方法子进程313.656秒；post2.594秒完整复现，整批318.297≤480秒。19项归档核对及19项内部独立复核通过；0热反馈行。已完成本授权并停止，不自动延长小域预算或恢复大域／K168／期限24／其他方法；建议将该同域参照用于第三章正确性展示，后续质量比较另议。以下资源等待和K195获批前状态为历史。
+
 **K.196续接资源波动：预检04通过，实际启动前资源门再次拦截，仍0调用（E642补记）。** [预检04](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196_recheck04.json)、[启动门回执](research/chapter3_experiments/results/small_whole_preparation01/launch_resource_gate_k196_01.json)。宿主12:40:03Z物理2.249GiB／提交4.037GiB一度达标；12:40:52Z实际launch复查降至1.976／3.705GiB，返回NOT_STARTED_RESOURCE_GATE，未创建实际输出、claim或worker，无MATLAB/热评价/求解。已按原用户授权保存独立approval，但尚未消费；冻结计划未改。用户恢复有效，等待更多内存余量；下一次仍先只读重查，不降低门槛、不新增预算，也不将资源门失败当科学重跑。
 
 **K.196／D222续接：用户已明确恢复，但第三次资源门仍未过，等待释放内存（E642）。** [重查03](research/chapter3_experiments/results/small_whole_preparation01/prelaunch_k196_recheck03.json)、[恢复检查点](research/chapter3_experiments/results/small_whole_preparation01/resume_k196_01.json)。此前暂停已被用户“可以恢复了”撤销；原1×300方法／最多1×60post／480日历授权仍有效、全部未消费。第三次物理1999011840B约1.862GiB、提交3867209728B约3.602GiB，仍低于冻结2/4GiB门；MATLAB二进制、Python依赖、197源、原受限input/config均一致，无既有MATLAB进程。没有approval/实际输出/真实claim或研究调用，不能称MILP失败。已请用户再释放约0.5GiB，回复尚待；不降低门槛、不自动增加预算。以下D221暂停为历史。
@@ -2254,3 +2260,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D222（2026-10-26，用户明确恢复K196并要求重查资源）：** 用户“可以恢复了，你再看看够不够”撤销D221暂停；沿用原未消费的300/60/480授权，不重新要求同额度批准。第三次只读宿主核对仅2/4GiB内存门未过，其余身份通过；等待用户再释放约0.5GiB，0MATLAB/方法/post调用。恢复不等于降低资源门或重启其他队列；通过新预检才执行唯一原whole调用，历史pause/两次预检不覆盖。
+
+
+**D223（2026-10-26，用户明确恢复并授权自行启动K195）：** 用户“现在应该够了，继续吧，实验可自行启动”后，预检05及launch宿主资源门通过；沿原1×300方法、正常完整SAFE最多1×60post、480日历授权，唯一真实whole及post均完成。新SAFE88.437秒形成、0.986251057947J，较自身初解改善9.422857%，达到K194有限域ε参照；原生正常时间截止而未证明最优。末请求晚回执只诊断，0新增迟到结果，源及安全标准未改。D221/D222资源等待已结束，授权已消费，不自动重试、延长或恢复其他队列。下一项建议为第三章正确性证据整理，同域其他算法比较另议。

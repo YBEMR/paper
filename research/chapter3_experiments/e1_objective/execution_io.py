@@ -58,6 +58,8 @@ def protocol_slots(manifest):
         from e4_deadline.protocol import SLOTS as slots
     elif protocol=='E4_REQUESTS_V1':
         from e4_requests.protocol import SLOTS as slots
+    elif protocol=='E4_DEADLINE_FALLBACK_V1':
+        from e4_deadline_fallback.protocol import SLOTS as slots
     else: raise ValueError('UNKNOWN_EXECUTION_PROTOCOL')
     return [list(slot) for slot in slots]
 
@@ -76,7 +78,18 @@ def protocol_limits(scope):
     if protocol=='E4_REQUESTS_V1':
         from e4_requests.protocol import BUDGETS as budgets,SUPERVISION
         return dict(budgets=dict(budgets),supervision=dict(SUPERVISION))
+    if protocol=='E4_DEADLINE_FALLBACK_V1':
+        from e4_deadline_fallback.protocol import BUDGETS as budgets,SUPERVISION
+        return dict(budgets=dict(budgets),supervision=dict(SUPERVISION))
     raise ValueError('UNKNOWN_EXECUTION_PROTOCOL')
+
+
+def protocol_methods(scope):
+    if scope.get('protocol_id')=='E4_DEADLINE_FALLBACK_V1':
+        from e4_deadline_fallback.protocol import METHODS
+        return list(METHODS)
+    protocol_slots(scope)  # Reject an unknown protocol before returning legacy None.
+    return None
 
 
 def runtime_paths(mode):
@@ -92,7 +105,11 @@ def runtime_paths(mode):
                'research/chapter3_experiments/e4_deadline/__init__.py',
                'research/chapter3_experiments/e4_deadline/protocol.py',
                'research/chapter3_experiments/e4_requests/__init__.py',
-               'research/chapter3_experiments/e4_requests/protocol.py']
+               'research/chapter3_experiments/e4_requests/protocol.py',
+               'research/chapter3_experiments/e4_deadline_fallback/__init__.py',
+               'research/chapter3_experiments/e4_deadline_fallback/protocol.py',
+               'research/chapter3_experiments/e4_deadline_fallback/construction.py',
+               'research/chapter3_experiments/e4_deadline_fallback/search.py']
     if mode=='MOCK_PROCESS': relative+=['research/chapter3_experiments/e1_objective/mock_fixtures.py']
     return relative
 
@@ -101,7 +118,7 @@ def validate_gate(gate,manifest,mode,run_dir):
     require(mode in ('MOCK_PROCESS','REAL_RESEARCH'),'EXECUTION_MODE')
     require(gate.get('kind')==mode,'AUTHORIZATION_KIND_MISMATCH')
     if mode=='REAL_RESEARCH':
-        approved=gate.get('stage_authorized') if manifest.get('protocol_id') in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1') else gate.get('four_slot_authorized')
+        approved=gate.get('stage_authorized') if manifest.get('protocol_id') in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1','E4_DEADLINE_FALLBACK_V1') else gate.get('four_slot_authorized')
         require(gate.get('authorized') is True and approved is True and
                 isinstance(gate.get('approval_reference'),str) and gate['approval_reference'].strip(),
                 'E1_REAL_RESEARCH_NOT_AUTHORIZED')
@@ -111,12 +128,16 @@ def validate_gate(gate,manifest,mode,run_dir):
             gate.get('scope_sha256')==sha(manifest),'SOURCE_OR_SCOPE_DRIFT')
     limits=protocol_limits(manifest)
     protocol=manifest.get('protocol_id','E1_OBJECTIVE_V1')
-    if 'protocol_id' in gate or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1'):
+    if 'protocol_id' in gate or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1','E4_DEADLINE_FALLBACK_V1'):
         require(gate.get('protocol_id')==protocol,'AUTHORIZATION_PROTOCOL_MISMATCH')
     require(gate.get('budgets')==limits['budgets'] and manifest.get('budgets')==limits['budgets'] and
             manifest.get('slots')==protocol_slots(manifest),'BUDGET_OR_SLOTS_DRIFT')
-    if 'supervision' in manifest or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1'):
+    if 'supervision' in manifest or protocol in ('E3_DEPLOYMENT_V1','E4_DEADLINE_V1','E4_REQUESTS_V1','E4_DEADLINE_FALLBACK_V1'):
         require(manifest.get('supervision')==limits['supervision'],'SUPERVISION_DRIFT')
+    methods=protocol_methods(manifest)
+    if methods is not None:
+        require(manifest.get('methods')==methods and gate.get('methods')==methods,'FIXED_METHOD_POLICIES')
+    else: require('methods' not in manifest and 'methods' not in gate,'LEGACY_METHOD_OVERRIDE_FORBIDDEN')
     require(isinstance(gate.get('authorization_id'),str) and gate['authorization_id'],'AUTHORIZATION_ID')
     for key in ('authority_store','allowed_run_directory'):
         require(isinstance(gate.get(key),str) and Path(gate[key]).is_absolute(),'FIXED_ABSOLUTE_'+key)
@@ -155,6 +176,12 @@ def verify_job(job,gate,manifest,output):
             Path(claim['run_dir']).resolve()==Path(job['run_dir']).resolve(),'CLAIM_JOB_SOURCE_OR_RUN')
     require(Path(output).resolve()==Path(job['run_dir']).resolve()/('slot_'+str(job['ordinal']))/job['phase'].lower(),
             'WORKER_OUTPUT_IDENTITY')
+    methods=protocol_methods(manifest)
+    if methods is not None:
+        policy=methods[job['ordinal']-1]
+        require(job.get('method_policy')==policy and claim['job_context'].get('method_policy')==policy,'JOB_OR_CLAIM_METHOD_POLICY')
+        if job['phase']=='POST': require(job['planning_result'].get('method_policy')==policy,'POST_PLANNING_METHOD_POLICY')
+    else: require('method_policy' not in job and 'method_policy' not in claim['job_context'],'LEGACY_JOB_METHOD_OVERRIDE_FORBIDDEN')
     packet=job['packet']; i,c=packet['instance'],packet['config']
     require(set(packet)=={'instance','config','objective'},'PACKET_FIELDS')
     if mode=='REAL_RESEARCH':

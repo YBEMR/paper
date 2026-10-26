@@ -4,7 +4,7 @@ import io,json,subprocess,sys,time,unittest
 from pathlib import Path
 CORE=Path(__file__).resolve().parents[1];REPO=CORE.parents[1]
 sys.path.insert(0,str(CORE));sys.dont_write_bytecode=True
-from e1_objective.execution_io import runtime_paths,sha,file_sha,read_json,save,protocol_limits
+from e1_objective.execution_io import runtime_paths,sha,file_sha,read_json,save,protocol_limits,protocol_methods
 
 
 def main(destination,*,protocol_id='E2_RESOURCES_V1'):
@@ -24,6 +24,10 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
         from e4_requests.protocol import SLOTS
         from e4_requests.input_contract import prepare_inputs,validate_inputs
         from e4_requests.test_protocol import mock_materials
+    elif protocol_id=='E4_DEADLINE_FALLBACK_V1':
+        from e4_deadline_fallback.protocol import SLOTS
+        from e4_deadline_fallback.input_contract import prepare_inputs,validate_inputs
+        from e4_deadline_fallback.test_protocol import mock_materials
     else: raise ValueError('UNKNOWN_PRECHECK_PROTOCOL')
     limits=protocol_limits(dict(protocol_id=protocol_id));budgets=limits['budgets']
     out=Path(destination).resolve()
@@ -42,7 +46,7 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
     # Bind every executable dependency and test to committed bytes; results can
     # be committed subsequently without rewriting this immutable source SHA.
     all_source=set(runtime_paths('MOCK_PROCESS'))
-    for folder in ('e1_objective','e2_resources','e3_deployment','e4_deadline','e4_requests'):
+    for folder in ('e1_objective','e2_resources','e3_deployment','e4_deadline','e4_requests','e4_deadline_fallback'):
         all_source.update(str(p.relative_to(REPO)).replace('\\','/') for p in (CORE/folder).glob('*.py'))
     dirty=subprocess.run(['git','diff','--name-only','HEAD','--',*sorted(all_source)],cwd=REPO,
                          capture_output=True,text=True,check=True).stdout
@@ -55,10 +59,21 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
          original_files_unchanged=unchanged,source_committed=True))
     import thermal,heft_method
     forbidden={thermal.__file__.lower(),str(thermal.KERNEL_PATH).lower()}
-    builder=heft_method.build_heft_candidate.__code__;blocked=[];processes=[];collect=[True]
+    from e4_deadline_fallback.construction import build_deadline_candidate
+    from e4_deadline_fallback.mock_fixtures import constructor_fixture_sha256s
+    builders={heft_method.build_heft_candidate.__code__,build_deadline_candidate.__code__}
+    allowed_toys=set(constructor_fixture_sha256s());toy_calls=[]
+    blocked=[];processes=[];collect=[True]
     def guard(frame,event,arg):
-        if event=='call' and (frame.f_code is builder or frame.f_code.co_filename.lower() in forbidden):
+        if event!='call':return
+        if frame.f_code.co_filename.lower() in forbidden:
             blocked.append(frame.f_code.co_name);raise AssertionError('SCIENTIFIC_FUNCTION_FORBIDDEN')
+        if frame.f_code in builders:
+            instance=frame.f_locals.get('instance',{})
+            digest=sha(instance)
+            if instance.get('mock_only') is True and str(instance.get('id','')).startswith('MOCK_ONLY_DF_') and digest in allowed_toys:
+                toy_calls.append(dict(function=frame.f_code.co_name,input_sha256=digest));return
+            blocked.append(frame.f_code.co_name);raise AssertionError('REAL_CONSTRUCTOR_FORBIDDEN')
     def audit(event,args):
         if collect[0] and event=='subprocess.Popen':
             argv=args[1];processes.append(dict(argv_sha256=sha(argv),mock_marker='--e1-mock-worker' in argv,
@@ -80,18 +95,25 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
                 supervision=deepcopy(limits['supervision']),
                 files={rel:file_sha(REPO/rel) for rel in runtime_paths(mode)},inputs=pairs,
                 config_source_sha256=file_sha(CORE/'config_v01.json'))
+            methods=protocol_methods(manifest)
+            if methods is not None:manifest['methods']=methods
             save(out/name,manifest);manifests[mode]=manifest
-        save(out/'authorization_template_CLOSED.json',dict(kind='REAL_RESEARCH',protocol_id=protocol_id,authorized=False,
+        closed=dict(kind='REAL_RESEARCH',protocol_id=protocol_id,authorized=False,
             stage_authorized=False,four_slot_authorized=False,approval_reference=None,authorization_id=None,
             authority_store=None,allowed_run_directory=None,source_sha=commit,
-            scope_sha256=sha(manifests['REAL_RESEARCH']),budgets=deepcopy(budgets)))
+            scope_sha256=sha(manifests['REAL_RESEARCH']),budgets=deepcopy(budgets))
+        methods=protocol_methods(closed)
+        if methods is not None:closed['methods']=methods
+        save(out/'authorization_template_CLOSED.json',closed)
         suite=unittest.defaultTestLoader.loadTestsFromNames([
             'e1_objective.test_search','e1_objective.test_scoring','e1_objective.test_runner',
             'e1_objective.test_ledger','e1_objective.test_process_control','e1_objective.test_execution',
             'e2_resources.test_input_contract','e2_resources.test_protocol',
             'e3_deployment.test_input_contract','e3_deployment.test_protocol',
             'e4_deadline.test_input_contract','e4_deadline.test_protocol',
-            'e4_requests.test_input_contract','e4_requests.test_protocol'])
+            'e4_requests.test_input_contract','e4_requests.test_protocol',
+            'e4_deadline_fallback.test_construction','e4_deadline_fallback.test_search',
+            'e4_deadline_fallback.test_protocol'])
         result=unittest.TextTestRunner(stream=stream,verbosity=2).run(suite)
         if not result.wasSuccessful():raise AssertionError('STATIC_MOCK_REGRESSIONS_FAILED')
         from e1_objective.controller import run_phase
@@ -117,7 +139,7 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
     finally:
         sys.setprofile(original_profile);collect[0]=False
         (out/'mock_tests.txt').write_bytes(stream.getvalue().encode())
-        save(out/'mock_process_launches.json',dict(processes=processes,scientific_function_attempts=blocked))
+        save(out/'mock_process_launches.json',dict(processes=processes,scientific_function_attempts=blocked,allowed_mock_constructor_calls=toy_calls))
     changed=[rel for rel,digest in hashes.items() if file_sha(REPO/rel)!=digest]
     real_entries=list((out/'mock_records').rglob('real_backend_entry.json')) if (out/'mock_records').exists() else []
     save(out/'retained_mock_summary.json',summaries)
@@ -128,7 +150,7 @@ def main(destination,*,protocol_id='E2_RESOURCES_V1'):
         real_gate_authorized=False,original_files_unchanged=len(unchanged),actual_mock_process_launches=len(processes),
         retained_mock_phases=len(summaries),formal_research_calls=0,true_thermal_evaluations=0,
         MILP_calls=0,MATLAB_starts=0,new_real_SAFE=0,scientific_function_attempts=blocked,
-        source_changed_during_precheck=changed,real_backend_entry_files=[str(x) for x in real_entries],
+        allowed_mock_constructor_calls=len(toy_calls),source_changed_during_precheck=changed,real_backend_entry_files=[str(x) for x in real_entries],
         mock_SAFE_is_not_research_evidence=True,
         real_manifest_sha256=sha(manifests['REAL_RESEARCH']) if 'REAL_RESEARCH' in manifests else None)
     save(out/'precheck_result.json',summary);print(json.dumps(summary,ensure_ascii=False))

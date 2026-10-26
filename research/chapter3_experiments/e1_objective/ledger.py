@@ -147,6 +147,10 @@ class Ledger:
         _require(type(root_origin) in (int, float) and math.isfinite(root_origin)
                  and root_origin >= 0, "ROOT_ORIGIN")
         _require(isinstance(context, dict) and context, "EMPTY_JOB_CONTEXT")
+        from .execution_io import protocol_methods
+        methods=protocol_methods(self.authorization)
+        expected=None if methods is None else methods[ordinal-1]
+        _require(context.get('method_policy')==expected and (expected is not None or 'method_policy' not in context), 'CLAIM_METHOD_POLICY')
         batch = self._batch()
         record = dict(schema="E1_CALL_CLAIM_V1", authorization_sha256=self.authorization_sha256,
                       batch_sha256=digest(batch), kind=self.kind, phase=phase, ordinal=ordinal,
@@ -197,7 +201,7 @@ class Ledger:
                 self._stop("PLAN_REQUIRES_STOP")
             return record
 
-    def claim_post(self, ordinal, root_origin, token):
+    def claim_post(self, ordinal, root_origin, token, *, method_policy=None):
         self._ordinal(ordinal)
         token = validate_token(token)
         with self._lock():
@@ -205,9 +209,12 @@ class Ledger:
             prior = self._record(f"{ordinal:02d}_plan_finish.json")
             _require(prior["selected_token"] == token and prior["selected_token_sha256"] == digest(token),
                      "POST_NOT_FINAL_SELECTED_CANDIDATE")
-            return self._claim("POST", ordinal, root_origin,
-                               {"selected_token": token, "selected_token_sha256": digest(token),
-                                "plan_result_sha256": prior["result_sha256"]})
+            planned_policy=self._record(f'{ordinal:02d}_plan_claim.json')['job_context'].get('method_policy')
+            _require(method_policy==planned_policy,'POST_METHOD_POLICY_DRIFT')
+            context={"selected_token": token, "selected_token_sha256": digest(token),
+                     "plan_result_sha256": prior["result_sha256"]}
+            if method_policy is not None:context['method_policy']=method_policy
+            return self._claim("POST", ordinal, root_origin,context)
 
     def finish_post(self, ordinal, result_sha, stop_required=False, not_launched_deadline=None):
         self._ordinal(ordinal)

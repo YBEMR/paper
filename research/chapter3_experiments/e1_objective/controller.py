@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import sys
 import time
-from .execution_io import (CORE,DEFAULT_GATE,protocol_slots,protocol_limits,read_json,save,sha,require,
+from .execution_io import (CORE,DEFAULT_GATE,protocol_slots,protocol_limits,protocol_methods,read_json,save,sha,require,
                             validate_gate,build_bundle,selected_token)
 from .ledger import Ledger
 from .process_control import supervise
@@ -33,12 +33,16 @@ def recover_plan(packet,job,output,process,*,ignore_return=False):
     returned=None; checkpoint=None
     if not ignore_return and (output/'worker_return.json').exists():
         returned=read_json(output/'worker_return.json')
+        if 'method_policy' in job:
+            require(returned.get('method_policy')==job['method_policy'],'RETURN_METHOD_POLICY')
+            if 'result' in returned:require(returned['result'].get('method_policy')==job['method_policy'],'RESULT_METHOD_POLICY')
         require(returned['job_sha256']==sha(job) and returned['kind']==job['mode'],'RETURN_IDENTITY')
         if not returned.get('pre_backend_root_exhausted'):
             require(returned['manifest_sha256']==job['scope_sha256'] and returned['packet_sha256']==sha(packet),
                     'RETURN_CONTEXT')
     if (output/'checkpoint.json').exists():
         checkpoint=read_json(output/'checkpoint.json')
+        if 'method_policy' in job:require(checkpoint.get('method_policy')==job['method_policy'],'CHECKPOINT_METHOD_POLICY')
         require(checkpoint['job_sha256']==sha(job) and checkpoint['kind']==job['mode'] and
                 checkpoint['manifest_sha256']==job['scope_sha256'] and checkpoint['packet_sha256']==sha(packet),
                 'CHECKPOINT_CONTEXT')
@@ -81,6 +85,7 @@ def recover_plan(packet,job,output,process,*,ignore_return=False):
     # Raw late witnesses stay in the archive; only pre-cutoff witnesses count.
     result['effective_violations']=[v for v in result.get('archive',{}).get('violations',[])
          if timely(v.get('formed_at_elapsed_s'),effective) and v['formed_at_elapsed_s']<=provenance_end]
+    if 'method_policy' in job:result.setdefault('method_policy',job['method_policy'])
     verify_export(packet['instance'],packet['config'],result,300,evidence_seconds=effective)
     result.update(recovery='FINAL_RETURN' if returned and 'result' in returned else
                   ('PREEXISTING_CHECKPOINT_ONLY' if checkpoint else 'NO_COMPLETE_EVIDENCE'),
@@ -95,6 +100,9 @@ def recover_post(job,output,process):
     returned=None
     if (output/'worker_return.json').exists():
         returned=read_json(output/'worker_return.json')
+        if 'method_policy' in job:
+            require(returned.get('method_policy')==job['method_policy'],'RETURN_METHOD_POLICY')
+            if 'result' in returned:require(returned['result'].get('method_policy')==job['method_policy'],'RESULT_METHOD_POLICY')
         require(returned['job_sha256']==sha(job) and returned['kind']==job['mode'],'POST_RETURN_IDENTITY')
         if 'result' in returned:
             require(returned['manifest_sha256']==job['scope_sha256'] and returned['packet_sha256']==sha(job['packet']),
@@ -128,6 +136,7 @@ def recover_post(job,output,process):
             result.update(state='UNRESOLVED',evaluation=None,reason='POST_UNRESOLVED_OR_LATE')
     require(result.get('state')!='POST_SAFE' or ((output/'post_receipt.json').exists() and
             result.get('evaluation')==result.get('raw_receipt')),'POST_SAFE_WITHOUT_RAW_RECEIPT')
+    if 'method_policy' in job:result.setdefault('method_policy',job['method_policy'])
     return result
 
 
@@ -146,16 +155,18 @@ def run_phase(ledger,gate,manifest,run_dir,ordinal,phase,*,slot_origin,batch_ori
     slot_deadline=slot_origin+supervision['slot_wall_s'];batch_deadline=batch_origin+supervision['batch_wall_s']
     out=Path(run_dir)/('slot_'+str(ordinal))/phase.lower()
     problem,objective=protocol_slots(manifest)[ordinal-1]
+    methods=protocol_methods(manifest);method_policy=None if methods is None else methods[ordinal-1]
     if phase=='PLAN':
         expected=manifest['inputs'][problem] if mode=='REAL_RESEARCH' else manifest['mock_input']
         ctx=dict(input_sha256=expected['input_sha256'],config_sha256=expected['config_sha256'],
                  accuracy_sha256=expected['accuracy_sha256'],objective=objective if mode=='REAL_RESEARCH' else expected['objective'],
                  packet_sha256=expected['packet_sha256'][objective if mode=='REAL_RESEARCH' else expected['objective']],
                  manifest_sha256=sha(manifest))
+        if method_policy is not None:ctx['method_policy']=method_policy
         claim=ledger.claim_plan(ordinal,origin,ctx)
     else:
         token=selected_token(packet,planning_result)
-        claim=ledger.claim_post(ordinal,origin,token)
+        claim=ledger.claim_post(ordinal,origin,token,method_policy=method_policy)
     # The call is already consumed before input expansion, bundle, process start.
     out.mkdir(parents=True,exist_ok=False)
     job=None;process=None
@@ -170,6 +181,7 @@ def run_phase(ledger,gate,manifest,run_dir,ordinal,phase,*,slot_origin,batch_ori
         job=dict(mode=mode,phase=phase,ordinal=ordinal,root_origin=origin,limit_s=limit,
                  slot_deadline=slot_deadline,batch_deadline=batch_deadline,scope_sha256=sha(manifest),
                  run_dir=str(Path(run_dir).resolve()),packet=packet,claim=claim,authorization=gate)
+        if method_policy is not None:job['method_policy']=method_policy
         if phase=='POST':job.update(selected_token=token,planning_result=planning_result)
         if mode=='MOCK_PROCESS':
             job.update(mock_behavior=mock_behavior,mock_prior_elapsed_s=mock_prior_elapsed_s)
@@ -203,6 +215,7 @@ def run_phase(ledger,gate,manifest,run_dir,ordinal,phase,*,slot_origin,batch_ori
             # The declared slot/batch limit ended the phase before its nominal
             # 60s root. No restart is possible within that ended authorization.
             result.update(stop_required=True,reason='DECLARED_TOTAL_BUDGET_EXHAUSTED',technical_failure=False)
+    if method_policy is not None:result.setdefault('method_policy',method_policy)
     save(out/'accepted_result.json',dict(kind=mode,result=result,process=process,
           usable_as_research_evidence=mode=='REAL_RESEARCH',consumed_budget_slots=1,
           formal_research_calls=0 if mode=='MOCK_PROCESS' else None,

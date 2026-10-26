@@ -47,7 +47,7 @@ def execute_worker(job,bundle,output):
     libs=[Path(sys.base_prefix)/'Lib',Path(sys.base_prefix)/'DLLs',Path(sys.base_prefix)/'python312.zip',
           Path(sys.base_prefix)/'python313.zip']
     boundary_events=install_worker_boundary(bundle,output,stdlib_roots=libs)
-    mode=job['mode']; prohibited={'thermal','timing','heft_method','e1_objective.search'}
+    mode=job['mode']; prohibited={'thermal','timing','heft_method','e1_objective.search','e4_deadline_fallback.search','e4_deadline_fallback.construction'}
     denied=[]
     if mode=='MOCK_PROCESS':
         require(job.get('mock_behavior','normal') in ('normal','crash_after_checkpoint','hang_after_checkpoint',
@@ -85,13 +85,17 @@ def execute_worker(job,bundle,output):
         from e1_objective.search import run_search
         evaluator,validator,base,exhausted=evaluate_candidate,validate_schedule,MethodBudget,Exhausted
         search=run_search
+        if job['phase']=='PLAN' and job.get('method_policy')=='DEADLINE_FALLBACK':
+            from e4_deadline_fallback.search import run_search as deadline_search
+            search=deadline_search
     budget=controlled_budget(base,root,job,output/'STOP.json')
     packet=job['packet']
     from e1_objective import runner
     from e1_objective.exports import verify_export
     def checkpoint(snapshot):
-        save(output/'checkpoint.json',dict(job_sha256=sha(job),manifest_sha256=sha(manifest),
-             kind=mode,packet_sha256=sha(packet),snapshot=snapshot,archived_at_s=root.elapsed))
+        value=dict(job_sha256=sha(job),manifest_sha256=sha(manifest),kind=mode,packet_sha256=sha(packet),snapshot=snapshot,archived_at_s=root.elapsed)
+        if 'method_policy' in job:value['method_policy']=job['method_policy']
+        save(output/'checkpoint.json',value)
     if job['phase']=='PLAN':
         original=runner.ObjectiveRecorder
         class Observing(original):
@@ -104,6 +108,7 @@ def execute_worker(job,bundle,output):
             result=runner.execute(loader,budget,packet['objective'],search=search,validator=validator,
                  evaluator=evaluator,exhausted=(exhausted,),checkpoint=checkpoint)
         finally: runner.ObjectiveRecorder=original
+        if 'method_policy' in job:result['method_policy']=job['method_policy']
         verify_export(packet['instance'],packet['config'],result,300,evidence_seconds=min(300,job['slot_deadline']-root.origin,job['batch_deadline']-root.origin))
     else:
         result=dict(state='UNRESOLVED',stop_required=False,reason=None)
@@ -141,6 +146,7 @@ def execute_worker(job,bundle,output):
         except Exception as error:
             result.update(stop_required=True,reason=type(error).__name__+':'+str(error),raw_receipt=raw)
         result['timing']=budget.summary()
+    if 'method_policy' in job:result['method_policy']=job['method_policy']
     behavior=job.get('mock_behavior')
     if mode=='MOCK_PROCESS' and behavior=='probe':
         for name in ('thermal','e1_objective.search'):
@@ -163,9 +169,9 @@ def execute_worker(job,bundle,output):
     guard=dict(kind=mode,science_modules_loaded=sorted(prohibited.intersection(sys.modules)),
                denied=denied,boundary_events=boundary_events,
                real_backend_entered=(output/'real_backend_entry.json').exists())
-    save(output/'worker_return.json',dict(job_sha256=sha(job),manifest_sha256=sha(manifest),kind=mode,
-         packet_sha256=sha(packet),phase=job['phase'],result=result,guard=guard,
-         returned_at_s=root.elapsed,usable_as_research_evidence=mode=='REAL_RESEARCH'))
+    value=dict(job_sha256=sha(job),manifest_sha256=sha(manifest),kind=mode,packet_sha256=sha(packet),phase=job['phase'],result=result,guard=guard,returned_at_s=root.elapsed,usable_as_research_evidence=mode=='REAL_RESEARCH')
+    if 'method_policy' in job:value['method_policy']=job['method_policy']
+    save(output/'worker_return.json',value)
 
 
 def main():
@@ -177,8 +183,9 @@ def main():
     require(args.e1_mock_worker==(job['mode']=='MOCK_PROCESS'),'MOCK_CLI_KIND_MISMATCH')
     try: execute_worker(job,Path(args.bundle).resolve(),output)
     except RootBudgetExpired:
-        save(output/'worker_return.json',dict(job_sha256=sha(job),kind=job['mode'],phase=job['phase'],
-             pre_backend_root_exhausted=True,returned_at_s=time.monotonic()-job['root_origin']))
+        value=dict(job_sha256=sha(job),kind=job['mode'],phase=job['phase'],pre_backend_root_exhausted=True,returned_at_s=time.monotonic()-job['root_origin'])
+        if 'method_policy' in job:value['method_policy']=job['method_policy']
+        save(output/'worker_return.json',value)
     return 0
 
 if __name__=='__main__':

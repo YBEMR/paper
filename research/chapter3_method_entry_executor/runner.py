@@ -45,6 +45,30 @@ def classify(envelope, process, cleanup):
     return 'NORMAL_COMPLETION'
 
 
+def classify_post(envelope, process, cleanup):
+    """Exit 2 is expected for a verified negative post, not by itself a fault."""
+    errors = envelope.get('errors') or []
+    missing_at_cutoff = process.get('wall_limit') and errors == ['NO_COMPLETE_WORKER_RECEIPT']
+    if process.get('error') or (errors and not missing_at_cutoff):
+        return 'TECHNICAL_FAILURE'
+    if cleanup is not True:
+        return 'CLEANUP_UNVERIFIED'
+    state = envelope.get('post_state')
+    timely_violation = state == 'THERMAL_VIOLATION' and bool(envelope.get('timely_violations_preserved'))
+    if process.get('wall_limit'):
+        return 'POST_THERMAL_VIOLATION_STOP' if timely_violation else 'POST_TIME_LIMIT_UNRESOLVED'
+    if process.get('returncode') == 2:
+        if timely_violation:
+            return 'POST_THERMAL_VIOLATION_STOP'
+        if (state == 'INVALID_SCHEDULE' and envelope.get('within_absolute_deadline') is True
+                and (envelope.get('evaluation') or {}).get('state') == 'INVALID_SCHEDULE'):
+            return 'POST_INVALID_SCHEDULE_STOP'
+        return 'TECHNICAL_FAILURE'
+    if process.get('returncode') != 0 or state not in ('SAFE', 'UNRESOLVED'):
+        return 'TECHNICAL_FAILURE'
+    return 'NORMAL_COMPLETION'
+
+
 def _run_slot(ctx, job, mode, batch_out, batch_deadline, rt, batch_claim):
     plan = ctx['plan']; start = rt.clock()
     cap = job['process_wall_seconds'] if mode == 'method' else job['independent_post_seconds']
@@ -168,19 +192,10 @@ def _run_slot(ctx, job, mode, batch_out, batch_deadline, rt, batch_claim):
         envelope.setdefault('errors', []).append(process['error'])
     if mode == 'method':
         state = classify(envelope, process, cleanup)
-    elif process['wall_limit'] and cleanup is True:
-        if envelope.get('timely_violations_preserved'):
-            state = 'POST_THERMAL_VIOLATION_STOP'
-            envelope['post_state'] = 'THERMAL_VIOLATION'
-        else:
-            state = 'POST_TIME_LIMIT_UNRESOLVED'
-            envelope['post_state'] = 'UNRESOLVED'
-    elif process.get('error') or process.get('returncode') != 0 or envelope.get('errors'):
-        state = 'TECHNICAL_FAILURE'
-    elif cleanup is not True:
-        state = 'CLEANUP_UNVERIFIED'
     else:
-        state = 'NORMAL_COMPLETION'
+        state = classify_post(envelope, process, cleanup)
+        if state == 'POST_TIME_LIMIT_UNRESOLVED':
+            envelope['post_state'] = 'UNRESOLVED'
     report = {'slot_id': slot_id, 'mode': mode, 'job_id': job['id'], 'execution_status': state,
               'process': process, 'memory': memory, 'monitor_cleanup_verified': cleanup,
               'worker': envelope, 'plan_sha256': ctx['plan_sha256'],
@@ -230,8 +245,12 @@ def run_batch(ctx, output, *, runtime=None, started_at=None, claims_root=None):
                 report['post_attempts'] += 1
                 post = _run_slot(ctx, job, 'post', out, deadline, rt, claim)
                 report['posts'].append(post)
-                require(post['execution_status'] in ('NORMAL_COMPLETION', 'POST_TIME_LIMIT_UNRESOLVED')
-                        and post['worker'].get('post_state') in ('SAFE', 'UNRESOLVED'), 'POST_ABNORMAL_STOP')
+                accepted = (post['execution_status'] in ('NORMAL_COMPLETION', 'POST_TIME_LIMIT_UNRESOLVED')
+                            and post['worker'].get('post_state') in ('SAFE', 'UNRESOLVED'))
+                if not accepted:
+                    report['stop_reason'] = {'phase':'post', 'job_id':job['id'],
+                        'execution_status':post['execution_status'], 'post_state':post['worker'].get('post_state')}
+                require(accepted, 'POST_ABNORMAL_STOP:'+post['execution_status'])
         report['state'] = 'COMPLETE'
     except Exception as error:
         report.update(state='STOPPED', error=type(error).__name__+': '+str(error))

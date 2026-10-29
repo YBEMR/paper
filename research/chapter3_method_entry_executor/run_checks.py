@@ -17,11 +17,12 @@ def main():
     out=Path(p.parse_args().output).resolve()
     guard=Guard();sys.meta_path.insert(0,guard);sys.addaudithook(guard.audit)
     started=time.monotonic();plan=freeze(out)
-    from . import test_executor, test_monitor, test_worker_tickets
+    from . import test_executor, test_monitor, test_worker_tickets, test_post_status
     test_executor.FROZEN=out
     suite=unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromModule(test_executor),
                              unittest.defaultTestLoader.loadTestsFromModule(test_monitor),
-                             unittest.defaultTestLoader.loadTestsFromModule(test_worker_tickets)])
+                             unittest.defaultTestLoader.loadTestsFromModule(test_worker_tickets),
+                             unittest.defaultTestLoader.loadTestsFromModule(test_post_status)])
     log=io.StringIO()
     result=unittest.TextTestRunner(stream=log,verbosity=2,resultclass=RecordedResult).run(suite)
     verify_sources(plan)

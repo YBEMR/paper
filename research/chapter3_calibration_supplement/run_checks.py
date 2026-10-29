@@ -77,7 +77,7 @@ def _check(out):
         return wrapped
 
     modules = ["research.chapter3_calibration_supplement." + name for name in
-               ("test_condition", "test_analysis", "test_runtime", "test_persistence")]
+               ("test_condition", "test_analysis", "test_runtime", "test_persistence", "test_continuation")]
     modules += ["research.chapter3_calibration_adjustment." + name for name in
                 ("test_transforms", "test_window_idle", "test_manifest")]
     modules += ["research.chapter3_deadline_reference.test_reference"]

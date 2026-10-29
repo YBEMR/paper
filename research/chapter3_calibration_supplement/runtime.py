@@ -41,11 +41,14 @@ def validate_worker_context(freeze_dir, out, index, token):
     """A direct worker command must match the same approved, consumed slot."""
     freeze_dir, out = result_path(freeze_dir), result_path(out)
     plan, inv, record = check_frozen(freeze_dir)
+    limits = plan.get("limits", LIMITS)
     approval = read_json(out / "approval.json")
-    validate_approval(approval, record["plan_sha256"])
+    validate_approval(approval, record["plan_sha256"], plan=plan)
     batch = read_json(freeze_dir / "execution_claim.json")
     require(batch["output"] == str(out) and batch["plan_sha256"] == record["plan_sha256"] and
             batch["approval_sha256"] == sha(out / "approval.json"), "BATCH_CLAIM_BINDING")
+    if "consumption_claim_path" in plan:
+        require(read_json(result_path(plan["consumption_claim_path"])) == batch, "CONTINUATION_CONSUMPTION_BINDING")
     require(type(index) is int and 0 <= index < len(plan["calls"]), "CALL_INDEX")
     call = plan["calls"][index]
     directory = out / call["condition_id"]
@@ -55,9 +58,9 @@ def validate_worker_context(freeze_dir, out, index, token):
     started, deadline = claim["started_monotonic"], claim["deadline_monotonic"]
     require(all(isinstance(x, (int, float)) and math.isfinite(x) for x in
                 (started, deadline, batch["started_monotonic"], batch["deadline_monotonic"])), "CLOCK_INVALID")
-    require(batch["deadline_monotonic"] == batch["started_monotonic"] + LIMITS["batch_seconds"] and
-            batch["started_monotonic"] <= started < deadline <= started + LIMITS["condition_seconds"] and
-            deadline <= batch["deadline_monotonic"] - LIMITS["finalization_reserve_seconds"],
+    require(batch["deadline_monotonic"] == batch["started_monotonic"] + limits["batch_seconds"] and
+            batch["started_monotonic"] <= started < deadline <= started + limits["condition_seconds"] and
+            deadline <= batch["deadline_monotonic"] - limits["finalization_reserve_seconds"],
             "SLOT_BUDGET_BINDING")
     require(time.perf_counter() < deadline, "WORKER_START_AFTER_DEADLINE")
     return plan, inv, call, directory, started, deadline
@@ -198,16 +201,22 @@ def execute(freeze_dir, output, approval_path):
     started = time.perf_counter()  # Includes input/source/archive validation.
     freeze_dir = result_path(freeze_dir)
     plan, inv, record = check_frozen(freeze_dir)
+    limits = plan.get("limits", LIMITS)
     approval_path = Path(approval_path).resolve()
     approval = read_json(approval_path)
-    validate_approval(approval, record["plan_sha256"])
+    validate_approval(approval, record["plan_sha256"], plan=plan)
     check_frozen(freeze_dir, full_archive_check=True)
     out = result_path(output, fresh=True)
-    batch_deadline = started + LIMITS["batch_seconds"]
-    exclusive_json(freeze_dir / "execution_claim.json", {
+    batch_deadline = started + limits["batch_seconds"]
+    claim_record = {
         "output": str(out), "plan_sha256": record["plan_sha256"], "approval_sha256": sha(approval_path),
         "started_monotonic": started, "deadline_monotonic": batch_deadline,
-        "started_utc": datetime.now(timezone.utc).isoformat()})
+        "started_utc": datetime.now(timezone.utc).isoformat()}
+    if "consumption_claim_path" in plan:
+        shared_claim = result_path(plan["consumption_claim_path"])
+        shared_claim.parent.mkdir(parents=True, exist_ok=True)
+        exclusive_json(shared_claim, claim_record)
+    exclusive_json(freeze_dir / "execution_claim.json", claim_record)
     rows = []
     state = "RUNNING"
     final_error = None
@@ -238,13 +247,13 @@ def execute(freeze_dir, output, approval_path):
         shutil.copyfile(freeze_dir / "plan.json", out / "plan.json")
         status_log = SnapshotLog(out / "status")
         for index, call in enumerate(plan["calls"]):
-            if time.perf_counter() >= batch_deadline - LIMITS["finalization_reserve_seconds"]:
+            if time.perf_counter() >= batch_deadline - limits["finalization_reserve_seconds"]:
                 state = "STOPPED_BATCH_TIMEOUT"
                 break
             check_frozen(freeze_dir)
             call_start = time.perf_counter()
-            deadline = min(call_start + LIMITS["condition_seconds"],
-                           batch_deadline - LIMITS["finalization_reserve_seconds"])
+            deadline = min(call_start + limits["condition_seconds"],
+                           batch_deadline - limits["finalization_reserve_seconds"])
             if deadline <= call_start:
                 state = "STOPPED_BATCH_TIMEOUT"
                 break
@@ -306,6 +315,7 @@ def execute(freeze_dir, output, approval_path):
             try:
                 after = protected()
                 require(after == record["protected_files"] and sources() == plan["source_files"], "FINAL_SOURCE_OR_ARCHIVE_DRIFT")
+                check_frozen(freeze_dir, full_archive_check=True)
             except Exception as error:
                 state = "STOPPED_SOURCE_OR_ARCHIVE_DRIFT"
                 remember_error(error)
@@ -321,11 +331,11 @@ def execute(freeze_dir, output, approval_path):
                 state = "STOPPED_SUMMARY_ERROR"
                 remember_error(error)
             elapsed = time.perf_counter() - started
-            if elapsed > LIMITS["batch_seconds"]:
+            if elapsed > limits["batch_seconds"]:
                 state = "STOPPED_BATCH_OVERRUN"
             result = {"state": state, "rows": coverage, "consumed_conditions": len(rows),
                       "completed_conditions": sum(r["state"] == "COMPLETE" for r in rows),
-                      "planned_conditions": len(plan["calls"]), "elapsed_s": elapsed, "limits": LIMITS,
+                      "planned_conditions": len(plan["calls"]), "elapsed_s": elapsed, "limits": limits,
                       "protected_unchanged": after == record["protected_files"],
                       "final_error": final_error, "additional_errors": additional_errors,
                       "plan_sha256": record["plan_sha256"],
@@ -344,7 +354,7 @@ def execute(freeze_dir, output, approval_path):
             else:
                 # Final serialization/flush belongs to the batch clock too.
                 finished_elapsed = time.perf_counter() - started
-                if finished_elapsed > LIMITS["batch_seconds"] and state != "STOPPED_BATCH_OVERRUN":
+                if finished_elapsed > limits["batch_seconds"] and state != "STOPPED_BATCH_OVERRUN":
                     previous_state = state
                     state = "STOPPED_BATCH_OVERRUN"
                     result.update(state=state, elapsed_s=finished_elapsed,
@@ -356,7 +366,7 @@ def execute(freeze_dir, output, approval_path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("freeze", "inspect", "execute", "_worker"))
+    parser.add_argument("operation", choices=("freeze", "freeze-remaining", "inspect", "execute", "_worker"))
     parser.add_argument("--output")
     parser.add_argument("--freeze")
     parser.add_argument("--checks")
@@ -364,6 +374,10 @@ def main(argv=None):
     parser.add_argument("--index", type=int)
     parser.add_argument("--token")
     args = parser.parse_args(argv)
+    if args.operation == "freeze-remaining":
+        from .continuation import freeze as freeze_remaining
+        print(freeze_remaining(args.output, args.checks))
+        return 0
     if args.operation == "freeze":
         print(freeze(args.output, args.checks))
         return 0

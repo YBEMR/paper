@@ -93,18 +93,20 @@ def build_plan(inv, source_map):
     return plan
 
 
-def approval_template(plan_sha):
+def approval_template(plan_sha, *, plan=None):
     return {"schema_version": "supplement-user-approval-v1", "approved": False,
-            "scope": SCOPE, "plan_sha256": plan_sha, "limits": deepcopy(LIMITS),
+            "scope": plan.get("scope", SCOPE) if plan is not None else SCOPE, "plan_sha256": plan_sha,
+            "limits": deepcopy(plan.get("limits", LIMITS) if plan is not None else LIMITS),
             "user_authorization": "", "single_use": True}
 
 
-def validate_approval(value, plan_sha):
-    expected_keys = set(approval_template(plan_sha))
+def validate_approval(value, plan_sha, *, plan=None):
+    expected = approval_template(plan_sha, plan=plan)
+    expected_keys = set(expected)
     require(isinstance(value, dict) and set(value) == expected_keys, "APPROVAL_SCHEMA")
     require(value["approved"] is True and value["single_use"] is True, "SEPARATE_USER_APPROVAL_REQUIRED")
-    require(value["scope"] == SCOPE and value["plan_sha256"] == plan_sha and
-            value["limits"] == LIMITS, "APPROVAL_SCOPE_HASH_OR_BUDGET_MISMATCH")
+    require(value["scope"] == expected["scope"] and value["plan_sha256"] == plan_sha and
+            value["limits"] == expected["limits"], "APPROVAL_SCOPE_HASH_OR_BUDGET_MISMATCH")
     require(isinstance(value["user_authorization"], str) and
             value["user_authorization"].strip(), "USER_AUTHORIZATION_RECORD_REQUIRED")
     return True
@@ -147,6 +149,9 @@ def freeze(output, checks_path):
 def check_frozen(freeze_dir, *, full_archive_check=False):
     freeze_dir = result_path(freeze_dir)
     record = read_json(freeze_dir / "freeze.json")
+    if record.get("protocol_kind") == "supplement-remaining25-v1":
+        from .continuation import check_frozen as check_remaining
+        return check_remaining(freeze_dir, full_archive_check=full_archive_check)
     for name, key in (("plan.json", "plan_sha256"), ("inventory.json", "inventory_sha256"),
                       ("source_manifest.json", "source_manifest_sha256")):
         require(sha(freeze_dir / name) == record[key], "FROZEN_FILE_DRIFT:" + name)

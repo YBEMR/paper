@@ -170,16 +170,17 @@ class RuntimeTests(unittest.TestCase):
                     r.accept_receipt(directory, call, {"token": "manual-token"}, p.sources())
 
     def _fake_batch(self, temp, *, fail_index=None, corrupt_index=None, throw_index=None,
-                    storage_fault=None, missing_receipt_index=None):
+                    storage_fault=None, missing_receipt_index=None, call_count=28, first_index=0, plan_overrides=None):
         base = Path(temp)
         frozen = base / "freeze"
         frozen.mkdir()
         calls = [{"condition_id": f"manual-{n}", "axis": "S4", "root_id": f"manual-{n}", "scale": 24}
-                 for n in range(28)]
+                 for n in range(first_index, first_index + call_count)]
         plan = {"calls": calls, "source_files": {"manual": "fixture"}}
+        plan.update(plan_overrides or {})
         record = {"plan_sha256": "fixture", "protected_files": {"old": "unchanged"}}
         p.write_json(frozen / "plan.json", plan)
-        approval = p.approval_template("fixture")
+        approval = p.approval_template("fixture", plan=plan)
         approval.update(approved=True, user_authorization="MANUAL TEST ONLY")
         p.write_json(base / "approval.json", approval)
         launched = []
@@ -226,6 +227,13 @@ class RuntimeTests(unittest.TestCase):
             code = r.execute(frozen, base / "out", base / "approval.json")
             with self.assertRaises(FileExistsError):
                 r.execute(frozen, base / "another-output", base / "approval.json")
+            if "consumption_claim_path" in plan:
+                clone = base / "clone-freeze"
+                clone.mkdir()
+                p.write_json(clone / "plan.json", plan)
+                with self.assertRaises(FileExistsError):
+                    r.execute(clone, base / "cloned-output", base / "approval.json")
+                self.assertFalse((clone / "execution_claim.json").exists())
         terminal = base / "out/terminal_failure.json"
         if not terminal.exists():
             terminal = base / "out/batch_result.json"

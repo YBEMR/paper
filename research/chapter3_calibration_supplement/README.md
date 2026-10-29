@@ -1,6 +1,18 @@
 # 28条件补充期限诊断执行入口
 
-独立于旧校准批次。原唯一批次已异常停止：3个S4有效完成、25项未运行，详见[部分结果](../第三章28条件补充期限诊断结果_V1_20261029.md)。当前只修复持久化并做人工测试，没有续跑授权。
+独立于旧校准批次。原唯一批次已异常停止：3个S4有效完成、25项未运行，详见[部分结果](../第三章28条件补充期限诊断结果_V1_20261029.md)。持久化已修复；剩余25项续接已完成准备和148项人工预检，尚无真实续接授权。
+
+## 当前：剩余25项待批续接
+
+[续接协议](../第三章剩余25条件期限诊断续接协议_V1_20261029.md)、[新计划](results/frozen_remaining25_01/plan.json)、[最终预检](results/continuation_precheck03/checks.json)、[范围核对](results/continuation_precheck03/preparation_audit.json)。顺序为C12—C24的13项S4，再运行原12项S7；75族表、60秒/条件、1620秒/批、0重试均待批准。前三项只读保留，不占新调用。
+
+新`continuation.py`绑定原83份档案与三项回执，独立消费键禁止复制冻结目录重跑。批准需匹配新计划scope/hash/限额；两批的结果可汇总，次数、耗时和异常终态分开记录。`combined_summary`为事后只读汇总入口，不构造时间表。当前批准模板false，无真实claim或新输出。
+
+只读核验新冻结：
+
+    & 'F:/Anaconda3/python.exe' -B -m research.chapter3_calibration_supplement.runtime inspect --freeze research/chapter3_calibration_supplement/results/frozen_remaining25_01
+
+以下为原28项协议与持久化修复记录，原批准已经消费。
 
 ## 固定入口
 
@@ -17,7 +29,7 @@
 
     & 'F:/Anaconda3/python.exe' -B -m research.chapter3_calibration_supplement.runtime inspect --freeze research/chapter3_calibration_supplement/results/frozen_supplement01
 
-原批准已消费，旧输出不得重建。本次修复没有建立剩余25项的执行清单或新批准文件；后续应单独冻结续接，明确保留已完成三项、不重跑，再确认执行范围。execute与worker原有计划、批准、源码、Python身份和一次性核查保持。
+原批准已消费，旧输出不得重建。修复阶段未建立续接；现已独立冻结上方25项，仍待批准。execute与worker原有计划、批准、源码、Python身份和一次性核查保持。
 
 ## 计时、状态和证据
 

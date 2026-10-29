@@ -16,7 +16,8 @@ from unittest.mock import patch
 
 from research.chapter3_deadline_reference.run_checks import ScopeGuard
 from research.chapter3_workload_calibration.runtime import (
-    sha, write_json, read_json, write_gzip, read_gzip)
+    sha, read_json, write_gzip, read_gzip)
+from .persistence import write_once, SnapshotLog, read_latest_snapshot
 from .protocol import (REPO, LIMITS, require, result_path, sources, protected,
                        check_frozen, validate_approval, load_evidence, freeze)
 
@@ -25,11 +26,7 @@ ZERO = {"mapping_constructions": 0, "timetable_constructions": 0, "S1_projection
 
 
 def exclusive_json(path, value):
-    import json
-    with Path(path).open("x", encoding="utf-8") as handle:
-        json.dump(value, handle, ensure_ascii=False, indent=2)
-        handle.flush()
-        os.fsync(handle.fileno())
+    write_once(path, value)
 
 
 def append_ledger(path, value):
@@ -78,12 +75,13 @@ def worker(freeze_dir, out, index, token):
         plan, inv, call, directory, started, deadline = validate_worker_context(freeze_dir, out, index, token)
         exclusive_json(directory / "worker_claim.json", {"token": token, "pid": os.getpid()})
         owns_worker_claim = True
+        progress_log = SnapshotLog(directory / "progress")
 
         def progress(phase, current):
             counters.update(current)
             if time.perf_counter() >= deadline:
                 raise TimeoutError("CONDITION_TIME_LIMIT")
-            write_json(directory / "progress.json", {"phase": phase, "counters": dict(counters),
+            progress_log.append({"phase": phase, "counters": dict(counters),
                        "elapsed_s": time.perf_counter() - started})
 
         progress("READING_FROZEN_PARENT_AND_COMPARISONS", counters)
@@ -115,11 +113,11 @@ def worker(freeze_dir, out, index, token):
         progress("DESCRIPTIVE_SUMMARY_COMPLETE", counters)
         write_gzip(directory / "generated_workload.json.gz", evidence["workload"])
         write_gzip(directory / "evidence.json.gz", evidence)
-        write_json(directory / "summary.json", summary)
+        write_once(directory / "summary.json", summary)
         progress("PAYLOADS_SAVED", counters)
         require(counters == {**ZERO, "timetable_constructions": 3}, "EXACTLY_THREE_REFERENCE_TABLES_REQUIRED")
         require(not guard.denied_events and not guard.denied_imports, "SCOPE_FAILURE")
-        write_json(directory / "result.json", {
+        write_once(directory / "result.json", {
             "state": "COMPLETE", "condition": call, "elapsed_s": time.perf_counter() - started,
             "counters": counters, "source_files": sources(), "token": token,
             "evidence_sha256": sha(directory / "evidence.json.gz"),
@@ -139,7 +137,10 @@ def worker(freeze_dir, out, index, token):
             target = directory / ("worker_rejection.json" if not owns_worker_claim or
                                    (directory / "result.json").exists() else "result.json")
             if not target.exists():
-                write_json(target, detail)
+                try:
+                    write_once(target, detail)
+                except (Exception, KeyboardInterrupt) as save_error:
+                    detail["persistence_error"] = {"type": type(save_error).__name__, "error": str(save_error)}
         print(str(detail), flush=True)
         return 2
 
@@ -210,11 +211,32 @@ def execute(freeze_dir, output, approval_path):
     rows = []
     state = "RUNNING"
     final_error = None
+    additional_errors = []
     after = None
+
+    def remember_error(error):
+        nonlocal final_error
+        detail = {"error": str(error), "type": type(error).__name__, "traceback": traceback.format_exc()}
+        if final_error is None:
+            final_error = detail
+        else:
+            additional_errors.append(detail)
+
+    def save_terminal_failure(result):
+        try:
+            write_once(out / "terminal_failure.json", result)
+        except (Exception, KeyboardInterrupt) as fallback_error:
+            remember_error(fallback_error)
+            print(str({"state": state, "terminal_record_saved": False,
+                       "completed_conditions": result["completed_conditions"],
+                       "final_error": final_error, "additional_errors": additional_errors}),
+                  file=sys.stderr, flush=True)
+
     try:
         out.mkdir(parents=True)
         shutil.copyfile(approval_path, out / "approval.json")
         shutil.copyfile(freeze_dir / "plan.json", out / "plan.json")
+        status_log = SnapshotLog(out / "status")
         for index, call in enumerate(plan["calls"]):
             if time.perf_counter() >= batch_deadline - LIMITS["finalization_reserve_seconds"]:
                 state = "STOPPED_BATCH_TIMEOUT"
@@ -245,8 +267,10 @@ def execute(freeze_dir, output, approval_path):
             accepted = decide_call_state(code, receipt, time.perf_counter() - call_start, claim["limit_seconds"])
             if receipt is not None:
                 row["counters"] = receipt.get("counters", dict(ZERO))
-            elif (directory / "progress.json").is_file():
-                row["counters"] = read_json(directory / "progress.json").get("counters", dict(ZERO))
+            else:
+                progress_record = read_latest_snapshot(directory / "progress")
+                if progress_record is not None:
+                    row["counters"] = progress_record.get("counters", dict(ZERO))
             if accepted == "COMPLETE":
                 try:
                     receipt, summary = accept_receipt(directory, call, claim, plan["source_files"])
@@ -256,11 +280,15 @@ def execute(freeze_dir, output, approval_path):
                         row["summary"] = summary
                 except Exception as error:
                     accepted = "EVIDENCE_FAILURE"
-                    write_json(directory / "acceptance_error.json", {"error": str(error), "traceback": traceback.format_exc()})
+                    write_once(directory / "acceptance_error.json", {"error": str(error), "traceback": traceback.format_exc()})
             row.update(state=accepted, elapsed_s=time.perf_counter() - call_start, returncode=code,
                        result_sha256=sha(receipt_path) if receipt_path.is_file() else None)
             append_ledger(out / "ledger.jsonl", row)
-            write_json(out / "status.json", {"state": accepted, "rows": rows, "elapsed_s": time.perf_counter() - started})
+            # Batch remains RUNNING until final source/summary/terminal persistence succeeds.
+            # Full summaries remain in immutable per-condition files and final output.
+            status_log.append({"state": "RUNNING", "last_condition_state": accepted,
+                               "rows": [{k: v for k, v in item.items() if k not in {"summary", "error"}}
+                                        for item in rows], "elapsed_s": time.perf_counter() - started})
             print(str({"condition_id": call["condition_id"], "state": accepted, "elapsed_s": row["elapsed_s"]}), flush=True)
             if accepted != "COMPLETE":
                 state = "STOPPED_" + accepted
@@ -269,7 +297,7 @@ def execute(freeze_dir, output, approval_path):
             state = "COMPLETE"
     except (Exception, KeyboardInterrupt) as error:
         state = "STOPPED_EXCEPTION"
-        final_error = {"error": str(error), "type": type(error).__name__, "traceback": traceback.format_exc()}
+        remember_error(error)
         if rows and rows[-1]["state"] == "CLAIMED":
             rows[-1]["state"] = "FAILED"
             rows[-1]["error"] = final_error
@@ -280,7 +308,7 @@ def execute(freeze_dir, output, approval_path):
                 require(after == record["protected_files"] and sources() == plan["source_files"], "FINAL_SOURCE_OR_ARCHIVE_DRIFT")
             except Exception as error:
                 state = "STOPPED_SOURCE_OR_ARCHIVE_DRIFT"
-                final_error = {"error": str(error), "traceback": traceback.format_exc()}
+                remember_error(error)
             row_by_id = {r["condition_id"]: r for r in rows}
             coverage = [row_by_id.get(c["condition_id"], {"condition_id": c["condition_id"], "state": "NOT_RUN"})
                         for c in plan["calls"]]
@@ -288,20 +316,41 @@ def execute(freeze_dir, output, approval_path):
             try:
                 from .analysis import aggregate_summaries
                 summary = aggregate_summaries(plan["calls"], coverage)
-                write_json(out / "summary.json", summary)
+                write_once(out / "summary.json", summary)
             except Exception as error:
                 state = "STOPPED_SUMMARY_ERROR"
-                final_error = {"error": str(error), "traceback": traceback.format_exc()}
+                remember_error(error)
             elapsed = time.perf_counter() - started
             if elapsed > LIMITS["batch_seconds"]:
                 state = "STOPPED_BATCH_OVERRUN"
             result = {"state": state, "rows": coverage, "consumed_conditions": len(rows),
                       "completed_conditions": sum(r["state"] == "COMPLETE" for r in rows),
-                      "planned_conditions": 28, "elapsed_s": elapsed, "limits": LIMITS,
+                      "planned_conditions": len(plan["calls"]), "elapsed_s": elapsed, "limits": LIMITS,
                       "protected_unchanged": after == record["protected_files"],
-                      "final_error": final_error, "plan_sha256": record["plan_sha256"],
+                      "final_error": final_error, "additional_errors": additional_errors,
+                      "plan_sha256": record["plan_sha256"],
                       "beta_selected": None, "formal_algorithm_calls": 0, "thermal_integrations": 0}
-            write_json(out / "batch_result.json", result)
+            try:
+                write_once(out / "batch_result.json", result)
+            except (Exception, KeyboardInterrupt) as error:
+                previous_state = state
+                state = "STOPPED_TERMINAL_PERSISTENCE"
+                remember_error(error)
+                result.update(state=state, final_error=final_error, additional_errors=additional_errors,
+                              execution_state_before_persistence_failure=previous_state)
+                # A terminal failure marker takes precedence even if fsync failed after
+                # the primary file became readable. Do not overwrite or retry that file.
+                save_terminal_failure(result)
+            else:
+                # Final serialization/flush belongs to the batch clock too.
+                finished_elapsed = time.perf_counter() - started
+                if finished_elapsed > LIMITS["batch_seconds"] and state != "STOPPED_BATCH_OVERRUN":
+                    previous_state = state
+                    state = "STOPPED_BATCH_OVERRUN"
+                    result.update(state=state, elapsed_s=finished_elapsed,
+                                  execution_state_before_persistence_failure=previous_state,
+                                  terminal_reason="FINAL_PERSISTENCE_EXCEEDED_BATCH_CLOCK")
+                    save_terminal_failure(result)
     return 0 if state == "COMPLETE" else 2
 
 

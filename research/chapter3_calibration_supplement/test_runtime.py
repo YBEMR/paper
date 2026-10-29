@@ -169,7 +169,8 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     r.accept_receipt(directory, call, {"token": "manual-token"}, p.sources())
 
-    def _fake_batch(self, temp, *, fail_index=None, corrupt_index=None, throw_index=None):
+    def _fake_batch(self, temp, *, fail_index=None, corrupt_index=None, throw_index=None,
+                    storage_fault=None, missing_receipt_index=None):
         base = Path(temp)
         frozen = base / "freeze"
         frozen.mkdir()
@@ -189,6 +190,10 @@ class RuntimeTests(unittest.TestCase):
             launched.append(index)
             if index == throw_index:
                 raise OSError("injected launch failure")
+            if index == missing_receipt_index:
+                progress = r.SnapshotLog(directory / "progress")
+                progress.append({"counters": {**r.ZERO, "timetable_constructions": 1}})
+                return -1
             receipt = {"state": "FAILED" if index == fail_index else "COMPLETE",
                        "elapsed_s": 0.01, "counters": {**r.ZERO, "timetable_constructions": 3},
                        "denied_imports": [], "denied_events": []}
@@ -202,6 +207,15 @@ class RuntimeTests(unittest.TestCase):
             return p.read_json(directory / "result.json"), {"manual_summary": True}
 
         with ExitStack() as stack:
+            if storage_fault is not None:
+                from . import persistence
+                original_write = persistence.write_once
+
+                def storage_write(path, value):
+                    return storage_fault(Path(path), value, original_write)
+
+                stack.enter_context(patch.object(r, "write_once", side_effect=storage_write))
+                stack.enter_context(patch.object(persistence, "write_once", side_effect=storage_write))
             stack.enter_context(patch.object(r, "check_frozen", return_value=(plan, {}, record)))
             stack.enter_context(patch.object(r, "protected", return_value=record["protected_files"]))
             stack.enter_context(patch.object(r, "sources", return_value=plan["source_files"]))
@@ -212,7 +226,11 @@ class RuntimeTests(unittest.TestCase):
             code = r.execute(frozen, base / "out", base / "approval.json")
             with self.assertRaises(FileExistsError):
                 r.execute(frozen, base / "another-output", base / "approval.json")
-        return code, p.read_json(base / "out/batch_result.json"), launched
+        terminal = base / "out/terminal_failure.json"
+        if not terminal.exists():
+            terminal = base / "out/batch_result.json"
+        from .persistence import read_terminal_record
+        return code, read_terminal_record(base / "out", exit_code=code) if terminal.exists() else None, launched
 
     def test_mock_28_slots_complete_once_without_scientific_calls(self):
         with tempfile.TemporaryDirectory(dir=p.PACKAGE / "results") as temp:

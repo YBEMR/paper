@@ -111,6 +111,37 @@ def post_state(slot,method,instance):
     return 'COMPLETE_POST_SAFE'
 
 
+def before_post(method,recovery):
+    """A SAFE witness and a stop reason are independent pieces of evidence."""
+    if (not isinstance(recovery,dict) or recovery.get('status') not in ('RECOVERED','EMPTY')
+            or recovery.get('rejected')):
+        return 'RECOVERY_TECHNICAL_STOP'
+    if ((recovery['status']=='EMPTY' and (recovery.get('retained') is not False or recovery.get('record') is not None))
+            or (recovery['status']=='RECOVERED' and (recovery.get('retained') is not True
+                                                   or not isinstance(recovery.get('record'),dict)))):
+        return 'RECOVERY_TECHNICAL_STOP'
+    if (method.get('error') or method.get('cleanup_verified') is not True or method.get('wall_limit')
+            or method.get('returncode')!=0 or not method.get('within_process_deadline')):
+        return 'METHOD_ABNORMAL_SAFE_CHECKPOINT_PRESERVED'
+    m=((method.get('worker') or {}).get('result') or {})
+    state=m.get('execution_state')
+    if not m.get('safe_retained'):
+        if recovery.get('retained'):return 'METHOD_CHECKPOINT_INCONSISTENCY'
+        return ('NO_COMPLETE_SAFE_NO_POST' if state in ('NORMAL_COMPLETION','NORMAL_TIME_LIMIT',
+                'NO_SAFE_UNRESOLVED','CONSTRUCTOR_UNSUPPORTED') else 'METHOD_FAULT_OR_NO_SAFE')
+    if state not in ('NORMAL_COMPLETION','NORMAL_TIME_LIMIT') or not m.get('post_eligible'):
+        return 'METHOD_FAULT_OR_POST_INELIGIBLE'
+    r=recovery.get('record')
+    if recovery.get('retained') is not True or not isinstance(r,dict):
+        return 'METHOD_SAFE_WITHOUT_VERIFIED_CHECKPOINT'
+    try:
+        same=(r['candidate']==m['safe_candidate']
+              and Fraction(r['U_J'])==Fraction(m['safe_upper_bound_J'])
+              and list(map(Fraction,r['weighted_energy_J']))==list(map(Fraction,m['weighted_energy_J'])))
+    except (KeyError,ValueError,TypeError,ZeroDivisionError):same=False
+    return None if same else 'METHOD_CHECKPOINT_INCONSISTENCY'
+
+
 def run(plan_file,approval_file,approval_sha256,output):
     """Real dispatcher. Calling requires a later explicit user budget approval."""
     rt=Runtime();start=rt.clock();deadline=start+720
@@ -128,14 +159,16 @@ def run(plan_file,approval_file,approval_sha256,output):
         verify_plan(ctx['plan'])
         common=read(ROOT/INPUT)
         from .persistence import recover
-        report['recovery']=recover(output/'method'/'work'/'checkpoints',ctx,common['config'],
-                                  common['instance'],method['process_started_monotonic_s'])
+        try:
+            report['recovery']=recover(output/'method'/'work'/'checkpoints',ctx,common['config'],
+                                      common['instance'],method['process_started_monotonic_s'])
+        except Exception as error:
+            report['recovery']={'status':'ERROR','retained':False,'record':None,
+                'rejected':[],'error':type(error).__name__+': '+str(error)}
         m=((method.get('worker') or {}).get('result') or {})
-        if (method['error'] or method['cleanup_verified'] is not True or method['wall_limit']
-                or method['returncode']!=0 or not method['within_process_deadline']):
-            report['stop_reason']='METHOD_ABNORMAL_SAFE_CHECKPOINT_PRESERVED';return report
-        if m.get('execution_state') not in ('NORMAL_COMPLETION','NORMAL_TIME_LIMIT'):
-            report['stop_reason']='METHOD_FAULT_OR_NO_SAFE';return report
+        reason=before_post(method,report['recovery'])
+        if reason is not None:
+            report['stop_reason']=reason;return report
         if m.get('safe_retained') and m.get('post_eligible'):
             verify_plan(ctx['plan'])
             if deadline-rt.clock()<60:raise TimeoutError('NO_FULL_POST_BUDGET')

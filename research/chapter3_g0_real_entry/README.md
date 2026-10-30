@@ -1,3 +1,9 @@
+## 当前修复版本（2026-10-30）
+
+scope封存/恢复、post前异常闸门和READY读取诊断已作限定修复；[人工验收报告](../G0恢复停机与READY诊断_限定修复及人工验收_20261030.md)、[72项检查](results/recovery_repair02/checks.json)、[源码检查点](results/recovery_repair02/repair_version.json)。新checkpoint为v2，旧真实结果未重放或升级。旧real_entry_plan01已消费且源hash不再匹配，不能复用；本修复检查点不是新科研批准。实际启动延迟和局部求解接入仍未解决，算法/时限/预算均不变。
+
+以下为先前一次性入口合同与历史准备状态，原批准不得据此再次执行。
+
 # G0一次性真实入口：工程准备完成
 
 本目录已实现受控REAL入口；**工程就绪不等于科研批准**。原SIMULATION入口保留。没有可用用户批准文件，未创建真实claim，当前禁止科研启动。

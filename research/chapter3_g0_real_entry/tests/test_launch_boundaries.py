@@ -150,20 +150,24 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(r['state'],'UNRESOLVED')
         self.assertEqual(r['reason'],'ROOT_CUTOFF')
 
-    def checkpoint(self):
+    def checkpoint(self,*,use_token=True,nested=False):
+        from contextlib import nullcontext
         config,instance,candidate=bundle();clock=FakeClock(100)
         from ..receipts import DEFAULT_ACCURACY
         config['accuracy_targets']=deepcopy(DEFAULT_ACCURACY)
         budget,ledger,permit,archive,bridge=setup_profile(config,instance,clock)
-        with ledger.patched():bridge.assess(candidate)
-        record=archive.snapshot()
-        # Explicit test-only envelope for the recovery validator; no real permit
-        # and no physical evaluator. This is never stored in real claims/results.
-        record['evidence_kind']='REAL'
-        record['generation_sha256']=canonical_hash({k:v for k,v in record.items() if k!='generation_sha256'})
-        ctx=self.context();fakepermit=SimpleNamespace(context=ctx)
-        store=CheckpointStore(self.folder/'checkpoints',fakepermit,budget,config,instance)
-        store(record)
+        with budget.scope('phase1',150,kind='phase') as phase:
+            inner=budget.scope('p1:X',75,kind='slot') if nested else nullcontext(phase)
+            with inner as token:
+                scope=token if use_token else budget.scope_snapshot(token)
+                with ledger.patched():bridge.assess(candidate,scope=scope)
+                record=archive.snapshot()
+                # Explicit test-only envelope for the recovery validator; no real permit.
+                record['evidence_kind']='REAL'
+                record['generation_sha256']=canonical_hash({k:v for k,v in record.items() if k!='generation_sha256'})
+                ctx=self.context();fakepermit=SimpleNamespace(context=ctx)
+                store=CheckpointStore(self.folder/'checkpoints',fakepermit,budget,config,instance)
+                store(record)
         return config,instance,clock,budget,record,ctx,store
 
     def test_crash_recovery_revalidates_existing_complete_receipt_without_heat(self):
@@ -187,8 +191,7 @@ class BoundaryTests(unittest.TestCase):
             self.assertFalse(recover(store.folder,ctx,config,instance,100)['retained'])
         c.save(p,original)
         self.assertFalse(recover(store.folder,ctx,config,instance,101)['retained'])
-        stale=deepcopy(original);stale['record']['scope']['deadline_elapsed_s']=0
-        stale['record']['generation_sha256']=canonical_hash({k:v for k,v in stale['record'].items() if k!='generation_sha256'})
+        stale=deepcopy(original);stale['scope_evidence']['snapshot']['deadline_elapsed_s']=0
         c.save(p,stale)
         c.save(p.with_suffix('.seal.json'),{'checkpoint_sha256':c.digest(stale),'published_at_elapsed_s':0})
         self.assertFalse(recover(store.folder,ctx,config,instance,100)['retained'])

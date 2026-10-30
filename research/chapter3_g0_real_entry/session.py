@@ -9,6 +9,7 @@ import hashlib
 import importlib
 import math
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -94,6 +95,7 @@ class ScopedMatlabSession:
             cut_max_iterations_declared=self.cut_max_iterations,
             cut_max_iterations_scope='native_cut_pass_limit_only',
             requested_total_budget_s=total_budget_s,
+            startup_scope_snapshot=budget.capture_scope(),
             lifetime_rule='root deadline, never first-slot remaining time')
         write=dependencies['write_json']
         write(self.workdir/'session.json',self.metadata)
@@ -127,6 +129,8 @@ class ScopedMatlabSession:
             self.metadata.update(startup_outcome='FAILED_OR_DEADLINE',
                 startup_wall_seconds=self.clock()-self.started,
                 startup_error=f'{type(error).__name__}: {error}')
+            if hasattr(error,'diagnostics'):
+                self.metadata['startup_publication_read']=deepcopy(error.diagnostics)
             try:
                 write(self.workdir/'session.json',self.metadata)
             except Exception as archive_error:
@@ -136,6 +140,23 @@ class ScopedMatlabSession:
             except BaseException as cleanup_error:
                 self.cleanup=getattr(self,'cleanup',{})
                 self.cleanup['cleanup_error']=repr(cleanup_error)
+            # A late file may diagnose a timeout, never make it a READY success.
+            # One non-waiting read only; no request, clock change or evaluation.
+            late={'observed':False,'accepted_for_startup':False,
+                  'observed_at_elapsed_s':budget.elapsed,'after_deadline':self.clock()>=self.startup_deadline}
+            try:
+                path=self.workdir/'ready.json'
+                if path.is_file():
+                    value=json.loads(path.read_text(encoding='utf-8-sig'))
+                    late.update(observed=True,status=value.get('status'),release=value.get('release'),
+                                license_checkout=value.get('license_checkout'))
+            except Exception as read_error:
+                late['read_error']=type(read_error).__name__+': '+str(read_error)
+            self.metadata['failed_startup_publication_observation']=late
+            try:
+                write(self.workdir/'session.json',self.metadata)
+            except Exception as archive_error:
+                self.metadata['post_cleanup_archive_error']=repr(archive_error)
             error.matlab_cleanup=getattr(self,'cleanup',{})
             error.matlab_workdir=str(self.workdir)
             error.matlab_startup_metadata=deepcopy(self.metadata)

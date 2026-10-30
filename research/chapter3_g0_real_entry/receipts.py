@@ -96,6 +96,13 @@ class RealArchive(ManualArchive):
         self._initialize(config,instance,budget,source_hashes,accuracy=accuracy,
                          evidence_kind=kind)
 
+    def commit(self,candidate,aggregate,*,source,scope=None):
+        accepted=super().commit(candidate,aggregate,source=source,scope=scope)
+        writer=getattr(self,'_checkpoint_writer',None)
+        if accepted and writer is not None:
+            writer(self.generations[-1])
+        return accepted
+
 
 class RealReceiptBridge(ManualReceiptBridge):
     def __init__(self, config, instance, budget, archive, dependencies=None, *,

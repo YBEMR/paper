@@ -1,28 +1,17 @@
-# G0真实后端接线：模拟验收版
+# G0一次性真实入口：工程准备完成
 
-依据575788ee限定接线协议。当前只能创建SIMULATION许可；未批准真实科研预算，没有可用REAL许可或实际OS进程工厂。代码中的原生函数绑定是懒接线，不能通过字符串改名或翻全局开关启用。
+本目录已实现受控REAL入口；**工程就绪不等于科研批准**。原SIMULATION入口保留。没有可用用户批准文件，未创建真实claim，当前禁止科研启动。
 
-| 文件 | 已接接口 |
+| 接口 | 本版合同 |
 |---|---|
-| gating.py | SIMULATION能力与真实研究授权分离 |
-| model_backend.py | 原Model/expand_options/RC入口、模型视图、x0与严格反馈；模拟必须显式假依赖 |
-| receipts.py | 复用完整U校验，分开人工/SIMULATION/未来REAL来源，补control_policy源hash |
-| session.py | 根会话寿命、当前scope启动等待与每请求上限；原solve/close函数不改 |
-| numeric_transport.py | 原C第二阶段增广数学接口，普通截止与真实数值冲突分开 |
-| backend.py | 同次HEFT、共享G0协调器、两阶段原生请求、清理与SAFE保留 |
-| worker.py | 共同输入核hash、方法归档、独立post处理；原热回执不被伪造模型视图字段 |
-| runner.py | 单次方法/至多单次post模拟监督，身份及能量区间相容门 |
+| launch_contract / gating | 原输入、最终源码/可执行文件、预算、外部用户批准hash；原子单次claim、分角色worker票据；REAL拒绝假依赖 |
+| real_runner / actual_worker | 新Python方法/post，独立MATLAB会话；复用原ProcessMonitor/host_gate，不复用旧队列；0重试 |
+| worker / G0Budget | 唯一300秒根追溯至监督器启动方法进程前，包含导入、准备和读输入；阶段一仍150秒。post唯一60秒包含启动到回收 |
+| persistence / RealArchive | 完整SAFE逐代原子落盘及seal；崩溃后只读校验原身份、全场景覆盖、能量、原根/阶段截止，不补积分或能量 |
+| 原数学路径 | 原Model/选项/系数、PARTIAL、原x0/反馈和C增广；科学源码及容差不动 |
 
-同时只对原G0的method、receipts、local_model增加profile/依赖接缝。旧chapter3_experiments、物理模型、正式输入、历史结果不改；原构模数值后缀238行仍逐字保护。
+[最终执行计划](results/real_entry_plan01/plan.json)、[就绪回执](results/real_entry_plan01/readiness.json)、[最终66项](results/entry_final01/checks.json)、[旧32项回归](../chapter3_g0/results/manual08_entry_regression/checks.json)。66项含17项新增执行边界及49项接线回归；新检查全是假进程、人工账本与模拟授权，0真实科研。测试中的假APPROVED文件不能通过真实计划核对，不是科研批准。
 
-模拟复跑（输出目录必须是新的）：
+真实入口为 `python -B -m research.chapter3_g0_real_entry.real_runner`，必须另给plan、approval、approval-sha256和全新output四项。不能使用PENDING模板，不能用模拟runner代替。当前最终计划固定C01一次300秒，正常完整SAFE最多一次60秒post，方法进程480秒/整批720秒。
 
-```powershell
-& 'F:/Anaconda3/python.exe' -B -m research.chapter3_g0_real_entry.tests.run_checks --out research/chapter3_g0_real_entry/results/wiring_next
-```
-
-最终[wiring04](results/wiring04/checks.json)：49/49项；原[32项人工回归](../chapter3_g0/results/manual07_wiring_regression/checks.json)：32/32、180断言。两套分进程运行，避免旧A32模块重载影响类身份。
-
-全部进程、HEFT、选项/系数、视图评价和求解依赖均为明确假后端；仅复用原PARTIAL结构检查/聚合及手给数值行导出。模拟夹具保存在各次scratch目录，不递归删除。wiring01的临时目录权限失败、wiring02的夹具根断言失败及wiring03版本均留档；本地不可读临时目录被精确忽略，其失败回执保留。
-
-真实新Python进程、MATLAB启动/响应/清理和调度质量均未验证。待用户明确批准预算后，还须冻结一次性真实启动入口、授权消费与当前资源门；不能把本模拟runner称为已验证的实际OS监督器。预算提案仍为C01一次300秒、正常完整SAFE最多一次60秒post、进程480秒/整批720秒，无补跑。
+[当前报告](../G0一次性真实入口实施与最终预检_20261030.md)列明启动条件及残余风险。当前资源快照物理可用1.995GiB，低于2GiB门槛；资源须在日后获批启动前重查。实际OS/MATLAB传输、原生数值兼容及真实连续SAFE均尚未实跑，工程预检不提供算法质量结论。

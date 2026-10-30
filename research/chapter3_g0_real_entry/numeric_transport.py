@@ -126,9 +126,9 @@ class _ScopedRequest:
 class ScopeAwareContext:
     def __init__(self,budget,*,permit,dependencies=None):
         require_permit(permit)
+        require_simulation_dependencies(permit,dependencies)
         if dependencies is None:
             dependencies=production_dependencies(permit)
-        require_simulation_dependencies(permit,dependencies)
         keys=('transform','validate','append','matrix_identity','recorder_base','vector_present','np','conflict_state')
         if any(k not in dependencies for k in keys):
             raise ValueError('explicit augmented helper set incomplete')

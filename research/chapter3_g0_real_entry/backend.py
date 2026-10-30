@@ -1,7 +1,7 @@
 """Same-call G0 backend binding; no native work at construction or import.
 
 The production functions are lazily named, not executed by this release.
-Only SIMULATION permits exist; explicit fakes exercise the real wiring code.
+SIMULATION uses explicit fakes; REAL accepts only frozen production functions.
 """
 from copy import deepcopy
 from pathlib import Path
@@ -41,7 +41,7 @@ def production_dependencies(permit):
     from heft_method import run_heft
     from milp import evaluate_model_candidate
     from formal_milp import _checked_thermal_witnesses
-    return dict(initializer=run_heft,receipt=receipt_dependencies(permit),model=None,evaluation=None,
+    return dict(initializer=run_heft,receipt=None,model=None,evaluation=None,
                 transport=None,numeric=None,recorder_factory=PartialRecorder,
                 evaluate_model_candidate=evaluate_model_candidate,witness_validator=_checked_thermal_witnesses)
 
@@ -49,9 +49,9 @@ def production_dependencies(permit):
 class G0Backend:
     def __init__(self,workdir,*,permit,dependencies=None):
         self.evidence_kind=require_permit(permit)
+        require_simulation_dependencies(permit,dependencies)
         if dependencies is None:
             dependencies=production_dependencies(permit)
-        require_simulation_dependencies(permit,dependencies)
         required=('initializer','receipt','model','evaluation','transport','numeric',
                   'recorder_factory','evaluate_model_candidate','witness_validator')
         if not isinstance(dependencies,dict) or any(k not in dependencies for k in required):
@@ -71,6 +71,9 @@ class G0Backend:
         budget.check()
         self.config,self.instance,self.budget=config,instance,budget
         self.archive,self.bridge=archive,bridge
+        if self.evidence_kind == 'REAL':
+            from .persistence import CheckpointStore
+            archive._checkpoint_writer=CheckpointStore(self.workdir/'checkpoints',self.permit,budget,config,instance)
 
     def initializer(self,instance,config,budget,assess):
         if budget is not self.budget:
@@ -221,16 +224,19 @@ class G0Backend:
             self.timings['cleanup_seconds']=self.budget.clock()-started
 
 
-def execute_wiring(input_loader,workdir,*,permit,dependencies=None,seconds=300,clock=time.monotonic):
-    """Shared algorithm coordinator; this release accepts simulation only."""
+def execute_wiring(input_loader,workdir,*,permit,dependencies=None,seconds=300,clock=time.monotonic,budget=None):
+    """Shared coordinator with a single root formed before backend preparation."""
     from types import SimpleNamespace
     from ..chapter3_g0.method import run_g0
+    from ..chapter3_g0.budget import G0Budget
+    budget=G0Budget(seconds,clock=clock) if budget is None else budget
     require_permit(permit)
+    budget.check()
     backend=G0Backend(workdir,permit=permit,dependencies=dependencies)
     wiring=SimpleNamespace(permit=permit,archive_factory=RealArchive,bridge_factory=RealReceiptBridge)
     result=None
     try:
-        result=run_g0(input_loader,backend,seconds=seconds,clock=clock,_wiring=wiring)
+        result=run_g0(input_loader,backend,seconds=seconds,clock=clock,_wiring=wiring,_budget=budget)
     finally:
         try:
             cleanup=backend.close()
@@ -241,6 +247,8 @@ def execute_wiring(input_loader,workdir,*,permit,dependencies=None,seconds=300,c
             result['backend_timings']=deepcopy(backend.timings)
             result['native_search_records']=deepcopy(backend.search_records)
             result['numeric_transport']=None if backend.numeric_context is None else backend.numeric_context.summary()
+            if 'budget' in result:
+                result['budget']['real_execution_enabled']=require_permit(permit)=='REAL'
             if cleanup.get('verified') is not True:
                 result.setdefault('cleanup_errors',[]).append(deepcopy(cleanup))
                 if result.get('failure') is None:

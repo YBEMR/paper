@@ -48,7 +48,7 @@ def make_model_view(instance, scene_id, deployment):
     return view
 
 
-def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None):
+def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None, _budget=None):
     """Execute deterministic coordination only with explicit manual seams.
 
     No default initializer, solver, coefficient factory or evaluator exists.
@@ -63,7 +63,9 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None)
         kind=require_permit(_wiring.permit)
         if manual or backend.evidence_kind!=kind:
             raise PermissionError('WIRING_PROFILE_MISMATCH')
-    budget = G0Budget(seconds, clock=clock)
+    if _budget is not None and (_wiring is None or _budget.seconds != seconds or _budget.clock is not clock):
+        raise ValueError('external budget must be the same wired root')
+    budget = G0Budget(seconds, clock=clock) if _budget is None else _budget
     out = dict(schema='g0-manual-lifecycle-v1' if _wiring is None else 'g0-wired-lifecycle-v1', evidence_kind=kind,
                real_execution=kind=='REAL', state='UNRESOLVED', reason=None,
                stages={'1': [], '2': []}, initialization=None, S0=None, S1=None,

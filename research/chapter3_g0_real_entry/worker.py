@@ -5,8 +5,9 @@ import json
 import math
 from pathlib import Path
 import time
+from fractions import Fraction
 
-from .gating import require_permit, require_simulation_dependencies
+from .gating import require_permit, require_simulation_dependencies, require_role
 from .backend import execute_wiring
 from ..chapter3_g0.budget import G0Budget, ScopeExhausted
 from ..chapter3_g0.contract import canonical_hash, validate_inputs
@@ -31,10 +32,14 @@ def normalize(raw,*,input_sha256,method_seconds,process_seconds):
     if isinstance(final,dict):
         aggregate=final.get('aggregate') or {}
         formed=final.get('completed_at_elapsed_s')
+        try:
+            same_upper=(Fraction(aggregate.get('safe_upper_bound_J'))==Fraction(final.get('U_J')))
+        except (ValueError,TypeError,ZeroDivisionError):
+            same_upper=False
         retained=(aggregate.get('state')=='SAFE' and aggregate.get('rankable_energy') is True
             and isinstance(final.get('candidate'),dict)
             and aggregate.get('safe_candidate')==final.get('candidate')
-            and aggregate.get('safe_upper_bound_J')==final.get('U_J')
+            and same_upper
             and aggregate.get('identity',{}).get('candidate_sha256')==canonical_hash(final.get('candidate'))
             and aggregate.get('identity',{}).get('full_input_sha256')==raw.get('input_sha256')
             and type(formed) in (int,float) and math.isfinite(formed) and 0<=formed<method_seconds)
@@ -68,19 +73,29 @@ def normalize(raw,*,input_sha256,method_seconds,process_seconds):
         raw=deepcopy(raw),performance_ranking_claim=False)
 
 
-def execute_method(common_file,expected_sha256,workdir,*,permit,dependencies,seconds=300,clock=time.monotonic):
+def execute_method(common_file,expected_sha256,workdir,*,permit,dependencies=None,seconds=300,clock=time.monotonic,started_at=None):
+    budget=G0Budget(seconds,clock=clock,started_at=started_at)
     require_permit(permit)
-    started=clock()
-    result=execute_wiring(lambda:load_common(common_file,expected_sha256),workdir,
-        permit=permit,dependencies=dependencies,seconds=seconds,clock=clock)
+    require_role(permit,'method')
+    started=budget.start
+    try:
+        result=execute_wiring(lambda:load_common(common_file,expected_sha256),workdir,
+            permit=permit,dependencies=dependencies,seconds=seconds,clock=clock,budget=budget)
+    except ScopeExhausted as e:
+        result={'evidence_kind':require_permit(permit),'reason':e.kind.upper()+'_CUTOFF',
+                'stopped_s':budget.elapsed,'stages':{},'final':None,'failure':None}
     return normalize(result,input_sha256=expected_sha256,method_seconds=seconds,
                      process_seconds=clock()-started)
 
 
-def execute_post(common_file,expected_sha256,candidate,*,permit,dependencies=None,seconds=60,clock=time.monotonic):
+def execute_post(common_file,expected_sha256,candidate,*,permit,dependencies=None,seconds=60,clock=time.monotonic,started_at=None):
+    budget=G0Budget(seconds,clock=clock,started_at=started_at)
     kind=require_simulation_dependencies(permit,dependencies)
-    # The post clock starts before input/hash reads and dependency dispatch.
-    budget=G0Budget(seconds,clock=clock)
+    require_role(permit,'post')
+    budget.check()
+    if kind == 'REAL':
+        from .model_backend import _legacy_module
+        dependencies={'evaluate_candidate':_legacy_module('thermal').evaluate_candidate}
     out={'schema':'g0-independent-post-receipt-v1','evidence_kind':kind,
          'state':'UNRESOLVED','reason':None,'evaluation':None,'candidate':deepcopy(candidate)}
     if not isinstance(dependencies,dict) or not callable(dependencies.get('evaluate_candidate')):

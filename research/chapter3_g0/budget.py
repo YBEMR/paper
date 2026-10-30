@@ -49,8 +49,13 @@ class G0Budget(MethodBudget):
     new evidence or perform an exit check; callers first retain already formed
     evidence, confirm worker idle, and only then leave/seal the scope.
     """
-    def __init__(self, seconds, *, clock=time.monotonic, hook=None):
+    def __init__(self, seconds, *, clock=time.monotonic, hook=None, started_at=None):
         super().__init__(seconds, clock=clock, hook=hook)
+        if started_at is not None:
+            if not math.isfinite(started_at) or started_at > clock():
+                raise ValueError('invalid original clock origin')
+            self.start = float(started_at)
+            self.deadline = self.start + float(seconds)
         self._root_fingerprint = (self.start, self.seconds, self.deadline)
         self._scene_adapter_budget_identity = {
             "token": uuid.uuid4().hex, "start": repr(self.start),

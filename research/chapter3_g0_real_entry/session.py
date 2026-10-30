@@ -1,7 +1,7 @@
 """Root-lived MATLAB session with a separately scoped startup/request wait.
 
-No process is launched by import. REAL permits are unavailable in this stage;
-all runnable tests require explicit simulated process and transport functions.
+No process is launched by import. REAL requires the one-shot authorization;
+all preparation tests use explicit simulated process and transport functions.
 The original worker script, native solve and close implementations are reused.
 """
 from copy import deepcopy
@@ -55,9 +55,11 @@ class ScopedMatlabSession:
     def __init__(self,workdir,*,budget,permit,dependencies=None,total_budget_s=None,
                  matlab_path=None,cut_max_iterations=10,clock=None):
         kind=require_permit(permit)
+        if kind=='REAL' and matlab_path is not None:
+            raise ValueError('REAL_MATLAB_PATH_OVERRIDE_FORBIDDEN')
+        require_simulation_dependencies(permit,dependencies)
         if dependencies is None:
             dependencies=production_dependencies(permit)
-        require_simulation_dependencies(permit,dependencies)
         required=('kernel','launch','read_json','write_json','capture_tree','open_log',
                   'preference_directory','matlab_path','environment','creationflags')
         if any(key not in dependencies for key in required):

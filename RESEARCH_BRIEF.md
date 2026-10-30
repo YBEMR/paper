@@ -2,6 +2,8 @@
 
 更新：2026-10-30。
 
+**G0零调用原因核查完成：scope格式/停机闸门已定位，READY为迟到发布（D250／E670）。** [核查及最小修复方案](research/G0恢复与启动截止_零调用核查及最小修复方案_20261030.md)、[文件/令牌观测](research/chapter3_g0_real_entry/results/real_entry01_readonly_audit/findings.json)。44/44检查点scope是字符串，可对应同次最终phase1记录；恢复器当dict取字段，错误又被返回列表吞掉，runner未据其停止而继续post。原ready.json已归档，R2023b/intlinprog路径/许可签出均正常；本地原始mtime支持约57.52秒发布，晚于首slot读取截止约9.25秒。原生内部耗时未分段，不归咎于许可或求解器。只提出persistence封存scope快照、runner恢复异常门、session读取诊断及针对人工测试，未实施；不更改T/2/slot/模型/预算、不补跑/不重放恢复器，原结果和plan不改。下一项建议仅工程修复，科研仍须另批且旧claim已消费。
+
 **G0唯一真实接入已执行并停止：初始化SAFE/post通过，局部原生未进入；恢复接口异常（D249／E669）。** [结果报告](research/G0首次真实接入结果与异常记录_20261030.md)、[原batch](research/chapter3_g0_real_entry/results/real_entry01/batch.json)、[只读摘要](research/chapter3_g0_real_entry/results/real_entry01_analysis/summary.json)。用户批准原plan一次300＋正常SAFE最多一次60post/进程480/批720；预检物理4.808GiB，源/input/executable匹配。方法1次根122.047/进程123.219秒，post1次进程2.172秒，批128.625秒。S0=final=0.882913166J，仅同次HEFT初始化，首次SAFE3.453秒；C1构模0.563秒，MATLAB未在首块48.36秒READY等待内就绪，清理成功，原生请求0，C2/第二阶段未进入。44封存检查点因scope token字符串被恢复器当dict而全拒；监督器未升级该异常仍做post，故原batch COMPLETE_POST_SAFE不代表工程全通过。没有修复或重跑。唯一调用均消费完；建议下一步只读/零调用审查scope恢复与异常停机、MATLAB启动限制，不恢复任何正式队列。
 
 **G0一次性真实入口工程就绪，未批准科研（D248／E668）。** [实施报告](research/G0一次性真实入口实施与最终预检_20261030.md)、[最终计划](research/chapter3_g0_real_entry/results/real_entry_plan01/plan.json)、[就绪回执](research/chapter3_g0_real_entry/results/real_entry_plan01/readiness.json)。17新增执行边界＋49回归共66/66，原32/32、180断言通过；230份源码、原common及可执行文件hash冻结。REAL许可/单次claim、真实新Python/Matlab监督、300秒根前置及post60秒含启动回收、完整SAFE逐代持久化已实现但仅模拟。READY是工程状态，execution_authorized=false/can_launch_now=false，无实际claim；0科研/Matlab/热积分。准备资源快照物理可用1.995GiB未过2GiB门，须未来重查。待用户另批原C01一次300＋正常完整SAFE最多一次60post/进程480/批720，不自动执行；模型、输入、算法规则和旧结果不变。
@@ -2391,3 +2393,5 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 **D248（2026-10-30，用户限定授权入口工程及预检）：** 用户承接b76c0199，明确只准REAL许可/claim、真实进程监督、根计时与post计时、SAFE崩溃持久化及必要预检；不准真实HEFT/MILP/Matlab/积分。助手按此完成隔离入口并冻结plan 5f93b914…；66项（17新增＋49回归）、原32项通过，新增失败留档。精确有理数修正同值异形U接纳，不放宽任何容差。REAL_ENTRY_READY为工程就绪，许可仍须后续用户科研授权；无真实claim。资源快照内存未过门，实际OS/Native仍待首次接入。停在另批原C01一次300＋最多一次60post之前；不恢复50根/whole/其他暂停实验。重审触发：最终源/input漂移，修改D0/2、4/T/2/物理安全或调用预算，或无法通过启动资源/进程身份门。
 
 **D249（2026-10-30，用户明确批准冻结G0唯一真实调用）：** 用户批准原plan 1×300＋正常完整SAFE最多1×60、进程480/批720，先源hash与内存门，无重试/延长。执行源码437cd61c；1方法＋1post均消费，批128.625秒。正常初始化SAFE 0.882913166J获独立post确认；仅C1构模，首块READY截止后清理并停止，0原生请求/0局部改善/第二阶段未进入。归档发现恢复器scope格式异常44拒，且监督器没有升级停机而继续post；原件保留，整体入口按部分通过工程异常表述。未修代码/参数/规则/结果，不补跑。下一项建议（非科研授权）为零调用核scope恢复及异常停机，并只读查启动回执；任何新科研调用须另批。
+
+**D250（2026-10-30，用户批准零调用核查及原因/最小修复方案）：** 按用户边界只读scope恢复、停机源码及MATLAB原目录。确定44字符串scope触发dict访问错误；recover返回错误列表而runner未检查，故未按异常停止。找到原归档晚READY：工具箱最终可用，文件mtime支持首slot截止后发布；无producer单调时钟或阶段耗时，细分原因未知。提出外层封存scope快照/恢复异常闸门/读取诊断及定向人工测试，未实现。无真实调用、积分、恢复重放或算法/预算变更。建议下一阶段只作隔离工程修复；任何入口变化须新hash，原claim/预算不恢复。

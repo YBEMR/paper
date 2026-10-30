@@ -184,7 +184,7 @@ class WiringScenario:
             'witness_validator':lambda *a:[]}
         return dependencies,FakeSession,FakeNumericContext,FakeAugmentedSession
 
-    def run(self,folder,*,seconds=300):
+    def run(self,folder,*,seconds=300,execution_organization='legacy_slot_startup_v1'):
         deps,session,context,augmented=self.dependency_map()
         with ExitStack() as stack:
             stack.enter_context(self.ledger.patched())
@@ -193,7 +193,8 @@ class WiringScenario:
             stack.enter_context(patch.object(wired,'ScopeAwareContext',context))
             stack.enter_context(patch.object(wired,'ScopedAugmentedSession',augmented))
             return wired.execute_wiring(lambda:(self.config,self.instance),folder,
-                permit=WiringPermit('SIMULATION'),dependencies=deps,seconds=seconds,clock=self.clock)
+                permit=WiringPermit('SIMULATION'),dependencies=deps,seconds=seconds,clock=self.clock,
+                execution_organization=execution_organization)
 
 
 class BackendDriverTests(unittest.TestCase):

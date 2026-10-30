@@ -18,6 +18,7 @@ def freeze(output):
     plan={'schema':'g0-real-single-entry-v1','basis_commit':'b76c01990ce219995751a83e74e69108eb205569',
           'input':INPUT,'input_sha256':INPUT_SHA,'scope':dict(SCOPE),
           'algorithm':{'fixed_D0':True,'block_capacities':[2,4],'stage1_deadline_root_s':150},
+          'execution_organization':'phase_public_startup_v1',
           'python_executable':sys.executable.replace('\\','/'),
           'matlab_executable':'F:/Matlab2023/Program_Files/MATLAB_R2023b/bin/matlab.exe',
           'source_sha256':sources,'execution_authorized':False,

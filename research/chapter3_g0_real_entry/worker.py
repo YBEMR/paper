@@ -11,6 +11,7 @@ from .gating import require_permit, require_simulation_dependencies, require_rol
 from .backend import execute_wiring
 from ..chapter3_g0.budget import G0Budget, ScopeExhausted
 from ..chapter3_g0.contract import canonical_hash, validate_inputs
+from .execution_costs import PUBLIC
 
 
 def load_common(path,expected_sha256):
@@ -60,12 +61,15 @@ def normalize(raw,*,input_sha256,method_seconds,process_seconds):
         state='NORMAL_COMPLETION'
     local=[r for records in raw.get('stages',{}).values() for r in records]
     return dict(schema='g0-wired-worker-receipt-v1',evidence_kind=raw.get('evidence_kind','UNKNOWN'),
+        execution_organization=raw.get('execution_organization','legacy_slot_startup_v1'),
         execution_state=state,input_sha256=input_sha256,full_input_sha256=raw.get('input_sha256'),
         safe_retained=retained,safe_candidate=deepcopy(final['candidate']) if retained else None,
         safe_upper_bound_J=final['U_J'] if retained else None,full_safe_aggregate=deepcopy(final['aggregate']) if retained else None,
         weighted_energy_J=deepcopy(final.get('weighted_energy_J')) if retained else None,
         first_legal_s=raw.get('first_legal_s'),first_safe_s=raw.get('first_safe_s'),
         method_elapsed_s=raw.get('stopped_s'),process_elapsed_s=process_seconds,
+        execution_timing=deepcopy(raw.get('execution_timing')),
+        method_elapsed_scope='coordinator body before final close; process_elapsed includes close/serialization',
         matlab_startup_s=raw.get('backend_timings',{}).get('matlab_startup_seconds'),
         phase_native_entries={str(p):sum(r.get('solver_entered',False) for r in raw.get('stages',{}).get(str(p),[])) for p in (1,2)},
         local_path_entered=any(r.get('solver_entered') for r in local),
@@ -73,14 +77,18 @@ def normalize(raw,*,input_sha256,method_seconds,process_seconds):
         raw=deepcopy(raw),performance_ranking_claim=False)
 
 
-def execute_method(common_file,expected_sha256,workdir,*,permit,dependencies=None,seconds=300,clock=time.monotonic,started_at=None):
+def execute_method(common_file,expected_sha256,workdir,*,permit,dependencies=None,seconds=300,clock=time.monotonic,started_at=None,
+                   execution_organization=PUBLIC):
     budget=G0Budget(seconds,clock=clock,started_at=started_at)
     require_permit(permit)
     require_role(permit,'method')
+    if require_permit(permit)=='REAL' and execution_organization!=permit.context['plan'].get('execution_organization'):
+        raise PermissionError('METHOD_EXECUTION_ORGANIZATION_DRIFT')
     started=budget.start
     try:
         result=execute_wiring(lambda:load_common(common_file,expected_sha256),workdir,
-            permit=permit,dependencies=dependencies,seconds=seconds,clock=clock,budget=budget)
+            permit=permit,dependencies=dependencies,seconds=seconds,clock=clock,budget=budget,
+            execution_organization=execution_organization)
     except ScopeExhausted as e:
         result={'evidence_kind':require_permit(permit),'reason':e.kind.upper()+'_CUTOFF',
                 'stopped_s':budget.elapsed,'stages':{},'final':None,'failure':None}

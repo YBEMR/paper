@@ -1,3 +1,7 @@
+## 当前公共启动版本（2026-10-30）
+
+`phase_public_startup_v1`已隔离实现：[实施与七组验收报告](../G0阶段公共启动_V2隔离实现与七组人工验收_20261030.md)、[79项最终回执](results/public_startup_final01/checks.json)、[逐文件审计](results/public_startup_final01/artifact_audit.json)。同根phase公共启动后再分slot；phase1从未启动、有及时S0时保留phase2唯一首次启动，启动失败禁止重试。启动总览/互斥分项/最终close分别记录。旧`legacy_slot_startup_v1`保留用于回归及来源追溯。旧plan及claim不可复用；本版未生成新科研批准，0真实算法/MATLAB/积分。以下为历史修复和入口状态。
+
 ## 当前修复版本（2026-10-30）
 
 scope封存/恢复、post前异常闸门和READY读取诊断已作限定修复；[人工验收报告](../G0恢复停机与READY诊断_限定修复及人工验收_20261030.md)、[72项检查](results/recovery_repair02/checks.json)、[源码检查点](results/recovery_repair02/repair_version.json)。新checkpoint为v2，旧真实结果未重放或升级。旧real_entry_plan01已消费且源hash不再匹配，不能复用；本修复检查点不是新科研批准。实际启动延迟和局部求解接入仍未解决，算法/时限/预算均不变。

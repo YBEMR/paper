@@ -66,10 +66,13 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None,
     if _budget is not None and (_wiring is None or _budget.seconds != seconds or _budget.clock is not clock):
         raise ValueError('external budget must be the same wired root')
     budget = G0Budget(seconds, clock=clock) if _budget is None else _budget
+    organization=getattr(_wiring,'execution_organization','legacy_slot_startup_v1')
+    public_start=organization=='phase_public_startup_v1'
     out = dict(schema='g0-manual-lifecycle-v1' if _wiring is None else 'g0-wired-lifecycle-v1', evidence_kind=kind,
                real_execution=kind=='REAL', state='UNRESOLVED', reason=None,
                stages={'1': [], '2': []}, initialization=None, S0=None, S1=None,
                final=None, D0=None, events=[], coverage={}, failure=None)
+    out['execution_organization']=organization
     out['blocks'] = {'1': {}, '2': {}}
     archive = bridge = None
     b1 = {}
@@ -192,6 +195,10 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None,
                     event('INITIALIZATION_END', has_safe=out['S0'] is not None)
                 if out['S0'] is not None:
                     out['D0'] = deepcopy(out['S0']['d0'])
+                    if public_start:
+                        event('PUBLIC_SESSION_CHECK',phase=1)
+                        backend.start_public_session(budget,phase=1)
+                        event('PUBLIC_SESSION_READY',phase=1)
                     for index, sid in enumerate(ids):
                         budget.check()
                         block = select_block(config, instance, out['S0']['candidate'], out['D0'],
@@ -216,6 +223,10 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None,
             event('S1_FROZEN', candidate_sha256=canonical_hash(out['S1']['candidate']))
             budget.check()
             with budget.scope('phase2', float(seconds), kind='phase'):
+                if public_start:
+                    event('PUBLIC_SESSION_CHECK',phase=2)
+                    backend.start_public_session(budget,phase=2)
+                    event('PUBLIC_SESSION_READY',phase=2)
                 # All B2 choices are frozen atomically before the first model.
                 draft = {}
                 for sid in ids:

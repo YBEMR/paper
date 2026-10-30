@@ -97,6 +97,7 @@ class ScopedMatlabSession:
             requested_total_budget_s=total_budget_s,
             startup_scope_snapshot=budget.capture_scope(),
             lifetime_rule='root deadline, never first-slot remaining time')
+        self.metadata['startup_intervals']={'constructor_start_s':self.started-budget.start}
         write=dependencies['write_json']
         write(self.workdir/'session.json',self.metadata)
         try:
@@ -113,8 +114,12 @@ class ScopedMatlabSession:
                 creationflags=dependencies['creationflags'])
             self.metadata['pid']=self.proc.pid
             write(self.workdir/'session.json',self.metadata)
-            self.environment,read_info=dependencies['read_json'](
-                self.workdir/'ready.json',self.startup_deadline,self.clock,self.proc)
+            self.metadata['startup_intervals']['ready_wait_start_s']=budget.elapsed
+            try:
+                self.environment,read_info=dependencies['read_json'](
+                    self.workdir/'ready.json',self.startup_deadline,self.clock,self.proc)
+            finally:
+                self.metadata['startup_intervals']['ready_wait_end_s']=budget.elapsed
             self.metadata['ready_publication_read']=read_info
             if self.environment.get('status')!='READY':
                 raise RuntimeError('MATLAB worker unavailable: '+str(self.environment))
@@ -124,6 +129,7 @@ class ScopedMatlabSession:
             self.process_tree=dependencies['capture_tree'](self.proc,phase='ready')
             self.metadata.update(process_tree_at_ready=deepcopy(self.process_tree),
                 startup_wall_seconds=self.clock()-self.started,startup_outcome='READY')
+            self.metadata['startup_intervals']['ready_accepted_s']=budget.elapsed
             write(self.workdir/'session.json',self.metadata)
         except BaseException as error:
             self.metadata.update(startup_outcome='FAILED_OR_DEADLINE',
@@ -136,10 +142,13 @@ class ScopedMatlabSession:
             except Exception as archive_error:
                 self.metadata['startup_archive_error']=repr(archive_error)
             try:
+                self.metadata['startup_intervals']['failure_cleanup_start_s']=budget.elapsed
                 self.close()
             except BaseException as cleanup_error:
                 self.cleanup=getattr(self,'cleanup',{})
                 self.cleanup['cleanup_error']=repr(cleanup_error)
+            finally:
+                self.metadata['startup_intervals']['failure_cleanup_end_s']=budget.elapsed
             # A late file may diagnose a timeout, never make it a READY success.
             # One non-waiting read only; no request, clock change or evaluation.
             late={'observed':False,'accepted_for_startup':False,

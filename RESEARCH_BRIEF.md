@@ -2,6 +2,8 @@
 
 更新：2026-10-29。
 
+**首次真实方法接入已完成：HEFT/SA完整SAFE，whole300秒构模截止（D240／E660）。** [结果报告](research/第三章首次小规模真实方法接入预检结果_20261029.md)、[汇总](research/chapter3_method_entry_executor/results/real_entry01_analysis/summary.json)、[内部只读审查](research/chapter3_method_entry_executor/results/real_entry01_preparation/independent_result_review.json)。用户释放内存后按原资源门通过，执行唯一whole→HEFT→SA101：3方法、2post，根648.671秒/post进程6.359秒/批681.125秒；无重试/延时。whole根300秒、进程306.391秒，构模未完、0MATLAB/0native/无候选及SAFE，非数值冲突或原生无解；部分114334变量/590495行/9524633非零，C1/C2候选事件1246/1162。HEFT根48.671秒、E0.882913166J；SA根300秒、E0.979512056J，末次未决不覆盖31.609秒已有SAFE；两份post均完整SAFE。208冻结源/输入不变，进程清理/内存采样通过；独立1116项只读核对通过，0额外生产评价。80份原始工件完整压缩及往返hash归档；批claim已消费。此为单根接入验收，非总体性能/热反馈收益结论；MATLAB实际启动与求解仍未验收。下一步优先基于现有日志核whole构模成本及可运行规模，不自动扩50根/原C或暂停实验。以下D239为释放内存前记录。
+
 **首次真实接入已获本轮批准，宿主内存门阻断，尚未消费调用（D239／E659）。** 用户在明确3×300方法、最多3×60post、批1800预算后回复“继续吧”。[批准与身份核对](research/chapter3_method_entry_executor/results/real_entry01_preparation/approval_gate_check.json)、[宿主预检](research/chapter3_method_entry_executor/results/real_entry01_preparation/preflight01.json)。同一plan/input/208源、Python和依赖一致，MATLAB文件存在；无遗留MATLAB/非AppContainer，提交余量7.26GiB/磁盘充足，但最后物理可用2128703488字节（约1.98GiB）低于原2GiB门，按冻结规则不启动。另存本轮authorized=true批准文件，原false模板/冻结源码不动；无真实claim、方法/post/MATLAB/热积分均0，研究预算未消耗。已请用户释放内存；下一步重查同一门，通过后才按whole→HEFT→SA101唯一执行，不重试/换输入/降门槛或扩大范围。以下D238为此前待批状态。
 
 **post语义拒绝外层分类已修正，60项模拟通过，首次真实接入待批准（D238／E658）。** [补修说明/当前待批协议](research/第三章小规模方法执行器_阶段二验收与待批协议_20261029.md)、[新冻结](research/chapter3_method_entry_executor/results/post_status_precheck01/plan.json)、[60项回归](research/chapter3_method_entry_executor/results/post_status_precheck01/checks.json)、[范围核对](research/chapter3_method_entry_executor/results/post_status_precheck01/scope_verification.json)。用户指出worker约定exit2的热违规/非法调度被父级误归技术故障，核实成立。仅改新增runner/run_checks并加定向测试：干净匹配回执/清理确认/exit2+及时违规→POST_THERMAL_VIOLATION_STOP；exit2+期限内非法回执→POST_INVALID_SCHEDULE_STOP；真实errors、异常退出、缺证据和清理失败仍分别为技术/清理故障。batch stop_reason保留phase/job/具体状态，不只泛化POST_ABNORMAL_STOP。新增7项包括两条run_post→exit2→slot→batch完整模拟；60/60、48子项、16.093秒通过。原worker、算法、热模型、input及jobs/预算字节/内容保持，0真实调用。当前plan SHA a6b4bd70f58b92eadcb6409d336df18a341f174ecca0f88c5ae782948813cd06，批准模板false、无真实claims。下一步只待原3×300＋最多3×60post/批1800真实接入批准及环境门，不再扩功能；以下D237为此前阶段二版本。
@@ -2336,3 +2338,6 @@ papers/现有50份PDF文件，其中CoDVFS为608页论文集，不等于50篇独
 
 
 **D239（2026-10-29，用户批准既定首次真实方法接入）：** 在6efbb2f5完成post状态修复并重申whole/HEFT/SA101各300秒、最多3×60post、批1800后，用户回复“继续吧”，本轮据此记录批准并保持此前冻结范围。独立只读合同核查、208源与input/runtime/依赖核对通过；新增真实批准副本及身份核对，不改原false模板、plan或任何科学/算法代码。启动前最后物理可用1.98GiB低于2GiB门，停止于环境准备，无批claim/进程/方法/post/热积分，0研究秒。请求用户释放至少0.5GiB留裕量；其后重查原门再唯一启动，不把资源阻断当算法失败，不自动改变预算或条件。重审触发：真实来源漂移、资源或进程身份不明、方法技术/数值/清理故障或超额；原C、50根和暂停队列均不在本批准内。
+
+
+**D240（2026-10-29，既定首次真实接入执行完成）：** 用户报告已释放内存，并明确本批后续例行请求由助手自主处理；资源门在物理3.90GiB/提交12.26GiB、无MATLAB、非AppContainer通过后按D239批准及同一plan/input唯一执行。3×300上限及最多3×60post/批1800不变，实际3方法/2post，root648.671秒、post6.359秒、批681.125秒。whole300秒构模未完、0原生/无SAFE；HEFT0.882913166J、SA1010.979512056J及各自post完整SAFE，后者正常截止保留既有SAFE。208源不变，1116纯核查通过。助手采纳将构模事件/条件约束成本作为后续优先核查对象，不据本次直接缩域、改模型或扩大预算；本轮批准已一次消费，未用余额不挪给其他任务。禁止自动启动50根、原C、K.168、期限组剩余调用。重审触发：改变科学输入/物理/合法域/安全门、正式规模/统计范围或新增研究调用。

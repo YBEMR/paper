@@ -48,17 +48,24 @@ def make_model_view(instance, scene_id, deployment):
     return view
 
 
-def run_g0(input_loader, backend, *, seconds, clock, manual=False):
+def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None):
     """Execute deterministic coordination only with explicit manual seams.
 
     No default initializer, solver, coefficient factory or evaluator exists.
     A future real entry needs separate approval and integration validation.
     """
-    if not manual or REAL_EXECUTION_ENABLED or backend.evidence_kind != 'MANUAL_FIXTURE':
-        raise PermissionError('REAL_G0_ENTRY_DISABLED')
+    kind='MANUAL_FIXTURE'
+    if _wiring is None:
+        if not manual or REAL_EXECUTION_ENABLED or backend.evidence_kind != kind:
+            raise PermissionError('REAL_G0_ENTRY_DISABLED')
+    else:
+        from ..chapter3_g0_real_entry.gating import require_permit
+        kind=require_permit(_wiring.permit)
+        if manual or backend.evidence_kind!=kind:
+            raise PermissionError('WIRING_PROFILE_MISMATCH')
     budget = G0Budget(seconds, clock=clock)
-    out = dict(schema='g0-manual-lifecycle-v1', evidence_kind='MANUAL_FIXTURE',
-               real_execution=False, state='UNRESOLVED', reason=None,
+    out = dict(schema='g0-manual-lifecycle-v1' if _wiring is None else 'g0-wired-lifecycle-v1', evidence_kind=kind,
+               real_execution=kind=='REAL', state='UNRESOLVED', reason=None,
                stages={'1': [], '2': []}, initialization=None, S0=None, S1=None,
                final=None, D0=None, events=[], coverage={}, failure=None)
     out['blocks'] = {'1': {}, '2': {}}
@@ -157,9 +164,16 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False):
         validate_inputs(config, instance)
         budget.check()
         out['input_sha256'], out['config_sha256'] = canonical_hash(instance), canonical_hash(config)
-        archive = Archive(config, instance, budget, backend.source_hashes, manual=True)
-        bridge = ReceiptBridge(config, instance, budget, archive, backend.receipt_dependencies,
-                               manual=True)
+        if _wiring is None:
+            archive = Archive(config, instance, budget, backend.source_hashes, manual=True)
+            bridge = ReceiptBridge(config, instance, budget, archive, backend.receipt_dependencies,
+                                   manual=True)
+        else:
+            archive=_wiring.archive_factory(config,instance,budget,backend.source_hashes,
+                permit=_wiring.permit,accuracy=config['accuracy_targets'])
+            bridge=_wiring.bridge_factory(config,instance,budget,archive,backend.receipt_dependencies,
+                permit=_wiring.permit,accuracy=config['accuracy_targets'])
+            backend.attach_context(config,instance,budget,archive,bridge)
         ids = sorted(scenes(instance))
         phase1_end = float(seconds)/2
         try:
@@ -219,16 +233,22 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False):
         except CleanupFailure as cleanup:
             out['failure'] = dict(kind='CLEANUP_FAILURE', message=str(cleanup))
     except Exception as error:
-        out['failure'] = dict(kind='CLEANUP_FAILURE' if isinstance(error, CleanupFailure)
-                              else 'TECHNICAL_FAILURE', error_type=type(error).__name__,
-                              message=str(error))
-        context=error.__context__
-        out['failure']['context_chain']=[]
-        while context is not None and len(out['failure']['context_chain'])<8:
-            out['failure']['context_chain'].append({'error_type':type(context).__name__,
-                                                   'message':str(context)})
-            context=context.__context__
-        out['reason'] = out['failure']['kind']
+        if _wiring is not None and getattr(error,'g0_normal_startup_cutoff',False):
+            out['reason']='STARTUP_'+error.kind.upper()+'_CUTOFF'
+            out['startup_stop']={'scope_kind':error.kind,'cleanup_verified':error.cleanup_verified,'worker_ready':False}
+            if not error.cleanup_verified:
+                out['failure']={'kind':'CLEANUP_FAILURE','message':'STARTUP_CUTOFF_CLEANUP_NOT_CONFIRMED'}
+        else:
+            out['failure'] = dict(kind='CLEANUP_FAILURE' if isinstance(error, CleanupFailure)
+                                  else 'TECHNICAL_FAILURE', error_type=type(error).__name__,
+                                  message=str(error))
+            context=error.__context__
+            out['failure']['context_chain']=[]
+            while context is not None and len(out['failure']['context_chain'])<8:
+                out['failure']['context_chain'].append({'error_type':type(context).__name__,
+                                                       'message':str(context)})
+                context=context.__context__
+            out['reason'] = out['failure']['kind']
     finally:
         if out['failure'] is not None:
             try:
@@ -245,7 +265,7 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False):
             out['first_safe_s'] = archive.first_safe_elapsed_s
             out['violations'] = deepcopy(archive.violations)
         if out['final'] is not None:
-            out['state'] = 'MANUAL_SAFE_WITNESS_RETAINED'
+            out['state'] = 'MANUAL_SAFE_WITNESS_RETAINED' if _wiring is None else kind+'_SAFE_WITNESS_RETAINED'
         def improvement(before,after):
             if before is None or after is None:
                 return None
@@ -255,7 +275,8 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False):
             'phase1_upper_bound_reduction_J':improvement(out['S0'],out['S1']),
             'phase2_upper_bound_reduction_J':improvement(out['S1'],out['final']),
             'strict_interval_improvement':False if out['final'] is None else out['final']['strict_improvement'],
-            'scope':'manual replay only; no scientific energy result'}
+            'scope':'manual replay only; no scientific energy result' if _wiring is None else
+                    ('simulation wiring only; no scientific energy result' if kind=='SIMULATION' else 'complete original-input U')}
         if instance is not None:
             for sid in scenes(instance):
                 blocks=[]
@@ -272,5 +293,5 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False):
         out['budget'] = budget.summary(stopped_s=budget.elapsed)
         out['scope_records'] = deepcopy(budget.scope_records)
         if out['reason'] is None:
-            out['reason'] = 'DECLARED_MANUAL_LIFECYCLE_COMPLETED'
+            out['reason'] = 'DECLARED_MANUAL_LIFECYCLE_COMPLETED' if _wiring is None else 'DECLARED_WIRING_LIFECYCLE_COMPLETED'
     return out

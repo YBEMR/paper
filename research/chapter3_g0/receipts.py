@@ -133,8 +133,15 @@ class Archive:
     def __init__(self, config, instance, budget, source_hashes, *, accuracy=None, manual=True):
         if not manual or REAL_EXECUTION_ENABLED:
             raise RealExecutionDisabled("this archive is limited to manual isolation evidence")
+        self._initialize(config, instance, budget, source_hashes, accuracy=accuracy,
+                         evidence_kind=EVIDENCE_KIND)
+
+    def _initialize(self, config, instance, budget, source_hashes, *, accuracy,
+                    evidence_kind):
+        """Shared validation core; non-manual factories must gate before entry."""
         if not isinstance(source_hashes, dict) or not source_hashes:
             raise ValueError("explicit backend source identity required")
+        self.evidence_kind = evidence_kind
         self.config, self.instance = deepcopy(config), deepcopy(instance)
         self.budget, self.sources = budget, deepcopy(source_hashes)
         self.accuracy = dict(DEFAULT_ACCURACY)
@@ -184,7 +191,7 @@ class Archive:
             raise EvidenceConflict("raw receipt is not the original PARTIAL protocol")
         # Manual dependency provenance belongs to the G0 envelope, not to
         # invented fields in an already hashed legacy PARTIAL receipt.
-        if receipt.get("evidence_kind") not in (None, EVIDENCE_KIND):
+        if receipt.get("evidence_kind") not in (None, self.evidence_kind):
             raise EvidenceConflict("conflicting raw receipt provenance")
         if receipt.get("receipt_sha256") != hash_payload(receipt):
             raise EvidenceConflict("receipt payload identity mismatch")
@@ -287,7 +294,7 @@ class Archive:
             "U_J": str(interval[1]), "completed_at_elapsed_s": formed, "source": str(source),
             "input_sha256": canonical_hash(self.instance), "config_sha256": canonical_hash(self.config),
             "source_sha256": deepcopy(self.sources), "scope": self.budget.capture_scope() if scope is None else deepcopy(scope),
-            "evidence_kind": EVIDENCE_KIND,
+            "evidence_kind": self.evidence_kind,
             "strict_improvement": self._best is not None and interval[1] < energy_interval(self._best["weighted_energy_J"])[0]}
         record["generation_sha256"] = canonical_hash(record)
         self.generations.append(deepcopy(record))
@@ -325,8 +332,21 @@ class ReceiptBridge:
                  manual=True, source_hashes=None):
         if not manual or REAL_EXECUTION_ENABLED:
             raise RealExecutionDisabled("real G0 bridge entry is closed")
-        if not isinstance(dependencies, dict) or dependencies.get("evidence_kind") != EVIDENCE_KIND:
-            raise ValueError("explicit MANUAL_FIXTURE dependency set required")
+        self._initialize(config, instance, budget, archive, dependencies,
+                         accuracy=accuracy, source_hashes=source_hashes,
+                         evidence_kind=EVIDENCE_KIND, origin_prefix="MANUAL",
+                         require_raw_view_kind=True)
+
+    def _initialize(self, config, instance, budget, archive, dependencies, *, accuracy,
+                    source_hashes, evidence_kind, origin_prefix, require_raw_view_kind):
+        """Profile seam; preserves original raw PARTIAL and shared validators."""
+        if not isinstance(dependencies, dict) or dependencies.get("evidence_kind") != evidence_kind:
+            raise ValueError("explicit matching-provenance dependency set required")
+        if archive.evidence_kind != evidence_kind:
+            raise ValueError("bridge/archive evidence profile mismatch")
+        self.evidence_kind = evidence_kind
+        self.origin_prefix = origin_prefix
+        self.require_raw_view_kind = require_raw_view_kind
         self.config, self.instance = deepcopy(config), deepcopy(instance)
         self.budget, self.archive, self.dependencies = budget, archive, dict(dependencies)
         self.accuracy = deepcopy(archive.accuracy)
@@ -368,7 +388,7 @@ class ReceiptBridge:
         if checked.get("state") != "SCHEDULE_VALID_THERMAL_UNCHECKED":
             out = {"state": "INVALID_SCHEDULE", "reason": checked.get("reason"),
                    "rankable_energy": False, "weighted_energy_J": None,
-                   "legality": deepcopy(checked), "evidence_kind": EVIDENCE_KIND}
+                   "legality": deepcopy(checked), "evidence_kind": self.evidence_kind}
             self.archive.events.append({"source": source, "aggregate": deepcopy(out), "accepted": False})
             return out
         d0 = _deployment(self.config, self.instance, candidate)
@@ -405,7 +425,7 @@ class ReceiptBridge:
         if isinstance(expected_scope, str):
             expected_scope = self.budget.scope_snapshot(expected_scope)
         if (context.get("protocol") != "g0-model-view-envelope-v1"
-                or context.get("evidence_kind") != EVIDENCE_KIND
+                or context.get("evidence_kind") != self.evidence_kind
                 or context.get("root_identity") != self.budget.root_identity
                 or context.get("input_sha256") != model_digest(model_instance)
                 or context.get("candidate_sha256") != model_digest(candidate)
@@ -413,13 +433,14 @@ class ReceiptBridge:
                 or context.get("source_sha256") != self.archive.sources
                 or context.get("raw_sha256") != canonical_hash(raw)
                 or context.get("scope") != expected_scope
-                or not str(context.get("origin", "")).startswith("MANUAL")):
+                or not str(context.get("origin", "")).startswith(self.origin_prefix)):
             raise EvidenceConflict("model-view G0 source/root/accuracy/scope binding mismatch")
         expected = {"input_sha256": model_digest(model_instance),
                     "candidate_sha256": model_digest(candidate)}
         if receipt.get("evidence_identity") != expected:
             raise EvidenceConflict("model-view evidence identity mismatch")
-        if receipt.get("evidence_kind") != EVIDENCE_KIND:
+        if ((self.require_raw_view_kind and receipt.get("evidence_kind") != self.evidence_kind)
+                or receipt.get("evidence_kind") not in (None, self.evidence_kind)):
             raise EvidenceConflict("model-view manual source must be explicit")
         self.archive.violations.extend(deepcopy(receipt.get("violations", [])))
         if receipt.get("state") != "SAFE":

@@ -1,8 +1,9 @@
-"""Controlled G0 local builder. Only labelled artificial row replay is enabled.
+"""Controlled G0 local builder with separately gated wiring seams.
 
 Imports perform no work. The numerical suffix is inherited verbatim from the
 archived builder; real G0 construction, coefficient generation and solvers
-remain disabled pending separately approved scientific entry.
+remain disabled pending separately approved scientific entry. Wiring tests
+must explicitly inject a fake Model factory and finite handwritten options.
 """
 from copy import deepcopy
 from dataclasses import dataclass
@@ -99,27 +100,35 @@ def _manual_model(kernel, instance, budget, progress, coefficients):
 
 def build_local_model(config, instance, *, condition, budget, manual=False,
                       manual_backend=None, coefficient_factory=None,
+                      wiring_permit=None, wiring_dependencies=None,
                       starts=None, include_physics=True, progress=None,
                       fix_late_options=True, aggregate_opp_locks=True,
                       relax_auxiliary_integrality=False,
                       strengthen_energy_lower_bounds=False,
                       prefilter_deadlines=True, cumulative_precedence=False,
                       preeliminate_closed_anchors=True):
-    """Artificial option/row replay only; no real options or RC coefficients.
+    """Manual replay, or a capability-gated and explicitly wired front end.
 
     A later real entry must use original Coefficients, never this injection
     seam. All returned rows carry manual provenance and are not scientific
     results. Original arithmetic is reused without an original model build.
     """
-    if manual is not True:
+    wiring = None
+    if wiring_permit is not None:
+        if manual or manual_backend is not None or coefficient_factory is not None:
+            raise ValueError('manual and separately gated wiring profiles cannot mix')
+        from ..chapter3_g0_real_entry.model_backend import resolve_build_dependencies
+        wiring = resolve_build_dependencies(wiring_permit, wiring_dependencies)
+    elif manual is not True:
         raise RuntimeError('REAL_G0_CONSTRUCTION_DISABLED_PENDING_SEPARATE_APPROVAL')
     if coefficient_factory is not None:
         raise ValueError('factory injection disabled; provide labelled prestored rows')
-    if not isinstance(manual_backend, ManualReplay) or manual_backend.source_kind != MANUAL_ORIGIN:
-        raise ValueError('explicit labelled manual backend required')
-    if (manual_backend.input_sha256 != _digest(instance) or
-            manual_backend.config_sha256 != _digest(config)):
-        raise ValueError('manual replay input/config identity mismatch')
+    if wiring is None:
+        if not isinstance(manual_backend, ManualReplay) or manual_backend.source_kind != MANUAL_ORIGIN:
+            raise ValueError('explicit labelled manual backend required')
+        if (manual_backend.input_sha256 != _digest(instance) or
+                manual_backend.config_sha256 != _digest(config)):
+            raise ValueError('manual replay input/config identity mismatch')
     if starts is not None:
         raise ValueError('G0 uses declared original start domain; no override')
     for value in (include_physics, fix_late_options, aggregate_opp_locks,
@@ -134,9 +143,15 @@ def build_local_model(config, instance, *, condition, budget, manual=False,
             'source_builder_matches', 'numerical_suffix_exact_text', 'numerical_suffix_matches')):
         raise ValueError('non-whitelisted original builder/source drift')
     budget.check()
-    kernel = _kernel()
-    from control_policy import AUTO_LOW_IMMEDIATE_V1, resolve_idle_policy
-    from scene_adapter import make_scene_instance
+    if wiring is None:
+        kernel = _kernel()
+        from control_policy import AUTO_LOW_IMMEDIATE_V1, resolve_idle_policy
+        from scene_adapter import make_scene_instance
+    else:
+        kernel = wiring['kernel']
+        AUTO_LOW_IMMEDIATE_V1 = wiring['auto_low_policy']
+        resolve_idle_policy = wiring['resolve_idle_policy']
+        make_scene_instance = wiring['make_scene_instance']
     _plus = kernel._plus
     add_energy_lower_bound = kernel.add_energy_lower_bound
     add_cumulative_precedence = kernel.add_cumulative_precedence
@@ -149,7 +164,12 @@ def build_local_model(config, instance, *, condition, budget, manual=False,
     view = make_scene_instance(instance, sid, unweighted=True)
     for shared, modes in view['stage_modes'].items():
         view['stage_modes'][shared] = [mode for mode in modes if mode['unit_id'] == normalized[shared]]
-    model = _manual_model(kernel, view, budget, progress, manual_backend.coefficients)
+    if wiring is None:
+        model = _manual_model(kernel, view, budget, progress, manual_backend.coefficients)
+    else:
+        model = wiring['model_factory'](view, budget, progress=progress)
+        if model.budget is not budget or _digest(model.instance) != _digest(view):
+            raise ValueError('wired Model factory changed view or root budget')
     model.formulation = dict(fix_late_options=bool(fix_late_options),
                              aggregate_opp_locks=bool(aggregate_opp_locks),
                              relax_auxiliary_integrality=bool(relax_auxiliary_integrality))
@@ -166,10 +186,13 @@ def build_local_model(config, instance, *, condition, budget, manual=False,
         'fixed_scene_id': sid,
         'prefilter_deadlines': bool(prefilter_deadlines),
         'objective_weights': {scene['id']: scene['weight'] for scene in instance['scenarios']},
-        'numeric_scope': 'manual row replay only; no scientific model execution',
+        'numeric_scope': ('manual row replay only; no scientific model execution'
+                          if wiring is None else 'gated '+wiring['kind']+' model wiring'),
         'options_before_deadline_filter': None, 'deadline_removed_count': 0,
         'empty_stage_option_sets': [], 'fixed_idle_domains': {},
-        'manual_origin': MANUAL_ORIGIN, 'formal_experiment_result': False,
+        'manual_origin': MANUAL_ORIGIN if wiring is None else None,
+        'wiring_profile': None if wiring is None else wiring['kind'],
+        'formal_experiment_result': False,
         'source_text_protection': protected,
     }
     model.formulation.update(prefilter_deadlines=bool(prefilter_deadlines),
@@ -185,7 +208,8 @@ def build_local_model(config, instance, *, condition, budget, manual=False,
     nodes = p['node_order']; n = len(nodes)
     units = {unit['id']: unit for unit in p['units']}
     domains = p['domains']
-    options = deepcopy(manual_backend.options)
+    options = (deepcopy(manual_backend.options) if wiring is None else
+               wiring['expand_options'](model.instance, config, budget=budget))
     if any(option['scenario_id'] != sid for option in options):
         raise ValueError('manual rows must belong to original requested scene')
     options, model.neighborhood_stats = filter_options(

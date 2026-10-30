@@ -64,10 +64,10 @@ def main():
         dest=output/'source_snapshot'/p.relative_to(ROOT/'research')
         dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(p.read_bytes())
     counters={};result=Result();ctx_records=[];started=time.monotonic()
-    from . import test_model_backend, test_receipt_profile, test_transport, test_backend_driver, test_worker_runner, test_launch_boundaries, test_recovery_repairs, test_public_startup
+    from . import test_model_backend, test_receipt_profile, test_transport, test_backend_driver, test_worker_runner, test_launch_boundaries, test_recovery_repairs, test_public_startup, test_settlement
     with prohibit_scientific_work(counters):
         suite=unittest.TestSuite()
-        for module in (test_receipt_profile,test_transport,test_backend_driver,test_worker_runner,test_launch_boundaries,test_recovery_repairs,test_public_startup):
+        for module in (test_receipt_profile,test_transport,test_backend_driver,test_worker_runner,test_launch_boundaries,test_recovery_repairs,test_public_startup,test_settlement):
             suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(module))
         suite.run(result)
         for name in sorted(n for n in dir(test_model_backend) if n.startswith('test_')):

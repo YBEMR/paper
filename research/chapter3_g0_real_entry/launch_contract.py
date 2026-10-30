@@ -41,8 +41,11 @@ def verify_plan(plan):
             or plan.get('algorithm')!={'fixed_D0':True,'block_capacities':[2,4],
                                       'stage1_deadline_root_s':150}):
         raise ValueError('PLAN_SCOPE_DRIFT')
-    if plan.get('execution_organization')!='phase_public_startup_v1':
+    from .settlement import PROFILE,RULE
+    if plan.get('execution_organization') not in ('phase_public_startup_v1',PROFILE):
         raise ValueError('PLAN_EXECUTION_ORGANIZATION_REQUIRED')
+    if plan.get('execution_organization')==PROFILE and plan.get('request_settlement')!=RULE:
+        raise ValueError('PLAN_SETTLEMENT_RULE_DRIFT')
     if sha(ROOT/INPUT)!=INPUT_SHA:raise ValueError('INPUT_DRIFT')
     sources=plan.get('source_sha256')
     if not isinstance(sources,dict) or not sources:raise ValueError('NO_SOURCE_FREEZE')

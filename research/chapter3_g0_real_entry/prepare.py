@@ -4,7 +4,7 @@ import sys
 from .launch_contract import ROOT,HERE,INPUT,INPUT_SHA,SCOPE,read,save,sha,verify_plan,digest
 
 
-def freeze(output):
+def freeze(output,*,bounded_settlement=False):
     from pathlib import Path
     output=Path(output)
     if output.exists():raise ValueError('NEW_PLAN_DIRECTORY_REQUIRED')
@@ -23,6 +23,9 @@ def freeze(output):
           'matlab_executable':'F:/Matlab2023/Program_Files/MATLAB_R2023b/bin/matlab.exe',
           'source_sha256':sources,'execution_authorized':False,
           'purpose':'one C01 G0 connection check, not algorithm ranking'}
+    if bounded_settlement:
+        from .settlement import PROFILE,RULE
+        plan.update(execution_organization=PROFILE,request_settlement=dict(RULE))
     plan['executable_sha256']={p:sha(p) for p in (plan['python_executable'],plan['matlab_executable'])}
     verify_plan(plan)
     output.mkdir(parents=True)

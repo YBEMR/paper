@@ -67,7 +67,8 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None,
         raise ValueError('external budget must be the same wired root')
     budget = G0Budget(seconds, clock=clock) if _budget is None else _budget
     organization=getattr(_wiring,'execution_organization','legacy_slot_startup_v1')
-    public_start=organization=='phase_public_startup_v1'
+    bounded_settlement=organization=='phase_public_startup_bounded_settlement_v1'
+    public_start=organization=='phase_public_startup_v1' or bounded_settlement
     out = dict(schema='g0-manual-lifecycle-v1' if _wiring is None else 'g0-wired-lifecycle-v1', evidence_kind=kind,
                real_execution=kind=='REAL', state='UNRESOLVED', reason=None,
                stages={'1': [], '2': []}, initialization=None, S0=None, S1=None,
@@ -77,6 +78,10 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None,
     archive = bridge = None
     b1 = {}
     config = instance = None
+
+    def settle():
+        if bounded_settlement:
+            backend.settle_pending(budget)
 
     def idle():
         if backend.is_idle() is not True:
@@ -157,6 +162,9 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None,
                 idle()
         except ScopeExhausted as error:
             record.update(status=error.kind.upper()+'_CUTOFF', stop_kind=error.kind)
+            if bounded_settlement:
+                if error.kind != 'slot':raise
+                settle()
             idle()
             if error.kind != 'slot':
                 raise
@@ -208,6 +216,7 @@ def run_g0(input_loader, backend, *, seconds, clock, manual=False, _wiring=None,
                         local(1, sid, out['S0'], block, phase1_end, index, len(ids))
         except ScopeExhausted as error:
             event('PHASE1_CUTOFF', stop_kind=error.kind)
+            settle()
             idle()
         out['phase1_stopped_s']=budget.elapsed
         if out['S0'] is None:

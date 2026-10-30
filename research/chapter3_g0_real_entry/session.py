@@ -16,6 +16,7 @@ import sys
 
 from research.chapter3_g0.budget import ScopeExhausted
 from .gating import require_permit, require_simulation_dependencies
+from .settlement import BoundedSettlement
 
 
 def _legacy():
@@ -46,7 +47,7 @@ def production_dependencies(permit):
         creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
 
 
-class ScopedMatlabSession:
+class ScopedMatlabSession(BoundedSettlement):
     """Same root Budget object; lifetime root-bound, waits scope-bound.
 
     The startup block deliberately mirrors the original constructor. The
@@ -186,6 +187,8 @@ class ScopedMatlabSession:
         cap=available if solver_max_time_s is None else min(available,solver_max_time_s)
         if not math.isfinite(cap) or cap<=0:
             raise ValueError('native MaxTime must be positive and scope bounded')
+        previous=self.counter
+        scope=active.capture_scope();evidence_deadline=active.effective_deadline_elapsed_s
         self.request_settled=False
         try:
             returned=self.kernel.MatlabSession.solve(self,model,remaining_s=available,
@@ -195,6 +198,7 @@ class ScopedMatlabSession:
             raise
         self.request_settled=(returned.get('status') in ('SOLVED','BUDGET_EXHAUSTED_BEFORE_PUBLICATION')
                               and not self.request_blocked)
+        self.note_request_return(returned,previous,scope,evidence_deadline)
         returned=dict(returned)
         returned.update(request_settled=self.request_settled,
                         g0_effective_limit_s=available,g0_session_deadline=self.deadline)

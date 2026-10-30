@@ -1,3 +1,7 @@
+## 当前有界收束版本（2026-10-30）
+
+新增`phase_public_startup_bounded_settlement_v1`：[隔离实现与十组验收报告](../G0有界收束_隔离实现与十组人工验收_20261030.md)、[89项最终回执](results/settlement_final02/checks.json)、[逐文件审计](results/settlement_final02/artifact_audit.json)。已发布请求正常取消后，最多10秒控制收束计入原根；跨phase不重置截止，迟到候选/目标/回调不接纳。数值/原生错误或提交前占号未发布不能恢复。旧PUBLIC/LEGACY版本保留；`prepare.freeze(..., bounded_settlement=True)`仅准备未批准的新版本计划，默认仍是旧PUBLIC。`phase1_stopped_s`可含边界控制，150秒优化截止以scope记录为准。本版仅人工验证，未批准真实调用，无新真实claim。以下为历史版本说明。
+
 ## 当前公共启动版本（2026-10-30）
 
 `phase_public_startup_v1`已隔离实现：[实施与七组验收报告](../G0阶段公共启动_V2隔离实现与七组人工验收_20261030.md)、[79项最终回执](results/public_startup_final01/checks.json)、[逐文件审计](results/public_startup_final01/artifact_audit.json)。同根phase公共启动后再分slot；phase1从未启动、有及时S0时保留phase2唯一首次启动，启动失败禁止重试。启动总览/互斥分项/最终close分别记录。旧`legacy_slot_startup_v1`保留用于回归及来源追溯。旧plan及claim不可复用；本版未生成新科研批准，0真实算法/MATLAB/积分。以下为历史修复和入口状态。

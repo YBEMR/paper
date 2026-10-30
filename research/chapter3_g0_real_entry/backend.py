@@ -16,6 +16,7 @@ from .session import ScopedMatlabSession
 from .numeric_transport import ScopeAwareContext, ScopedAugmentedSession
 from ..chapter3_g0.budget import ScopeExhausted
 from .execution_costs import LEGACY,PUBLIC,startup_cost
+from .settlement import PROFILE as SETTLEMENT
 
 
 class StartupCutoff(Exception):
@@ -49,7 +50,7 @@ def production_dependencies(permit):
 
 class G0Backend:
     def __init__(self,workdir,*,permit,dependencies=None,execution_organization=LEGACY):
-        if execution_organization not in (LEGACY,PUBLIC):raise ValueError('UNKNOWN_EXECUTION_ORGANIZATION')
+        if execution_organization not in (LEGACY,PUBLIC,SETTLEMENT):raise ValueError('UNKNOWN_EXECUTION_ORGANIZATION')
         self.execution_organization=execution_organization
         self.evidence_kind=require_permit(permit)
         if self.evidence_kind=='REAL' and execution_organization!=permit.context.get('plan',{}).get('execution_organization'):
@@ -108,6 +109,7 @@ class G0Backend:
                 budget.check()
                 if self.session.budget is not budget or not self.session.is_idle():
                     raise RuntimeError('NEW_SESSION_NOT_VERIFIABLY_IDLE')
+                if self.execution_organization==SETTLEMENT:self.session.enable_bounded_settlement()
                 self.session_state='READY'
             except BaseException as error:
                 self.session_state='FAILED_OR_CUTOFF'
@@ -146,7 +148,7 @@ class G0Backend:
         budget.check()
 
     def start_public_session(self,budget,*,phase):
-        if self.execution_organization!=PUBLIC or budget is not self.budget:
+        if self.execution_organization not in (PUBLIC,SETTLEMENT) or budget is not self.budget:
             raise ValueError('PUBLIC_START_PROFILE_OR_ROOT_MISMATCH')
         scope=budget.capture_scope()
         if (scope.get('kind')!='phase' or scope.get('name')!='phase'+str(phase)
@@ -165,7 +167,7 @@ class G0Backend:
                         session_attempts=self.session_attempts)
 
     def prepare(self,model,anchor,budget):
-        if self.execution_organization==PUBLIC:self._require_ready(budget)
+        if self.execution_organization in (PUBLIC,SETTLEMENT):self._require_ready(budget)
         else:self._ensure_session(budget)
         return model_backend.prepare(model,anchor,budget,self.bridge,permit=self.permit,
             dependencies=self.dependencies['evaluation'])
@@ -259,6 +261,16 @@ class G0Backend:
                 recorder.release()
         return deepcopy(record)
 
+    def settle_pending(self,budget):
+        if self.execution_organization!=SETTLEMENT or budget is not self.budget:
+            raise ValueError('SETTLEMENT_PROFILE_OR_ROOT_MISMATCH')
+        if self.numeric_context is not None and self.numeric_context.failed:
+            raise RuntimeError('NUMERICAL_FAILURE_LATCH_NOT_RECOVERABLE')
+        if self.session is None:
+            if not self.is_idle():raise RuntimeError('UNSETTLED_STARTUP_NOT_RECOVERABLE')
+            return None
+        return self.session.settle_pending(budget)
+
     def is_idle(self):
         if self.startup_failure is not None:
             return False
@@ -315,6 +327,10 @@ def execute_wiring(input_loader,workdir,*,permit,dependencies=None,seconds=300,c
                 'elapsed_after_root_for_cleanup_s':max(0.,close_end-max(close_start,float(seconds))),
                 'startup':deepcopy(getattr(backend,'startup_accounting',None)),
                 'rule':'startup overview contains its components; final close is a separate actual interval'}
+            result['settlement_records']=deepcopy(getattr(getattr(backend,'session',None),'settlement_records',[]))
+            result['settlement_summary']={'max_per_request_seconds':10,
+                'control_seconds':sum(r.get('finished_s',r['started_s'])-r['started_s'] for r in result['settlement_records']),
+                'late_candidate_admissions':0,'root_clock_paused':False}
             result['numeric_transport']=None if backend.numeric_context is None else backend.numeric_context.summary()
             if 'budget' in result:
                 result['budget']['real_execution_enabled']=require_permit(permit)=='REAL'

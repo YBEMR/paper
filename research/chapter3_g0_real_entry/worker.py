@@ -78,10 +78,12 @@ def normalize(raw,*,input_sha256,method_seconds,process_seconds):
 
 
 def execute_method(common_file,expected_sha256,workdir,*,permit,dependencies=None,seconds=300,clock=time.monotonic,started_at=None,
-                   execution_organization=PUBLIC):
+                   execution_organization=None):
     budget=G0Budget(seconds,clock=clock,started_at=started_at)
     require_permit(permit)
     require_role(permit,'method')
+    if execution_organization is None:
+        execution_organization=permit.context['plan'].get('execution_organization') if require_permit(permit)=='REAL' else PUBLIC
     if require_permit(permit)=='REAL' and execution_organization!=permit.context['plan'].get('execution_organization'):
         raise PermissionError('METHOD_EXECUTION_ORGANIZATION_DRIFT')
     started=budget.start

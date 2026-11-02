@@ -9,7 +9,7 @@ from research.chapter3_experiments import natural_full_600_entry as e
 class BudgetChecks(unittest.TestCase):
     def setUp(self):
         names=('ENTRY','WORKER_MODULE','PREPARATION','JOBS','SCOPE','METHOD_SECONDS',
-               'METHOD_WATCHDOG_SECONDS','validate_plan','freeze','native_session_factory','run_whole')
+               'METHOD_WATCHDOG_SECONDS','NATIVE_RESPONSE_VALIDATOR','validate_plan','freeze','native_session_factory','run_whole')
         self.saved={k:getattr(e.base,k) for k in names}
         e.configure()
     def tearDown(self):
@@ -27,12 +27,15 @@ class BudgetChecks(unittest.TestCase):
             with self.assertRaises(ValueError):e.validate_plan(bad)
     def test_audit_uses_600_and_restores(self):
         fake=ModuleType('audit_whole');fake.SECONDS=300
+        helper=ModuleType('audit_heuristic');helper.SECONDS=300
         def recorded():
             self.assertEqual(fake.SECONDS,600)
+            self.assertEqual(helper.SECONDS,600)
             return 'saved-only'
-        with patch.dict(sys.modules,{'audit_whole':fake}),patch.object(e,'_run_whole_original',recorded):
+        with patch.dict(sys.modules,{'audit_whole':fake,'audit_heuristic':helper}),patch.object(e,'_run_whole_original',recorded):
             self.assertEqual(e.run_whole(),'saved-only')
             self.assertEqual(fake.SECONDS,300)
+            self.assertEqual(helper.SECONDS,300)
     def test_parent_clock_has_real_600_deadline(self):
         e.base.sys.path.insert(0,str(e.base.EXP))
         from timing import MethodBudget
@@ -41,5 +44,14 @@ class BudgetChecks(unittest.TestCase):
         self.assertEqual(b.deadline,700)
         b.check()
         self.assertEqual(b.elapsed,450)
+    def test_native_budget_and_parameter_identity(self):
+        request={'remaining_s':550,'cut_max_iterations':10}
+        response={'cut_max_iterations_declared':10,'cut_max_iterations_actual_effective':10,
+                  'options':{'MaxTime':549,'Display':'off'}}
+        self.assertTrue(e.validate_response_600(request,response,{'Display':'off'})['passed'])
+        for change in ({'MaxTime':551,'Display':'off'},{'MaxTime':549,'Display':'iter'}):
+            with self.assertRaises(ValueError):
+                e.validate_response_600(request,dict(response,options=change),{'Display':'off'})
+        with self.assertRaises(ValueError):e.validate_response_600(dict(request,remaining_s=601),response,{'Display':'off'})
 
 if __name__=='__main__':unittest.main()

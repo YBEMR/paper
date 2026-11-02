@@ -25,6 +25,7 @@ CONFIG = 'research/chapter3_experiments/results/natural_full_preparation01/input
 PREPARATION = RESULTS / 'natural_full_preparation01'
 STATIC = PREPARATION / 'static_size.json'
 DOMAIN = PREPARATION / 'domain_identity.json'
+NATIVE_RESPONSE_VALIDATOR = None
 METHOD_SECONDS = 300
 METHOD_WATCHDOG_SECONDS = 405
 JOBS = [{'id':'whole_milp','method':'whole_milp','seed':None},
@@ -287,7 +288,7 @@ def native_session_factory(plan):
             if response_path.exists():
                 response=read(response_path)
                 if response.get('options'):
-                    checked=native_contract.validate_request_response(read(prefix.with_suffix('.request.json')),
+                    checked=(NATIVE_RESPONSE_VALIDATOR or native_contract.validate_request_response)(read(prefix.with_suffix('.request.json')),
                               response,plan['native_options'])
                     save(prefix.with_suffix('.options_admission.json'),checked)
                 elif returned.get('status')=='SOLVED':

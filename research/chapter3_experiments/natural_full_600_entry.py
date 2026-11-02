@@ -17,6 +17,24 @@ def validate_plan(plan):
     repaired.validate_plan(plan)
     base.require(plan.get('budget_extension_only') is True, 'EXPLICIT_600_SCOPE_REQUIRED')
 
+def validate_response_600(request, response, reference):
+    """Same option identity checks, bound to the explicitly approved 600 s root."""
+    from research.chapter3_experiments.small_whole_execution import native_contract as n
+    n.require(all(isinstance(v,dict) for v in (request,response,reference)), 'NATIVE_RECORD_TYPES')
+    n.require(not any(k.startswith('solver_max_time_s') for r in (request,response) for k in r), 'NO_NATIVE_ONLY_CAP')
+    remaining=n.positive_finite(request.get('remaining_s'),'remaining_s')
+    n.require(remaining<=600,'REQUEST_EXCEEDS_600')
+    n.require(n._same_json_value(request.get('cut_max_iterations'),10),'CUT_REQUEST_DRIFT')
+    for key in ('cut_max_iterations_declared','cut_max_iterations_actual_effective'):
+        n.require(n._same_json_value(response.get(key),10),'CUT_RESPONSE_DRIFT')
+    options=response.get('options')
+    n.require(isinstance(options,dict) and 'MaxTime' not in reference and set(options)==set(reference)|{'MaxTime'},'OPTION_INVENTORY_DRIFT')
+    n.require(all(n._same_json_value(options[k],v) for k,v in reference.items()),'OPTION_VALUE_DRIFT')
+    allocated=n.positive_finite(options['MaxTime'],'MaxTime')
+    n.require(allocated<=remaining<=600,'NATIVE_ALLOCATION_EXCEEDS_ROOT')
+    return dict(passed=True,state='NATIVE_OPTIONS_BUDGET_PASS',method_seconds=600,
+                matching_options_except_MaxTime=len(reference),MaxTime=allocated,request_remaining_s=remaining)
+
 def freeze(folder):
     folder = Path(folder).resolve()
     base.require(folder == PREPARATION and not folder.exists(), 'NEW_PREPARATION_REQUIRED')
@@ -41,12 +59,13 @@ def freeze(folder):
 def run_whole(*args, **kwargs):
     sys.path.insert(0,str(base.EXP/'p0_batch'))
     import audit_whole
-    previous = audit_whole.SECONDS
-    audit_whole.SECONDS = 600
+    import audit_heuristic
+    previous = audit_whole.SECONDS, audit_heuristic.SECONDS
+    audit_whole.SECONDS = audit_heuristic.SECONDS = 600
     try:
         return _run_whole_original(*args, **kwargs)
     finally:
-        audit_whole.SECONDS = previous
+        audit_whole.SECONDS, audit_heuristic.SECONDS = previous
 
 def configure():
     repaired.configure()
@@ -57,6 +76,7 @@ def configure():
     base.SCOPE = SCOPE
     base.METHOD_SECONDS = 600
     base.METHOD_WATCHDOG_SECONDS = 705
+    base.NATIVE_RESPONSE_VALIDATOR = validate_response_600
     base.validate_plan = validate_plan
     base.freeze = freeze
     base.run_whole = run_whole

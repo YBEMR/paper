@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EXP = ROOT / 'research/chapter3_experiments'
 RESULTS = EXP / 'results'
 ENTRY = 'research/chapter3_experiments/natural_full_entry.py'
+WORKER_MODULE = 'research.chapter3_experiments.natural_full_entry'
 INPUT = 'research/chapter3_experiments/results/natural_full_preparation01/input_instance.json'
 CONFIG = 'research/chapter3_experiments/results/natural_full_preparation01/input_config.json'
 PREPARATION = RESULTS / 'natural_full_preparation01'
@@ -469,7 +470,7 @@ def run_slot(plan_path, approval_path, plan, output, job, mode, origin, job_dead
         require(time.monotonic() < ticket['scientific_deadline'], 'BUDGET_EXHAUSTED_BEFORE_SPAWN')
         with (slot/'stdout.txt').open('w', encoding='utf-8') as log:
             flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            process = subprocess.Popen([sys.executable, '-B', '-m', 'research.chapter3_experiments.natural_full_entry',
+            process = subprocess.Popen([sys.executable, '-B', '-m', WORKER_MODULE,
                 'worker', '--ticket', str(slot/'ticket.json'), '--token', token],
                 cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
             monitor = ProcessMonitor(process.pid)

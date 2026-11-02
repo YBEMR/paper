@@ -25,6 +25,8 @@ CONFIG = 'research/chapter3_experiments/results/natural_full_preparation01/input
 PREPARATION = RESULTS / 'natural_full_preparation01'
 STATIC = PREPARATION / 'static_size.json'
 DOMAIN = PREPARATION / 'domain_identity.json'
+METHOD_SECONDS = 300
+METHOD_WATCHDOG_SECONDS = 405
 JOBS = [{'id':'whole_milp','method':'whole_milp','seed':None},
         {'id':'heft','method':'heft','seed':None}, {'id':'sa101','method':'sa','seed':101}]
 SCOPE = {'method_calls':3,'method_seconds_each':300,'method_seconds_total':900,
@@ -123,7 +125,7 @@ def freeze(folder):
             'jobs': JOBS, 'scope': SCOPE, 'python_executable': str(Path(sys.executable).resolve()),
             'python_version': sys.version,
             'dependencies': {n: metadata.version(n) for n in ('numpy', 'scipy', 'psutil')},
-            'method_process_watchdog_seconds': 405,
+            'method_process_watchdog_seconds': METHOD_WATCHDOG_SECONDS,
             'clock_origin': 'parent monotonic before per-job preparation, imports and interpreter startup',
             'historical_candidate_or_cache_input': False, 'reference_read_by_search': False,
             'approval_path': 'separate immutable-subject/plan-bound USER manual approval; not external agent_loop review'}
@@ -144,7 +146,7 @@ def validate_plan(plan):
     require((plan.get('input_file'), plan.get('config_file')) == (INPUT, CONFIG), 'PLAN_INPUT')
     require(plan.get('builder_flags') == BUILDER_FLAGS and plan.get('feedback_kind')=='conditional'
             and plan.get('cut_max_iterations')==10, 'PLAN_SCIENCE_FLAGS')
-    require(plan.get('method_process_watchdog_seconds') == 405
+    require(plan.get('method_process_watchdog_seconds') == METHOD_WATCHDOG_SECONDS
             and plan.get('historical_candidate_or_cache_input') is False
             and plan.get('reference_read_by_search') is False, 'PLAN_BOUNDARIES')
     require(plan.get('science_source_count') == 197 and ENTRY in plan['source_sha256'], 'SOURCE_MANIFEST')
@@ -188,7 +190,7 @@ def validate_ticket(ticket_path, token):
     require(ticket['token'] == token and ticket['job'] in JOBS and ticket['mode'] in ('method', 'post'), 'TICKET_SCOPE')
     require(ticket['slot_id'] == ticket['job']['id']+'__'+ticket['mode'], 'SLOT_ID')
     origin, cutoff = ticket['origin'], ticket['scientific_deadline']
-    seconds = 300 if ticket['mode'] == 'method' else 60
+    seconds = METHOD_SECONDS if ticket['mode'] == 'method' else 60
     require(type(origin) in (float, int) and math.isfinite(origin) and cutoff == origin+seconds
             and origin <= time.monotonic() < cutoff, 'TICKET_DEADLINE')
     plan = authorize(ticket['plan'], ticket['approval'], root, verify_subject=False)
@@ -310,7 +312,7 @@ def run_whole(ticket, plan, folder):
     def loader(budget):
         require(budget.start==ticket['origin'] and budget.deadline==ticket['scientific_deadline'], 'ROOT_CLOCK_NOT_INSTALLED')
         save(call/'method_budget_identity.json',{'start':budget.start,'deadline':budget.deadline,
-             'limit_s':300,'clock':'monotonic','origin_scope':'parent before preparation/import/startup'})
+             'limit_s':METHOD_SECONDS,'clock':'monotonic','origin_scope':'parent before preparation/import/startup'})
         verify_sources(plan);budget.check()
         loaded_config,loaded_instance=read(ROOT/CONFIG),read(ROOT/INPUT)
         require(declaration(loaded_instance,loaded_config)==spec,'LOADER_INPUT_DRIFT')
@@ -328,7 +330,7 @@ def run_whole(ticket, plan, folder):
         return model
     extra={k:v for k,v in BUILDER_FLAGS.items() if k not in
            ('fix_late_options','aggregate_opp_locks','relax_auxiliary_integrality','strengthen_energy_lower_bounds')}
-    raw=execute_formal_milp(loader,call,seconds=300,clock=ParentOriginClock(ticket['origin']),
+    raw=execute_formal_milp(loader,call,seconds=METHOD_SECONDS,clock=ParentOriginClock(ticket['origin']),
           feedback_kind='conditional',model_builder=partial(builder,**extra),
           session_factory=native_session_factory(plan))
     if bounds:save(call/'independent_bounds.json',bounds)
@@ -352,7 +354,7 @@ def worker(ticket_path, token):
     from schedules import validate_schedule
     def validate_candidate(instance, candidate, config):
         require(validate_schedule(instance,candidate)['state']=='SCHEDULE_VALID_THERMAL_UNCHECKED', 'FULL_DOMAIN_SCHEDULE_INVALID')
-    seconds = 300 if ticket['mode'] == 'method' else 60
+    seconds = METHOD_SECONDS if ticket['mode'] == 'method' else 60
     budget = MethodBudget(seconds)
     budget.start, budget.deadline = ticket['origin'], ticket['scientific_deadline']
     result = {'state': 'UNRESOLVED', 'status': 'NORMAL_TIME_LIMIT', 'error': None,
@@ -365,7 +367,7 @@ def worker(ticket_path, token):
                 raw,audit=run_whole(ticket,plan,folder)
                 save(folder/'raw_result.json',raw)
                 instance,config=read(ROOT/INPUT),read(ROOT/CONFIG)
-                safe=inspect_safe_receipt(instance,raw,300)
+                safe=inspect_safe_receipt(instance,raw,METHOD_SECONDS)
                 if safe['preserved']:
                     validate_candidate(instance,safe['candidate'],config)
                 result.update(state=raw.get('state'),status=audit['execution']['execution_status'],
@@ -391,11 +393,11 @@ def worker(ticket_path, token):
                 root_budget.check()
                 return config, instance
             raw = execute_heuristic(loader, folder/'method', method=ticket['job']['method'],
-                                    seed=ticket['job']['seed'], seconds=300, budget=budget, allow_auto_low=True,
+                                    seed=ticket['job']['seed'], seconds=METHOD_SECONDS, budget=budget, allow_auto_low=True,
                                     evaluator=guarded_evaluate)
             save(folder/'raw_result.json', raw)
             instance, config = read(ROOT/INPUT), read(ROOT/CONFIG)
-            safe = inspect_safe_receipt(instance, raw, 300)
+            safe = inspect_safe_receipt(instance, raw, METHOD_SECONDS)
             if safe['preserved']:
                 validate_candidate(instance, safe['candidate'], config)
             malformed_safe = raw.get('state') == 'SAFE' and not safe['preserved']
@@ -411,7 +413,7 @@ def worker(ticket_path, token):
             require(sha(source) == ticket['method_receipt_sha256'], 'POST_SOURCE_DRIFT')
             raw = read(source)
             instance, config = read(ROOT/INPUT), read(ROOT/CONFIG)
-            previous = inspect_safe_receipt(instance, raw, 300)
+            previous = inspect_safe_receipt(instance, raw, METHOD_SECONDS)
             require(previous['preserved'], 'POST_WITHOUT_COMPLETE_SAFE')
             validate_candidate(instance, previous['candidate'], config)
             budget.check()
@@ -456,13 +458,13 @@ def run_slot(plan_path, approval_path, plan, output, job, mode, origin, job_dead
     token = secrets.token_hex(24)
     ticket = {'plan': str(plan_path), 'approval': str(approval_path), 'plan_sha256': sha(plan_path),
               'output': str(output), 'job': job, 'mode': mode, 'slot_id': slot.name,
-              'origin': origin, 'scientific_deadline': origin+(300 if mode == 'method' else 60),
+              'origin': origin, 'scientific_deadline': origin+(METHOD_SECONDS if mode == 'method' else 60),
               'parent_identity': [parent['pid'], parent['create_time']], 'token': token,
               'method_receipt_sha256': sha(output/'slots'/(job['id']+'__method')/'worker'/'raw_result.json')
                 if mode == 'post' else None}
     save(slot/'ticket.json', ticket)
     save(slot/'slot_claim.json', {'ticket_sha256': sha(slot/'ticket.json')})
-    watchdog = min(origin+(405 if mode == 'method' else 60), job_deadline-15, batch_deadline-15)
+    watchdog = min(origin+(METHOD_WATCHDOG_SECONDS if mode == 'method' else 60), job_deadline-15, batch_deadline-15)
     process = monitor = None
     record = {'job': job['id'], 'mode': mode, 'origin': origin, 'watchdog': watchdog,
               'status': 'TECHNICAL_FAILURE', 'error': None}
@@ -548,7 +550,7 @@ def run(plan_path, approval_path, output):
     # Admission only; each method rechecks sources/resources within its own root.
     probe = default_host_probe(ROOT)
     require(host_gate(probe)['passed'], 'HOST_RESOURCE_GATE_FAILED')
-    started = time.monotonic(); deadline = started+1440
+    started = time.monotonic(); deadline = started+SCOPE['batch_calendar_seconds']
     save(RESULTS/'natural_full_claims'/(sha(plan_path)+'.json'), {
         'output': str(output), 'approval_sha256': sha(approval_path), 'scope': SCOPE,
         'started_monotonic': started, 'no_resume_or_retry': True})
@@ -558,8 +560,8 @@ def run(plan_path, approval_path, output):
     save(output/'host_prelaunch.json', probe)
     try:
         for job in JOBS:
-            origin = time.monotonic(); job_deadline = min(origin+480, deadline)
-            require(deadline-origin >= 480, 'INSUFFICIENT_BATCH_CALENDAR')
+            origin = time.monotonic(); job_deadline = min(origin+SCOPE['job_calendar_seconds'], deadline)
+            require(deadline-origin >= SCOPE['job_calendar_seconds'], 'INSUFFICIENT_BATCH_CALENDAR')
             verify_sources(plan)
             probe = default_host_probe(ROOT)
             save(output/('host_'+job['id']+'.json'), probe)

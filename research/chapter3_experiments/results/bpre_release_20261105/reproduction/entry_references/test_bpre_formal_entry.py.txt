@@ -1,0 +1,189 @@
+"""Pure admission-boundary tests; no MATLAB, model building or evaluation."""
+from contextlib import ExitStack
+from copy import deepcopy
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from research.chapter3_experiments import bpre_formal_entry as entry
+
+
+class BpreEntryTests(unittest.TestCase):
+    def plan(self):
+        code = {rel: 'source-digest' for rel in entry.REQUIRED_SOURCE_FILES}
+        # A discovered extra source proves the manifest has no fixed file count.
+        code['research/additional_source.py'] = 'extra-digest'
+        artifacts = {
+            entry.INPUT: entry.EXPECTED_INPUT_HASHES['input_instance.json'],
+            entry.CONFIG: entry.EXPECTED_INPUT_HASHES['input_config.json'],
+            entry.STATIC.relative_to(entry.base.ROOT).as_posix():
+                entry.EXPECTED_INPUT_HASHES['static_size.json'],
+            entry.DOMAIN.relative_to(entry.base.ROOT).as_posix(): 'domain-digest',
+        }
+        result = dict(
+            schema='bpre-seven-600-manual-v1', execution_authorized=False,
+            jobs=deepcopy(entry.JOBS), scope=deepcopy(entry.SCOPE),
+            input_file=entry.INPUT, config_file=entry.CONFIG,
+            input_sha256=entry.EXPECTED_INPUT_HASHES['input_instance.json'],
+            config_sha256=entry.EXPECTED_INPUT_HASHES['input_config.json'],
+            static_size_sha256=entry.EXPECTED_INPUT_HASHES['static_size.json'],
+            domain_identity_sha256='domain-digest',
+            builder_flags=deepcopy(entry.base.BUILDER_FLAGS), feedback_kind='conditional',
+            cut_max_iterations=10, method_process_watchdog_seconds=705,
+            historical_candidate_or_cache_input=False, reference_read_by_search=False,
+            hand_witness_as_initial_point=False, delivery_reserve_policy=None,
+            numerical_representation=entry.repaired.REPRESENTATION,
+            representation_adapter=entry.repaired.ADAPTER,
+            representation_helper=entry.repaired.HELPER,
+            baseline_commit=entry.BASELINE_COMMIT, task_a_patch_sha256=entry.PATCH_SHA256,
+            source_sha256=code | artifacts, science_source_count=len(code),
+            native_executable=str(entry.NATIVE_EXECUTABLE), native_executable_sha256='native-digest',
+            native_options=deepcopy(entry.EXPECTED_NATIVE_OPTIONS))
+        return result, code
+
+    def validate(self, plan, code):
+        def digest(path):
+            return 'native-digest' if Path(path) == entry.NATIVE_EXECUTABLE else 'domain-digest'
+        with patch.object(entry, 'source_inventory', return_value=code), \
+             patch.object(entry, 'verify_bpre_inputs') as verify_inputs, \
+             patch.object(entry.base, 'sha', side_effect=digest):
+            entry.validate_plan(plan)
+            verify_inputs.assert_called_once_with()
+
+    def test_valid_dynamic_manifest(self):
+        plan, code = self.plan()
+        self.assertNotEqual(plan['science_source_count'], 197)
+        self.validate(plan, code)
+
+    def test_seeds_order_and_budget_are_bound(self):
+        original, code = self.plan()
+        changes = (
+            ('seed', lambda p: p['jobs'][2].update(seed=999)),
+            ('order', lambda p: p['jobs'].reverse()),
+            ('budget', lambda p: p['scope'].update(method_seconds_each=300)),
+            ('retry', lambda p: p['scope'].update(retries=1)),
+            ('post', lambda p: p['scope'].update(post_seconds_each=61)),
+            ('job-calendar', lambda p: p['scope'].update(job_calendar_seconds=900)),
+            ('batch-calendar', lambda p: p['scope'].update(batch_calendar_seconds=6000)),
+        )
+        for label, change in changes:
+            with self.subTest(label=label):
+                plan = deepcopy(original)
+                change(plan)
+                with self.assertRaisesRegex(ValueError, 'BPRE_PLAN_SCOPE'):
+                    self.validate(plan, code)
+
+    def test_rejects_historical_input_and_changed_full_domain_flags(self):
+        original, code = self.plan()
+        for key, value, reason in (
+            ('input_file', 'research/chapter3_experiments/results/old/input.json', 'BPRE_PLAN_INPUT'),
+            ('input_sha256', 'old', 'BPRE_PLAN_INPUT_HASHES'),
+            ('historical_candidate_or_cache_input', True, 'BPRE_PLAN_BOUNDARIES'),
+            ('hand_witness_as_initial_point', True, 'BPRE_PLAN_BOUNDARIES'),
+            ('delivery_reserve_policy', 30, 'BPRE_PLAN_BOUNDARIES'),
+        ):
+            with self.subTest(key=key):
+                plan = deepcopy(original)
+                plan[key] = value
+                with self.assertRaisesRegex(ValueError, reason):
+                    self.validate(plan, code)
+        plan = deepcopy(original)
+        plan['builder_flags']['fixed_scene_id'] = 'scene1'
+        with self.assertRaisesRegex(ValueError, 'BPRE_PLAN_SCIENCE_FLAGS'):
+            self.validate(plan, code)
+
+    def test_manifest_missing_added_or_changed_sources_fail(self):
+        original, code = self.plan()
+        for change in (
+            lambda p: p['source_sha256'].pop(entry.ENTRY),
+            lambda p: p['source_sha256'].update({'research/unknown.py': 'untracked'}),
+            lambda p: p['source_sha256'].update({'research/additional_source.py': 'drift'}),
+            lambda p: p.update(science_source_count=197),
+        ):
+            plan = deepcopy(original)
+            change(plan)
+            with self.assertRaisesRegex(ValueError, 'BPRE_(SOURCE|MANIFEST)'):
+                self.validate(plan, code)
+
+    def test_native_options_and_binary_are_bound(self):
+        original, code = self.plan()
+        for change, reason in (
+            (lambda p: p['native_options'].update(RelativeGapTolerance=.01), 'BPRE_NATIVE_OPTIONS'),
+            (lambda p: p['native_options'].update(MaxTime=600), 'BPRE_NATIVE_OPTIONS'),
+            (lambda p: p.update(native_executable_sha256='other'), 'BPRE_NATIVE_BINARY_DRIFT'),
+        ):
+            plan = deepcopy(original)
+            change(plan)
+            with self.assertRaisesRegex(ValueError, reason):
+                self.validate(plan, code)
+
+    def test_domain_bytes_are_bound_even_when_manifest_is_consistent(self):
+        plan, code = self.plan()
+        plan['domain_identity_sha256'] = 'different-domain'
+        plan['source_sha256'][entry.DOMAIN.relative_to(entry.base.ROOT).as_posix()] = 'different-domain'
+        with self.assertRaisesRegex(ValueError, 'BPRE_DOMAIN_HASH'):
+            self.validate(plan, code)
+
+    def test_source_inventory_excludes_all_result_and_cache_trees(self):
+        # The managed Windows session can redirect default TEMP to a read-only
+        # package sandbox. Keep this disposable fixture inside the writable repo.
+        with tempfile.TemporaryDirectory(dir=entry.base.ROOT, prefix='bpre_boundary_') as temp:
+            root = Path(temp).resolve()
+            paths = ('research/live.py', 'research/sub/live.m', 'research/notes.txt',
+                     'research/results/old.py', 'research/sub/results/old.m',
+                     'research/.runtime/old.py', 'research/sub/cache/old.py',
+                     'research/__pycache__/old.py')
+            for relative in paths:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('fixture', encoding='utf-8')
+            with patch.object(entry.base, 'ROOT', root), \
+                 patch.object(entry, 'REQUIRED_SOURCE_FILES', ('research/live.py',)):
+                actual = entry.source_inventory()
+            self.assertEqual(set(actual), {'research/live.py', 'research/sub/live.m'})
+
+    def test_configure_preserves_lifecycle_and_installs_exact_existing_adapters(self):
+        names = ('ENTRY', 'WORKER_MODULE', 'INPUT', 'CONFIG', 'PREPARATION', 'STATIC', 'DOMAIN',
+                 'JOBS', 'SCOPE', 'METHOD_SECONDS', 'METHOD_WATCHDOG_SECONDS',
+                 'NATIVE_RESPONSE_VALIDATOR', 'native_session_factory', 'run_whole',
+                 'validate_plan', 'freeze')
+        lifecycle = {name: getattr(entry.base, name) for name in
+                     ('worker', 'run_slot', 'run', 'authorize', 'ParentOriginClock', 'admit_model')}
+        with ExitStack() as stack:
+            for name in names:
+                stack.enter_context(patch.object(entry.base, name, getattr(entry.base, name)))
+            entry.configure()
+            self.assertIs(entry.base.native_session_factory, entry.repaired.native_session_factory)
+            self.assertIs(entry.base.run_whole, entry.prior.run_whole)
+            self.assertIs(entry.base.NATIVE_RESPONSE_VALIDATOR, entry.prior.validate_response_600)
+            self.assertEqual(entry.base.JOBS, entry.JOBS)
+            self.assertEqual(entry.base.METHOD_SECONDS, 600)
+            for name, function in lifecycle.items():
+                self.assertIs(getattr(entry.base, name), function)
+
+    def test_input_byte_drift_stops_before_parsing_or_model_work(self):
+        with patch.object(entry.base, 'sha', return_value='wrong'), \
+             patch.object(entry.base, 'read') as read:
+            with self.assertRaisesRegex(ValueError, 'BPRE_BYTES_DRIFT'):
+                entry.verify_bpre_inputs()
+            read.assert_not_called()
+
+    def test_existing_whole_adapter_sets_both_auditors_to_600_and_restores(self):
+        whole, heuristic = SimpleNamespace(SECONDS=300), SimpleNamespace(SECONDS=300)
+        def observed_call(*args, **kwargs):
+            self.assertEqual((whole.SECONDS, heuristic.SECONDS), (600, 600))
+            raise RuntimeError('boundary sentinel; no algorithm called')
+        with patch.dict(sys.modules, {'audit_whole': whole, 'audit_heuristic': heuristic}), \
+             patch.object(sys, 'path', list(sys.path)), \
+             patch.object(entry.prior, '_run_whole_original', side_effect=observed_call) as original:
+            with self.assertRaisesRegex(RuntimeError, 'boundary sentinel'):
+                entry.prior.run_whole('ticket', 'plan', 'folder')
+            original.assert_called_once_with('ticket', 'plan', 'folder')
+        self.assertEqual((whole.SECONDS, heuristic.SECONDS), (300, 300))
+
+
+if __name__ == '__main__':
+    unittest.main()

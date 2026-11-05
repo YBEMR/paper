@@ -1,0 +1,241 @@
+"""Frozen B.pre full-domain comparison through the existing method lifecycle.
+
+Preparation and validation use only file/metadata operations. The original
+worker, safety evaluator, method algorithms and process monitor are reused.
+"""
+from copy import deepcopy
+from importlib import metadata
+import os
+from pathlib import Path
+import sys
+
+from research.chapter3_experiments import natural_full_600_entry as prior
+
+base = prior.base
+repaired = prior.repaired
+ENTRY = 'research/chapter3_experiments/bpre_formal_entry.py'
+WORKER_MODULE = 'research.chapter3_experiments.bpre_formal_entry'
+PREPARATION = base.RESULTS / 'bpre_formal_preparation_20261104'
+INPUT = (PREPARATION / 'input_instance.json').relative_to(base.ROOT).as_posix()
+CONFIG = (PREPARATION / 'input_config.json').relative_to(base.ROOT).as_posix()
+STATIC = PREPARATION / 'static_size.json'
+DOMAIN = PREPARATION / 'domain_identity.json'
+BASELINE_COMMIT = '2b18f3cdf97939ec2dc5d58d3a863a8ddc55a0c5'
+PATCH_SHA256 = '2fd2f8bfcc33b979e5f67586294c45160d3a4f81f7840583ee5c9b343c4b0d9b'
+EXPECTED_INPUT_HASHES = {
+    'input_config.json': 'd0905539bf9c9acba7a598a72bc05e8c5f7cac805d29e5f15837c47b18c09fdb',
+    'input_instance.json': 'abeea5c1e71edbeb45e56615351047fbcfc7220f189955ff7f0643670d7dc76c',
+    'static_size.json': 'd9396a3ed99986e28558f5ba70d7444c1719e5bb4926f93999e4f79afd15899c',
+}
+NATIVE_REFERENCE = (base.ROOT.parents[1] / 'bridge_e2e_20261104T113821Z' /
+                    'worker_session' / 'request_000001.response.json')
+NATIVE_EXECUTABLE = Path('<MATLAB_R2023B_EXECUTABLE>')
+# Admission fingerprint of the actual R2023b smoke options, excluding only
+# MaxTime. These values validate the observed reference; they do not set options.
+EXPECTED_NATIVE_OPTIONS = dict(
+    AbsoluteGapTolerance=0, BranchRule='reliability', ConstraintTolerance=1e-9,
+    CutGeneration='basic', CutMaxIterations=10, Display='off', Heuristics='basic',
+    HeuristicsMaxNodes=50, IntegerPreprocess='none', IntegerTolerance=1e-6,
+    LPMaxIterations='max(30000,10*(numberOfEqualities+numberOfInequalities+numberOfVariables))',
+    LPOptimalityTolerance=1e-7, MaxNodes=10000000, MaxFeasiblePoints=None,
+    NodeSelection='simplebestproj', ObjectiveCutOff=None, ObjectiveImprovementThreshold=0,
+    OutputFcn='solve_model/callback', PlotFcn=[], RelativeGapTolerance=0,
+    RootLPAlgorithm='dual-simplex',
+    RootLPMaxIterations='max(30000,10*(numberOfEqualities+numberOfInequalities+numberOfVariables))',
+    LPPreprocess='none')
+METHOD_SECONDS = 600
+METHOD_WATCHDOG_SECONDS = 705
+JOBS = [dict(id='whole_milp', method='whole_milp', seed=None),
+        dict(id='heft', method='heft', seed=None)] + [
+        dict(id=f'sa{seed}', method='sa', seed=seed) for seed in range(101, 106)]
+SCOPE = dict(method_calls=7, method_seconds_each=600, method_seconds_total=4200,
+             post_calls_at_most=7, post_seconds_each=60,
+             post_seconds_total_at_most=420, job_calendar_seconds=780,
+             batch_calendar_seconds=5520, retries=0)
+EXCLUDED_SOURCE_DIRECTORIES = frozenset({
+    'results', '.runtime', '.git', '__pycache__', '.pytest_cache', 'cache', '.cache'})
+REQUIRED_SOURCE_FILES = (
+    ENTRY, repaired.BASE_ENTRY, repaired.ENTRY, prior.ENTRY,
+    repaired.ADAPTER, repaired.HELPER,
+    'research/chapter3_experiments/formal_milp.py',
+    'research/chapter3_experiments/matlab_bridge.py',
+    'research/chapter3_experiments/solve_model.m',
+    'research/chapter3_experiments/heuristic_runner.py',
+    'research/chapter3_experiments/heft_method.py',
+    'research/chapter3_experiments/sa_method.py',
+    'research/chapter3_experiments/thermal.py',
+    'research/chapter3_experiments/timing.py',
+    'research/chapter3_experiments/p0_batch/audit_whole.py',
+    'research/chapter3_experiments/p0_batch/audit_heuristic.py',
+    'research/chapter3_experiments/small_whole_execution/native_contract.py',
+    'research/chapter3_method_entry_executor/common.py',
+    'research/chapter3_method_entry_executor/monitor.py',
+)
+
+
+def source_inventory():
+    """Enumerate actual checked-out code; never include old result snapshots."""
+    files = {}
+    for directory, children, names in os.walk(base.ROOT / 'research'):
+        children[:] = sorted(name for name in children
+                             if name not in EXCLUDED_SOURCE_DIRECTORIES)
+        for name in sorted(names):
+            path = Path(directory) / name
+            if path.suffix not in ('.py', '.m'):
+                continue
+            base.require(path.resolve().is_relative_to(base.ROOT), 'SOURCE_OUTSIDE_REPOSITORY')
+            files[path.relative_to(base.ROOT).as_posix()] = base.sha(path)
+    base.require(all(rel in files for rel in REQUIRED_SOURCE_FILES), 'REQUIRED_SOURCE_MISSING')
+    return files
+
+
+def verify_bpre_inputs():
+    for name, expected in EXPECTED_INPUT_HASHES.items():
+        base.require(base.sha(PREPARATION / name) == expected, 'BPRE_BYTES_DRIFT:' + name)
+    config, instance, size = (base.read(PREPARATION / name) for name in
+                              ('input_config.json', 'input_instance.json', 'static_size.json'))
+    identity = base.read(DOMAIN)
+    checks = identity.get('checks')
+    base.require(identity.get('state') == 'PASS' and isinstance(checks, dict)
+                 and checks and all(value is True for value in checks.values()), 'BPRE_DOMAIN_IDENTITY')
+    base.require(instance.get('id') == 'bpre_recovered__R1', 'BPRE_PROBLEM_ID')
+    base.require(config['defaults']['deadline_beta'] == '1', 'BPRE_BETA')
+    base.require(tuple(stage['id'] for stage in config['stage_catalog']) ==
+                 ('A.pre', 'A.main', 'B.pre', 'B.main', 'C.main'), 'BPRE_STAGE_CATALOG')
+    deadlines = {request['application']: request['deadline_ms']
+                 for scene in instance['scenarios'] for request in scene['requests']}
+    base.require(deadlines == {'A': '90', 'B': '115', 'C': '90'}, 'BPRE_DEADLINES')
+    base.require(sum(len(s['stage_instances']) for s in instance['scenarios']) == 7
+                 and sum(len(s['dependencies']) for s in instance['scenarios']) == 3,
+                 'BPRE_EXECUTION_STRUCTURE')
+    base.require(instance.get('start_domain') is None and instance['window_ms'] == '400'
+                 and instance['start_grid_ms'] == '5', 'BPRE_COMPLETE_GRID')
+    base.require(size['deadline_legal_options'] == 523 and size['predicted_total_variables'] == 8887
+                 and size['predicted_total_rows'] == 56320
+                 and size['explicit_start_domain_present'] is False
+                 and all(not scene['empty_stage_option_sets'] for scene in size['scenes']),
+                 'BPRE_STATIC_SIZE')
+    return config, instance, size, identity
+
+
+def native_reference():
+    """Read only native options/version from the completed synthetic smoke."""
+    response = base.read(NATIVE_REFERENCE)
+    ready_path = NATIVE_REFERENCE.parent / 'ready.json'
+    ready = base.read(ready_path)
+    base.require(ready.get('status') == 'READY' and ready.get('release') == '2023b'
+                 and ready.get('license_checkout') is True, 'NATIVE_SMOKE_NOT_READY')
+    base.require(response.get('status') == 'SOLVED' and response.get('exitflag', 0) > 0,
+                 'NATIVE_SMOKE_NOT_SOLVED')
+    options = deepcopy(response.get('options'))
+    base.require(isinstance(options, dict) and 'MaxTime' in options, 'NATIVE_OPTION_REFERENCE')
+    options.pop('MaxTime')
+    base.require(options == EXPECTED_NATIVE_OPTIONS, 'NATIVE_BASELINE_OPTIONS')
+    return options, {'response_path': str(NATIVE_REFERENCE),
+                     'response_sha256': base.sha(NATIVE_REFERENCE),
+                     'ready_sha256': base.sha(ready_path), 'version': ready['version'],
+                     'use': 'options and version only; no smoke vector is a method input'}
+
+
+def validate_plan(plan):
+    base.require(plan.get('schema') == 'bpre-seven-600-manual-v1'
+                 and plan.get('execution_authorized') is False, 'BPRE_PLAN_SCHEMA')
+    base.require(plan.get('jobs') == JOBS and plan.get('scope') == SCOPE, 'BPRE_PLAN_SCOPE')
+    base.require((plan.get('input_file'), plan.get('config_file')) == (INPUT, CONFIG), 'BPRE_PLAN_INPUT')
+    base.require(plan.get('input_sha256') == EXPECTED_INPUT_HASHES['input_instance.json']
+                 and plan.get('config_sha256') == EXPECTED_INPUT_HASHES['input_config.json']
+                 and plan.get('static_size_sha256') == EXPECTED_INPUT_HASHES['static_size.json'],
+                 'BPRE_PLAN_INPUT_HASHES')
+    base.require(plan.get('builder_flags') == base.BUILDER_FLAGS
+                 and plan.get('feedback_kind') == 'conditional' and plan.get('cut_max_iterations') == 10,
+                 'BPRE_PLAN_SCIENCE_FLAGS')
+    base.require(plan.get('method_process_watchdog_seconds') == METHOD_WATCHDOG_SECONDS
+                 and plan.get('historical_candidate_or_cache_input') is False
+                 and plan.get('reference_read_by_search') is False
+                 and plan.get('hand_witness_as_initial_point') is False
+                 and plan.get('delivery_reserve_policy') is None, 'BPRE_PLAN_BOUNDARIES')
+    base.require(plan.get('numerical_representation') == repaired.REPRESENTATION
+                 and plan.get('representation_adapter') == repaired.ADAPTER
+                 and plan.get('representation_helper') == repaired.HELPER, 'BPRE_REPRESENTATION')
+    base.require(plan.get('baseline_commit') == BASELINE_COMMIT
+                 and plan.get('task_a_patch_sha256') == PATCH_SHA256, 'BPRE_BASELINE_PROVENANCE')
+    sources = plan.get('source_sha256')
+    base.require(isinstance(sources, dict) and all(rel in sources for rel in REQUIRED_SOURCE_FILES),
+                 'BPRE_SOURCE_MANIFEST')
+    code = source_inventory()
+    base.require(plan.get('science_source_count') == len(code)
+                 and all(sources.get(rel) == digest for rel, digest in code.items()),
+                 'BPRE_SOURCE_INVENTORY_DRIFT')
+    artifacts = {INPUT: plan['input_sha256'], CONFIG: plan['config_sha256'],
+                 STATIC.relative_to(base.ROOT).as_posix(): plan['static_size_sha256'],
+                 DOMAIN.relative_to(base.ROOT).as_posix(): plan.get('domain_identity_sha256')}
+    base.require(set(sources) == set(code) | set(artifacts)
+                 and all(sources.get(rel) == digest for rel, digest in artifacts.items()),
+                 'BPRE_MANIFEST_INVENTORY')
+    base.require(plan.get('native_executable') == str(NATIVE_EXECUTABLE)
+                 and plan.get('native_executable_sha256') == base.sha(NATIVE_EXECUTABLE),
+                 'BPRE_NATIVE_BINARY_DRIFT')
+    base.require(plan.get('native_options') == EXPECTED_NATIVE_OPTIONS, 'BPRE_NATIVE_OPTIONS')
+    base.require(plan.get('domain_identity_sha256') == base.sha(DOMAIN), 'BPRE_DOMAIN_HASH')
+    verify_bpre_inputs()
+
+
+def freeze(folder):
+    folder = Path(folder).resolve()
+    base.require(folder == PREPARATION and not (folder / 'plan.json').exists()
+                 and not (folder / 'approval_template.json').exists(), 'NEW_BPRE_PLAN_REQUIRED')
+    verify_bpre_inputs()
+    code = source_inventory()
+    sources = dict(code)
+    for path in (base.ROOT / INPUT, base.ROOT / CONFIG, STATIC, DOMAIN):
+        sources[path.relative_to(base.ROOT).as_posix()] = base.sha(path)
+    options, probe = native_reference()
+    plan = dict(schema='bpre-seven-600-manual-v1', execution_authorized=False,
+                baseline_commit=BASELINE_COMMIT, task_a_patch_sha256=PATCH_SHA256,
+                input_file=INPUT, input_sha256=EXPECTED_INPUT_HASHES['input_instance.json'],
+                config_file=CONFIG, config_sha256=EXPECTED_INPUT_HASHES['input_config.json'],
+                static_size_sha256=EXPECTED_INPUT_HASHES['static_size.json'], domain_identity_sha256=base.sha(DOMAIN),
+                source_sha256=sources, science_source_count=len(code), builder_flags=deepcopy(base.BUILDER_FLAGS),
+                native_executable=str(NATIVE_EXECUTABLE), native_executable_sha256=base.sha(NATIVE_EXECUTABLE),
+                native_options=options, native_probe_evidence=probe,
+                numerical_representation=repaired.REPRESENTATION, representation_adapter=repaired.ADAPTER,
+                representation_helper=repaired.HELPER, feedback_kind='conditional', cut_max_iterations=10,
+                jobs=deepcopy(JOBS), scope=deepcopy(SCOPE), method_process_watchdog_seconds=METHOD_WATCHDOG_SECONDS,
+                python_executable=str(Path(sys.executable).resolve()), python_version=sys.version,
+                dependencies={name: metadata.version(name) for name in ('numpy', 'scipy', 'mpmath', 'psutil')},
+                clock_origin='parent monotonic before per-job preparation, imports and interpreter startup',
+                historical_candidate_or_cache_input=False, reference_read_by_search=False,
+                hand_witness_as_initial_point=False, delivery_reserve_policy=None,
+                initialization='Original fresh method initialization only; no hand witness, historical matrix or incumbent.',
+                safety_evaluation='Original full continuous thermal/energy evaluator and unchanged accuracy_targets.',
+                early_completion='Original finite HEFT/local-search stopping is retained; no restart to fill the budget.',
+                comparison='One fresh same-input seven-method comparison; each method has one 600 s root.',
+                post_checks='At most one 60 s independent same-candidate check per method; never creates a new method result.',
+                approval_path='separate immutable-subject/plan-bound USER manual approval; not external agent_loop review')
+    validate_plan(plan)
+    base.verify_sources(plan)
+    base.save(folder / 'plan.json', plan)
+    base.save(folder / 'approval_template.json', dict(
+        schema='natural-full-three-user-approval-v1', approved_by_user=False,
+        approval_source='USER_CURRENT_CONVERSATION', human_authorization_text='', subject_commit=None,
+        plan_sha256=base.sha(folder / 'plan.json'), scope=deepcopy(SCOPE), output_directory=None,
+        not_an_external_agent_loop_review=True))
+    return dict(plan=str(folder / 'plan.json'), sha256=base.sha(folder / 'plan.json'), authorized=False)
+
+
+def configure():
+    """Bind only this dedicated entry process; retain original science functions."""
+    base.ENTRY, base.WORKER_MODULE = ENTRY, WORKER_MODULE
+    base.INPUT, base.CONFIG = INPUT, CONFIG
+    base.PREPARATION, base.STATIC, base.DOMAIN = PREPARATION, STATIC, DOMAIN
+    base.JOBS, base.SCOPE = deepcopy(JOBS), deepcopy(SCOPE)
+    base.METHOD_SECONDS, base.METHOD_WATCHDOG_SECONDS = METHOD_SECONDS, METHOD_WATCHDOG_SECONDS
+    base.NATIVE_RESPONSE_VALIDATOR = prior.validate_response_600
+    base.native_session_factory = repaired.native_session_factory
+    base.run_whole = prior.run_whole
+    base.validate_plan, base.freeze = validate_plan, freeze
+
+
+if __name__ == '__main__':
+    configure()
+    raise SystemExit(base.main())

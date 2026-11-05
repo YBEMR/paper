@@ -1,0 +1,179 @@
+diff --git a/research/chapter3_experiments/formal_milp.py b/research/chapter3_experiments/formal_milp.py
+index 43fd2ff..ce6dfba 100644
+--- a/research/chapter3_experiments/formal_milp.py
++++ b/research/chapter3_experiments/formal_milp.py
+@@ -99,9 +99,11 @@ def add_assignment_feedback(model, candidate, evaluation):
+ 
+ def solve_formal_diagnostic(model, session, accuracy, budget, *,
+                             feedback_kind='conditional', max_rounds=OUTER_ROUND_LIMIT,
+-                            recorder_factory=Recorder):
++                            recorder_factory=None):
+     """One common outer loop; no variant-specific candidates or initialization."""
+     _require_kind(feedback_kind)
++    if recorder_factory is None:
++        recorder_factory = Recorder
+     recorder = recorder_factory(model, accuracy, budget, session.workdir.parent)
+     session.event_consumer = recorder.poll
+     result = {'state': 'UNRESOLVED', 'safe_candidate': None, 'safe_upper_bound_J': None,
+diff --git a/research/chapter3_experiments/test_formal_continuation.py b/research/chapter3_experiments/test_formal_continuation.py
+index 10d9fd3..1b53d62 100644
+--- a/research/chapter3_experiments/test_formal_continuation.py
++++ b/research/chapter3_experiments/test_formal_continuation.py
+@@ -13,6 +13,7 @@ from unittest.mock import patch
+ 
+ import run_formal_comparison as original
+ import run_formal_continuation as driver
++from test_formal_driver import mock_worker_process
+ 
+ 
+ HERE = Path(__file__).resolve().parent
+@@ -198,7 +199,7 @@ class ContinuationTests(unittest.TestCase):
+             before = self.bytes_under(previous)
+             out = Path(temp)/'continuation'
+             with patch.object(driver, 'validate_gate', side_effect=ValueError('fixture not approved')), \
+-                 patch('subprocess.run') as worker:
++                 mock_worker_process() as worker:
+                 with self.assertRaisesRegex(ValueError, 'fixture not approved'):
+                     driver.run('not-read-precheck.json', 'not-read-approval.json', previous, out)
+                 worker.assert_not_called()
+@@ -244,7 +245,7 @@ class ContinuationTests(unittest.TestCase):
+             gate_path, approval_path, _, _, proposed = self.records(temp, previous)
+             before = self.bytes_under(previous); invoked = []; out = Path(temp)/'continuation'
+             with patch.object(original, 'source_paths', return_value={}), \
+-                 patch('subprocess.run', side_effect=self.fake_worker(invoked)):
++                 mock_worker_process(side_effect=self.fake_worker(invoked)):
+                 driver.run(gate_path, approval_path, previous, out)
+             self.assertEqual(invoked, proposed['jobs'][:1])
+             self.assertEqual(self.read(out/'stop.json')['reason'], 'TECHNICAL_CHECK_FAILED')
+@@ -259,7 +260,7 @@ class ContinuationTests(unittest.TestCase):
+             gate_path, approval_path, _, _, _ = self.records(temp, previous)
+             invoked = []
+             with patch.object(original, 'source_paths', return_value={}), \
+-                 patch('subprocess.run', side_effect=self.fake_worker(invoked)):
++                 mock_worker_process(side_effect=self.fake_worker(invoked)):
+                 driver.run(gate_path, approval_path, previous, Path(temp)/'first')
+                 with self.assertRaises((FileExistsError, ValueError)):
+                     driver.run(gate_path, approval_path, previous, Path(temp)/'second')
+@@ -274,7 +275,7 @@ class ContinuationTests(unittest.TestCase):
+             before = self.bytes_under(previous); invoked = []; out = Path(temp)/'continuation'
+             with patch.object(original, 'source_paths', return_value={}), \
+                  patch.object(original, 'technical_check', return_value={'passed': True, 'errors': []}), \
+-                 patch('subprocess.run', side_effect=self.fake_worker(invoked, fail_at=4)):
++                 mock_worker_process(side_effect=self.fake_worker(invoked, fail_at=4)):
+                 driver.run(gate_path, approval_path, previous, out)
+             self.assertEqual(invoked, proposed['jobs'][:4])
+             entry = self.read(out/'continuation_entry_technical_check.json')
+diff --git a/research/chapter3_experiments/test_formal_driver.py b/research/chapter3_experiments/test_formal_driver.py
+index 69477d4..8cc30c3 100644
+--- a/research/chapter3_experiments/test_formal_driver.py
++++ b/research/chapter3_experiments/test_formal_driver.py
+@@ -5,14 +5,16 @@ Controller tests replace subprocess workers; no MATLAB or physical evaluation
+ is called, and no historical optimum is read.
+ """
+ from collections import Counter
++from contextlib import contextmanager
+ from copy import deepcopy
+ from fractions import Fraction as F
+ import json
+ from pathlib import Path
+ import tempfile
++import subprocess
+ from types import SimpleNamespace
+ import unittest
+-from unittest.mock import patch
++from unittest.mock import Mock, patch
+ 
+ import run_formal_comparison as driver
+ from inputs import load_config
+@@ -22,7 +24,31 @@ from run_milp_precheck import fixtures
+ HERE = Path(__file__).resolve().parent
+ 
+ 
++@contextmanager
++def mock_worker_process(**kwargs):
++    """Replace only the controller's subprocess binding, never the global module.
++
++    platform.platform() may independently invoke subprocess.run on Linux.
++    Those metadata probes must not enter the experiment-worker mock.
++    """
++    worker = Mock(**kwargs)
++    interface = SimpleNamespace(run=worker, STDOUT=subprocess.STDOUT,
++                               CREATE_NO_WINDOW=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
++    with patch.object(driver, 'subprocess', interface):
++        yield worker
++
++
+ class DriverTests(unittest.TestCase):
++    def test_worker_mock_leaves_global_subprocess_untouched(self):
++        real_run = subprocess.run
++        original_binding = driver.subprocess
++        with mock_worker_process(return_value=SimpleNamespace(returncode=0)) as worker:
++            self.assertIs(subprocess.run, real_run)
++            self.assertIs(driver.subprocess.run, worker)
++            self.assertEqual(driver.subprocess.STDOUT, subprocess.STDOUT)
++            worker.assert_not_called()
++        self.assertIs(driver.subprocess, original_binding)
++
+     @classmethod
+     def setUpClass(cls):
+         cls.config = load_config()
+@@ -270,7 +296,7 @@ class DriverTests(unittest.TestCase):
+             with patch.object(driver, 'validate_gate', return_value=proposed), \
+                  patch.object(driver, 'signature', return_value={'x': 'same'}), \
+                  patch.object(driver, 'source_paths', return_value={}), \
+-                 patch.object(driver.subprocess, 'run', side_effect=fake_worker):
++                 mock_worker_process(side_effect=fake_worker):
+                 driver.run(gate_path, approval_path, out)
+             self.assertEqual(len(subprocess_calls), 1)
+             self.assertEqual(json.loads((out/'stop.json').read_text(encoding='utf-8'))['reason'],
+@@ -282,7 +308,7 @@ class DriverTests(unittest.TestCase):
+         with self.temporary() as temp:
+             out = Path(temp)/'batch'
+             with patch.object(driver, 'validate_gate', side_effect=ValueError('not approved')), \
+-                 patch.object(driver.subprocess, 'run') as native:
++                 mock_worker_process() as native:
+                 with self.assertRaisesRegex(ValueError, 'not approved'):
+                     driver.run('not-read-gate.json', 'not-read-approval.json', out)
+                 native.assert_not_called()
+@@ -295,7 +321,7 @@ class DriverTests(unittest.TestCase):
+             with patch.object(driver, 'validate_gate', return_value=self.proposed), \
+                  patch.object(driver, 'signature', side_effect=[{'x': 'old'}, {'x': 'new'}, {'x': 'new'}]), \
+                  patch.object(driver, 'source_paths', return_value={}), \
+-                 patch.object(driver.subprocess, 'run') as native:
++                 mock_worker_process() as native:
+                 driver.run(gate_path, approval_path, out)
+                 native.assert_not_called()
+             self.assertEqual(json.loads((out/'calls.json').read_text(encoding='utf-8')), [])
+diff --git a/research/chapter3_experiments/test_formal_milp.py b/research/chapter3_experiments/test_formal_milp.py
+index c0af280..768db04 100644
+--- a/research/chapter3_experiments/test_formal_milp.py
++++ b/research/chapter3_experiments/test_formal_milp.py
+@@ -137,7 +137,7 @@ class FakeRecorder:
+ 
+ class FormalLoopTests(unittest.TestCase):
+     def invoke(self, *, kind='conditional', assessments=None, returned=None,
+-               feedback=None, max_rounds=50):
++               feedback=None, max_rounds=50, explicit_recorder=False):
+         clock = Clock(); budget = MethodBudget(10, clock=clock)
+         model = FakeModel({'id': 'fixture_formal_loop'}, budget)
+         self.clock, self.budget = clock, budget
+@@ -157,10 +157,18 @@ class FormalLoopTests(unittest.TestCase):
+              patch.object(formal, 'add_thermal_feedback', side_effect=feedback) as conditional, \
+              patch.object(formal, 'add_assignment_feedback', side_effect=feedback) as assignment:
+             result = formal.solve_formal_diagnostic(model, session, {}, budget,
+-                                                   feedback_kind=kind, max_rounds=max_rounds)
++                feedback_kind=kind, max_rounds=max_rounds,
++                **({'recorder_factory': FakeRecorder} if explicit_recorder else {}))
+         self.assertIsNone(session.event_consumer)
++        self.assertNotEqual(result['reason'], 'INTERFACE_ERROR', result)
+         return result, conditional.call_count, assignment.call_count
+ 
++    def test_explicit_recorder_factory_uses_the_same_interface(self):
++        output, conditional, assignment = self.invoke(explicit_recorder=True,
++            assessments=[({}, {'state': 'UNRESOLVED'})])
++        self.assertEqual(output['reason'], 'EVALUATION_UNRESOLVED')
++        self.assertEqual((conditional, assignment), (0, 0))
++
+     def test_unknown_retained_without_any_cut(self):
+         output, conditional, assignment = self.invoke(assessments=[({}, {'state': 'UNRESOLVED'})])
+         self.assertEqual(output['reason'], 'EVALUATION_UNRESOLVED')

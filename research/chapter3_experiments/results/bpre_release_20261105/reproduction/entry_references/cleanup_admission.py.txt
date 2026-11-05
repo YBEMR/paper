@@ -1,0 +1,158 @@
+"""Offline reconciliation using the repository's unchanged cleanup predicate.
+
+This tool never starts a process, signals a PID, runs a solver, or rewrites an
+input record. The historical launcher/smoke status is preserved verbatim.
+"""
+import argparse
+import ast
+from copy import deepcopy
+from datetime import datetime, timezone
+import hashlib
+import json
+import math
+from numbers import Real
+from pathlib import Path
+import sys
+import time
+
+CHECK_NAMES = ('status', 'accepted', 'budget_valid', 'known_optimum', 'objective',
+               'one_exact_pair_moved', 'original_rows_admitted', 'native_options_budget')
+CLEANUP_LIMIT_SECONDS = 40
+SCHEMA = 'bpre-original-cleanup-reconciliation-v1'
+
+
+def sha_bytes(content):
+    return hashlib.sha256(content).hexdigest()
+
+
+def load_original_cleanup(source_path):
+    """Compile the two original AST nodes without importing executable modules."""
+    path = Path(source_path).resolve()
+    data = path.read_bytes()
+    source = data.decode('utf-8-sig')
+    tree = ast.parse(source, filename=str(path))
+    names = ('_cleanup_has_error', 'cleanup_is_complete')
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name in names}
+    if set(functions) != set(names):
+        raise ValueError('Original cleanup function or dependency missing')
+    # Keep the exact original nodes, including their expressions and docstrings.
+    extracted = ast.Module(body=[functions[name] for name in names], type_ignores=[])
+    namespace = {'math': math, 'Real': Real}
+    exec(compile(extracted, str(path), 'exec'), namespace)
+    provenance = dict(path=str(path), sha256=sha_bytes(data),
+                      extraction='unchanged original AST nodes; original math/Real dependencies',
+                      functions={name: {
+                          'line': functions[name].lineno,
+                          'end_line': functions[name].end_lineno,
+                          'source_segment_sha256': sha_bytes(ast.get_source_segment(source, functions[name]).encode('utf-8')),
+                          'ast_sha256': sha_bytes(ast.dump(functions[name], include_attributes=False).encode('utf-8')),
+                      } for name in names},
+                      original_function_ast_unchanged=True)
+    return namespace['cleanup_is_complete'], provenance
+
+
+def finite_number(value):
+    return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def validate_smoke(record, closed, *, cleanup_predicate, response=None):
+    """Pure validation: functional evidence and cleanup are separate decisions.
+
+`response` is optional for in-memory callers; file reconciliation always supplies
+the original raw native response and records its hash. No result is rewritten.
+"""
+    record = record if isinstance(record, dict) else {}
+    closed = closed if isinstance(closed, dict) else {}
+    checks = record.get('checks')
+    complete_checks = isinstance(checks, dict) and all(name in checks for name in CHECK_NAMES)
+    functional_passed = complete_checks and all(value is True for value in checks.values())
+    returned = record.get('returned') or {}
+    vector = returned.get('x') if isinstance(returned, dict) else None
+    known_solution = (isinstance(vector, list) and len(vector) == 2
+                      and all(finite_number(value) for value in vector)
+                      and abs(vector[0] - 1) <= 1e-8 and abs(vector[1]) <= 1e-8)
+    objective = returned.get('fval') if isinstance(returned, dict) else None
+    original_response_valid = bool(isinstance(returned, dict)
+        and returned.get('status') == 'SOLVED'
+        and returned.get('accepted_for_evaluation') is True
+        and returned.get('budget_valid') is True
+        and known_solution and finite_number(objective) and abs(objective - 1) < 1e-8)
+    raw_response_matches = None
+    if response is not None:
+        raw_response_matches = bool(isinstance(response, dict) and response
+            and all(key in returned and returned[key] == value for key, value in response.items()))
+        original_response_valid = original_response_valid and raw_response_matches
+    same_cleanup = isinstance(record.get('cleanup'), dict) and record['cleanup'] == closed
+    cleanup_complete = bool(cleanup_predicate(closed))
+    elapsed = closed.get('cleanup_wall_seconds')
+    within_limit = finite_number(elapsed) and 0 <= elapsed <= CLEANUP_LIMIT_SECONDS
+    decisions = dict(functional_checks_complete=bool(complete_checks),
+                     functional_checks_passed=bool(functional_passed),
+                     original_response_valid=bool(original_response_valid),
+                     cleanup_record_matches_closed=bool(same_cleanup),
+                     original_cleanup_complete=cleanup_complete,
+                     cleanup_within_40_seconds=bool(within_limit))
+    return dict(original_protocol_accepted=all(decisions.values()), decisions=decisions,
+                raw_response_matches_returned=raw_response_matches,
+                raw_status=record.get('status'), raw_checks=deepcopy(checks),
+                raw_cleanup=deepcopy(closed),
+                raw_start_utc=record.get('start_utc'), raw_end_utc=record.get('end_utc'),
+                raw_elapsed_seconds=record.get('elapsed_seconds'),
+                original_status_rewritten=False, formal_experiment_started=False,
+                interpretation='Existing smoke admission only; forced_closed is accepted exactly when the original cleanup predicate accepts it. No new scientific result.')
+
+
+def read_evidence(path):
+    path = Path(path).resolve()
+    data = path.read_bytes()
+    return json.loads(data.decode('utf-8-sig')), {'path': str(path), 'sha256': sha_bytes(data)}
+
+
+def reconcile_records(source_path, record_paths):
+    """Read existing result/closed/response files, preserving all raw identities."""
+    started = datetime.now(timezone.utc).isoformat()
+    clock = time.perf_counter()
+    predicate, provenance = load_original_cleanup(source_path)
+    records = []
+    for record_path in record_paths:
+        record_path = Path(record_path).resolve()
+        record, result_evidence = read_evidence(record_path)
+        closed, closed_evidence = read_evidence(record_path.parent / 'session' / 'closed.json')
+        response, response_evidence = read_evidence(record_path.parent / 'session' / 'request_000001.response.json')
+        result = validate_smoke(record, closed, cleanup_predicate=predicate, response=response)
+        result.update(result_path=result_evidence['path'], result_sha256=result_evidence['sha256'],
+                      closed_path=closed_evidence['path'], closed_sha256=closed_evidence['sha256'],
+                      response_path=response_evidence['path'], response_sha256=response_evidence['sha256'])
+        records.append(result)
+    return dict(schema=SCHEMA, source=provenance, records=records,
+                original_protocol_accepted=bool(records) and all(row['original_protocol_accepted'] for row in records),
+                original_cleanup_grace_wait_seconds=20, original_cleanup_total_limit_seconds=40,
+                boundary_policy='Original 20-second graceful wait and 40-second cleanup limit unchanged; this tool only reads completed receipts.',
+                historical_records_modified=False, matlab_started=False, scientific_algorithms_run=False,
+                start_utc=started, end_utc=datetime.now(timezone.utc).isoformat(),
+                elapsed_seconds=time.perf_counter() - clock)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', required=True, help='Original matlab_bridge.py')
+    parser.add_argument('--record', action='append', required=True, help='Existing smoke result.json; repeat as needed')
+    parser.add_argument('--out', required=True, help='New reconciliation JSON; must not exist')
+    args = parser.parse_args(argv)
+    out = Path(args.out).resolve()
+    if out.exists():
+        raise FileExistsError(out)
+    result = reconcile_records(args.source, args.record)
+    result['command_argv'] = [sys.executable, str(Path(__file__).resolve()), *(sys.argv[1:] if argv is None else argv)]
+    with out.open('x', encoding='utf-8', newline='\n') as handle:
+        json.dump(result, handle, ensure_ascii=False, indent=2)
+        handle.write('\n')
+    print(json.dumps({'output': str(out), 'original_protocol_accepted': result['original_protocol_accepted'],
+                      'records': [{'result_path': row['result_path'], 'raw_status': row['raw_status'],
+                                   'decisions': row['decisions']} for row in result['records']]}, ensure_ascii=False))
+    return 0 if result['original_protocol_accepted'] else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

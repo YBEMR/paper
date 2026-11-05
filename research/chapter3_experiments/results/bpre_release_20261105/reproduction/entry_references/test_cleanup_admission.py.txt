@@ -1,0 +1,129 @@
+"""Offline admission tests; no process, solver or repository writes."""
+from copy import deepcopy
+import os
+from pathlib import Path
+import unittest
+
+import cleanup_admission as admission
+
+
+SOURCE = Path(os.environ.get('CLEANUP_SOURCE', str(Path(__file__).resolve().parent.parent /
+    'task_a_rebuild_20261104T114840Z/paper/research/chapter3_experiments/matlab_bridge.py')))
+
+
+class CleanupAdmissionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        predicate, cls.provenance = admission.load_original_cleanup(SOURCE)
+        cls.predicate = staticmethod(predicate)
+
+    def fixture(self):
+        closed = dict(cleanup_status='forced_closed', returncode=1, force_requested=True,
+            force_termination_succeeded=True, own_process_tree_kill_returncode=0,
+            observed_tree_verified_terminated=True, observed_tree_capture_complete=True,
+            observed_tree_identity_count=2, cleanup_wall_seconds=20.7,
+            process_tree_verification=dict(capture_complete=True, verified_terminated=True,
+                identities=[dict(pid=10, create_time=100.0, state='EXITED'),
+                            dict(pid=11, create_time=101.0, state='EXITED')]))
+        record = dict(status='CLEANUP_UNRESOLVED', checks={name: True for name in admission.CHECK_NAMES},
+            cleanup=deepcopy(closed), returned=dict(status='SOLVED', accepted_for_evaluation=True,
+                budget_valid=True, x=[1.0, 0.0], fval=1))
+        return record, closed
+
+    def validate(self, record, closed, **kwargs):
+        return admission.validate_smoke(record, closed, cleanup_predicate=self.predicate, **kwargs)
+
+    def test_accepts_complete_forced_nonzero_without_rewriting_status(self):
+        record, closed = self.fixture()
+        before = deepcopy(record), deepcopy(closed)
+        result = self.validate(record, closed)
+        self.assertTrue(result['original_protocol_accepted'])
+        self.assertEqual(result['raw_status'], 'CLEANUP_UNRESOLVED')
+        self.assertEqual(result['raw_cleanup']['returncode'], 1)
+        self.assertFalse(result['original_status_rewritten'])
+        self.assertEqual(before, (record, closed))
+
+    def test_source_is_actual_original_ast_with_hash(self):
+        self.assertEqual(self.provenance['sha256'], admission.sha_bytes(SOURCE.read_bytes()))
+        self.assertTrue(self.provenance['original_function_ast_unchanged'])
+        self.assertEqual(set(self.provenance['functions']), {'_cleanup_has_error', 'cleanup_is_complete'})
+
+    def test_rejects_lost_identity_and_false_capture(self):
+        for mutation in (
+            lambda c: c['process_tree_verification']['identities'][0].pop('create_time'),
+            lambda c: c['process_tree_verification']['identities'].pop(),
+            lambda c: c.update(observed_tree_capture_complete=False),
+            lambda c: c['process_tree_verification'].update(capture_complete=False),
+        ):
+            record, closed = self.fixture()
+            mutation(closed)
+            record['cleanup'] = deepcopy(closed)
+            result = self.validate(record, closed)
+            self.assertFalse(result['original_protocol_accepted'])
+            self.assertFalse(result['decisions']['original_cleanup_complete'])
+
+    def test_rejects_pending_error_and_alive_tree(self):
+        for mutation in (
+            lambda c: c.update(cleanup_pending_pid=10),
+            lambda c: c.update(cleanup_error='unresolved'),
+            lambda c: c['process_tree_verification']['identities'][1].update(state='RUNNING'),
+        ):
+            record, closed = self.fixture()
+            mutation(closed)
+            record['cleanup'] = deepcopy(closed)
+            self.assertFalse(self.validate(record, closed)['decisions']['original_cleanup_complete'])
+
+    def test_preserves_exact_40_second_boundary(self):
+        for seconds, accepted in ((40, True), (40.00001, False), (float('inf'), False), (-1, False), (True, False)):
+            with self.subTest(seconds=seconds):
+                record, closed = self.fixture()
+                closed['cleanup_wall_seconds'] = seconds
+                record['cleanup'] = deepcopy(closed)
+                result = self.validate(record, closed)
+                self.assertTrue(result['decisions']['original_cleanup_complete'])
+                self.assertEqual(result['original_protocol_accepted'], accepted)
+
+    def test_rejects_each_false_or_missing_functional_check(self):
+        for name in admission.CHECK_NAMES:
+            for missing in (False, True):
+                with self.subTest(name=name, missing=missing):
+                    record, closed = self.fixture()
+                    if missing:
+                        record['checks'].pop(name)
+                    else:
+                        record['checks'][name] = False
+                    result = self.validate(record, closed)
+                    self.assertFalse(result['original_protocol_accepted'])
+                    self.assertTrue(result['decisions']['original_cleanup_complete'])
+
+    def test_rejects_false_returned_response_despite_all_check_booleans(self):
+        for name, value in (('budget_valid', False), ('accepted_for_evaluation', False),
+                            ('status', 'ERROR'), ('x', [0, 1]), ('fval', 2)):
+            record, closed = self.fixture()
+            record['returned'][name] = value
+            self.assertFalse(self.validate(record, closed)['decisions']['original_response_valid'])
+
+    def test_rejects_closed_archive_disagreement(self):
+        record, closed = self.fixture()
+        record['cleanup']['returncode'] = 9
+        result = self.validate(record, closed)
+        self.assertFalse(result['original_protocol_accepted'])
+        self.assertFalse(result['decisions']['cleanup_record_matches_closed'])
+
+    def test_raw_response_is_bound_to_returned_record(self):
+        record, closed = self.fixture()
+        response = dict(status='SOLVED', x=[1, 0], fval=1)
+        self.assertTrue(self.validate(record, closed, response=response)['original_protocol_accepted'])
+        response['fval'] = 2
+        self.assertFalse(self.validate(record, closed, response=response)['original_protocol_accepted'])
+
+    def test_complete_graceful_and_reused_original_identity_follow_original(self):
+        record, closed = self.fixture()
+        closed.update(cleanup_status='graceful_closed', returncode=0, force_requested=False)
+        closed['process_tree_verification']['identities'][1]['state'] = 'PID_REUSED_ORIGINAL_EXITED'
+        record['cleanup'] = deepcopy(closed)
+        self.assertTrue(self.validate(record, closed)['original_protocol_accepted'])
+
+
+if __name__ == '__main__':
+    unittest.main()

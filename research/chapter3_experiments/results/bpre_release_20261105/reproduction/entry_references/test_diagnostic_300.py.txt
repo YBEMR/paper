@@ -1,0 +1,115 @@
+"""Small offline checks. Importing or testing never starts the scientific worker."""
+import ast
+from copy import deepcopy
+import io
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+import diagnostic_300 as diagnostic
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_300_wiring_reuses_original_scientific_functions(self):
+        original, native, repaired = object(), object(), object()
+        whole_audit, heuristic_audit = SimpleNamespace(SECONDS=600), SimpleNamespace(SECONDS=600)
+        contract = SimpleNamespace(validate_request_response=native)
+        package = SimpleNamespace(native_contract=contract)
+        base = SimpleNamespace(EXP=Path('fixture'), METHOD_SECONDS=600, METHOD_WATCHDOG_SECONDS=705,
+                               NATIVE_RESPONSE_VALIDATOR=None, native_session_factory=None, run_whole=None)
+        entry = SimpleNamespace(base=base, prior=SimpleNamespace(_run_whole_original=original),
+                                repaired=SimpleNamespace(native_session_factory=repaired))
+        with patch.dict(sys.modules, {'research.chapter3_experiments.small_whole_execution': package,
+                'audit_whole': whole_audit, 'audit_heuristic': heuristic_audit}), patch.object(sys, 'path', list(sys.path)):
+            diagnostic.configure_300(entry)
+        self.assertEqual((base.METHOD_SECONDS, base.METHOD_WATCHDOG_SECONDS), (300, 405))
+        self.assertEqual((whole_audit.SECONDS, heuristic_audit.SECONDS), (300, 300))
+        self.assertIs(base.run_whole, original)
+        self.assertIs(base.native_session_factory, repaired)
+        self.assertIs(base.NATIVE_RESPONSE_VALIDATOR, native)
+
+    def test_observer_late_bytes_do_not_call_scientific_functions(self):
+        path = SimpleNamespace(stat=lambda: SimpleNamespace(st_size=28, st_mtime_ns=10),
+                               read_bytes=lambda: b'{"kind":"callback","x":[1]}')
+        session = SimpleNamespace(glob=lambda pattern: [path] if 'event' in pattern else [])
+        class Folder:
+            def __truediv__(self, name):
+                return session if name == 'matlab' else self
+        seen, log = set(), io.StringIO()
+        with patch.object(diagnostic, 'anchor', return_value=dict(monotonic_before=301, monotonic_after=301,
+                                                                 utc='fixture')):
+            diagnostic.observe(Folder(), 300, seen, log)
+            diagnostic.observe(Folder(), 300, seen, log)
+        rows = [diagnostic.json.loads(line) for line in log.getvalue().splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]['first_observed_after_deadline'])
+        self.assertFalse(rows[0]['used_for_evaluation'])
+        self.assertFalse(rows[0]['delivered_to_recorder'])
+
+    def test_scope_drift_rejected_before_reference_import(self):
+        baseline = dict(schema='bpre-one-300-diagnostic-v1', scope=deepcopy(diagnostic.SCOPE))
+        for name, value in (('method_seconds', 600), ('method_calls', 2), ('post_calls', 1), ('retries', 1)):
+            manifest = deepcopy(baseline); manifest['scope'][name] = value
+            with patch.object(diagnostic, 'external_path', return_value=Path('fixture')), \
+                 patch.object(diagnostic, 'read', return_value=manifest), \
+                 patch.object(diagnostic, 'verify_reference') as source:
+                with self.assertRaisesRegex(ValueError, 'DIAGNOSTIC_SCOPE_DRIFT'):
+                    diagnostic.verify_manifest('fixture', check_git=False)
+                source.assert_not_called()
+
+    def test_syntax_and_no_freeze_or_batch_run_calls(self):
+        source = Path(diagnostic.__file__).read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        compile(tree, diagnostic.__file__, 'exec')
+        prohibited = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr in ('freeze', 'execute_formal_milp', 'evaluate_candidate', 'assess')]
+        self.assertEqual(prohibited, [])
+
+    def test_bad_cleanup_and_observer_io_still_reclaims_tree_and_writes_terminal(self):
+        with tempfile.TemporaryDirectory(dir=diagnostic.HERE, prefix='mock_cleanup_') as temporary:
+            root = Path(temporary).resolve(); output = root / 'output'; manifest_path = root / 'manifest.json'
+            manifest_path.write_text('{}', encoding='utf-8')
+            manifest = dict(output=str(output), claim=str(root / 'claim.json'))
+            entry = SimpleNamespace(base=SimpleNamespace(ROOT=root, verify_sources=Mock()))
+            process = SimpleNamespace(pid=42, returncode=0, poll=lambda: 0, wait=Mock(), kill=Mock())
+            monitor = SimpleNamespace(root_identity=(42, 1000), samples=[],
+                cleanup_verified=Mock(side_effect=[False, True]),
+                terminate_owned=Mock(return_value=[]), register_identities=Mock(),
+                sample=Mock(side_effect=OSError('sample fixture failure')),
+                summary=Mock(return_value={'cleanup_verified_observed_tree': True}))
+            module = SimpleNamespace(ProcessMonitor=Mock(return_value=monitor),
+                PsutilProvider=lambda: SimpleNamespace(describe=lambda pid: dict(pid=pid, create_time=900, state='ACTIVE')),
+                default_host_probe=lambda root: {}, host_gate=lambda probe: {'passed': True})
+            def spawn(*args, **kwargs):
+                session = output / 'worker' / 'method' / 'matlab'; session.mkdir(parents=True)
+                (session / 'session.json').write_text('{}', encoding='utf-8')
+                (session / 'closed.json').write_text('{bad json', encoding='utf-8')
+                return process
+            actual_save = diagnostic.save
+            def faulty_save(path, value):
+                if Path(path).name == 'memory_samples.json':
+                    raise OSError('memory log fixture failure')
+                actual_save(path, value)
+            with patch.object(diagnostic, 'HERE', root), \
+                 patch.object(diagnostic, 'verify_manifest', return_value=(manifest, entry, {})), \
+                 patch.object(diagnostic.subprocess, 'Popen', side_effect=spawn), \
+                 patch.object(diagnostic, 'observe', side_effect=OSError('observer fixture failure')), \
+                 patch.object(diagnostic, 'save', side_effect=faulty_save), \
+                 patch.dict(sys.modules, {'research.chapter3_method_entry_executor.monitor': module,
+                                          'matlab_bridge': SimpleNamespace(cleanup_is_complete=lambda receipt: True)}):
+                result = diagnostic.run(SimpleNamespace(manifest=str(manifest_path)))
+            monitor.terminate_owned.assert_called_once_with(force=True)
+            self.assertEqual(result['state'], 'CLEANUP_FAILURE')
+            self.assertTrue(result['missing_native_cleanup_receipt'])
+            self.assertTrue((output / 'controller_result.json').is_file())
+            operations = [item['operation'] for item in result['cleanup_errors']]
+            self.assertTrue(any(name.startswith('admit_native_receipt:') for name in operations))
+            for name in ('monitor_final_sample', 'save_memory_samples', 'terminal_observation'):
+                self.assertIn(name, operations)
+
+
+if __name__ == '__main__':
+    unittest.main()

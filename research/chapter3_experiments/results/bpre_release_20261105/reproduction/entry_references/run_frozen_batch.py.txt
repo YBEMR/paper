@@ -1,0 +1,111 @@
+"""Launch exactly the frozen command and observe metadata; no science changes."""
+from pathlib import Path
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+import time
+
+AUDIT=Path(__file__).resolve().parent
+REPO=AUDIT.parent/'task_a_rebuild_20261104T114840Z/paper'
+def read(path):return json.loads(Path(path).read_text(encoding='utf-8'))
+def save_new(path,value):
+    with Path(path).open('x',encoding='utf-8') as f:json.dump(value,f,indent=2,ensure_ascii=False)
+def anchor():
+    before=time.monotonic_ns();wall=time.time_ns();after=time.monotonic_ns()
+    return dict(monotonic_before_ns=before,utc_unix_ns=wall,monotonic_after_ns=after,
+                bracket_ns=after-before,utc=dt.datetime.fromtimestamp(wall/1e9,dt.timezone.utc).isoformat())
+def utc_from_monotonic(value,a):
+    return dt.datetime.fromtimestamp(a['utc_unix_ns']/1e9+float(value)-(a['monotonic_before_ns']+a['monotonic_after_ns'])/2e9,dt.timezone.utc).isoformat()
+
+assert read(AUDIT/'identity.json')['state']=='PASS'
+assert read(AUDIT/'resource_recheck.json')['gate']['passed']
+from cleanup_admission import reconcile_records
+import hashlib
+sys.path.insert(0,str(REPO))
+from research.chapter3_method_entry_executor.monitor import default_host_probe,host_gate
+
+# Re-evaluate immutable smoke evidence using the original, unchanged predicate.
+# The old CLEANUP_UNRESOLVED label remains in the original files and this record.
+validation_root=AUDIT.parent/'matlab_exit_diagnostic_20261104T123311Z'
+source=REPO/'research/chapter3_experiments/matlab_bridge.py'
+record_paths=[validation_root/name/'result.json' for name in ('validation01','validation02')]
+approved=read(AUDIT/'reconciliation.json')
+current=reconcile_records(source,record_paths)
+assert current['original_protocol_accepted'] is True
+assert approved['original_protocol_accepted'] is True
+for before,after in zip(approved['records'],current['records']):
+    for key in ('result_path','result_sha256','closed_path','closed_sha256'):
+        assert before[key]==after[key], 'Smoke evidence changed: '+key
+assert len(approved['records'])==len(current['records'])==2
+assert hashlib.sha256(source.read_bytes()).hexdigest()=='c56527e4836c5154c1ad567060a94c5fa8df125d761131c71e53dc187bc7e8e1'
+
+# A current host probe complements per-slot host checks in the original monitor.
+launch_probe=default_host_probe(REPO)
+launch_gate=host_gate(launch_probe)
+save_new(AUDIT/'launch_host_gate.json',dict(recorded_utc=dt.datetime.now(dt.timezone.utc).isoformat(),probe=launch_probe,gate=launch_gate))
+assert launch_gate['passed'],launch_gate
+save_new(AUDIT/'launch_cleanup_admission.json',dict(
+    recorded_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
+    reconciliation_sha256=hashlib.sha256((AUDIT/'reconciliation.json').read_bytes()).hexdigest(),
+    original_protocol_accepted=True,records=current['records'],
+    note='Original forced_closed status is retained. Complete cleanup does not mean graceful exit.'))
+previous=read(AUDIT.parent/'bpre_execution_20261104T115711Z/FINAL_STATUS.json')
+command=previous['future_command']
+output=Path(previous['source_verification']['future_output'])
+claim=REPO/'research/chapter3_experiments/results/natural_full_claims'/(previous['plan_sha256']+'.json')
+assert not output.exists() and not claim.exists(), 'Single-use batch already claimed; no retry'
+begin=anchor();clock=time.perf_counter()
+record=dict(stage='frozen_formal_batch',cwd=str(REPO),command_argv=command,start_utc=begin['utc'],
+            beginning_clock_anchor=begin,status='STARTING',scope='One frozen batch; no retries',
+            log=str(AUDIT/'formal_batch.log'),observation_log=str(AUDIT/'observations.jsonl'))
+seen=set()
+with (AUDIT/'formal_batch.log').open('xb') as log, (AUDIT/'observations.jsonl').open('x',encoding='utf-8') as observations:
+    process=subprocess.Popen(command,cwd=REPO,stdout=log,stderr=subprocess.STDOUT,
+        env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    record.update(pid=process.pid,status='CONTROLLER_RUNNING')
+    save_new(AUDIT/'formal_batch_started.json',record)
+    print(json.dumps(record,ensure_ascii=False),flush=True)
+    def observe():
+        paths=[claim,output/'batch.json']
+        for slot in sorted((output/'slots').glob('*')):
+            paths.extend(slot/name for name in ('ticket.json','go.json','slot_result.json'))
+        for path in paths:
+            if str(path) in seen or not path.is_file():continue
+            try:value=read(path)
+            except (OSError,UnicodeError,json.JSONDecodeError):continue
+            seen.add(str(path));a=anchor()
+            event=dict(path=str(path),event=path.name,first_observed_utc=a['utc'],clock_anchor=a,
+                       timestamp_note='First observed UTC is not event start; derived UTC uses monotonic plus sampled wall-clock anchor.')
+            if path==claim:
+                event.update(event='batch_claim_created',origin_monotonic=value['started_monotonic'],
+                             derived_start_utc=utc_from_monotonic(value['started_monotonic'],a))
+            elif path.name=='ticket.json':
+                event.update(job=value['job'],mode=value['mode'],origin_monotonic=value['origin'],
+                    scientific_deadline_monotonic=value['scientific_deadline'],
+                    derived_root_start_utc=utc_from_monotonic(value['origin'],a),
+                    derived_scientific_deadline_utc=utc_from_monotonic(value['scientific_deadline'],a))
+            elif path.name=='go.json':
+                event.update(worker_identity=value['worker_identity'],
+                    os_worker_created_utc=dt.datetime.fromtimestamp(value['worker_identity'][1],dt.timezone.utc).isoformat())
+            elif path.name=='slot_result.json':
+                event.update(job=value['job'],mode=value['mode'],status=value['status'],exit_code=value.get('returncode'),
+                    total_wall_s=value['total_wall_s'],error=value.get('error'),
+                    derived_root_start_utc=utc_from_monotonic(value['origin'],a),
+                    derived_slot_end_utc=utc_from_monotonic(value['origin']+value['total_wall_s'],a))
+            else:event.update(state=value.get('state'),error=value.get('error'),not_run=value.get('not_run'))
+            observations.write(json.dumps(event,ensure_ascii=False)+'\n');observations.flush()
+            print(json.dumps(event,ensure_ascii=False),flush=True)
+    while process.poll() is None:
+        observe()
+        time.sleep(2)
+    observe()
+    end=anchor()
+    record.update(end_utc=end['utc'],ending_clock_anchor=end,elapsed_seconds=time.perf_counter()-clock,
+        exit_code=process.returncode,status='COMPLETED' if process.returncode==0 else 'FAILED',
+        claim_created=claim.exists(),output_created=output.exists(),
+        batch=read(output/'batch.json') if (output/'batch.json').exists() else None)
+    save_new(AUDIT/'formal_batch_command.json',record)
+    print(json.dumps({k:v for k,v in record.items() if k!='batch'},ensure_ascii=False),flush=True)
+sys.exit(process.returncode)

@@ -1,0 +1,288 @@
+"""Deterministic byte patch and software-only stop-policy reference models.
+
+No MATLAB or scientific module is imported/executed. Instrumentation preserves
+the original left-to-right probes and all-state stop policy. Capturing values
+has overhead; Python reference equivalence is not a MATLAB timing experiment.
+"""
+import argparse
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+TARGET = ROOT / "native_source/research/chapter3_experiments/solve_model.m"
+EXPECTED_PARENT_SHA256 = PARENT_SHA256 = "a8782e69b1091d1b1178eb5d4cba467217eebbbaa3421c634fce7e22b088b62a"
+TARGET_SHA256 = "1fe7f9d1590f9f3b54e87a3cd4c538dd3fed24f5c4c5affb1389cf1052b07b56"
+MARKER = "% STOP_DECISION_DIAGNOSTICS_V1"
+
+OLD_CALLBACK = """    function stop = callback(x,values,state)
+        stop = false;
+        try
+            callbackFields=union(callbackFields,fieldnames(values));
+            entry=struct('state',state,'request_wall_seconds',toc(requestClock), ...
+                'values',values,'x',x(:)');
+            if streamEvents
+                entry.kind='callback';
+                publish(entry);
+                % The immutable event file retains x; avoid duplicate large
+                % vectors in the final response. Historical path is unchanged.
+                entry.x=[]; entry.event_number=eventNumber;
+            end
+            callbacks{end+1}=entry; %#ok<AGROW>
+            stop = toc(requestClock)>=remaining || toc(workerClock)>=guardSeconds ...
+                || isfile([prefix '.cancel']) || isfile(fullfile(folder,'stop'));
+        catch err
+            callbackError=getReport(err,'extended','hyperlinks','off');
+            stop=true;
+        end
+    end
+
+"""
+
+NEW_CALLBACK = """    function stop = callback(x,values,state)
+        stop = false;
+        sdOriginalException=false;
+        try
+            callbackFields=union(callbackFields,fieldnames(values));
+            entry=struct('state',state,'request_wall_seconds',toc(requestClock), ...
+                'values',values,'x',x(:)');
+            if streamEvents
+                entry.kind='callback';
+                publish(entry);
+                % The immutable event file retains x; avoid duplicate large
+                % vectors in the final response. Historical path is unchanged.
+                entry.x=[]; entry.event_number=eventNumber;
+            end
+            callbacks{end+1}=entry; %#ok<AGROW>
+            % STOP_DECISION_DIAGNOSTICS_V1
+            % Capture only probes required by the original left-to-right OR.
+            % No additional clock/file probe or disk publication is added.
+            sdRequestAttempted=false; sdRequestEvaluated=false;
+            sdWorkerAttempted=false; sdWorkerEvaluated=false;
+            sdCancelAttempted=false; sdCancelEvaluated=false;
+            sdStopAttempted=false; sdStopEvaluated=false;
+            sdRequestSeconds=[]; sdWorkerSeconds=[];
+            sdRequestValue=[]; sdWorkerValue=[]; sdCancelValue=[]; sdStopValue=[];
+            sdRequestAttempted=true;
+            sdRequestSeconds=toc(requestClock);
+            sdRequestValue=sdRequestSeconds>=remaining; sdRequestEvaluated=true;
+            if sdRequestValue
+                stop=true;
+            else
+                sdWorkerAttempted=true;
+                sdWorkerSeconds=toc(workerClock);
+                sdWorkerValue=sdWorkerSeconds>=guardSeconds; sdWorkerEvaluated=true;
+                if sdWorkerValue
+                    stop=true;
+                else
+                    sdCancelAttempted=true;
+                    sdCancelValue=isfile([prefix '.cancel']); sdCancelEvaluated=true;
+                    if sdCancelValue
+                        stop=true;
+                    else
+                        sdStopAttempted=true;
+                        sdStopValue=isfile(fullfile(folder,'stop')); sdStopEvaluated=true;
+                        stop=sdStopValue;
+                    end
+                end
+            end
+        catch err
+            callbackError=getReport(err,'extended','hyperlinks','off');
+            stop=true;
+            sdOriginalException=true;
+        end
+        % The stop boolean is already final. Diagnostics cannot change it.
+        try
+            stop_decisions_count_attempted=stop_decisions_count_attempted+1;
+            if ~exist('sdRequestAttempted','var')
+                % Original callback failed before reaching its stop expression.
+                sdRequestAttempted=false; sdRequestEvaluated=false;
+                sdWorkerAttempted=false; sdWorkerEvaluated=false;
+                sdCancelAttempted=false; sdCancelEvaluated=false;
+                sdStopAttempted=false; sdStopEvaluated=false;
+                sdRequestSeconds=[]; sdWorkerSeconds=[];
+                sdRequestValue=[]; sdWorkerValue=[]; sdCancelValue=[]; sdStopValue=[];
+            end
+            sdTriggers=struct( ...
+                'request_deadline',stop_trigger_record(sdRequestAttempted,sdRequestEvaluated, ...
+                    sdRequestValue,sdRequestSeconds,remaining,sdOriginalException), ...
+                'worker_guard',stop_trigger_record(sdWorkerAttempted,sdWorkerEvaluated, ...
+                    sdWorkerValue,sdWorkerSeconds,guardSeconds,sdOriginalException), ...
+                'cancel_file',stop_trigger_record(sdCancelAttempted,sdCancelEvaluated, ...
+                    sdCancelValue,[],[],sdOriginalException), ...
+                'stop_file',stop_trigger_record(sdStopAttempted,sdStopEvaluated, ...
+                    sdStopValue,[],[],sdOriginalException));
+            sdRecord=struct('callback_ordinal',stop_decisions_count_attempted, ...
+                'state',state,'event_number',eventNumber,'actual_stop',logical(stop), ...
+                'request_elapsed_s',sdRequestSeconds,'remaining_s',remaining, ...
+                'worker_elapsed_s',sdWorkerSeconds,'guard_seconds',guardSeconds, ...
+                'original_callback_exception',sdOriginalException,'triggers',sdTriggers);
+            if sdOriginalException, sdRecord.original_error_identifier=err.identifier; end
+            stop_decisions{end+1}=sdRecord; %#ok<AGROW>
+        catch sdLogError
+            stop_decisions_log_complete=false;
+            try
+                stop_decisions_log_errors{end+1}=struct('state',state, ...
+                    'event_number',eventNumber,'identifier',sdLogError.identifier, ...
+                    'message',sdLogError.message); %#ok<AGROW>
+            catch
+                stop_decisions_error_capture_failed=true;
+            end
+        end
+    end
+
+"""
+
+HELPER = """function record = stop_trigger_record(attempted,evaluated,value,observed,threshold,failed)
+% Pure post-decision metadata; never sample a clock or the filesystem here.
+reason='';
+if ~evaluated
+    if failed, reason='original_callback_exception';
+    else, reason='short_circuit'; end
+end
+record=struct('attempted',logical(attempted),'evaluated',logical(evaluated), ...
+    'value',value,'observed_seconds',observed,'threshold_seconds',threshold, ...
+    'not_evaluated_reason',reason);
+end
+
+"""
+
+INIT_OLD = "    streamEvents = false; eventNumber = 0;\n"
+INIT_NEW = INIT_OLD + """    stop_decisions={}; stop_decisions_log_complete=true;
+    stop_decisions_log_errors={}; stop_decisions_count_attempted=0;
+    stop_decisions_error_capture_failed=false;
+"""
+SAVE_OLD = """                save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks', ...
+                    'initialPoint','solverTimeAllocation');
+            else
+                save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks','initialPoint');
+"""
+SAVE_NEW = """                save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks', ...
+                    'initialPoint','solverTimeAllocation','stop_decisions', ...
+                    'stop_decisions_log_complete','stop_decisions_log_errors', ...
+                    'stop_decisions_count_attempted','stop_decisions_error_capture_failed');
+            else
+                save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks', ...
+                    'initialPoint','stop_decisions','stop_decisions_log_complete', ...
+                    'stop_decisions_log_errors','stop_decisions_count_attempted', ...
+                    'stop_decisions_error_capture_failed');
+"""
+RESULT_OLD = "    result.callbacks=callbacks; result.callback_fields=callbackFields;\n"
+RESULT_NEW = RESULT_OLD + """    result.stop_decisions=stop_decisions;
+    result.stop_decisions_log_complete=stop_decisions_log_complete;
+    result.stop_decisions_log_errors=stop_decisions_log_errors;
+    result.stop_decisions_count_attempted=stop_decisions_count_attempted;
+    result.stop_decisions_error_capture_failed=stop_decisions_error_capture_failed;
+"""
+HELPER_ANCHOR = "function [text,info,readError] = read_request_text(prefix,folder,workerClock,guardSeconds)"
+REPLACEMENTS = ((INIT_OLD, INIT_NEW), (SAVE_OLD, SAVE_NEW),
+                (RESULT_OLD, RESULT_NEW), (OLD_CALLBACK, NEW_CALLBACK),
+                (HELPER_ANCHOR, HELPER+HELPER_ANCHOR))
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _replace(data, old, new):
+    old, new = old.encode("utf-8"), new.encode("utf-8")
+    if data.count(old) != 1:
+        raise ValueError("Expected exactly one immutable byte anchor")
+    return data.replace(old, new, 1)
+
+
+def instrument_parent(data):
+    if sha256(data) != PARENT_SHA256:
+        raise ValueError("Parent SHA256 mismatch; no patch applied")
+    for old, new in REPLACEMENTS:
+        data = _replace(data, old, new)
+    return data
+
+
+# Public deterministic API for the parent freeze manifest.
+transform = instrument_parent
+
+def restore_parent(data):
+    for old, new in reversed(REPLACEMENTS):
+        data = _replace(data, new, old)
+    if sha256(data) != PARENT_SHA256:
+        raise ValueError("Reversed source is not the immutable parent")
+    return data
+
+
+TRIGGERS = ("request_deadline", "worker_guard", "cancel_file", "stop_file")
+
+
+def simulate_original(probes, before_decision=None):
+    """Python reference for original callback catch+OR, not MATLAB execution."""
+    try:
+        if before_decision is not None:
+            before_decision()
+        return bool(probes[0]() or probes[1]() or probes[2]() or probes[3]())
+    except Exception:
+        return True
+
+
+def simulate_instrumented(probes, *, state="iter", event_number=1,
+                          before_decision=None, logger=None):
+    """Software surrogate tests probe order, short circuit and logger isolation."""
+    triggers = {name: {"attempted": False, "evaluated": False, "value": None}
+                for name in TRIGGERS}
+    stop, original_error = False, None
+    try:
+        if before_decision is not None:
+            before_decision()
+        for index, name in enumerate(TRIGGERS):
+            triggers[name]["attempted"] = True
+            value = bool(probes[index]())
+            triggers[name].update(evaluated=True, value=value)
+            if value:
+                stop = True
+                break
+    except Exception as error:
+        stop, original_error = True, type(error).__name__
+    for record in triggers.values():
+        record["not_evaluated_reason"] = ("" if record["evaluated"] else
+            "original_callback_exception" if original_error else "short_circuit")
+    record = {"actual_stop": stop, "state": state, "event_number": event_number,
+              "triggers": triggers, "original_callback_exception": original_error is not None}
+    result = {"actual_stop": stop, "record": deepcopy(record), "log_complete": True, "errors": []}
+    try:
+        if logger is not None:
+            logger(deepcopy(record))
+    except Exception as error:
+        result["log_complete"] = False
+        result["errors"].append(type(error).__name__)
+    return result
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args(argv)
+    if args.check:
+        data = TARGET.read_bytes()
+        if sha256(data) != TARGET_SHA256:
+            raise ValueError("Instrumented worker differs from frozen target")
+        restore_parent(data)
+        print(json.dumps({"status": "CHECK_PASS", "sha256": sha256(data)}))
+        return
+    if args.source is None:
+        raise ValueError("Explicit original --source required; never repatch an unknown worker")
+    parent = args.source.read_bytes()
+    patched = instrument_parent(parent)
+    if TARGET_SHA256 != "TO_BE_FROZEN" and sha256(patched) != TARGET_SHA256:
+        raise ValueError("Generated target SHA256 mismatch")
+    existing = TARGET.read_bytes()
+    if existing not in (parent, patched):
+        raise ValueError("Destination differs from parent and expected target; refusing overwrite")
+    if existing != patched:
+        TARGET.write_bytes(patched)
+    print(json.dumps({"status": "GENERATED", "parent_sha256": sha256(parent),
+                      "sha256": sha256(patched), "target": str(TARGET.relative_to(ROOT))}))
+
+
+if __name__ == "__main__":
+    main()

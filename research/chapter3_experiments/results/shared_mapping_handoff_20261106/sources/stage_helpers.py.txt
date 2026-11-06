@@ -1,0 +1,32 @@
+"""Unchanged marker helpers from the successful native toy run; no launch."""
+from pathlib import Path
+import hashlib
+from build_stage_source import PHASES
+
+def marker_bytes(phase):
+    if phase not in PHASES:
+        raise ValueError("Undeclared diagnostic phase")
+    return ("PHASE "+phase+" COMPLETE\n").encode("ascii")
+
+
+def batch_prefix(folder):
+    path = (Path(folder)/"stage_000_batch_entry.marker").as_posix().replace("'", "''")
+    return ("stageFid=fopen('"+path+"','w','n','UTF-8'); "
+            "if stageFid<0,error('chapter3:stageWrite','Cannot open batch marker');end; "
+            "stageN=fprintf(stageFid,'PHASE 000_batch_entry COMPLETE\\n'); "
+            "stageClose=fclose(stageFid); "
+            "if stageN~="+str(len(marker_bytes("000_batch_entry")))+" || stageClose~=0,"
+            "error('chapter3:stageWrite','Incomplete batch marker');end; ")
+
+
+def read_markers(folder):
+    result = []
+    for phase in PHASES:
+        path = Path(folder)/("stage_"+phase+".marker")
+        if path.exists():
+            raw = path.read_bytes()
+            result.append({"phase":phase,"complete":raw==marker_bytes(phase),
+                           "bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest()})
+    return result
+
+

@@ -1,0 +1,73 @@
+"""One authorized AB probe. Exclusive claim forbids a second native attempt."""
+from datetime import datetime, timezone
+from pathlib import Path
+import hashlib
+import json
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parent
+
+
+def run_once():
+    origin = time.monotonic()  # before every scientific import and input read
+    started_utc = datetime.now(timezone.utc).isoformat()
+    sys.path[:0] = [str(ROOT), str(ROOT/"native_source/research/chapter3_experiments"),
+                   str(ROOT/"baseline/research/chapter3_experiments"), str(ROOT/"baseline")]
+    frozen = json.loads((ROOT/"SOURCE_FREEZE.json").read_text(encoding="utf-8"))
+    for name, digest in frozen["files"].items():
+        path = (ROOT/name).resolve()
+        if not path.is_relative_to(ROOT) or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ValueError("Source freeze mismatch: " + name)
+        if time.monotonic() >= origin + 180:
+            raise TimeoutError("Root expired during source verification")
+    matlab = Path(frozen["matlab_executable"])
+    if hashlib.sha256(matlab.read_bytes()).hexdigest() != frozen["matlab_executable_sha256"]:
+        raise ValueError("MATLAB executable identity changed")
+    expected = json.loads((ROOT/"EXPECTED_AB.json").read_text(encoding="utf-8"))
+    from ab_probe import execute_ab_probe
+    from single_mapping import baseline_dependencies
+    from native_entry_prepared import load_frozen_inputs
+    from protected_runtime import ResourceMonitor, NativeRuntime
+    from cancellation import CancellationState
+    import matlab_bridge
+    if Path(matlab_bridge.__file__).resolve() != ROOT/"native_source/research/chapter3_experiments/matlab_bridge.py":
+        raise RuntimeError("Wrong bridge module binding")
+    with (ROOT/"NATIVE_CLAIM.json").open("x", encoding="utf-8") as stream:
+        json.dump({"started_utc": started_utc, "origin": origin,
+                   "max_native_launches": 1, "max_requests": 1,
+                   "automatic_retry": False}, stream)
+    cancellation = CancellationState()
+    monitor = ResourceMonitor(cancellation)
+    runtime_factory = lambda folder, budget: NativeRuntime(folder/"runtime", budget, monitor,
+        cancellation, bridge=matlab_bridge, matlab_path=matlab)
+    (ROOT/"runs").mkdir(exist_ok=True)
+    answer = None
+    failure = None
+    try:
+        answer = execute_ab_probe(load_frozen_inputs, ROOT/"runs/native_once", origin=origin,
+            dependencies=baseline_dependencies(), runtime_factory=runtime_factory,
+            checkpoint=monitor.check, expected_model_sha256=expected["model_sha256"],
+            cancellation=cancellation, execution_kind="native_technical")
+        return answer
+    except BaseException as error:
+        failure = {"type": type(error).__name__, "message": str(error)}
+        raise
+    finally:
+        with (ROOT/"NATIVE_END.json").open("x", encoding="utf-8") as stream:
+            json.dump({"started_utc": started_utc,
+                "ended_utc": datetime.now(timezone.utc).isoformat(),
+                "wrapper_elapsed_s": time.monotonic()-origin,
+                "failure": failure, "result": answer,
+                "formal_comparison": False, "further_attempt_authorized": False}, stream,
+                ensure_ascii=False, indent=2)
+            stream.write("\n")
+
+
+if __name__ == "__main__":
+    answer = run_once()
+    audit = answer.get("driver_audit", {})
+    print(json.dumps({key: audit.get(key) for key in ["native_technical_pass",
+        "solver_returned_point", "solver_candidate_safe", "ab_local_safe_contract",
+        "full_safe_aggregate_contract", "method_stopped_elapsed_s",
+        "physical_cleanup_verified", "failure", "cleanup_failure"]}, ensure_ascii=False), flush=True)

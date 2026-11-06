@@ -1,0 +1,104 @@
+"""Process observation whose optional archives cannot interrupt cleanup.
+
+No process is started or signalled here. Capture and archive operations are
+injected so failure paths can be checked without MATLAB or native processes.
+"""
+from copy import deepcopy
+from cancellation import CancellationState
+
+
+class ProcessObserver:
+    def __init__(self, *, capture, clock, utc, save, append, enrich=None, cancellation=None):
+        self.cancellation = cancellation if cancellation is not None else CancellationState()
+        self._capture = capture
+        self._clock = clock
+        self._utc = utc
+        self._save = save
+        self._append = append
+        self._enrich = enrich
+        self.trees = {}
+        self.last_capture = {}
+        self.errors = []
+        self._seen = set()
+
+    def _error(self, operation, error):
+        # In-memory only: never recursively archive an archive failure.
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            self.cancellation.defer(error)
+        self.errors.append({"operation": operation,
+                            "error_type": type(error).__name__,
+                            "error": str(error)})
+
+    def side_effect(self, operation, action):
+        """Best effort only. Callers must check errors before continuing work."""
+        try:
+            return action()
+        except BaseException as error:
+            if not isinstance(error, (Exception, KeyboardInterrupt, SystemExit)):
+                raise
+            self._error(operation, error)
+            return None
+
+    def raise_if_errors(self):
+        self.cancellation.raise_if_requested()
+        if self.errors:
+            raise RuntimeError("Process observer failed; stop new work: "
+                               + str(self.errors))
+
+    def capture(self, proc, tree=None, *, phase):
+        """Return identity evidence even when optional writes fail.
+
+        A capture failure is never upgraded to verified identity. Preserve
+        previously known identities, mark incomplete, and let cleanup decide
+        whether signalling is safe. Archive failures do not erase identities.
+        """
+        if tree is None:
+            tree = self.trees.get(proc.pid)
+        try:
+            result = self._capture(proc, tree, phase=phase)
+        except BaseException as error:
+            if not isinstance(error, (Exception, KeyboardInterrupt, SystemExit)):
+                raise
+            self._error("capture:" + phase, error)
+            result = deepcopy(tree) if tree else {
+                "root_pid": proc.pid, "root_identity": None,
+                "identities": [], "capture_errors": [], "observations": []}
+            result["capture_complete"] = False
+            result["root_identity_verified"] = False
+            result.setdefault("capture_errors", []).append({
+                "phase": phase, "error": type(error).__name__ + ": " + str(error)})
+        self.trees[proc.pid] = result
+        self.last_capture[proc.pid] = self._clock()
+        for identity in result.get("identities", []):
+            key = (identity["pid"], identity["create_time"])
+            if key in self._seen:
+                continue
+            self._seen.add(key)
+            details = dict(identity)
+            if self._enrich is not None:
+                enriched = self.side_effect("enrich_identity", lambda: self._enrich(details))
+                if enriched is not None:
+                    details = enriched
+            self.side_effect("identity_append", lambda: self._append({
+                "event": "CAPTURED", "utc": self._utc(), "phase": phase, **details}))
+        self.side_effect("tree_snapshot", lambda: self._save("PROCESS_IDENTITIES.json", self.trees))
+        return result
+
+    def launched(self, proc, *, emit):
+        """Return a created handle despite ordinary exceptions or supported observer cancellation.
+
+        In particular an observation/publication exception cannot make the
+        parent lose the newly-created child before assigning self.proc.
+        """
+        try:
+            tree = self.capture(proc, phase="immediately_after_Popen")
+            if not tree.get("capture_complete") or not tree.get("root_identity"):
+                self._error("launch_identity", RuntimeError("Immediate identity capture incomplete"))
+            self.side_effect("launch_event", lambda: emit(proc))
+        except BaseException as error:
+            if not isinstance(error, (Exception, KeyboardInterrupt, SystemExit)):
+                raise
+            # Capture also invokes injected non-I/O dependencies. An unexpected
+            # exception still cannot strand a handle in this after-Popen hook.
+            self._error("launch_observer", error)
+        return proc

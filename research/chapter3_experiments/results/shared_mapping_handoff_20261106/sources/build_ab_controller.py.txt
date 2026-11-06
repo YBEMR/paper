@@ -1,0 +1,77 @@
+"""Generate the explicitly AB-only derivative; never execute scientific work.
+
+Only the three model/initial/search loops are filtered. Original scene records,
+full input and global aggregation denominator stay complete, so AC unprocessed
+cannot yield a full-scene SAFE aggregate. Helpers/defaults are the original
+objects imported into the derivative namespace, not copied implementations.
+"""
+import ast
+import hashlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+PARENT = ROOT / 'baseline/research/chapter3_experiments/partial_method.py'
+EXPECTED_PARENT_SHA256 = 'bcd3ce6f10b7661e0378cd88b420182fbbaf1d021850f4d59a9ed7a4a9af271d'
+AB_SCENE = 'AB_offset_0ms'
+
+
+def transform(raw):
+    if hashlib.sha256(raw).hexdigest() != EXPECTED_PARENT_SHA256:
+        raise ValueError('Original partial controller SHA256 mismatch')
+    text = raw.decode('utf-8')
+    tree = ast.parse(text)
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == 'execute_shared_deployment')
+    function = ast.get_source_segment(text, node)
+    function = function.replace('def execute_shared_deployment(', 'def execute_ab_deployment(', 1)
+    loops = "for index, scene in enumerate(instance['scenarios']):"
+    if function.count(loops) != 2:
+        raise ValueError('Expected original build and initialisation loops')
+    function = function.replace(loops,
+        "for index, scene in enumerate(s for s in instance['scenarios'] if s['id'] == AB_SCENE):")
+    search = "for scene in instance['scenarios']:\n            active_scene = sid = scene['id'];"
+    if function.count(search) != 1:
+        raise ValueError('Expected original search loop')
+    function = function.replace(search,
+        "for scene in (s for s in instance['scenarios'] if s['id'] == AB_SCENE):\n"
+        "            active_scene = sid = scene['id'];", 1)
+    startup = "        active_scene = None\n        active_stage = 'solver_startup'"
+    if function.count(startup) != 1:
+        raise ValueError('Expected original pre-startup boundary')
+    function = function.replace(startup,
+        "        # The AB x0 probe deliberately refuses the original bare-MILP fallback.\n"
+        "        if (initial[AB_SCENE].get('state') != 'SAFE_POINT_READY'\n"
+        "                or initial[AB_SCENE].get('x0') is None\n"
+        "                or len(initial[AB_SCENE]['x0']) == 0\n"
+        "                or not _safe(result['scenes'][AB_SCENE]['scene_receipt'] or {}, budget)):\n"
+        "            raise ValueError('AB probe requires fresh SAFE_POINT_READY and original-scene SAFE')\n"
+        + startup, 1)
+    header = '''"""Generated AB-only technical derivative; not a full-scene experiment.
+
+Regenerate with build_ab_controller.py; three original loops filtered and one
+fresh-initialisation pre-startup guard added. All private helpers/default objects
+are bound from the original module, preserving their identity and implementation.
+"""
+import partial_method as _original
+for _name, _value in vars(_original).items():
+    if not _name.startswith('__'):
+        globals()[_name] = _value
+AB_SCENE = 'AB_offset_0ms'
+PROTOCOL = 'ab-only-original-shared-deployment-technical-v1'
+
+'''
+    return (header + function + '\n').encode('utf-8')
+
+
+def main():
+    target = ROOT / 'ab_partial_method.py'
+    generated = transform(PARENT.read_bytes())
+    if target.exists() and target.read_bytes() != generated:
+        raise FileExistsError('Refusing to replace an unknown AB derivative')
+    if not target.exists():
+        target.write_bytes(generated)
+    print('ab_partial_method.py', hashlib.sha256(generated).hexdigest(), len(generated))
+
+
+if __name__ == '__main__':
+    main()

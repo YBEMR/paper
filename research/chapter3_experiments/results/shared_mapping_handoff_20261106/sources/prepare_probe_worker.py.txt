@@ -1,0 +1,134 @@
+"""Deterministic diagnostic patch; no MATLAB or scientific work on import.
+
+MaxFeasiblePoints=1 is the sole solver strategy change. Display='iter' and
+native input residuals provide observations, not a solver acceptance certificate.
+"""
+import hashlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+PARENT_SHA256 = "1fe7f9d1590f9f3b54e87a3cd4c538dd3fed24f5c4c5affb1389cf1052b07b56"
+TARGET_SHA256 = "f456a8df9f5f4ad3e97c2a1e4d6e7b0b4a54e993fd6c41b48112f185e929c158"
+TARGET = ROOT / "native_source/research/chapter3_experiments/solve_model.m"
+
+SELF_CHECK = """function record = native_x0_probe_check(p,initialPoint)
+% Original native input arithmetic only; not intlinprog's acceptance decision.
+record=struct('scope','native_input_selfcheck_not_solver_certificate', ...
+    'independent_certificate',false,'solver_acceptance','not_independently_observed', ...
+    'provided',isfield(p,'x0'),'completed',false,'error_identifier','', ...
+    'length',numel(initialPoint),'expected_length',numel(p.c), ...
+    'length_match',numel(initialPoint)==numel(p.c),'real_vector',isreal(initialPoint), ...
+    'finite_vector',all(isfinite(initialPoint)), ...
+    'intcon_convention','MATLAB_one_based_native_input', ...
+    'intcon_valid',false,'constraint_tolerance',1e-9,'integer_tolerance',1e-6, ...
+    'inequality_violation',[],'equality_violation',[], ...
+    'lower_bound_violation',[],'upper_bound_violation',[], ...
+    'integer_violation',[],'initial_objective',[], ...
+    'measured_values_finite',false,'numerically_feasible_at_recorded_tolerances',false);
+if ~record.provided || ~record.length_match || ~record.real_vector || ~record.finite_vector
+    record.error_identifier='chapter3:probeInvalidInitialVector';
+    return;
+end
+try
+    indices=p.intcon(:);
+    record.intcon_valid=isnumeric(indices) && isreal(indices) ...
+        && all(isfinite(indices)) && all(indices==fix(indices)) ...
+        && all(indices>=1) && all(indices<=numel(initialPoint));
+    if ~record.intcon_valid
+        record.error_identifier='chapter3:probeInvalidIntegerIndices';
+        return;
+    end
+    inequality=p.A*initialPoint-p.b(:);
+    equality=p.Aeq*initialPoint-p.beq(:);
+    lower=p.lb(:)-initialPoint;
+    upper=initialPoint-p.ub(:);
+    integer=abs(initialPoint(indices)-round(initialPoint(indices)));
+    record.inequality_violation=max([0;inequality]);
+    record.equality_violation=max([0;abs(equality)]);
+    record.lower_bound_violation=max([0;lower]);
+    record.upper_bound_violation=max([0;upper]);
+    record.integer_violation=max([0;integer]);
+    record.initial_objective=p.c(:)'*initialPoint;
+    measured=[record.inequality_violation,record.equality_violation, ...
+        record.lower_bound_violation,record.upper_bound_violation, ...
+        record.integer_violation,record.initial_objective];
+    record.measured_values_finite=all(isfinite(measured)) ...
+        && all(isfinite(inequality)) && all(isfinite(equality)) ...
+        && all(~isnan(lower)) && all(~isnan(upper));
+    record.numerically_feasible_at_recorded_tolerances=record.measured_values_finite ...
+        && max(measured(1:4))<=record.constraint_tolerance ...
+        && record.integer_violation<=record.integer_tolerance;
+    record.completed=true;
+catch probeError
+    % Observation failure is recorded. It must not fabricate/repair a solver x0.
+    record.error_identifier=probeError.identifier;
+end
+end
+
+"""
+
+REPLACEMENTS = (
+    ("    stop_decisions_error_capture_failed=false;\n",
+     "    stop_decisions_error_capture_failed=false;\n"
+     "    native_x0_check=struct('completed',false,'scope','native_input_selfcheck_not_solver_certificate');\n"),
+    ("        result.phase_seconds.request_and_mat_load=toc(phaseClock);\n        phaseClock=tic;\n",
+     "        result.phase_seconds.request_and_mat_load=toc(phaseClock);\n"
+     "        probeClock=tic;\n"
+     "        native_x0_check=native_x0_probe_check(p,initialPoint);\n"
+     "        result.phase_seconds.native_x0_selfcheck=toc(probeClock);\n"
+     "        phaseClock=tic;\n"),
+    ("        opts = optimoptions('intlinprog','Display','off', ...\n",
+     "        opts = optimoptions('intlinprog','Display','iter', ...\n"
+     "            'MaxFeasiblePoints',1, ...\n"),
+    ("'initialPoint','solverTimeAllocation','stop_decisions', ...\n",
+     "'initialPoint','solverTimeAllocation','native_x0_check','stop_decisions', ...\n"),
+    ("'initialPoint','stop_decisions','stop_decisions_log_complete', ...\n",
+     "'initialPoint','native_x0_check','stop_decisions','stop_decisions_log_complete', ...\n"),
+    ("    result.stop_decisions=stop_decisions;\n",
+     "    result.native_x0_check=native_x0_check;\n    result.stop_decisions=stop_decisions;\n"),
+    ("function record = stop_trigger_record(attempted,evaluated,value,observed,threshold,failed)\n",
+     SELF_CHECK + "function record = stop_trigger_record(attempted,evaluated,value,observed,threshold,failed)\n"),
+)
+
+
+def sha256(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _replace(raw, old, new):
+    old, new = old.encode("utf-8"), new.encode("utf-8")
+    if raw.count(old) != 1:
+        raise ValueError("Expected one immutable byte anchor")
+    return raw.replace(old, new, 1)
+
+
+def transform(raw):
+    if sha256(raw) != PARENT_SHA256:
+        raise ValueError("Parent worker SHA256 mismatch")
+    for old, new in REPLACEMENTS:
+        raw = _replace(raw, old, new)
+    if TARGET_SHA256 != "TO_BE_FROZEN" and sha256(raw) != TARGET_SHA256:
+        raise ValueError("Target worker SHA256 mismatch")
+    return raw
+
+
+def restore_parent(raw):
+    for old, new in reversed(REPLACEMENTS):
+        raw = _replace(raw, new, old)
+    if sha256(raw) != PARENT_SHA256:
+        raise ValueError("Reverse patch did not recover the immutable parent")
+    return raw
+
+
+def main():
+    raw = TARGET.read_bytes()
+    patched = transform(raw)
+    if restore_parent(patched) != raw:
+        raise ValueError("Round-trip mismatch")
+    TARGET.write_bytes(patched)
+    print("parent_sha256", PARENT_SHA256)
+    print("target_sha256", sha256(patched))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,232 @@
+"""Single staged startup with at most twelve tiny transport requests.
+
+Native CLI is intentionally disabled. This task may import/compile this file
+and test helpers; it must not call run_probe. No MATLAB starts on import.
+"""
+from contextlib import ExitStack
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+from unittest.mock import patch
+
+from build_stage_source import PHASES
+from cancellation import CancellationState, CancelSafeProcess, DeferredSignals
+from process_observer import ProcessObserver
+from toy_requests import run_toys
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT/"native_source/research/chapter3_experiments"
+MATLAB = Path("${MATLAB_ROOT}/bin/matlab.exe")
+
+
+def utc():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def marker_bytes(phase):
+    if phase not in PHASES:
+        raise ValueError("Undeclared diagnostic phase")
+    return ("PHASE "+phase+" COMPLETE\n").encode("ascii")
+
+
+def batch_prefix(folder):
+    path = (Path(folder)/"stage_000_batch_entry.marker").as_posix().replace("'", "''")
+    return ("stageFid=fopen('"+path+"','w','n','UTF-8'); "
+            "if stageFid<0,error('chapter3:stageWrite','Cannot open batch marker');end; "
+            "stageN=fprintf(stageFid,'PHASE 000_batch_entry COMPLETE\\n'); "
+            "stageClose=fclose(stageFid); "
+            "if stageN~="+str(len(marker_bytes("000_batch_entry")))+" || stageClose~=0,"
+            "error('chapter3:stageWrite','Incomplete batch marker');end; ")
+
+
+def read_markers(folder):
+    result = []
+    for phase in PHASES:
+        path = Path(folder)/("stage_"+phase+".marker")
+        if path.exists():
+            raw = path.read_bytes()
+            result.append({"phase":phase,"complete":raw==marker_bytes(phase),
+                           "bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest()})
+    return result
+
+
+class ProbeBudget:
+    def __init__(self, origin, *, clock=time.monotonic):
+        self.origin, self.clock, self.seconds = origin, clock, 180.0
+        self.start = origin
+        self.deadline = origin + self.seconds
+
+    @property
+    def elapsed(self):
+        return max(0,self.clock()-self.start)
+
+    @property
+    def remaining(self):
+        return max(0, self.deadline-self.clock())
+
+    def check(self):
+        if self.clock() >= self.deadline:
+            raise TimeoutError("Frozen 180-second diagnostic root deadline")
+
+
+def verify_source_freeze(root):
+    root=Path(root).resolve()
+    expected=json.loads((root/"SOURCE_FREEZE.json").read_text(encoding="utf-8"))
+    for name,digest in expected["files"].items():
+        path=(root/name).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("Source freeze path escapes isolated task")
+        if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
+            raise ValueError("Prepared source changed; refreeze before execution: "+name)
+    return expected
+
+
+def run_probe(output):
+    """Future authorized native action only. No caller in this offline task."""
+    import psutil
+    sys.path.insert(0,str(SOURCE))
+    import matlab_bridge as bridge
+    if Path(bridge.__file__).resolve() != SOURCE/"matlab_bridge.py":
+        raise RuntimeError("Wrong bridge binding")
+    if Path.cwd().resolve() != ROOT:
+        raise RuntimeError("Predeclared parent cwd must be this isolated task directory")
+    expected=verify_source_freeze(ROOT)
+    if hashlib.sha256(MATLAB.read_bytes()).hexdigest()!=expected["matlab_executable_sha256"]:
+        raise RuntimeError("MATLAB executable changed; stop before launch")
+    origin, started = time.monotonic(), utc()
+    budget = ProbeBudget(origin)
+    out = Path(output).resolve()
+    if out.parent != ROOT/"runs":
+        raise ValueError("Native output must be a fresh direct child of this task's runs directory")
+    out.parent.mkdir(exist_ok=True)
+    out.mkdir(exist_ok=False)
+    (out/"logs").mkdir()
+    cancel = CancellationState()
+    resources, native, cleanup, error = [], None, None, None
+    ready, launches = False, []
+    request_rows = []
+
+    def save(name, value):
+        p=out/name
+        t=p.with_suffix(p.suffix+".tmp")
+        t.write_text(json.dumps(value,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        t.replace(p)
+
+    def append(name, row):
+        with (out/"logs"/name).open("a",encoding="utf-8") as stream:
+            stream.write(json.dumps(row)+"\n")
+
+    observer=ProcessObserver(capture=bridge._capture_owned_process_tree,clock=time.monotonic,
+        utc=utc,save=save,append=lambda row:append("identity.jsonl",row),cancellation=cancel)
+    real_popen, original_reader = subprocess.Popen, bridge._read_json_until
+
+    def checkpoint(phase, *, process=None, force=False):
+        cancel.raise_if_requested()
+        observer.raise_if_errors()
+        budget.check()
+        now=time.monotonic()
+        if force or not resources or now-resources[-1]["monotonic"]>=0.25:
+            row={"utc":utc(),"monotonic":now,"phase":phase,
+                 "available_bytes":psutil.virtual_memory().available}
+            resources.append(row)
+            append("memory.jsonl",row)
+            if row["available_bytes"]<2**31:
+                raise MemoryError("Frozen 2 GiB available-memory stop gate")
+            if process is not None:
+                tree=observer.capture(process,phase=phase)
+                observer.raise_if_errors()
+                if not tree.get("capture_complete") or not tree.get("root_identity"):
+                    raise RuntimeError("Owned identity capture unresolved")
+                save("STAGE_OBSERVATIONS.json",{"observed_utc":utc(),
+                    "stages":read_markers(out/"matlab")})
+
+    def supervised_popen(argv, **kwargs):
+        cancel.raise_if_requested()
+        if launches:
+            raise RuntimeError("Only one MATLAB launch is permitted")
+        argv=list(argv)
+        if argv[1]!="-batch":
+            raise RuntimeError("Unexpected launch mode")
+        argv[2]=batch_prefix(out/"matlab")+argv[2]
+        env=kwargs.get("env",os.environ)
+        save("LAUNCH.json",{"utc":utc(),"argv":argv,"parent_cwd_at_popen":os.getcwd(),
+             "cwd_argument_present":"cwd" in kwargs,"cwd_argument":kwargs.get("cwd"),
+             "MATLAB_PREFDIR":env.get("MATLAB_PREFDIR"),"TEMP":env.get("TEMP"),"TMP":env.get("TMP"),
+             "PATH_sha256":hashlib.sha256(env.get("PATH","").encode()).hexdigest(),
+             "creationflags":kwargs.get("creationflags",0)})
+        proc=CancelSafeProcess(real_popen(argv,**kwargs),state=cancel,clock=time.monotonic)
+        launches.append(proc.pid)
+        return observer.launched(proc,emit=lambda child:append("events.jsonl",{
+            "event":"LAUNCHED","utc":utc(),"pid":child.pid}))
+
+    def reader(*args,on_poll=None,**kwargs):
+        process=kwargs.get("process") if len(args)<4 else args[3]
+        def poll():
+            checkpoint("publication_poll",process=process)
+            if on_poll is not None:
+                on_poll()
+        return original_reader(*args,on_poll=poll,**kwargs)
+
+    proxy=SimpleNamespace(Popen=supervised_popen,run=subprocess.run,STDOUT=subprocess.STDOUT,
+        TimeoutExpired=subprocess.TimeoutExpired,CREATE_NO_WINDOW=getattr(subprocess,"CREATE_NO_WINDOW",0))
+    preflight=[p.info for p in psutil.process_iter(["pid","name","create_time"])
+               if (p.info["name"] or "").lower()=="matlab.exe"]
+    save("PREFLIGHT.json",{"utc":utc(),"matlab":preflight})
+    if preflight:
+        raise RuntimeError("Existing MATLAB; do not launch or disturb it")
+    checkpoint("before_launch")
+    with DeferredSignals(cancel), ExitStack() as stack:
+        stack.enter_context(patch.object(bridge,"subprocess",proxy))
+        stack.enter_context(patch.object(bridge,"_capture_owned_process_tree",observer.capture))
+        stack.enter_context(patch.object(bridge,"_read_json_until",reader))
+        try:
+            native=bridge.MatlabSession(out/"matlab",total_budget_s=budget.remaining,
+                matlab_path=MATLAB,budget=budget)
+            checkpoint("after_READY",process=native.proc,force=True)
+            ready=True
+            run_toys(native,budget,checkpoint=checkpoint,save=save,append=append,utc=utc,rows=request_rows)
+        except BaseException as exc:
+            if isinstance(exc,(KeyboardInterrupt,SystemExit)):
+                cancel.defer(exc)
+            cleanup=getattr(exc,"matlab_cleanup",None)
+            error=type(exc).__name__+": "+str(exc)
+        finally:
+            if native is not None:
+                try:
+                    native.close()
+                except BaseException as exc:
+                    if isinstance(exc,(KeyboardInterrupt,SystemExit)):
+                        cancel.defer(exc)
+                    error=error or (type(exc).__name__+": "+str(exc))
+                cleanup=getattr(native,"cleanup",cleanup)
+            stages=read_markers(out/"matlab")
+            complete=bool(cleanup and bridge.cleanup_is_complete(cleanup))
+            graceful=complete and cleanup.get("cleanup_status")=="graceful_closed"
+            all_stages=len(stages)==len(PHASES) and all(x["complete"] for x in stages)
+            requests_passed=len(request_rows)==12 and all(row['passed'] for row in request_rows)
+            passed=bool(ready and graceful and all_stages and requests_passed and not error and not observer.errors
+                        and not cancel.requested and len(launches)==1)
+            record={"started_utc":started,"ended_utc":utc(),"total_wall_s":time.monotonic()-origin,
+                "state":"CANCELLED" if cancel.requested else "PASS" if passed else "STOPPED_OR_FAILED",
+                "ready":ready,"all_stages_complete":all_stages,"stages":stages,
+                "cleanup":cleanup,"cleanup_complete":complete,"normal_exit_verified":graceful,
+                "observer_errors":observer.errors,"cancellation":cancel.events,"error":error,
+                "launches":launches,"requests":native.counter if native is not None else 0,
+                "responses_checked":len(request_rows),"request_results":request_rows,
+                "requests_all_passed":requests_passed,
+                "solver_calls_confirmed":sum(row['checks'].get('entered',False) for row in request_rows),
+                "formal_experiments":0,
+                "scope":"single worker independent toy requests; no paper model or physical SAFE evaluation",
+                "minimum_available_bytes":min((x["available_bytes"] for x in resources),default=None)}
+            save("RESULT.json",record)
+    return record
+
+
+if __name__ == "__main__":
+    raise SystemExit("Prepared offline only; MATLAB launch is disabled. Read PLAN.json.")

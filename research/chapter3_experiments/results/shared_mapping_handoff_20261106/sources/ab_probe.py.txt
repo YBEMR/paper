@@ -1,0 +1,476 @@
+"""Single AB native x0 probe, with explicit scientific dependencies and one root.
+
+No CLI/native/model execution occurs on import. Software fixtures never yield
+native PASS. AC remains in the frozen input and metadata but is never processed.
+"""
+from copy import deepcopy
+import json
+import math
+from pathlib import Path
+import time
+from shared_mapping_adapter import (AdapterError, ModelProxy, ParentOriginClock,
+    RequestContext, RequestLedger, SerialSession, payload_sha256)
+from single_mapping import baseline_dependencies, _strict_cleanup, _validate_input, _error, DEPENDENCIES
+
+ROOT_SECONDS = 180
+SCENE_SLICE_SECONDS = 30
+MAX_ROUNDS = 1
+MAPPING = {"A.pre": "CPU1", "A.main": "NPU0", "A.post": "CPU1"}
+SCENE_IDS = ('AB_offset_0ms',)
+CONDITION_ID = 'ab_fresh_x0_probe'
+
+
+def _vector_hash(vector):
+    if vector is None or len(vector) == 0:
+        return None
+    return payload_sha256([float(value) for value in vector])
+
+
+def bounded_probe_cap(cap, remaining):
+    """Enforce the exact approved soft upper bound despite clock subtraction ULPs."""
+    for value in (cap, remaining):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise AdapterError('AB request cap and root remaining must be finite and positive')
+    return min(cap, SCENE_SLICE_SECONDS, remaining)
+
+
+def native_probe_errors(response, initial_length):
+    """Validate recorded native observations, never infer solver acceptance."""
+    errors = []
+    options = response.get('options')
+    if not isinstance(options, dict):
+        errors.append('PROBE_OPTIONS_MISSING')
+        options = {}
+    maximum = options.get('MaxFeasiblePoints')
+    if isinstance(maximum, bool) or not isinstance(maximum, (int, float)) or maximum != 1:
+        errors.append('PROBE_MAX_FEASIBLE_POINTS_MISMATCH')
+    if options.get('Display') != 'iter':
+        errors.append('PROBE_DISPLAY_MISMATCH')
+    check = response.get('native_x0_check')
+    if not isinstance(check, dict):
+        return errors + ['PROBE_NATIVE_X0_CHECK_MISSING']
+    for field in ('provided', 'completed', 'length_match', 'real_vector', 'finite_vector',
+                  'intcon_valid', 'measured_values_finite',
+                  'numerically_feasible_at_recorded_tolerances'):
+        if check.get(field) is not True:
+            errors.append('PROBE_NATIVE_X0_' + field.upper())
+    if check.get('error_identifier') != '':
+        errors.append('PROBE_NATIVE_X0_SELF_CHECK_ERROR')
+    for field in ('length', 'expected_length'):
+        value = check.get(field)
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or value != initial_length or initial_length <= 0):
+            errors.append('PROBE_NATIVE_X0_' + field.upper() + '_MISMATCH')
+    if (check.get('scope') != 'native_input_selfcheck_not_solver_certificate'
+            or check.get('independent_certificate') is not False
+            or check.get('solver_acceptance') != 'not_independently_observed'):
+        errors.append('PROBE_NATIVE_X0_OBSERVATION_SCOPE_MISMATCH')
+    return errors
+
+
+def solver_candidate_safe_contract(solved, seconds=ROOT_SECONDS):
+    """A solver callback/final SAFE is independent of the earlier initial SAFE."""
+    evaluation = solved.get('evaluation') or {}
+    stamp = evaluation.get('completed_at_elapsed_s')
+    return bool(solved.get('state') == 'SAFE' and solved.get('safe_candidate')
+        and evaluation.get('state') == 'SAFE' and evaluation.get('rankable_energy') is True
+        and evaluation.get('safe_upper_bound_J') is not None
+        and isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+        and math.isfinite(stamp) and 0 <= stamp < seconds)
+
+
+def execute_ab_probe(input_loader, workdir, *, origin, dependencies,
+                           runtime_factory, checkpoint, expected_model_sha256, clock=time.monotonic,
+                           cancellation=None, execution_kind="offline_fixture"):
+    """Return ``condition_result`` and ``driver_audit`` without changing the former.
+
+    runtime_factory(folder, budget) is a context manager yielding a callable
+    native-session factory.  The driver closes its sole session before context
+    exit.  Resource/cancellation checks never replenish the shared deadline.
+    """
+    from stop_control import SUPPRESS
+    stop_control_profile = SUPPRESS
+    if (not isinstance(expected_model_sha256, str) or len(expected_model_sha256) != 64
+            or any(c not in '0123456789abcdef' for c in expected_model_sha256)):
+        raise ValueError('Explicit SHA256 of the frozen AB model is required')
+    if execution_kind not in ("offline_fixture", "native_technical"):
+        raise ValueError("Unknown execution_kind")
+    if not all(callable(f) for f in (input_loader, runtime_factory, checkpoint, clock)):
+        raise TypeError("Loader, runtime, checkpoint and clock must be explicit callables")
+    if not isinstance(dependencies, dict) or set(dependencies) != DEPENDENCIES:
+        raise ValueError("The exact explicit scientific dependency set is required")
+    if not all(callable(f) for f in dependencies.values()):
+        raise TypeError("Every dependency must be callable")
+    original_dependencies = baseline_dependencies()
+    from stop_control import new_audit, wrap_recorder_factory, control_log_ok
+    stop_control_audit = new_audit(stop_control_profile)
+    if execution_kind == "native_technical" and any(
+            dependencies[k] is not original_dependencies[k] for k in DEPENDENCIES):
+        raise AdapterError("Native technical mode cannot use software scientific substitutes")
+    if execution_kind == "offline_fixture" and any(
+            dependencies[k] is original_dependencies[k] for k in (
+                "model_builder", "initial_preparer", "model_evaluator",
+                "scene_evaluator", "feedback_adder")):
+        raise AdapterError("Offline fixture mode refuses real model/thermal dependencies")
+    # Only after the exact native scientific dependency guard: wrap one newly
+    # created recorder instance, without loosening that guard or changing physics.
+    controlled_dependencies = dict(dependencies)
+    controlled_dependencies["recorder_factory"] = wrap_recorder_factory(
+        dependencies["recorder_factory"], stop_control_profile, stop_control_audit)
+    folder = Path(workdir)
+    if folder.exists():
+        raise FileExistsError("Output directory already exists: "+str(folder))
+    folder.mkdir(parents=True, exist_ok=False)
+
+    from timing import MethodBudget
+    from ab_partial_method import execute_ab_deployment
+    from scene_method import DEFAULT_BUILDER_OPTIONS
+    from scene_adapter import (canonical_hash, _partial_identity, _receipt_hash,
+                               PARTIAL_PROTOCOL, _local_candidate_deployment)
+    from thermal import _accuracy
+
+    checkpoints, model_events, observed_responses = [], [], []
+    initial_evidence = []
+    ledger = RequestLedger(scene_ids=SCENE_IDS)
+    condition_result = None
+    session = None
+    native = None
+    runtime = None
+    runtime_view = None
+    config = instance = accuracy = None
+    failure = cleanup_failure = None
+    factory_calls = 0
+    stopped_s = None
+    cleanup_started_s = None
+
+    def cancelled():
+        return bool(cancellation is not None and getattr(cancellation, "requested", False))
+
+    def check_cancel():
+        if cancellation is None:
+            return
+        method = getattr(cancellation, "raise_if_requested", None)
+        if method is None:
+            raise TypeError("Cancellation must expose raise_if_requested()")
+        method()
+
+    class Budget(MethodBudget):
+        def __init__(self):
+            self._checking = False
+            super().__init__(ROOT_SECONDS, clock=ParentOriginClock(clock, origin))
+
+        def check(self):
+            if self._checking:
+                return MethodBudget.check(self)
+            self._checking = True
+            try:
+                MethodBudget.check(self)
+                check_cancel()
+                checkpoint("budget_checkpoint", self, force=False)
+                MethodBudget.check(self)
+                check_cancel()
+            finally:
+                self._checking = False
+
+        def forced(self, phase):
+            MethodBudget.check(self)
+            check_cancel()
+            before = self._checking
+            self._checking = True
+            try:
+                checkpoint(phase, self, force=True)
+                checkpoints.append({"phase": phase, "elapsed_s": self.elapsed})
+                MethodBudget.check(self)
+                check_cancel()
+            finally:
+                self._checking = before
+
+    budget = Budget()
+    ledger.bind_budget(budget)
+
+    def load(given):
+        nonlocal config, instance, accuracy
+        ledger.check_budget(given)
+        config, instance = input_loader(given)
+        config, instance = deepcopy(config), deepcopy(instance)
+        _validate_input(instance)
+        accuracy = _accuracy(config["accuracy_targets"])
+        ledger.full_input_sha256 = canonical_hash(instance)
+        return config, instance
+
+    def build(original, given_config, **kwargs):
+        ledger.check_budget(kwargs.get("budget"))
+        sid = kwargs.get("fixed_scene_id")
+        if sid not in SCENE_IDS or kwargs.get("fixed_shared_deployment") != MAPPING:
+            raise AdapterError("Condition/model identity mismatch")
+        if canonical_hash(original) != ledger.full_input_sha256:
+            raise AdapterError("Model input differs from the original full input")
+        budget.forced("before_model")
+        model_events.append({"phase": "before_model", "scene_id": sid,
+                             "elapsed_s": budget.elapsed})
+        model = dependencies["model_builder"](original, given_config, **kwargs)
+        budget.forced("after_model")
+        with budget.phase('pre_startup_model_identity'):
+            payload = model.as_solver_dict()
+            actual_hash = payload_sha256(payload)
+            del payload
+        model_events.append({"phase": "after_model", "scene_id": sid,
+                             "elapsed_s": budget.elapsed, "model_sha256": actual_hash,
+                             "expected_model_sha256": expected_model_sha256,
+                             "matches_expected": actual_hash == expected_model_sha256})
+        budget.check()
+        if actual_hash != expected_model_sha256:
+            raise AdapterError('AB model payload differs from frozen expected hash')
+        return ModelProxy(model, ledger, RequestContext(
+            CONDITION_ID, MAPPING, sid, 0, ledger.full_input_sha256))
+
+    def prepare(model, accuracy, given, starts, max_attempts):
+        ledger.check_budget(given)
+        if starts is not None or model.instance['scenarios'][0]['id'] != SCENE_IDS[0]:
+            raise AdapterError('Only fresh original AB initialisation without supplied starts is permitted')
+        prepared = dependencies['initial_preparer'](model, accuracy, given, starts, max_attempts)
+        x0 = prepared.get('x0')
+        initial_evidence.append({'source': 'current_invocation_original_initial_preparer',
+            'state': prepared.get('state'), 'reason': prepared.get('reason'),
+            'completed_at_s': budget.elapsed, 'x0_length': None if x0 is None else len(x0),
+            'x0_sha256': None if x0 is None else payload_sha256(x0),
+            'x0_numeric_sha256': _vector_hash(x0),
+            'completion': deepcopy(prepared.get('completion')),
+            'external_candidate_or_cache_used': False})
+        budget.check()
+        return prepared
+
+    controlled_dependencies['initial_preparer'] = prepare
+
+    class ObservedSession(SerialSession):
+        def solve(self, payload, *, budget, **kwargs):
+            identity = ledger.resolve(payload, budget)
+            sid = identity["context"]["scene_id"]
+            if (len(observed_responses) >= 1 or
+                    any(r["scene_id"] == sid for r in observed_responses)):
+                self._blocked = True
+                ledger.faults.append({"kind": "SINGLE_MAPPING_REQUEST_LIMIT", "scene_id": sid})
+                raise AdapterError("At most one AB request is allowed")
+            if identity['model_sha256'] != expected_model_sha256:
+                raise AdapterError('AB request model hash changed after pre-startup verification')
+            x0 = kwargs.get('x0')
+            if (len(initial_evidence) != 1 or initial_evidence[0]['state'] != 'SAFE_POINT_READY'
+                    or x0 is None or len(x0) == 0
+                    or payload_sha256(x0) != initial_evidence[0]['x0_sha256']):
+                raise AdapterError('Request x0 does not match this invocation fresh admitted initialisation')
+            budget.check()
+            original_cap = kwargs.get('solver_max_time_s')
+            normalized_cap = bounded_probe_cap(original_cap, budget.remaining)
+            kwargs['solver_max_time_s'] = normalized_cap
+            response = super().solve(payload, budget=budget, **kwargs)
+            observed_responses.append({"scene_id": sid,
+                "request_number": response.get("request_number"),
+                "solver_max_time_before_normalization_s": original_cap,
+                "solver_max_time_after_normalization_s": normalized_cap,
+                "returned_vector_length": len(response.get('x', [])) if response.get('x') is not None else 0,
+                "returned_vector_numeric_sha256": _vector_hash(response.get('x')),
+                "returned_vector_matches_fresh_x0": (
+                    _vector_hash(response.get('x')) == initial_evidence[0]['x0_numeric_sha256']),
+                "initial_point": deepcopy(response.get('initial_point')),
+                "options": deepcopy(response.get('options')),
+                "native_x0_check": deepcopy(response.get('native_x0_check')),
+                "intlinprog_entered": response.get("intlinprog_entered") is True,
+                "status": response.get("status"),
+                "budget_valid": response.get("budget_valid") is True,
+                "accepted_for_evaluation": response.get("accepted_for_evaluation") is True})
+            if execution_kind == "native_technical":
+                from stop_control import stop_receipt_errors
+                stop_errors = stop_receipt_errors(response)
+                probe_errors = native_probe_errors(response, len(x0))
+                observed_responses[-1]['stop_receipt_errors'] = stop_errors
+                observed_responses[-1]['native_probe_errors'] = probe_errors
+                if stop_errors or probe_errors:
+                    self._blocked = True
+                    ledger.faults.append({'kind': 'NATIVE_PROBE_OBSERVATION_REJECTED',
+                        'scene_id': sid, 'stop_receipt_errors': stop_errors,
+                        'native_probe_errors': probe_errors})
+                    raise AdapterError('Native probe observation rejected: ' +
+                                       ','.join(stop_errors + probe_errors))
+            return response
+
+    def factory(workdir, **kwargs):
+        nonlocal factory_calls, native, session
+        ledger.check_budget(kwargs.get("budget"))
+        if factory_calls:
+            raise AdapterError("A second native lifetime is prohibited")
+        factory_calls += 1
+        budget.forced("before_native_startup")
+        native = runtime_view(workdir, **kwargs)
+        session = ObservedSession(native, ledger, require_native_identity=True)
+        if (getattr(native, "counter", None) != 0 or getattr(native, "closed", False)
+                or Path(native.workdir).resolve() != Path(workdir).resolve()):
+            raise AdapterError("Runtime factory did not create the requested fresh worker")
+        budget.forced("after_READY")
+        return session
+
+    try:
+        budget.forced("before_runtime")
+        runtime = runtime_factory(folder, budget)
+        with runtime as runtime_view:
+            try:
+                condition_result = execute_ab_deployment(
+                    load, folder/"condition", shared_deployment=deepcopy(MAPPING),
+                    budget=budget, close_session=False, scene_slice_s=SCENE_SLICE_SECONDS,
+                    max_rounds=MAX_ROUNDS, starts=None, session_factory=factory,
+                    model_builder=build,
+                    builder_options=deepcopy(DEFAULT_BUILDER_OPTIONS),
+                    **{k: v for k, v in controlled_dependencies.items() if k != "model_builder"})
+            except BaseException as error:
+                failure = _error(error)
+                if isinstance(error, (KeyboardInterrupt, SystemExit)) and cancellation is not None:
+                    defer = getattr(cancellation, "defer", None)
+                    if defer is not None:
+                        defer(error)
+            finally:
+                stopped_s = budget.elapsed
+                cleanup_started_s = clock()
+                try:
+                    if session is not None:
+                        session.close()
+                except BaseException as error:
+                    cleanup_failure = _error(error)
+                finally:
+                    ledger.release_condition(CONDITION_ID)
+    except BaseException as error:
+        if failure is None:
+            failure = _error(error)
+        else:
+            failure.setdefault("runtime_exit_error", _error(error))
+    finally:
+        ledger.release_condition(CONDITION_ID)
+        if stopped_s is None:
+            stopped_s = budget.elapsed
+
+    cleanup_receipt = deepcopy(getattr(native, "cleanup", None)) if native is not None else None
+    cleanup_receipt_valid = _strict_cleanup(cleanup_receipt)
+    reported_errors = {}
+    for label, owner in (("native", native), ("runtime", runtime), ("runtime_view", runtime_view)):
+        if owner is None:
+            continue
+        for attr in ("protected_observer_errors", "protected_runtime_errors", "errors"):
+            value = getattr(owner, attr, None)
+            if value:
+                reported_errors[label+":"+attr] = deepcopy(value)
+        observer = getattr(owner, "observer", None)
+        if observer is not None and getattr(observer, "errors", None):
+            reported_errors[label+":observer"] = deepcopy(observer.errors)
+
+    scene_record = (condition_result or {}).get('scenes', {}).get(SCENE_IDS[0], {})
+    receipt = scene_record.get('scene_receipt') or {}
+    ab_safe = False
+    aggregate_error = None
+    try:
+        if instance is not None and receipt.get('state') == 'SAFE':
+            candidate = scene_record.get('safe_candidate')
+            local = _local_candidate_deployment(instance, SCENE_IDS[0], candidate)
+            expected = _partial_identity(instance, MAPPING, accuracy, budget,
+                scene_id=SCENE_IDS[0], candidate=candidate, local_deployment=local)
+            stamp = receipt.get('completed_at_elapsed_s')
+            ab_safe = bool(receipt.get('protocol') == PARTIAL_PROTOCOL
+                and receipt.get('identity') == expected
+                and receipt.get('receipt_sha256') == _receipt_hash(receipt)
+                and receipt.get('shared_deployment') == MAPPING
+                and receipt.get('local_deployment') == local
+                and receipt.get('unweighted') is True
+                and receipt.get('rankable_energy') is True
+                and isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+                and 0 <= stamp < ROOT_SECONDS
+                and scene_record.get('safe_upper_bound_J') == receipt.get('safe_upper_bound_J'))
+    except Exception as error:
+        aggregate_error = _error(error)
+    full_safe = False  # AC is not constructed/evaluated; no full-scene claim.
+
+    transport = bool(len(ledger.requests) == 1 and len(observed_responses) == 1
+        and {r["scene_id"] for r in observed_responses} == set(SCENE_IDS)
+        and all(r["intlinprog_entered"] and r["status"] == "SOLVED"
+                and r["budget_valid"] and r["accepted_for_evaluation"] for r in observed_responses)
+        and all(r.get("settled") and not r.get("late") and r.get("native_identity_verified")
+                for r in ledger.requests) and not ledger.faults)
+    bad_condition = bool((condition_result or {}).get("error") or
+        (condition_result or {}).get("cleanup_error") or
+        (condition_result or {}).get("reason") in (
+            "INTERFACE_ERROR", "RESOURCE_LIMIT", "SOLVER_INTERFACE_ERROR",
+            "NATIVE_REQUEST_NOT_UNWOUND", "INVALID_INPUT_OR_INTERFACE"))
+    cleanup_interface_ok = bool(ledger.cleanup["attempted"] and ledger.cleanup["call_returned"]
+                                and not ledger.cleanup["error"])
+    method_within_root = bool(stopped_s < ROOT_SECONDS
+        and (condition_result or {}).get("budget_exhausted") is not True)
+    clean_interface = (failure is None and cleanup_failure is None and not reported_errors
+                       and cleanup_interface_ok)
+    solved = scene_record.get('solver_result') or {}
+    solver_model_candidate_safe = solver_candidate_safe_contract(solved)
+    solver_candidate_local_safe = False
+    solver_candidate_local_receipt_sha256 = None
+    if solver_model_candidate_safe and instance is not None:
+        candidate = solved['safe_candidate']
+        for attempt in scene_record.get('original_scene_evaluations', []):
+            if (attempt.get('accepted_safe') is not True or
+                    canonical_hash(attempt.get('candidate')) != canonical_hash(candidate)):
+                continue
+            local_receipt = attempt.get('receipt') or {}
+            local = _local_candidate_deployment(instance, SCENE_IDS[0], candidate)
+            expected = _partial_identity(instance, MAPPING, accuracy, budget,
+                scene_id=SCENE_IDS[0], candidate=candidate, local_deployment=local)
+            stamp = local_receipt.get('completed_at_elapsed_s')
+            solver_candidate_local_safe = bool(local_receipt.get('state') == 'SAFE'
+                and local_receipt.get('rankable_energy') is True
+                and local_receipt.get('protocol') == PARTIAL_PROTOCOL
+                and local_receipt.get('identity') == expected
+                and local_receipt.get('receipt_sha256') == _receipt_hash(local_receipt)
+                and local_receipt.get('shared_deployment') == MAPPING
+                and local_receipt.get('local_deployment') == local
+                and local_receipt.get('unweighted') is True
+                and isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+                and math.isfinite(stamp) and 0 <= stamp < ROOT_SECONDS)
+            if solver_candidate_local_safe:
+                solver_candidate_local_receipt_sha256 = local_receipt['receipt_sha256']
+                break
+    solver_candidate_safe = solver_model_candidate_safe and solver_candidate_local_safe
+    native_pass = bool(execution_kind == "native_technical" and transport and ab_safe
+        and solver_candidate_safe
+        and cleanup_receipt_valid and clean_interface and method_within_root
+        and not bad_condition and not cancelled() and control_log_ok(stop_control_audit))
+    audit = {"protocol": "ab-only-fresh-x0-technical-v1",
+        "execution_kind": execution_kind, "software_fixture": execution_kind == "offline_fixture",
+        "stop_control": stop_control_audit,
+        "scene_timer_suppression_exercised": any(
+            e.get("action") == "SUPPRESSED_TIMER_CANCEL" for e in stop_control_audit["events"]),
+        "formal_experiment": False, "projection_enabled": False, "recovery_enabled": False,
+        "shared_deployment": deepcopy(MAPPING), "scene_ids": list(SCENE_IDS),
+        "root_seconds": ROOT_SECONDS, "root_start": budget.start, "root_deadline": budget.deadline,
+        "scene_slice_s": SCENE_SLICE_SECONDS, "max_rounds": MAX_ROUNDS,
+        "method_stopped_elapsed_s": stopped_s,
+        "cleanup_elapsed_s": None if cleanup_started_s is None else clock()-cleanup_started_s,
+        "factory_calls": factory_calls, "checkpoint_events": checkpoints, "model_events": model_events,
+        "adapter_audit": ledger.audit(), "observed_responses": observed_responses,
+        "ab_local_safe_contract": ab_safe,
+        "solver_candidate_safe": solver_candidate_safe,
+        "solver_model_candidate_safe": solver_model_candidate_safe,
+        "solver_candidate_local_safe": solver_candidate_local_safe,
+        "solver_candidate_local_receipt_sha256": solver_candidate_local_receipt_sha256,
+        "full_safe_aggregate_contract": False, "full_aggregate_executed": False,
+        "omitted_scene_ids": ['AC_offset_0ms'], "aggregate_error": aggregate_error,
+        "expected_model_sha256": expected_model_sha256,
+        "fresh_initialisation": initial_evidence,
+        "solver_returned_point": any(r['returned_vector_length'] > 0 for r in observed_responses),
+        "ab_safe_source": scene_record.get('best_source'),
+        "ab_solver_result_reason": (scene_record.get('solver_result') or {}).get('reason'),
+        "transport_contract_complete": transport,
+        "method_within_root": method_within_root, "cleanup_interface_ok": cleanup_interface_ok,
+        "cleanup_receipt": cleanup_receipt, "cleanup_receipt_shape_valid": cleanup_receipt_valid,
+        "physical_cleanup_verified": execution_kind == "native_technical" and cleanup_receipt_valid,
+        "native_technical_pass": native_pass, "condition_technical_error": bad_condition,
+        "failure": failure, "cleanup_failure": cleanup_failure,
+        "protected_runtime_errors": reported_errors, "cancelled": cancelled(),
+        "condition_result_path": "condition/result.json",
+        "scope": "one fixed mapping, original full-input AB only; AC not run, no full SAFE or global search"}
+    with (folder/"driver_audit.json").open("x", encoding="utf-8", newline="\n") as stream:
+        json.dump(audit, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+    return {"condition_result": condition_result, "driver_audit": audit}

@@ -1,0 +1,502 @@
+"""Offline-first transport adapter; no projection, recovery or scientific defaults.
+
+The baseline search/result protocol is retained.  This file supplies explicit
+dependency injection and a separate transport audit; it never certifies SAFE.
+"""
+from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from copy import deepcopy
+import hashlib
+import json
+import math
+from pathlib import Path
+import threading
+import time
+from types import MappingProxyType
+
+
+class AdapterError(RuntimeError):
+    pass
+
+
+def _normal(value):
+    """Lossless identity encoding, including binary64 and ndarray bytes."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return {"float_hex": value.hex()}
+    if isinstance(value, Mapping):
+        if not all(isinstance(k, str) for k in value):
+            raise AdapterError("Payload mapping keys must be strings")
+        return {k: _normal(value[k]) for k in sorted(value)}
+    if isinstance(value, (list, tuple)):
+        return [_normal(v) for v in value]
+    if hasattr(value, "tocoo"):
+        coo = value.tocoo()
+        return {"sparse_shape": list(coo.shape), "row": _normal(coo.row),
+                "col": _normal(coo.col), "data": _normal(coo.data)}
+    if hasattr(value, "dtype") and hasattr(value, "shape") and hasattr(value, "tobytes"):
+        return {"dtype": str(value.dtype), "shape": list(value.shape),
+                "data_sha256": hashlib.sha256(value.tobytes(order="C")).hexdigest()}
+    raise AdapterError("Unsupported payload identity type: " + type(value).__name__)
+
+
+def payload_sha256(payload):
+    encoded = json.dumps(_normal(payload), ensure_ascii=False,
+                         sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_hash(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class RequestContext:
+    condition_id: str
+    shared_deployment: dict
+    scene_id: str
+    round_index: int
+    full_input_sha256: str
+
+    def __post_init__(self):
+        if (not self.condition_id or not self.scene_id or not self.full_input_sha256
+                or isinstance(self.round_index, bool) or not isinstance(self.round_index, int)
+                or self.round_index < 0 or not isinstance(self.shared_deployment, Mapping)):
+            raise AdapterError("Invalid request context")
+        object.__setattr__(self, "shared_deployment", MappingProxyType(deepcopy(dict(self.shared_deployment))))
+
+    def as_dict(self):
+        return {"condition_id": self.condition_id,
+                "shared_deployment": deepcopy(dict(self.shared_deployment)),
+                "scene_id": self.scene_id, "round_index": self.round_index,
+                "full_input_sha256": self.full_input_sha256}
+
+
+class RequestLedger:
+    def __init__(self, full_input_sha256=None, scene_ids=None):
+        self.full_input_sha256 = full_input_sha256
+        self.scene_ids = None if scene_ids is None else frozenset(scene_ids)
+        self.budget = None
+        self.start = self.deadline = None
+        self._payloads = {}
+        self._contexts = set()
+        self._consumed = set()
+        self._closed_conditions = set()
+        self.requests = []
+        self.faults = []
+        self.condition_releases = []
+        self.cleanup = {"attempted": False, "call_returned": False, "error": None,
+                        "physical_process_exit_verified": False}
+
+    def bind_budget(self, budget):
+        if self.budget is None:
+            self.budget = budget
+            self.start, self.deadline = budget.start, budget.deadline
+        self.check_budget(budget, check_cutoff=False)
+        return self
+
+    def check_budget(self, budget, *, check_cutoff=True):
+        if (budget is not self.budget or budget.start != self.start
+                or budget.deadline != self.deadline):
+            raise AdapterError("Budget object/origin/deadline mismatch")
+        if check_cutoff:
+            budget.check()
+
+    def bind_payload(self, payload, context):
+        if self.budget is None:
+            raise AdapterError("Bind root budget before a payload")
+        self.check_budget(self.budget)
+        if not isinstance(payload, Mapping) or not isinstance(context, RequestContext):
+            raise AdapterError("Payload/context type mismatch")
+        if context.condition_id in self._closed_conditions:
+            raise AdapterError("Closed condition cannot bind another payload")
+        if self.full_input_sha256 is None:
+            self.full_input_sha256 = context.full_input_sha256
+        if context.full_input_sha256 != self.full_input_sha256:
+            raise AdapterError("Full input identity mismatch")
+        if self.scene_ids is not None and context.scene_id not in self.scene_ids:
+            raise AdapterError("Unknown scene identity")
+        if "c" in payload:
+            count = len(payload["c"])
+            for field in ("lb", "ub", "x0"):
+                if field in payload and payload[field] is not None and len(payload[field]) != count:
+                    raise AdapterError("Payload dimension mismatch: " + field)
+        ctx = context.as_dict()
+        fingerprint = payload_sha256(payload)
+        old = self._payloads.get(id(payload))
+        if old is not None:
+            if old[0] is not payload or old[1] != ctx or old[2] != fingerprint:
+                raise AdapterError("Payload rebinding or mutation")
+            return {"context": deepcopy(ctx), "model_sha256": fingerprint}
+        context_key = json.dumps(ctx, sort_keys=True, separators=(",", ":"))
+        if context_key in self._contexts:
+            raise AdapterError("Duplicate condition/scene/round identity")
+        self._contexts.add(context_key)
+        self._payloads[id(payload)] = (payload, ctx, fingerprint)
+        self.check_budget(self.budget)
+        return {"context": deepcopy(ctx), "model_sha256": fingerprint}
+
+    def resolve(self, payload, budget):
+        self.check_budget(budget)
+        if id(payload) in self._consumed:
+            raise AdapterError("Previously consumed payload cannot be replayed")
+        item = self._payloads.get(id(payload))
+        if item is None or item[0] is not payload:
+            raise AdapterError("Unregistered model payload")
+        if item[2] != payload_sha256(payload):
+            raise AdapterError("Model payload changed after binding")
+        self.check_budget(budget)
+        return {"context": deepcopy(item[1]), "model_sha256": item[2]}
+
+    def consume(self, payload):
+        if id(payload) in self._consumed:
+            raise AdapterError("Previously consumed payload cannot be replayed")
+        self._consumed.add(id(payload))
+
+    def release_condition(self, condition_id):
+        """Release bulky exports even after cutoff; never create new evidence."""
+        if condition_id in self._closed_conditions:
+            return
+        identifiers = [key for key, (_, context, _) in self._payloads.items()
+                       if context["condition_id"] == condition_id]
+        records = [{"context": deepcopy(self._payloads[key][1]),
+                    "model_sha256": self._payloads[key][2],
+                    "consumed": key in self._consumed} for key in identifiers]
+        for key in identifiers:
+            del self._payloads[key]
+            self._consumed.discard(key)
+        self._closed_conditions.add(condition_id)
+        self.condition_releases.append({"condition_id": condition_id,
+                                        "released_payload_count": len(identifiers),
+                                        "payload_identities": records})
+
+    def audit(self):
+        return {"protocol": "offline-shared-mapping-adapter-v1", "offline_only": True,
+                "projection_enabled": False, "recovery_enabled": False,
+                "full_input_sha256": self.full_input_sha256,
+                "scene_ids": None if self.scene_ids is None else sorted(self.scene_ids),
+                "root_start": self.start, "root_deadline": self.deadline,
+                "requests": deepcopy(self.requests), "faults": deepcopy(self.faults),
+                "condition_releases": deepcopy(self.condition_releases),
+                "cleanup": deepcopy(self.cleanup)}
+
+
+class SerialSession:
+    """One native lifetime. Original response fields survive late rejection."""
+    def __init__(self, native, ledger, *, require_native_identity=True):
+        self.native, self.ledger = native, ledger
+        if type(require_native_identity) is not bool:
+            raise AdapterError("Native identity mode must be boolean")
+        self.require_native_identity = require_native_identity
+        self._active = threading.Lock()
+        self._blocked = False
+        self._closed = False
+
+    def __getattr__(self, name):
+        return getattr(self.native, name)
+
+    @property
+    def event_consumer(self):
+        return getattr(self.native, "event_consumer", None)
+
+    @event_consumer.setter
+    def event_consumer(self, consumer):
+        self.native.event_consumer = consumer
+
+    @property
+    def request_blocked(self):
+        return self._blocked or self._closed or bool(getattr(self.native, "request_blocked", False))
+
+    @property
+    def counter(self):
+        return getattr(self.native, "counter", len(self.ledger.requests))
+
+    def solve(self, payload, *, budget, **kwargs):
+        if self.request_blocked:
+            raise AdapterError("Session is closed, failed or unsettled")
+        if not self._active.acquire(blocking=False):
+            self._blocked = True
+            self.ledger.faults.append({"kind": "CONCURRENT_REQUEST"})
+            raise AdapterError("Concurrent request before settlement")
+        record = None
+        try:
+            identity = self.ledger.resolve(payload, budget)
+            cap = kwargs.get("solver_max_time_s")
+            if cap is not None and (isinstance(cap, bool) or not isinstance(cap, (int, float))
+                                    or not math.isfinite(cap) or cap <= 0):
+                raise AdapterError("Invalid solver soft cap")
+            remaining = budget.remaining
+            declared_remaining = kwargs.get("remaining_s")
+            declared_cap = cap
+            if "remaining_s" in kwargs:
+                supplied = kwargs["remaining_s"]
+                if (not isinstance(supplied, (int, float)) or isinstance(supplied, bool)
+                        or not math.isfinite(supplied) or supplied <= 0
+                        or supplied > budget.seconds):
+                    raise AdapterError("Invalid request remaining time")
+                kwargs["remaining_s"] = min(supplied, remaining)
+            if cap is not None and cap > budget.seconds:
+                raise AdapterError("Request soft cap exceeds root")
+            if cap is not None:
+                kwargs["solver_max_time_s"] = min(cap, remaining)
+            x0 = kwargs.get("x0")
+            x0_hash = None
+            x0_length = None
+            if x0 is not None:
+                if "c" not in payload or len(x0) != len(payload["c"]):
+                    raise AdapterError("Keyword x0 dimension mismatch")
+                x0_length = len(x0)
+                x0_hash = payload_sha256(x0)
+            native_counter = getattr(self.native, "counter", None)
+            native_workdir = getattr(self.native, "workdir", None)
+            identity_available = (isinstance(native_counter, int)
+                                  and not isinstance(native_counter, bool)
+                                  and native_counter >= 0 and native_workdir is not None)
+            if self.require_native_identity and not identity_available:
+                raise AdapterError("Native counter/workdir identity is required")
+            expected_number = native_counter+1 if identity_available else None
+            prefix = str(Path(native_workdir)/("request_%06d" % expected_number)) if identity_available else None
+            self.ledger.check_budget(budget)
+            remaining = budget.remaining
+            for limit in ("remaining_s", "solver_max_time_s"):
+                if limit in kwargs and kwargs[limit] is not None:
+                    kwargs[limit] = min(kwargs[limit], remaining)
+            record = {**identity, "request_index": len(self.ledger.requests)+1,
+                      "started_at_s": budget.elapsed, "settled": False,
+                      "late": False, "error": None,
+                      "x0_source": "kwargs" if x0 is not None else "absent",
+                      "x0_length": x0_length, "x0_sha256": x0_hash,
+                      "native_identity_required": self.require_native_identity,
+                      "native_identity_verified": False,
+                      "native_request_number": expected_number, "request_prefix": prefix,
+                      "declared_remaining_s": declared_remaining,
+                      "effective_remaining_s": kwargs.get("remaining_s"),
+                      "declared_solver_max_time_s": declared_cap,
+                      "effective_solver_max_time_s": kwargs.get("solver_max_time_s")}
+            record["context_round_semantics"] = "per-model export ordinal; not an algorithm feedback round"
+            record["scene_request_ordinal"] = 1+sum(
+                prior["context"]["condition_id"] == identity["context"]["condition_id"]
+                and prior["context"]["scene_id"] == identity["context"]["scene_id"]
+                for prior in self.ledger.requests)
+            self.ledger.requests.append(record)
+            self.ledger.consume(payload)
+            response = self.native.solve(payload, budget=budget, **kwargs)
+            if not isinstance(response, dict):
+                raise AdapterError("Native response must preserve mapping protocol")
+            self.ledger.check_budget(budget, check_cutoff=False)
+            record["returned_at_s"] = budget.elapsed
+            record["raw_admission"] = {k: response.get(k) for k in (
+                "status", "budget_valid", "accepted_for_evaluation", "rejection_reason")}
+            reject_reason = None
+            if x0 is not None and payload_sha256(x0) != x0_hash:
+                reject_reason = "ADAPTER_X0_MUTATED_DURING_REQUEST"
+            if identity_available:
+                returned_counter = getattr(self.native, "counter", None)
+                reported_number = response.get("request_number")
+                no_publication = (response.get("status") in (
+                    "BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED_BEFORE_PUBLICATION")
+                    and returned_counter == native_counter)
+                if not no_publication:
+                    record["native_identity_verified"] = (
+                        reported_number == expected_number and returned_counter == expected_number
+                        and str(getattr(self.native, "workdir", "")) == str(native_workdir))
+                    if not record["native_identity_verified"]:
+                        reject_reason = "ADAPTER_NATIVE_IDENTITY_MISMATCH"
+            if self._closed or self._blocked:
+                reject_reason = "ADAPTER_SESSION_CLOSED_OR_FAILED"
+            if reject_reason is not None:
+                self._blocked = True
+                self.ledger.faults.append({"kind": reject_reason,
+                                          "request_index": record["request_index"]})
+                response = dict(response)
+                response.update(budget_valid=False, accepted_for_evaluation=False,
+                                rejection_reason=reject_reason)
+            record["settled"] = (not bool(getattr(self.native, "request_blocked", False))
+                                  and response.get("request_settled") is not False)
+            if not record["settled"]:
+                self._blocked = True
+                self.ledger.faults.append({"kind": "UNSETTLED_REQUEST", "request_index": record["request_index"]})
+            if response.get("status") in ("ERROR", "WORKER_EXITED"):
+                self._blocked = True
+                self.ledger.faults.append({"kind": "NATIVE_ERROR", "request_index": record["request_index"]})
+                response = dict(response)
+                response.update(budget_valid=False, accepted_for_evaluation=False,
+                                rejection_reason="ADAPTER_NATIVE_ERROR")
+            if budget.clock() >= budget.deadline:
+                response = dict(response)
+                response.update(budget_valid=False, accepted_for_evaluation=False,
+                                rejection_reason="ADAPTER_LATE_RESPONSE")
+                record["late"] = True
+            return response
+        except BaseException as error:
+            self._blocked = True
+            self.ledger.faults.append({"kind": "REQUEST_EXCEPTION", "error": type(error).__name__+": "+str(error)})
+            if record is not None:
+                record["error"] = type(error).__name__+": "+str(error)
+            raise
+        finally:
+            self._active.release()
+
+    def close(self):
+        if self._closed:
+            return None
+        self._closed = True
+        self.ledger.cleanup["attempted"] = True
+        try:
+            outcome = self.native.close()
+            self.ledger.cleanup["call_returned"] = True
+            # No process-exit claim is inferred from a mock or bare close return.
+            return outcome
+        except BaseException as error:
+            self.ledger.cleanup["error"] = type(error).__name__+": "+str(error)
+            raise
+
+
+class ModelProxy:
+    def __init__(self, model, ledger, context):
+        self._model, self._ledger, self._context = model, ledger, context
+        self._round = context.round_index
+
+    def __getattr__(self, name):
+        return getattr(self._model, name)
+
+    def __setattr__(self, name, value):
+        if name in {"_model", "_ledger", "_context", "_round"} or "_model" not in self.__dict__:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._model, name, value)
+
+    def as_solver_dict(self):
+        payload = self._model.as_solver_dict()
+        context = replace(self._context, round_index=self._round)
+        self._ledger.bind_payload(payload, context)
+        self._round += 1
+        return payload
+
+
+class ParentOriginClock:
+    def __init__(self, clock, origin):
+        now = clock()
+        if not math.isfinite(origin) or origin > now:
+            raise AdapterError("Parent origin must be finite and not in the future")
+        self.clock, self.origin, self.first = clock, origin, True
+
+    def __call__(self):
+        if self.first:
+            self.first = False
+            return self.origin
+        return self.clock()
+
+
+def _blocked_science(*args, **kwargs):
+    raise AdapterError("Offline adapter requires explicit scientific test dependencies")
+
+
+def execute_adapted_shared_search(input_loader, workdir, *, seconds=900, scene_slice_s=60,
+                                 clock=time.monotonic, origin=None, session_factory=None,
+                                 condition_executor=None, condition_options=None,
+                                 bound_provider=None, require_native_identity=True):
+    """Run baseline orchestration via explicit DI; return its original result.
+
+    Any result is offline interface evidence, never a formal experiment.  No
+    actual scientific dependency is silently supplied by this adapter.
+    """
+    if session_factory is None:
+        raise AdapterError("Explicit offline session_factory required; native disabled")
+    from shared_search import execute_shared_search
+    from partial_method import execute_shared_deployment, PartialRecorder
+    from scene_adapter import aggregate_partial_scene_receipts
+    from partial_bounds import independent_lower_bound
+    folder = Path(workdir)
+    audit_path = folder.with_name(folder.name+".adapter_audit.json")
+    if folder.exists() or audit_path.exists():
+        raise FileExistsError("Invocation/audit already exists")
+    ledger = RequestLedger()
+    options = dict(condition_options or {})
+    builder = options.pop("model_builder", _blocked_science)
+    options.setdefault("initial_preparer", _blocked_science)
+    options.setdefault("model_evaluator", _blocked_science)
+    options.setdefault("scene_evaluator", _blocked_science)
+    options.setdefault("feedback_adder", _blocked_science)
+    options.setdefault("witness_validator", _blocked_science)
+    options.setdefault("recorder_factory", PartialRecorder)
+    options.setdefault("aggregator", aggregate_partial_scene_receipts)
+    executor = execute_shared_deployment if condition_executor is None else condition_executor
+    original_instance = None
+    session = None
+    result = None
+
+    def load(budget):
+        nonlocal original_instance
+        ledger.bind_budget(budget)
+        config, instance = input_loader(budget)
+        original_instance = deepcopy(instance)
+        ledger.full_input_sha256 = _canonical_hash(instance)
+        ledger.scene_ids = frozenset(scene["id"] for scene in instance["scenarios"])
+        return config, instance
+
+    def make_session(workdir, **kwargs):
+        nonlocal session
+        ledger.check_budget(kwargs.get("budget"))
+        if session is not None:
+            raise AdapterError("Outer search attempted another worker lifetime")
+        session = SerialSession(session_factory(workdir, **kwargs), ledger,
+                                require_native_identity=require_native_identity)
+        return session
+
+    def execute_condition(loader, condition_dir, **kwargs):
+        budget = kwargs["budget"]
+        ledger.check_budget(budget)
+        fixed = deepcopy(kwargs["shared_deployment"])
+        cid = Path(condition_dir).name
+
+        def build(instance, config, **build_options):
+            if build_options.get("budget") is not budget:
+                raise AdapterError("Model builder budget mismatch")
+            if build_options.get("fixed_shared_deployment") != fixed:
+                raise AdapterError("Model shared deployment mismatch")
+            if _canonical_hash(instance) != ledger.full_input_sha256:
+                raise AdapterError("Model full input identity mismatch")
+            scene = build_options.get("fixed_scene_id")
+            if scene not in ledger.scene_ids:
+                raise AdapterError("Model scene mismatch")
+            model = builder(instance, config, **build_options)
+            context = RequestContext(cid, fixed, scene, 0, ledger.full_input_sha256)
+            return ModelProxy(model, ledger, context)
+
+        try:
+            return executor(loader, condition_dir, model_builder=build, **kwargs)
+        finally:
+            ledger.release_condition(cid)
+
+    adapted_clock = clock if origin is None else ParentOriginClock(clock, origin)
+    try:
+        result = execute_shared_search(load, folder, seconds=seconds,
+            scene_slice_s=scene_slice_s, clock=adapted_clock,
+            session_factory=make_session, condition_executor=execute_condition,
+            condition_options=options,
+            bound_provider=independent_lower_bound if bound_provider is None else bound_provider)
+        return result
+    finally:
+        audit = ledger.audit()
+        reason = (result or {}).get("reason")
+        bad = reason in {"INTERFACE_ERROR", "CONDITION_TECHNICAL_FAILURE", "RESOURCE_LIMIT",
+                         "NATIVE_REQUEST_NOT_UNWOUND"}
+        audit["retained_safe"] = bool(result and result.get("state") == "SAFE"
+                                      and result.get("safe_upper_bound_J") is not None)
+        audit["technical_complete"] = bool(result is not None and not bad
+            and not ledger.faults and not ledger.cleanup["error"]
+            and not result.get("error") and not result.get("cleanup_error"))
+        audit["comparison_usable"] = audit["retained_safe"] and audit["technical_complete"]
+        audit["baseline_result_reason"] = reason
+        audit["native_identity_required"] = require_native_identity
+        audit["parent_origin_supplied"] = origin is not None
+        audit["timing_origin_scope"] = ("explicit parent monotonic origin" if origin is not None
+                                        else "baseline before input read; imports excluded")
+        audit["scope"] = "offline interface verification; no new scientific SAFE is certified"
+        folder.parent.mkdir(parents=True, exist_ok=True)
+        with audit_path.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(audit, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")

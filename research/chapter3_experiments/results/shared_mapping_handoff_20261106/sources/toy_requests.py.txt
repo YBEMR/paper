@@ -1,0 +1,65 @@
+"""Small independent transport problems; not a scientific energy model."""
+import hashlib
+import json
+import math
+from shared_mapping_adapter import RequestContext, RequestLedger, SerialSession
+
+
+def toy_payload(number):
+    if number not in range(1,13):
+        raise ValueError("Toy number outside frozen 1..12")
+    return {"c":[float(number)],"A":[[-1.0]],"b":[-float(number%2)],
+            "lb":[0.0],"ub":[1.0],"intcon":[0],
+            "metadata":{"scope":"toy_transport_only","case":number,
+                        "expected_x":number%2,"objective_is_not_energy":True}}
+
+
+def response_checks(number, result, ledger_record, native, budget):
+    values=result.get("x",[])
+    fval=result.get("fval")
+    cap=result.get("solver_max_time_s_used")
+    return {
+        "identity":ledger_record["native_identity_verified"],
+        "number":result.get("request_number")==number==native.counter,
+        "status":result.get("status")=="SOLVED",
+        "entered":result.get("intlinprog_entered") is True,
+        "timely":result.get("budget_valid") is True and budget.elapsed<budget.seconds,
+        "admissible":result.get("accepted_for_evaluation") is True,
+        "expected_x":len(values)==1 and math.isfinite(values[0]) and abs(values[0]-number%2)<=1e-9,
+        "expected_objective":isinstance(fval,(int,float)) and math.isfinite(fval) and abs(fval-number*(number%2))<=1e-9,
+        "settled":ledger_record["settled"] and not native.request_blocked,
+        "read_complete":result.get("request_publication_read",{}).get("outcome")=="READ",
+        "soft_cap":isinstance(cap,(int,float)) and math.isfinite(cap) and 0<cap<=2,
+    }
+
+
+def run_toys(native, budget, *, checkpoint, save, append, utc, rows):
+    full_hash=hashlib.sha256(json.dumps([toy_payload(i) for i in range(1,13)],sort_keys=True).encode()).hexdigest()
+    ledger=RequestLedger(full_input_sha256=full_hash,scene_ids={"toy"})
+    ledger.bind_budget(budget)
+    session=SerialSession(native,ledger,require_native_identity=True)
+    try:
+        for number in range(1,13):
+            checkpoint("before_request_%02d"%number,process=native.proc,force=True)
+            payload=toy_payload(number)
+            ledger.bind_payload(payload,RequestContext("toy_sequence",{},"toy",number,full_hash))
+            started=utc()
+            result=session.solve(payload,budget=budget,remaining_s=budget.remaining,solver_max_time_s=2)
+            checks=response_checks(number,result,ledger.requests[-1],native,budget)
+            row={"number":number,"started_utc":started,"ended_utc":utc(),"checks":checks,
+                 "passed":all(checks.values()),"x":result.get("x"),"fval":result.get("fval"),
+                 "exitflag":result.get("exitflag"),"status":result.get("status"),
+                 "solver_max_time_s_used":result.get("solver_max_time_s_used"),
+                 "read":result.get("request_publication_read"),
+                 "request_prefix":ledger.requests[-1]["request_prefix"],
+                 "scope":"toy algebraic response; no physical SAFE claim"}
+            rows.append(row)
+            save("REQUEST_RESULTS.json",rows)
+            append("events.jsonl",{"event":"TOY_REQUEST_FINISHED","utc":row["ended_utc"],
+                   "number":number,"passed":row["passed"],"exitflag":row["exitflag"]})
+            if not row["passed"]:
+                raise RuntimeError("Toy request failed: "+str(number)+" "+str([k for k,v in checks.items() if not v]))
+            checkpoint("after_request_%02d"%number,process=native.proc,force=True)
+    finally:
+        ledger.release_condition("toy_sequence")
+        save("TRANSPORT_AUDIT.json",ledger.audit())

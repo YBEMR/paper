@@ -1,0 +1,68 @@
+"""One direct intlinprog call with owned-tree 20/40 cleanup. No retry."""
+from pathlib import Path
+from datetime import datetime,timezone
+import hashlib,json,os,subprocess,sys,time
+R=Path(__file__).resolve().parent
+P=R.parent/'abac_exact_eq_verify_20261106T135623Z'
+def utc():return datetime.now(timezone.utc).isoformat()
+def save(name,data):
+ with (R/name).open('x',encoding='utf-8') as f:json.dump(data,f,ensure_ascii=False,indent=2,allow_nan=False);f.write('\n')
+def main():
+ origin=time.monotonic();start=utc();deadline=origin+420
+ sys.path[:0]=[str(P),str(P/'native_source/research/chapter3_experiments'),str(P/'baseline/research/chapter3_experiments'),str(P/'baseline')]
+ import psutil
+ import matlab_bridge as bridge
+ from cancellation import CancellationState,DeferredSignals,CancelSafeProcess
+ src=R/'request.mat'
+ expected='bde54760351d94569dbc7524dd7fc1e30eb1efe5fa97d9e9a59938fe7ec44af7'
+ source_hash=hashlib.sha256(src.read_bytes()).hexdigest()
+ if source_hash!=expected:raise ValueError('Published request MAT identity mismatch')
+ available=psutil.virtual_memory().available
+ visible=[p.info for p in psutil.process_iter(['pid','name','create_time']) if 'matlab' in (p.info['name'] or '').lower()]
+ save('PREFLIGHT.json',{'utc':utc(),'available_GiB':available/2**30,'visible_matlab':visible,'source_mat_sha256':source_hash,'source_mat':str(src),'root_seconds':420,'native_MaxTime':300.0})
+ if available<2**31 or visible:raise RuntimeError('Resource/visible MATLAB gate failed; no launch')
+ freeze=json.loads((P/'FROZEN.json').read_text(encoding='utf-8'))
+ matlab=Path(freeze['matlab_executable'])
+ if hashlib.sha256(matlab.read_bytes()).hexdigest()!=freeze['matlab_executable_sha256']:raise ValueError('MATLAB executable identity mismatch')
+ save('CLAIM.json',{'started_utc':start,'max_launches':1,'max_native_calls':1,'automatic_retry':False,'scope':'direct integer reproduction; no independent optimality proof'})
+ out=R/'native';out.mkdir(exist_ok=False)
+ prefs=R/'matlab_prefs';prefs.mkdir(exist_ok=False)
+ env=dict(os.environ,AC_REPRO_OUT=str(out),AC_REPRO_MAT=str(src),MATLAB_PREFDIR=str(prefs))
+ argv=[str(matlab),'-wait','-batch',"addpath('"+R.as_posix()+"'); ac_native_repro"]
+ state=CancellationState();owner=bridge.MatlabSession.__new__(bridge.MatlabSession)
+ owner.workdir=out;owner.clock=time.monotonic;owner.started=origin;owner.closed=False;owner.proc=None;owner.log=None
+ samples=[];reason='MATLAB_EXITED';failure=None
+ with DeferredSignals(state):
+  try:
+   owner.log=(out/'matlab.log').open('wb')
+   launch=utc()
+   owner.proc=CancelSafeProcess(subprocess.Popen(argv,cwd=out,env=env,stdout=owner.log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW),state=state,clock=time.monotonic)
+   owner.process_tree=bridge._capture_owned_process_tree(owner.proc,phase='launch')
+   save('LAUNCH.json',{'utc':launch,'argv':argv,'root_deadline':deadline,'pid':owner.proc.pid,'tree':owner.process_tree})
+   print(json.dumps({'event':'MATLAB_LAUNCHED','utc':launch,'pid':owner.proc.pid}),flush=True)
+   if not owner.process_tree.get('root_identity_verified'):raise RuntimeError('Owned process identity not established')
+   while owner.proc.poll() is None:
+    now=time.monotonic();row={'utc':utc(),'elapsed_s':now-origin,'available_bytes':psutil.virtual_memory().available}
+    samples.append(row)
+    with (R/'memory.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps(row)+'\n')
+    owner.process_tree=bridge._capture_owned_process_tree(owner.proc,owner.process_tree,phase='monitor')
+    if not owner.process_tree.get('capture_complete'):reason='IDENTITY_UNRESOLVED';break
+    if row['available_bytes']<2**31:reason='LOW_MEMORY';break
+    if state.requested:reason='USER_CANCELLED';break
+    if now>=deadline:reason='ROOT_DEADLINE';break
+    time.sleep(.25)
+  except BaseException as e:
+   failure={'type':type(e).__name__,'message':str(e)};reason='SUPERVISOR_ERROR'
+  finally:
+   if owner.proc is not None:owner.close()
+ result_path=out/'native_result.json';result=json.loads(result_path.read_text(encoding='utf-8-sig')) if result_path.exists() else None
+ source_unchanged=hashlib.sha256(src.read_bytes()).hexdigest()==source_hash
+ record={'started_utc':start,'ended_utc':utc(),'elapsed_s':time.monotonic()-origin,'reason':reason,'failure':failure,
+  'root_seconds':420,'native_MaxTime':300.0,'source_sha256':source_hash,'source_unchanged':source_unchanged,
+  'minimum_available_GiB':min((x['available_bytes']/2**30 for x in samples),default=available/2**30),
+  'cleanup':getattr(owner,'cleanup',None),'cleanup_complete':bridge.cleanup_is_complete(getattr(owner,'cleanup',None)),
+  'native_result':result,'MILP_SAFE':False,'formal_comparison':False,'automatic_retries':0}
+ save('RESULT.json',record)
+ print(json.dumps({k:record[k] for k in ('started_utc','ended_utc','elapsed_s','reason','minimum_available_GiB','cleanup_complete','source_unchanged')}|{'native_exitflag':result.get('exitflag') if result else None,'numnodes':(result or {}).get('output',{}).get('numnodes'),'x_length':(result or {}).get('x_length')}),flush=True)
+ return 0 if reason=='MATLAB_EXITED' and record['cleanup_complete'] and result else 2
+if __name__=='__main__':raise SystemExit(main())

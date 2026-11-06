@@ -1,0 +1,100 @@
+"""Cooperative cancellation: defer signals until owned-process cleanup.
+
+No handler is installed on import. This does not protect against OS-level
+forced termination, interpreter death, or an uninterruptible native hang.
+"""
+import signal
+import math
+import subprocess
+
+
+class ProbeCancelled(RuntimeError):
+    pass
+
+
+class CancellationState:
+    def __init__(self):
+        self.events = []
+
+    def defer(self, error):
+        if not isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise TypeError("Only supported cancellation exceptions may be deferred")
+        item = {"type": type(error).__name__}
+        if isinstance(error, SystemExit):
+            item["original_exit_code"] = error.code if isinstance(error.code, (int, str, type(None))) else repr(error.code)
+        self.events.append(item)
+
+    def signal(self, number):
+        self.events.append({"type": "signal", "number": int(number)})
+
+    @property
+    def requested(self):
+        return bool(self.events)
+
+    def raise_if_requested(self):
+        if self.requested:
+            raise ProbeCancelled("Cancellation pending; stop new work and clean up: " + str(self.events))
+
+
+class DeferredSignals:
+    """Install only for a bounded diagnostic; restore original handlers.
+
+    SIGINT/SIGBREAK handlers append in-memory state and never raise during
+    Popen assignment, identity capture, stop publication or the 20/40 cleanup.
+    The normal work loop observes this state and raises ProbeCancelled.
+    """
+    def __init__(self, state, *, api=signal):
+        self.state, self.api = state, api
+        self.original = {}
+
+    def handler(self, number, frame):
+        self.state.signal(number)
+
+    def __enter__(self):
+        numbers = [self.api.SIGINT]
+        if hasattr(self.api, "SIGBREAK"):
+            numbers.append(self.api.SIGBREAK)
+        try:
+            for number in numbers:
+                previous = self.api.getsignal(number)
+                self.api.signal(number, self.handler)
+                self.original[number] = previous
+        except BaseException:
+            for number, previous in reversed(list(self.original.items())):
+                self.api.signal(number, previous)
+            self.original.clear()
+            raise
+        return self
+
+    def __exit__(self, kind, value, traceback):
+        for number, previous in reversed(list(self.original.items())):
+            self.api.signal(number, previous)
+        self.original.clear()
+        return False
+
+
+def wait_through_cancel(process, timeout, *, state, clock):
+    """A cancellation cannot replenish the original wait timeout."""
+    if not isinstance(timeout, (float, int)) or not math.isfinite(timeout) or timeout < 0:
+        raise ValueError("A finite bounded wait is required")
+    deadline = clock() + timeout
+    while True:
+        remaining = max(0.0, deadline-clock())
+        try:
+            return process.wait(timeout=remaining)
+        except (KeyboardInterrupt, SystemExit) as error:
+            state.defer(error)
+            if clock() >= deadline:
+                raise subprocess.TimeoutExpired("OWNED_PROCESS", timeout) from error
+
+
+class CancelSafeProcess:
+    """Delegate a real owned Popen handle; only wait cancellation is deferred."""
+    def __init__(self, process, *, state, clock):
+        self._process, self._state, self._clock = process, state, clock
+
+    def __getattr__(self, name):
+        return getattr(self._process, name)
+
+    def wait(self, timeout):
+        return wait_through_cancel(self._process, timeout, state=self._state, clock=self._clock)

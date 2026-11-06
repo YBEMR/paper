@@ -1,0 +1,123 @@
+"""Build an isolated instrumented worker; never invoke MATLAB."""
+from pathlib import Path
+import hashlib
+import json
+
+ROOT = Path(__file__).resolve().parent
+EXPECTED = "907750330928eff94479cc4eb68429730715a42f420066e766d794734278a48b"
+PHASES = ["000_batch_entry", "010_bridge_entry",
+          "020_version_before", "021_version_after", "030_release_before", "031_release_after",
+          "040_which_before", "041_which_after", "050_license_test_before", "051_license_test_after",
+          "060_checkout_before", "061_checkout_after", "070_ready_publish_before",
+          "080_ready_open_before", "081_ready_open_after", "090_ready_encode_before", "091_ready_encode_after",
+          "100_ready_write_before", "101_ready_write_after", "110_ready_close_before", "111_ready_close_after",
+          "120_java_source_before", "121_java_source_after", "130_java_dest_before", "131_java_dest_after",
+          "140_java_options_before", "141_java_options_after", "150_java_move_before", "151_java_move_after",
+          "160_ready_publish_after"]
+
+HELPERS = r"""
+% BEGIN DIAGNOSTIC HELPERS: isolated copy only; no request may be submitted.
+function varargout=trace_startup(folder,before,after,action)
+stage_marker(folder,before);
+[varargout{1:nargout}]=action();
+stage_marker(folder,after);
+end
+
+function stage_marker(folder,key)
+path=fullfile(folder,['stage_' key '.marker']);
+if isfile(path),error('chapter3:stageDuplicate','Stage marker already exists');end
+fid=fopen(path,'w','n','UTF-8');
+if fid<0,error('chapter3:stageWrite','Cannot open stage marker');end
+payload=['PHASE ' key ' COMPLETE' char(10)];
+try
+    count=fprintf(fid,'%s',payload);
+    status=fclose(fid);
+catch err
+    try,fclose(fid);catch,end
+    rethrow(err);
+end
+if count~=numel(payload) || status~=0
+    error('chapter3:stageWrite','Stage marker not completely written and closed');
+end
+end
+
+function diagnostic_write_ready(folder,value)
+path=fullfile(folder,'ready.json');
+temporary=[path '.tmp'];
+stage_marker(folder,'080_ready_open_before');
+fid=fopen(temporary,'w','n','UTF-8');
+if fid<0,error('chapter3:bridgeOutput','Cannot open output %s',temporary);end
+cleanup=onCleanup(@()fclose(fid));
+stage_marker(folder,'081_ready_open_after');
+stage_marker(folder,'090_ready_encode_before');
+encoded=jsonencode(value);
+stage_marker(folder,'091_ready_encode_after');
+stage_marker(folder,'100_ready_write_before');
+fprintf(fid,'%s\n',encoded);
+stage_marker(folder,'101_ready_write_after');
+stage_marker(folder,'110_ready_close_before');
+clear cleanup % same close-before-publication as original writejson
+stage_marker(folder,'111_ready_close_after');
+stage_marker(folder,'120_java_source_before');
+sourceFile=javaObject('java.io.File',temporary); source=sourceFile.toPath();
+stage_marker(folder,'121_java_source_after');
+stage_marker(folder,'130_java_dest_before');
+destinationFile=javaObject('java.io.File',path); destination=destinationFile.toPath();
+stage_marker(folder,'131_java_dest_after');
+stage_marker(folder,'140_java_options_before');
+options=javaArray('java.nio.file.CopyOption',2);
+options(1)=javaMethod('valueOf','java.nio.file.StandardCopyOption','ATOMIC_MOVE');
+options(2)=javaMethod('valueOf','java.nio.file.StandardCopyOption','REPLACE_EXISTING');
+stage_marker(folder,'141_java_options_after');
+stage_marker(folder,'150_java_move_before');
+javaMethod('move','java.nio.file.Files',source,destination,options);
+stage_marker(folder,'151_java_move_after');
+end
+"""
+
+
+def build(original):
+    assert hashlib.sha256(original).hexdigest() == EXPECTED
+    text = original.decode("utf-8")
+    replacements = {
+        "workerClock = tic;": "stage_marker(folder,'010_bridge_entry');\nworkerClock = tic;",
+        "'version',version,'release',version('-release')":
+            "'version',trace_startup(folder,'020_version_before','021_version_after',@()version), ...\n"
+            "    'release',trace_startup(folder,'030_release_before','031_release_after',@()version('-release'))",
+        "'intlinprog_path',which('intlinprog'),'license_test', ...\n    license('test','Optimization_Toolbox')":
+            "'intlinprog_path',trace_startup(folder,'040_which_before','041_which_after',@()which('intlinprog')), ...\n"
+            "    'license_test',trace_startup(folder,'050_license_test_before','051_license_test_after', ...\n"
+            "    @()license('test','Optimization_Toolbox'))",
+        "[ok,message] = license('checkout','Optimization_Toolbox');":
+            "[ok,message] = trace_startup(folder,'060_checkout_before','061_checkout_after', ...\n"
+            "    @()license('checkout','Optimization_Toolbox'));",
+        "writejson(fullfile(folder,'ready.json'),info);":
+            "stage_marker(folder,'070_ready_publish_before');\n"
+            "diagnostic_write_ready(folder,info);\n"
+            "stage_marker(folder,'160_ready_publish_after');",
+    }
+    for before, after in replacements.items():
+        assert text.count(before) == 1, before
+        text = text.replace(before, after)
+    # The whole request loop/solver/options and original publication helper
+    # remain byte-identical after this unchanged marker in the original file.
+    unchanged = original.decode("utf-8").split("requestNumber = 1;", 1)[1]
+    assert text.split("requestNumber = 1;", 1)[1] == unchanged
+    return (text + HELPERS).encode("utf-8")
+
+
+def main():
+    source = ROOT/"baseline/solve_model.m"
+    output = ROOT/"native_source/research/chapter3_experiments/solve_model.m"
+    content = build(source.read_bytes())
+    output.write_bytes(content)
+    (ROOT/"STAGES.json").write_text(json.dumps({"stages": PHASES,
+        "marker_format": "PHASE <key> COMPLETE\\n", "privacy": "fixed names only; no license identity",
+        "baseline_sha256": EXPECTED, "instrumented_sha256": hashlib.sha256(content).hexdigest(),
+        "request_loop_unchanged": True, "matlab_syntax_checked": False},indent=2)+"\n",encoding="utf-8")
+    print(json.dumps({"prepared": str(output), "stages": len(PHASES), "matlab_runs": 0,
+                      "instrumented_sha256": hashlib.sha256(content).hexdigest()}))
+
+
+if __name__ == "__main__":
+    main()

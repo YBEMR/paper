@@ -1,0 +1,132 @@
+"""Isolated representation adapter. Original coordinates and admission remain."""
+from pathlib import Path
+import json
+import time
+import numpy as np
+from exact_equalities import KEYS, transform, verify_equivalence
+from shared_mapping_adapter import payload_sha256
+
+def save(path,value):
+    with Path(path).open('x',encoding='utf-8') as f:
+        json.dump(value,f,ensure_ascii=False,indent=2,allow_nan=False);f.write('\n')
+
+def independent_row_audit(p,q,cert):
+    """Separate coverage/sign checks, no tolerance or guessed row families."""
+    a=p['A'].tocsr(); eq=q['Aeq'].tocsr(); n=a.shape[0]
+    coverage=np.zeros(n,dtype=np.int64)
+    kept=[]
+    for start,end in cert['retained_le_row_ranges']: kept.extend(range(start,end))
+    coverage[kept]+=1
+    def equal_row(x,y):
+        return (x.shape==y.shape and (x!=y).nnz==0)
+    assert equal_row(q['A'].tocsr(),a[kept,:])
+    assert np.array_equal(q['b'],p['b'][kept])
+    old=p['Aeq'].shape[0]
+    assert equal_row(eq[:old,:],p['Aeq'].tocsr())
+    assert np.array_equal(q['beq'][:old],p['beq'])
+    for i,j,k in cert['original_le_pair_to_new_eq']:
+        assert 0<=i<j<n and old<=k<eq.shape[0]
+        coverage[i]+=1;coverage[j]+=1
+        assert equal_row(a.getrow(i),-a.getrow(j))
+        assert p['b'][i]==-p['b'][j]
+        assert equal_row(eq.getrow(k),a.getrow(i))
+        assert q['beq'][k]==p['b'][i]
+    assert np.all(coverage==1)
+    assert len(cert['original_le_pair_to_new_eq'])+old==eq.shape[0]
+    for key in ('c','lb','ub','intcon','x0'):
+        assert p[key].dtype==q[key].dtype and p[key].shape==q[key].shape
+        assert p[key].tobytes()==q[key].tobytes()
+    return {'all_original_inequality_rows_covered_once':True,
+            'all_original_equalities_retained':True,'exact_signed_pairs_only':True,
+            'original_coordinates_objective_bounds_intcon_and_x0_unchanged':True,
+            'tolerance_note':'Unscaled opposite rows and equality use the same 1e-9 absolute tolerance; no rounding, scaling, or relaxation.'}
+
+def certified_payload(payload,x0,budget):
+    budget.check()
+    if x0 is None: raise ValueError('This technical validation requires a fresh admitted initial point')
+    original={k:payload[k] for k in KEYS if k!='x0'}
+    original['x0']=np.asarray(x0)
+    derived,certificate=transform(original)
+    verify_equivalence(original,derived,certificate)
+    certificate['independent_row_audit']=independent_row_audit(original,derived,certificate)
+    budget.check()
+    delivered=dict(payload)
+    for k in KEYS:
+        if k!='x0':delivered[k]=derived[k]
+    return delivered,certificate
+
+def install_equivalent_solver(native,bridge,budget,*,expected_model_hashes=None,native_caps=(30.0,120.0)):
+    """Install once on a newly created worker, retaining its lifecycle controls."""
+    if getattr(native,'equivalent_solver_installed',False):raise RuntimeError('Already installed')
+    native.equivalent_solver_installed=True
+    raw_solve=native.solve
+    def solve(payload,**kwargs):
+        if kwargs.get('budget') is not budget:raise ValueError('Root budget identity mismatch')
+        budget.check();started=time.monotonic()
+        x0=kwargs.get('x0')
+        # Preserve and validate the original numerical formulation before any rewrite.
+        original_admission=bridge._prepare(payload,x0=x0).get('x0_validation')
+        if not original_admission or not original_admission['accepted_numerically']:
+            raise ValueError('No original-row admitted fresh point')
+        original_hash=payload_sha256(payload)
+        if expected_model_hashes is not None:
+            if native.counter>=len(expected_model_hashes) or original_hash!=expected_model_hashes[native.counter]:
+                raise ValueError('Original scene payload does not match frozen model identity/order')
+        delivered,certificate=certified_payload(payload,x0,budget)
+        bridge._prepare(delivered,x0=x0)
+        number=native.counter+1
+        prefix=Path(native.workdir)/('request_%06d'%number)
+        certificate.update(original_payload_sha256=original_hash,
+            delivered_payload_sha256=payload_sha256(delivered),request_number=number,
+            transform_completed_at_elapsed_s=budget.elapsed,
+            transform_wall_s=time.monotonic()-started,original_x0_admission=original_admission,
+            variable_recovery='identity; no projection',formal_comparison=False)
+        save(prefix.with_suffix('.equivalence.json'),certificate)
+        checks=[];consumer=native.event_consumer
+        recorder=getattr(consumer,'__self__',None)
+        original_assess=getattr(recorder,'assess',None)
+        if not callable(original_assess):
+            raise ValueError('The live consumer must expose its actual recorder assess entry')
+        callback_number=0
+        def checked_assess(vector,source):
+            nonlocal callback_number
+            budget.check()
+            result=bridge._prepare(payload,x0=vector)['x0_validation']
+            callback_number+=1
+            checks.append({'source':source,'admission':result,'at_elapsed_s':budget.elapsed})
+            save(Path('%s.original_admission_callback%06d.json'%(prefix,callback_number)),checks[-1])
+            budget.check()
+            return original_assess(vector,source)
+        # Gate the actual vector consumed, not a second scan of event files.
+        # Only this newly constructed recorder instance is patched.
+        recorder.assess=checked_assess
+        try:
+            kwargs=dict(kwargs)
+            # MaxTime is a native soft cap; transform and validation costs still
+            # consume the one root. Never increase any supplied limit.
+            for limit in ('remaining_s','solver_max_time_s'):
+                if kwargs.get(limit) is not None:kwargs[limit]=min(kwargs[limit],budget.remaining)
+            if kwargs.get('solver_max_time_s') is not None:
+                kwargs['solver_max_time_s']=min(native_caps[number-1],kwargs['solver_max_time_s'])
+            response=raw_solve(delivered,**kwargs)
+            if payload_sha256(payload)!=original_hash:raise ValueError('Original payload mutated')
+            if budget.clock()>=budget.deadline:
+                response=dict(response)
+                response.update(budget_valid=False,accepted_for_evaluation=False,
+                    rejection_reason='EQUIVALENT_ADAPTER_LATE_RESPONSE')
+            if (response.get('x') and response.get('budget_valid') and
+                response.get('accepted_for_evaluation') and budget.clock()<budget.deadline):
+                budget.check()
+                result=bridge._prepare(payload,x0=response['x'])['x0_validation']
+                checks.append({'source':'final','admission':result,'at_elapsed_s':budget.elapsed})
+                save(prefix.with_suffix('.original_admission_final.json'),checks[-1])
+                budget.check()
+            response=dict(response)
+            response['equivalent_representation']={'certificate_path':prefix.with_suffix('.equivalence.json').name,
+                'original_payload_sha256':original_hash,'delivered_payload_sha256':certificate['delivered_payload_sha256'],
+                'original_row_admission_count':len(checks),'identity_coordinates':True}
+            return response
+        finally:
+            recorder.assess=original_assess
+    native.solve=solve
+    return native

@@ -1,0 +1,40 @@
+function ac_lp_probe
+out=getenv('AC_LP_OUT');
+p=load(getenv('AC_LP_MAT'),'c','A','b','Aeq','beq','lb','ub','intcon','x0');
+assert(strcmp(version('-release'),'2023b'));
+assert(numel(p.c)==14014 && size(p.A,1)==80272 && size(p.Aeq,1)==4994);
+write_json('startup',struct('version',version,'release',version('-release'), ...
+ 'optimization_toolbox',ver('optim'),'variables',numel(p.c), ...
+ 'inequalities',size(p.A,1),'equalities',size(p.Aeq,1), ...
+ 'scope','LP relaxation only; intcon omitted; no MILP or SAFE claim'));
+if isfile(fullfile(out,'stop')),return;end
+cap=29.35899999999674;
+opts=optimoptions('linprog','Algorithm','dual-simplex','Preprocess','none', ...
+ 'ConstraintTolerance',1e-9,'OptimalityTolerance',1e-7,'MaxTime',cap, ...
+ 'MaxIterations',max(30000,10*(size(p.A,1)+size(p.Aeq,1)+numel(p.c))), ...
+ 'Display','iter');
+write_json('call_started',struct('MaxTime',cap,'scope','one independent LP relaxation'));
+clock=tic;lastwarn('');
+try
+ [x,fval,exitflag,output]=linprog(p.c(:),p.A,p.b(:),p.Aeq,p.beq(:),p.lb(:),p.ub(:),opts);
+catch err
+ write_json('error',struct('identifier',err.identifier,'message',err.message,'elapsed_s',toc(clock)));
+ rethrow(err);
+end
+elapsed=toc(clock);[wm,wi]=lastwarn;
+r=struct('elapsed_s',elapsed,'exitflag',exitflag,'fval',fval,'output',output, ...
+ 'x_length',numel(x),'MaxTime',cap,'options_text',evalc('disp(opts)'), ...
+ 'warning_identifier',wi,'warning_message',wm,'MILP_SAFE',false,'formal_comparison',false);
+if ~isempty(x)
+ r.LP_residual=struct('inequality',max([0;p.A*x-p.b(:)]), ...
+  'equality',max([0;abs(p.Aeq*x-p.beq(:))]),'lower',max([0;p.lb(:)-x]), ...
+  'upper',max([0;x-p.ub(:)]));
+end
+save(fullfile(out,'lp_result.mat'),'x','fval','exitflag','output','opts','r');
+write_json('lp_result',r);
+ function write_json(name,value)
+  target=fullfile(out,[name '.json']);assert(~isfile(target));
+  fid=fopen(target,'w','n','UTF-8');assert(fid>0);c=onCleanup(@()fclose(fid));
+  fprintf(fid,'%s\n',jsonencode(value,'PrettyPrint',true));
+ end
+end

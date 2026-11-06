@@ -1,0 +1,51 @@
+"""One authorized, bounded, original AB/AC mapping validation; no enumeration."""
+from pathlib import Path
+from datetime import datetime,timezone
+import hashlib,json,sys,time
+ROOT=Path(__file__).resolve().parent
+
+def main():
+    origin=time.monotonic();started=datetime.now(timezone.utc).isoformat()
+    if not __debug__:raise RuntimeError('Optimized Python would disable required independent audit assertions')
+    sys.path[:0]=[str(ROOT),str(ROOT/'native_source/research/chapter3_experiments'),str(ROOT/'baseline/research/chapter3_experiments'),str(ROOT/'baseline')]
+    freeze=json.loads((ROOT/'FROZEN.json').read_text(encoding='utf-8'))
+    for name,digest in freeze['files'].items():
+        path=(ROOT/name).resolve()
+        if not path.is_relative_to(ROOT) or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise ValueError('Frozen source mismatch: '+name)
+        if time.monotonic()>=origin+180:raise TimeoutError('Root expired during integrity check')
+    from single_mapping import execute_single_mapping,baseline_dependencies
+    from native_entry_prepared import load_frozen_inputs
+    from protected_runtime import NativeRuntime,ResourceMonitor
+    from cancellation import CancellationState
+    from equivalent_transport import install_equivalent_solver,save
+    import matlab_bridge
+    if Path(matlab_bridge.__file__).resolve()!=ROOT/'native_source/research/chapter3_experiments/matlab_bridge.py':raise ValueError('Bridge module binding changed')
+    if not json.loads((ROOT/'OFFLINE_EQUIVALENCE.json').read_text(encoding='utf-8'))['success']:raise ValueError('Offline certificate audit failed')
+    if not json.loads((ROOT/'ADAPTER_TEST_RESULT.json').read_text(encoding='utf-8'))['success']:raise ValueError('Offline adapter tests failed')
+    matlab=Path(freeze['matlab_executable'])
+    if hashlib.sha256(matlab.read_bytes()).hexdigest()!=freeze['matlab_executable_sha256']:raise ValueError('MATLAB executable changed')
+    save(ROOT/'NATIVE_CLAIM.json',{'started_utc':started,'max_launches':1,'max_requests':2,'root_seconds':180,'retry':False,'subject_commit':freeze['subject_commit']})
+    cancellation=CancellationState();monitor=ResourceMonitor(cancellation)
+    class EquivalentRuntime(NativeRuntime):
+        def __call__(self,workdir,**kwargs):
+            native=super().__call__(workdir,**kwargs)
+            return install_equivalent_solver(native,matlab_bridge,self.budget,expected_model_hashes=(
+                'affa9501fc75d8ee6ccc314b3b3043dce88a704f0c63d50691df9ebda7d27001',
+                '7c6454a946273f5ccc2d76b0ebfa264a2fee7ce326de537b474db9bb493c6e1c'))
+    runtime_factory=lambda folder,budget:EquivalentRuntime(folder/'runtime',budget,monitor,cancellation,bridge=matlab_bridge,matlab_path=matlab)
+    answer=None;failure=None
+    try:
+        print(json.dumps({'event':'ROOT_STARTED','utc':started,'root_seconds':180}),flush=True)
+        answer=execute_single_mapping(load_frozen_inputs,ROOT/'runs/native_once',origin=origin,
+            dependencies=baseline_dependencies(),runtime_factory=runtime_factory,checkpoint=monitor.check,
+            cancellation=cancellation,execution_kind='native_technical',stop_control_profile='suppress_scene_timer_cancel')
+        a=answer['driver_audit']
+        print(json.dumps({k:a.get(k) for k in ('native_technical_pass','transport_contract_complete','full_safe_aggregate_contract','method_stopped_elapsed_s','physical_cleanup_verified','failure','cleanup_failure')}),flush=True)
+    except BaseException as e:
+        failure={'type':type(e).__name__,'message':str(e)};raise
+    finally:
+        save(ROOT/'NATIVE_END.json',{'started_utc':started,'ended_utc':datetime.now(timezone.utc).isoformat(),
+            'wrapper_elapsed_s':time.monotonic()-origin,'failure':failure,'driver_audit':answer.get('driver_audit') if answer else None,
+            'formal_comparison':False,'matlab_retries':0})
+    return 0 if answer['driver_audit']['native_technical_pass'] else 2
+if __name__=='__main__':raise SystemExit(main())

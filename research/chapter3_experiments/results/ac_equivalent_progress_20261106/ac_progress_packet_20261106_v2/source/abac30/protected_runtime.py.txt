@@ -1,0 +1,211 @@
+"""Protected native runtime prepared for a future authorized diagnostic.
+
+Import and construction never start MATLAB. Only the factory call made by
+the condition controller can create the one worker. This module is tested
+offline with fake process handles; no full model is executed in preparation.
+"""
+from contextlib import ExitStack
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+import hashlib
+import json
+import os
+import subprocess
+import time
+
+from cancellation import CancellationState, CancelSafeProcess, DeferredSignals
+from process_observer import ProcessObserver
+from stage_helpers import batch_prefix, read_markers
+
+
+def utc():
+    return datetime.now(timezone.utc).isoformat()
+
+
+class ResourceMonitor:
+    def __init__(self, cancellation, *, clock=time.monotonic, memory_reader=None):
+        self.cancellation, self.clock = cancellation, clock
+        if memory_reader is None:
+            import psutil
+            memory_reader = psutil.virtual_memory
+        self.memory_reader = memory_reader
+        self.samples, self.folder = [], None
+        self._written = 0
+
+    def attach(self, folder):
+        folder=Path(folder)
+        folder.mkdir(parents=True,exist_ok=False)
+        self.folder=folder
+        self._flush()
+
+    def _flush(self):
+        if self.folder is None:
+            return
+        with (self.folder/"memory.jsonl").open("a",encoding="utf-8") as stream:
+            for row in self.samples[self._written:]:
+                stream.write(json.dumps(row)+"\n")
+        self._written=len(self.samples)
+
+    def check(self, phase, budget, *, force=False):
+        # Never call budget.check here: this hook is also invoked by its check.
+        self.cancellation.raise_if_requested()
+        now=self.clock()
+        if force or not self.samples or now-self.samples[-1]["monotonic"]>=0.25:
+            row={"utc":utc(),"monotonic":now,"phase":phase,
+                 "available_bytes":self.memory_reader().available,
+                 "root_deadline":budget.deadline}
+            self.samples.append(row)
+            self._flush()
+            if row["available_bytes"]<2**31:
+                raise MemoryError("Available memory below frozen 2 GiB gate")
+
+
+class NativeRuntime:
+    def __init__(self, folder, budget, monitor, cancellation, *, bridge=None,
+                 matlab_path="${MATLAB_ROOT}/bin/matlab.exe",
+                 popen=None, signal_api=None, process_inventory=None):
+        self.folder,self.budget=Path(folder),budget
+        self.monitor,self.cancellation=monitor,cancellation
+        self.bridge,self.matlab_path=bridge,Path(matlab_path)
+        self._real_popen=popen or subprocess.Popen
+        self._signal_api=signal_api
+        self._inventory=process_inventory
+        self.native,self.observer,self.stack=None,None,None
+        self.factory_calls,self.launches,self.errors=0,[],[]
+        self.worker_folder=None
+        self.startup_failure=None
+
+    def _save(self,name,value):
+        path=self.folder/name
+        temp=path.with_suffix(path.suffix+".tmp")
+        temp.write_text(json.dumps(value,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        temp.replace(path)
+
+    def _append(self,name,value):
+        with (self.folder/name).open("a",encoding="utf-8") as stream:
+            stream.write(json.dumps(value)+"\n")
+
+    def __enter__(self):
+        from unittest.mock import patch
+        if self.bridge is None:
+            import matlab_bridge
+            self.bridge=matlab_bridge
+        self.folder.mkdir(parents=True,exist_ok=False)
+        self.monitor.attach(self.folder/"resources")
+        self.monitor.check("native_runtime_preflight",self.budget,force=True)
+        if self._inventory is None:
+            import psutil
+            processes=[p.info for p in psutil.process_iter(["pid","name","create_time"])
+                       if (p.info["name"] or "").lower()=="matlab.exe"]
+        else:
+            processes=self._inventory()
+        self._save("PREFLIGHT.json",{"utc":utc(),"visible_matlab":processes,
+            "process_visibility":"task-visible namespace only; host-wide visibility not established"})
+        if processes:
+            raise RuntimeError("Existing visible MATLAB; stop without disturbing it")
+        self.observer=ProcessObserver(capture=self.bridge._capture_owned_process_tree,
+            clock=self.budget.clock,utc=utc,save=self._save,
+            append=lambda row:self._append("identity.jsonl",row),cancellation=self.cancellation)
+        original_reader=self.bridge._read_json_until
+
+        def reader(*args,on_poll=None,**kwargs):
+            proc=kwargs.get("process") if len(args)<4 else args[3]
+            def poll():
+                self.observer.raise_if_errors()
+                self.budget.check()
+                if proc is not None and self.budget.clock()-self.observer.last_capture.get(proc.pid,0)>=0.25:
+                    tree=self.observer.capture(proc,phase="publication_poll")
+                    self.observer.raise_if_errors()
+                    if not tree.get("capture_complete") or not tree.get("root_identity"):
+                        raise RuntimeError("Owned process identity unresolved")
+                if on_poll is not None:
+                    on_poll()
+            return original_reader(*args,on_poll=poll,**kwargs)
+
+        proxy=SimpleNamespace(Popen=self._popen,run=subprocess.run,STDOUT=subprocess.STDOUT,
+            TimeoutExpired=subprocess.TimeoutExpired,CREATE_NO_WINDOW=getattr(subprocess,"CREATE_NO_WINDOW",0))
+        self.stack=ExitStack()
+        try:
+            signals=DeferredSignals(self.cancellation) if self._signal_api is None else DeferredSignals(self.cancellation,api=self._signal_api)
+            self.stack.enter_context(signals)
+            self.stack.enter_context(patch.object(self.bridge,"subprocess",proxy))
+            self.stack.enter_context(patch.object(self.bridge,"_capture_owned_process_tree",self.observer.capture))
+            self.stack.enter_context(patch.object(self.bridge,"_read_json_until",reader))
+        except BaseException:
+            self.stack.close()
+            raise
+        return self
+
+    def _popen(self,argv,**kwargs):
+        self.cancellation.raise_if_requested()
+        self.observer.raise_if_errors()
+        self.budget.check()
+        if self.launches or self.worker_folder is None:
+            raise RuntimeError("Only one declared worker launch is allowed")
+        argv=list(argv)
+        if len(argv)!=3 or argv[1]!="-batch":
+            raise RuntimeError("Unexpected worker command")
+        argv[2]=batch_prefix(self.worker_folder)+argv[2]
+        env=kwargs.get("env",os.environ)
+        self._save("LAUNCH.json",{"utc":utc(),"argv":argv,"parent_cwd_at_popen":os.getcwd(),
+            "cwd_argument_present":"cwd" in kwargs,"cwd_argument":kwargs.get("cwd"),
+            "MATLAB_PREFDIR":env.get("MATLAB_PREFDIR"),"TEMP":env.get("TEMP"),"TMP":env.get("TMP"),
+            "PATH_sha256":hashlib.sha256(env.get("PATH","").encode()).hexdigest(),
+            "creationflags":kwargs.get("creationflags",0),"root_deadline":self.budget.deadline})
+        proc=CancelSafeProcess(self._real_popen(argv,**kwargs),state=self.cancellation,clock=self.budget.clock)
+        self.launches.append(proc.pid)
+        return self.observer.launched(proc,emit=lambda child:self._append("events.jsonl",{
+            "event":"LAUNCHED","utc":utc(),"pid":child.pid}))
+
+    def __call__(self,workdir,**kwargs):
+        self.cancellation.raise_if_requested()
+        if self.factory_calls:
+            raise RuntimeError("Only one worker factory call is allowed")
+        if kwargs.get("budget") is not self.budget:
+            raise RuntimeError("Worker root budget object mismatch")
+        self.factory_calls+=1
+        self.worker_folder=Path(workdir).resolve()
+        self.monitor.check("before_MATLAB",self.budget,force=True)
+        try:
+            native=self.bridge.MatlabSession(workdir,matlab_path=self.matlab_path,**kwargs)
+            self.native=native
+            native.protected_observer_errors=self.observer.errors
+            native.protected_runtime_errors=self.errors
+            self.monitor.check("after_READY",self.budget,force=True)
+            self.observer.raise_if_errors()
+            return native
+        except BaseException as error:
+            if self.native is not None and not self.native.closed:
+                try:
+                    self.native.close()
+                except BaseException as close_error:
+                    self.errors.append({"operation":"factory_failure_close","error":repr(close_error)})
+                error.matlab_cleanup=getattr(self.native,"cleanup",{})
+            self.startup_failure={"error_type":type(error).__name__,"error":str(error),
+                "cleanup":getattr(error,"matlab_cleanup",None),
+                "workdir":getattr(error,"matlab_workdir",str(self.worker_folder)),
+                "startup_metadata":getattr(error,"matlab_startup_metadata",None)}
+            raise
+
+    def __exit__(self,kind,value,traceback):
+        try:
+            # No second cleanup window: close() is called only if not yet begun.
+            if self.native is not None and not self.native.closed:
+                self.native.close()
+        finally:
+            try:
+                self._save("RUNTIME_FINAL.json",{"utc":utc(),"launches":self.launches,
+                    "factory_calls":self.factory_calls,"errors":self.errors,
+                    "observer_errors":self.observer.errors if self.observer else [],
+                    "cancellation":self.cancellation.events,
+                    "stages":read_markers(self.worker_folder) if self.worker_folder else [],
+                    "startup_failure":self.startup_failure,
+                    "cleanup":getattr(self.native,"cleanup",None) if self.native is not None
+                              else (self.startup_failure or {}).get("cleanup")})
+            except Exception as error:
+                self.errors.append({"operation":"runtime_final_archive","error":repr(error)})
+            finally:
+                if self.stack is not None:
+                    self.stack.close()
+        return False

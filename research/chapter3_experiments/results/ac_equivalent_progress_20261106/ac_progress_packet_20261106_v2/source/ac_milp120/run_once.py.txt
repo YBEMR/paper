@@ -1,0 +1,124 @@
+"""Single saved AC equivalent-MILP request, 120 native /300 root seconds."""
+from pathlib import Path
+from datetime import datetime,timezone
+import hashlib,json,sys,time
+R=Path(__file__).resolve().parent
+P=R.parent/'abac_exact_eq_verify_20261106T135623Z'
+def utc():return datetime.now(timezone.utc).isoformat()
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def save(path,value):
+ with Path(path).open('x',encoding='utf-8') as f:json.dump(value,f,ensure_ascii=False,indent=2,allow_nan=False);f.write('\n')
+def main():
+ origin=time.monotonic();start=utc();answer={};failure=None;runtime=None;session=None
+ sys.path[:0]=[str(R/'native_source/research/chapter3_experiments'),str(P),str(P/'baseline/research/chapter3_experiments'),str(P/'baseline')]
+ import numpy as np,psutil
+ from scipy.io import loadmat
+ from fractions import Fraction
+ from timing import MethodBudget
+ from shared_mapping_adapter import ParentOriginClock,payload_sha256
+ from protected_runtime import ResourceMonitor,NativeRuntime
+ from cancellation import CancellationState
+ from native_entry_prepared import load_frozen_inputs
+ from milp import build_model,decode,evaluate_model_candidate
+ from scene_method import DEFAULT_BUILDER_OPTIONS
+ from scene_adapter import evaluate_partial_scene
+ from partial_method import PartialRecorder
+ from thermal import _accuracy
+ from exact_equalities import KEYS,transform,verify_equivalence
+ from equivalent_transport import independent_row_audit
+ import matlab_bridge as bridge
+ state=CancellationState();monitor=ResourceMonitor(state)
+ class Budget(MethodBudget):
+  def check(self):
+   super().check();state.raise_if_requested();monitor.check('root_checkpoint',self)
+ budget=Budget(300,clock=ParentOriginClock(time.monotonic,origin))
+ sid='AC_offset_0ms';mapping={'A.pre':'CPU1','A.main':'NPU0','A.post':'CPU1'}
+ src=P/'runs/native_once/condition/matlab/request_000002.mat'
+ expected=next(x['sha256'] for x in json.loads((P/'DELIVERY_MANIFEST.json').read_text(encoding='utf-8'))['files'] if x['path']==src.relative_to(P).as_posix())
+ save(R/'CLAIM.json',{'started_utc':start,'root_seconds':300,'native_MaxTime':120,'max_requests':1,'max_launches':1,'retry':False})
+ try:
+  budget.check()
+  visible=[p.info for p in psutil.process_iter(['pid','name','create_time']) if 'matlab' in (p.info['name'] or '').lower()]
+  save(R/'PREFLIGHT.json',{'utc':utc(),'available_GiB':psutil.virtual_memory().available/2**30,'visible_matlab':visible,'source_mat_sha256':sha(src),'expected':expected})
+  if visible or sha(src)!=expected:raise ValueError('Process or matrix identity gate failed')
+  freeze=json.loads((P/'FROZEN.json').read_text(encoding='utf-8'))
+  for name,digest in freeze['files'].items():
+   if name.startswith(('baseline/','inputs/')) and sha(P/name)!=digest:raise ValueError('Original baseline/input drift: '+name)
+  for name in ('matlab_bridge.py','solve_model.m'):
+   if sha(R/'native_source/research/chapter3_experiments'/name)!=sha(P/'native_source/research/chapter3_experiments'/name):raise ValueError('Native source changed')
+  config,instance=load_frozen_inputs(budget,folder=P/'inputs');accuracy=_accuracy(config['accuracy_targets'])
+  with budget.phase('original_AC_model_build'):
+   model=build_model(instance,config,budget=budget,fixed_scene_id=sid,fixed_shared_deployment=mapping,**DEFAULT_BUILDER_OPTIONS)
+   payload=model.as_solver_dict()
+  if payload_sha256(payload)!='7c6454a946273f5ccc2d76b0ebfa264a2fee7ce326de537b474db9bb493c6e1c':raise ValueError('Original AC model hash mismatch')
+  saved=loadmat(src,variable_names=KEYS);x0=saved['x0'].reshape(-1)
+  original={k:payload[k] for k in KEYS if k!='x0'};original['x0']=x0
+  with budget.phase('equivalent_rows_and_certificate'):
+   derived,cert=transform(original);verify_equivalence(original,derived,cert)
+   cert['independent_row_audit']=independent_row_audit(original,derived,cert)
+   delivered={k:v for k,v in derived.items() if k!='x0'}
+   prepared=bridge._prepare(delivered,x0=x0)
+   for name in ('A','Aeq'):
+    if prepared[name].shape!=saved[name].shape or (prepared[name]!=saved[name]).nnz:raise ValueError('Saved equivalent matrix differs: '+name)
+   for name in ('c','b','beq','lb','ub','intcon','x0'):
+    if not np.array_equal(prepared[name].reshape(-1),saved[name].reshape(-1)):raise ValueError('Saved numerical input differs: '+name)
+   original_x0=bridge._prepare(payload,x0=x0)['x0_validation']
+  cert.update(saved_mat_sha256=expected,original_payload_sha256=payload_sha256(payload),
+   delivered_payload_sha256=payload_sha256(delivered),all_saved_native_arrays_equal=True,original_x0_admission=original_x0)
+  save(R/'EQUIVALENCE.json',cert)
+  receipts=[];numeric=[];cache={}
+  def on_safe(candidate,evaluation,source):
+   key=json.dumps(candidate,sort_keys=True)
+   if key in cache:receipt=cache[key]
+   else:
+    receipt=evaluate_partial_scene(instance,sid,mapping,candidate,accuracy,budget);cache[key]=receipt
+   row={'source':source,'receipt':receipt,'candidate':candidate,'completed_at_s':budget.elapsed,
+       'cache_reused':sum(x['candidate']==candidate for x in receipts)>0}
+   receipts.append(row);save(R/('scene_receipt_%03d.json'%len(receipts)),row)
+  recorder=PartialRecorder(model,accuracy,budget,R,model_evaluator=evaluate_model_candidate,on_evaluation=lambda *a:None,on_safe=on_safe)
+  raw_assess=recorder.assess
+  def assess(vector,source):
+   budget.check();admission=bridge._prepare(payload,x0=vector)['x0_validation']
+   row={'source':source,'at_s':budget.elapsed,'admission':admission};numeric.append(row)
+   save(R/('original_admission_%03d.json'%len(numeric)),row);budget.check()
+   return raw_assess(vector,source)
+  recorder.assess=assess
+  recorder.assess(x0,'saved_initial_same_as_previous_AC')
+  if not receipts or receipts[0]['receipt'].get('state')!='SAFE':raise ValueError('Original saved point failed original complete SAFE')
+  initial=receipts[0]['receipt'];initial_upper=initial['safe_upper_bound_J']
+  matlab=Path(freeze['matlab_executable'])
+  if sha(matlab)!=freeze['matlab_executable_sha256']:raise ValueError('MATLAB executable identity changed')
+  class Runtime(NativeRuntime):
+   def _popen(self,argv,**kwargs):
+    p=super()._popen(argv,**kwargs);print(json.dumps({'event':'MATLAB_LAUNCHED','utc':utc(),'pid':p.pid}),flush=True);return p
+  runtime=Runtime(R/'runtime',budget,monitor,state,bridge=bridge,matlab_path=matlab)
+  with runtime:
+   try:
+    session=runtime(R/'matlab',budget=budget,total_budget_s=budget.remaining)
+    session.event_consumer=recorder.poll
+    returned=session.solve(delivered,budget=budget,remaining_s=budget.remaining,x0=x0,solver_max_time_s=120.)
+    save(R/'RETURNED.json',returned)
+    if returned.get('budget_valid') and returned.get('accepted_for_evaluation') and returned.get('x'):
+     recorder.assess(returned['x'],'final')
+    stopped=budget.elapsed
+    candidate=np.asarray(returned.get('x',[]),dtype=float)
+    eligible=[r for r in receipts if r['receipt'].get('state')=='SAFE' and r['completed_at_s']<300]
+    best=min(eligible,key=lambda r:Fraction(r['receipt']['safe_upper_bound_J']))
+    answer={'returned_vector_length':int(candidate.size),'exitflag':returned.get('exitflag'),
+     'returned_bitwise_equal_original_x0':bool(candidate.size==x0.size and candidate.tobytes()==x0.tobytes()),
+     'initial_safe_upper_bound_J':initial_upper,'best_safe_upper_bound_J':best['receipt']['safe_upper_bound_J'],
+     'upper_bound_improved':Fraction(best['receipt']['safe_upper_bound_J'])<Fraction(initial_upper),
+     'method_stopped_s':stopped,'within_root':stopped<300,'native_entered':returned.get('intlinprog_entered'),
+     'numeric_admissions':numeric,'receipt_count':len(receipts),'independently_proven_optimal':False,'formal_comparison':False}
+   finally:
+    if session is not None:session.event_consumer=None;session.close()
+ except BaseException as e:
+  failure={'type':type(e).__name__,'message':str(e)}
+ finally:
+  cleanup=getattr(session,'cleanup',None) or (getattr(runtime,'startup_failure',None) or {}).get('cleanup')
+  result={'started_utc':start,'ended_utc':utc(),'elapsed_s':time.monotonic()-origin,'failure':failure,'result':answer,
+   'cleanup':cleanup,'cleanup_complete':bridge.cleanup_is_complete(cleanup),'minimum_available_GiB':min((r['available_bytes']/2**30 for r in monitor.samples),default=None),
+   'source_unchanged':sha(src)==expected,'new_MILP_requests':getattr(session,'counter',0),'root_seconds':300,'native_MaxTime':120,'further_attempts':0}
+  save(R/'RESULT.json',result);print(json.dumps({k:result[k] for k in ('started_utc','ended_utc','elapsed_s','failure','minimum_available_GiB','cleanup_complete','source_unchanged','new_MILP_requests')}|{'result':answer}),flush=True)
+ return 0 if failure is None and result['cleanup_complete'] else 2
+if __name__=='__main__':raise SystemExit(main())

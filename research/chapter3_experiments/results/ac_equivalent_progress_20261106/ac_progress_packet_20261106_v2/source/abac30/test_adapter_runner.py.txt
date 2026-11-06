@@ -1,0 +1,19 @@
+from pathlib import Path
+from datetime import datetime,timezone
+from contextlib import ExitStack
+import json,sys,time,subprocess,os,unittest
+from unittest.mock import patch
+ROOT=Path(__file__).resolve().parent
+sys.path[:0]=[str(ROOT),str(ROOT/'native_source/research/chapter3_experiments'),str(ROOT/'baseline/research/chapter3_experiments'),str(ROOT/'baseline')]
+import psutil
+started=datetime.now(timezone.utc).isoformat();origin=time.monotonic();attempts=[]
+def forbidden(*a,**k):
+    attempts.append('native process API');raise AssertionError('No native processes in unit tests')
+with ExitStack() as stack:
+    for obj,name in [(subprocess,'Popen'),(subprocess,'run'),(os,'system'),(os,'kill'),(psutil.Process,'kill'),(psutil.Process,'terminate')]:stack.enter_context(patch.object(obj,name,forbidden))
+    suite=unittest.defaultTestLoader.loadTestsFromName('test_equivalent_transport')
+    with (ROOT/'logs/adapter_tests.log').open('x',encoding='utf-8') as f:result=unittest.TextTestRunner(stream=f,verbosity=2).run(suite)
+r={'started_utc':started,'ended_utc':datetime.now(timezone.utc).isoformat(),'elapsed_s':time.monotonic()-origin,
+    'tests':result.testsRun,'failures':len(result.failures),'errors':len(result.errors),'native_api_attempts':attempts,'success':result.wasSuccessful() and not attempts,'matlab_runs':0,'thermal_evaluations':0}
+(ROOT/'ADAPTER_TEST_RESULT.json').write_text(json.dumps(r,indent=2)+'\n',encoding='utf-8');print(json.dumps(r))
+raise SystemExit(0 if r['success'] else 1)

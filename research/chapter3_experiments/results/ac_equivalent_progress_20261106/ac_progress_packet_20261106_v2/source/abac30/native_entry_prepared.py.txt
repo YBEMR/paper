@@ -1,0 +1,70 @@
+"""Future single-condition diagnostic entry. CLI is disabled in preparation.
+
+No model, heat evaluation or MATLAB call happens on import. The current task
+may compile/import this file and test the byte loader only.
+"""
+from pathlib import Path
+import hashlib
+import json
+import sys
+import time
+
+ROOT=Path(__file__).resolve().parent
+INPUT_HASHES={
+    'input_config.json':'132323b4b18dd514b9baa929543d235ff91bb07026a60e7b629e1adb6aaaa5e2',
+    'input_instance.json':'01eacb2a653d56419c32f38740021a787ea01ac9e7ade407bef2edd81ec6ef89'}
+
+
+def load_frozen_inputs(budget,*,folder=ROOT/'inputs'):
+    values=[]
+    for name,expected in INPUT_HASHES.items():
+        budget.check()
+        raw=(Path(folder)/name).read_bytes()
+        if hashlib.sha256(raw).hexdigest()!=expected:
+            raise ValueError('Frozen input bytes mismatch: '+name)
+        values.append(json.loads(raw.decode('utf-8')))
+        budget.check()
+    return tuple(values)
+
+
+def future_native_single_mapping(output, *, stop_control_profile="preserve_scene_cancel"):
+    """Call only in a separately authorized native execution phase."""
+    origin=time.monotonic()  # before NumPy/SciPy/scientific imports and input reads
+    paths=[ROOT,ROOT/'native_source/research/chapter3_experiments',
+           ROOT/'baseline/research/chapter3_experiments',ROOT/'baseline']
+    sys.path[:0]=[str(p) for p in paths]
+    from single_mapping import execute_single_mapping,baseline_dependencies
+    from stop_control import PROFILES
+    if stop_control_profile not in PROFILES:
+        raise ValueError('Unknown stop-control profile')
+    from protected_runtime import ResourceMonitor,NativeRuntime
+    from cancellation import CancellationState
+    import matlab_bridge
+    if Path(matlab_bridge.__file__).resolve()!=ROOT/'native_source/research/chapter3_experiments/matlab_bridge.py':
+        raise RuntimeError('Unexpected native bridge module binding')
+    expected=json.loads((ROOT/'SOURCE_FREEZE.json').read_text(encoding='utf-8'))
+    for name,digest in expected['files'].items():
+        path=(ROOT/name).resolve()
+        if not path.is_relative_to(ROOT) or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
+            raise ValueError('Source freeze mismatch: '+name)
+        if time.monotonic()>=origin+180:
+            raise TimeoutError('Frozen root expired during source verification')
+    matlab=Path(expected['matlab_executable'])
+    if hashlib.sha256(matlab.read_bytes()).hexdigest()!=expected['matlab_executable_sha256']:
+        raise ValueError('MATLAB executable changed')
+    output=Path(output).resolve()
+    if output.parent!=ROOT/'runs':
+        raise ValueError('Output must be a fresh direct child of the isolated runs directory')
+    output.parent.mkdir(exist_ok=True)
+    cancellation=CancellationState()
+    monitor=ResourceMonitor(cancellation)
+    runtime_factory=lambda folder,budget:NativeRuntime(folder/"runtime",budget,monitor,cancellation,
+        bridge=matlab_bridge,matlab_path=matlab)
+    return execute_single_mapping(load_frozen_inputs,output,origin=origin,
+        dependencies=baseline_dependencies(),runtime_factory=runtime_factory,
+        checkpoint=monitor.check,cancellation=cancellation,execution_kind='native_technical',
+        stop_control_profile=stop_control_profile)
+
+
+if __name__=='__main__':
+    raise SystemExit('Offline preparation only. No MATLAB/model run is enabled in this task.')

@@ -1,0 +1,113 @@
+"""Local recorder instrumentation; only the ordinary scene timer is selectable.
+
+No class/module globals are patched. Each newly constructed recorder retains
+its original evaluator, thermal cancellation and release implementation.
+The preserved profile delegates the timer decision without an earlier probe.
+"""
+from copy import deepcopy
+from types import MethodType
+
+PRESERVE = "preserve_scene_cancel"
+SUPPRESS = "suppress_scene_timer_cancel"
+PROFILES = (PRESERVE, SUPPRESS)
+
+
+def control_log_ok(audit):
+    return audit.get("log_complete") is True and audit.get("errors") == []
+
+
+def stop_receipt_errors(response):
+    """Fail closed on incomplete instrumentation; never supply a solver vector."""
+    errors = []
+    if response.get("stop_decisions_log_complete") is not True:
+        errors.append("STOP_LOG_NOT_COMPLETE")
+    if response.get("stop_decisions_log_errors") != []:
+        errors.append("STOP_LOG_RECORDED_ERRORS")
+    if response.get("stop_decisions_error_capture_failed") is not False:
+        errors.append("STOP_LOG_ERROR_CAPTURE_NOT_CONFIRMED")
+    decisions = response.get("stop_decisions")
+    attempted = response.get("stop_decisions_count_attempted")
+    callbacks = response.get("callbacks")
+    if (not isinstance(decisions, list) or type(attempted) is not int or attempted < 0
+            or not isinstance(callbacks, list) or len(decisions) != attempted
+            or len(decisions) != len(callbacks)):
+        errors.append("STOP_LOG_COUNT_MISMATCH")
+    elif any(not isinstance(item, dict) or type(item.get("actual_stop")) is not bool
+             for item in decisions):
+        errors.append("STOP_LOG_INVALID_ACTUAL_BOOL")
+    else:
+        for ordinal, (decision, callback) in enumerate(zip(decisions, callbacks), 1):
+            if (not isinstance(callback, dict)
+                    or type(decision.get("callback_ordinal")) is not int
+                    or decision["callback_ordinal"] != ordinal
+                    or decision.get("state") != callback.get("state")
+                    or ("event_number" in callback
+                        and decision.get("event_number") != callback["event_number"])):
+                errors.append("STOP_LOG_CALLBACK_IDENTITY_MISMATCH")
+                break
+    return errors
+
+
+def new_audit(profile):
+    if profile not in PROFILES:
+        raise ValueError("Unknown stop-control profile")
+    return {"profile": profile, "events": [], "errors": [],
+            "log_complete": True, "ordinary_timer_only": True,
+            "matlab_MaxTime_unchanged": True, "callback_stop_strategy_unchanged": True}
+
+
+def wrap_recorder_factory(factory, profile, audit):
+    if profile not in PROFILES or audit["profile"] != profile:
+        raise ValueError("Stop-control profile/audit mismatch")
+
+    def factory_with_timer_control(*args, **kwargs):
+        recorder = factory(*args, **kwargs)
+        original_timer = recorder._cancel_slice_if_due
+        original_summary = recorder.summary
+        observed = set()
+        local_events = []
+
+        def record(event):
+            # Diagnostic failure must not change the chosen cancellation action.
+            # The driver separately rejects technical PASS if logging is incomplete.
+            try:
+                local_events.append(deepcopy(event))
+                audit["events"].append(deepcopy(event))
+            except Exception as error:
+                audit["log_complete"] = False
+                audit["errors"].append(type(error).__name__ + ": " + str(error))
+
+        def timer(self, prefix):
+            if profile == PRESERVE:
+                previous_count = len(self.cancel_requests)
+                # Preserve the exact original sampling/short-circuit decision.
+                original_timer(prefix)
+                if len(self.cancel_requests) != previous_count:
+                    record(dict(self.cancel_requests[-1], action="PUBLISHED_ORIGINAL_TIMER_CANCEL"))
+                return
+            # Same eligibility expression/order as PartialRecorder. No filesystem
+            # publication, no mutation of _cancelled_prefixes. In particular a
+            # later certified thermal violation must still be able to cancel.
+            if (self.slice_end is None or self.budget.clock() < self.slice_end
+                    or self.budget.remaining <= 0 or str(prefix) in self._cancelled_prefixes):
+                return
+            key = str(prefix)
+            if key not in observed:
+                observed.add(key)
+                record({"request_prefix": key, "observed_at_s": self.budget.elapsed,
+                        "reason": "SCENE_SLICE_END", "action": "SUPPRESSED_TIMER_CANCEL",
+                        "slice_end_monotonic": self.slice_end,
+                        "root_deadline_monotonic": self.budget.deadline,
+                        "cancel_file_written": False})
+
+        def summary(self):
+            result = original_summary()
+            result["stop_control"] = {"profile": profile,
+                "events": deepcopy(local_events), "log_complete": audit["log_complete"]}
+            return result
+
+        recorder._cancel_slice_if_due = MethodType(timer, recorder)
+        recorder.summary = MethodType(summary, recorder)
+        return recorder
+
+    return factory_with_timer_control

@@ -1,0 +1,162 @@
+from pathlib import Path
+from types import SimpleNamespace
+from copy import deepcopy
+import json,tempfile,unittest
+from unittest.mock import patch
+import numpy as np
+from scipy import sparse
+import equivalent_transport as adapter
+from exact_equalities import transform,verify_equivalence
+import matlab_bridge as bridge
+
+class Budget:
+    def __init__(self): self.now=0.;self.deadline=180.;self.seconds=180.;self.start=0.
+    def clock(self):return self.now
+    @property
+    def elapsed(self):return self.now
+    @property
+    def remaining(self):return max(0.,self.deadline-self.now)
+    def check(self):
+        if self.now>=self.deadline:raise TimeoutError('root')
+
+def model():
+    return dict(c=np.array([1.,0.]),A=sparse.csc_matrix([[1.,0.],[-1.,0.],[0.,0.],[0.,1.],[0.,-1.]]),
+        b=np.array([1.,-1.,3.,2.,0.]),Aeq=sparse.csc_matrix((0,2)),beq=np.array([],dtype=float),
+        lb=np.array([0.,0.]),ub=np.array([3.,3.]),intcon=np.array([0.]))
+
+class Tests(unittest.TestCase):
+    def setup_native(self,folder,*,result=None,event=None,advance=False):
+        budget=Budget();calls=[];consumed=[]
+        class Recorder:
+            def assess(self,vector,source):consumed.append((vector,source))
+            def poll(self,prefix):
+                path=Path(str(prefix)+'.event_000001.json')
+                if path.exists():
+                    event=json.loads(path.read_text(encoding='utf-8'))
+                    if event.get('x'):return self.assess(event['x'],'event1')
+        recorder=Recorder()
+        native=SimpleNamespace(counter=0,workdir=Path(folder),event_consumer=recorder.poll)
+        def solve(payload,**kwargs):
+            calls.append((payload,kwargs));native.counter+=1
+            if event is not None:
+                prefix=native.workdir/'request_000001'
+                Path(str(prefix)+'.event_000001.json').write_text(json.dumps({'x':event}),encoding='utf-8')
+                native.event_consumer(prefix)
+            if advance:budget.now=180.
+            return dict(result or {'status':'SOLVED','x':[1.,0.],'budget_valid':True,'accepted_for_evaluation':True})
+        native.solve=solve
+        adapter.install_equivalent_solver(native,bridge,budget)
+        return native,budget,calls,consumed
+
+    def test_certificate_and_original_arrays_unchanged(self):
+        p=model();original=deepcopy(p);q,c=adapter.certified_payload(p,np.array([1.,0.]),Budget())
+        self.assertEqual(c['exact_pairs_moved'],1)
+        self.assertEqual(q['A'].shape,(3,2));self.assertEqual(q['Aeq'].shape,(1,2))
+        self.assertEqual(adapter.payload_sha256(p),adapter.payload_sha256(original))
+
+    def test_no_near_opposite_pair_or_nonzero_width_removed(self):
+        p=model();p['b'][1]=-1.+1e-12
+        q,c=adapter.certified_payload(p,np.array([1.,0.]),Budget())
+        self.assertEqual(c['exact_pairs_moved'],0);self.assertEqual(q['A'].shape,p['A'].shape)
+
+    def test_nonzero_original_equalities_retained(self):
+        p=model();p['Aeq']=sparse.csc_matrix([[0.,1.]]);p['beq']=np.array([0.])
+        q,c=adapter.certified_payload(p,np.array([1.,0.]),Budget())
+        self.assertEqual(q['Aeq'].shape,(2,2));self.assertTrue((q['Aeq'].getrow(0)!=p['Aeq']).nnz==0)
+
+    def test_certificate_drift_rejected(self):
+        p=model();p['x0']=np.array([1.,0.]);q,c=transform(p);q['b'][0]+=1
+        with self.assertRaises(ValueError):verify_equivalence(p,q,c)
+
+    def test_row_coverage_tamper_rejected(self):
+        p=model();p['x0']=np.array([1.,0.]);q,c=transform(p);c['retained_le_row_ranges']=[]
+        with self.assertRaises((AssertionError,ValueError)):adapter.independent_row_audit(p,q,c)
+
+    def test_callback_and_final_checked_against_original(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,consumed=self.setup_native(t,event=[1.,0.]);r=n.solve(model(),budget=b,x0=np.array([1.,0.]),solver_max_time_s=30.,remaining_s=180.)
+            self.assertEqual(len(consumed),1);self.assertEqual(len(c),1)
+            self.assertEqual(c[0][0]['Aeq'].shape,(1,2));self.assertEqual(r['equivalent_representation']['original_row_admission_count'],2)
+
+    def test_invalid_original_initial_point_stops_before_native(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t)
+            with self.assertRaises(bridge.InitialPointRejected):n.solve(model(),budget=b,x0=np.array([0.,0.]))
+            self.assertFalse(c)
+
+    def test_invalid_final_fails_closed(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t,result={'x':[0.,0.],'budget_valid':True,'accepted_for_evaluation':True})
+            with self.assertRaises(bridge.InitialPointRejected):n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertEqual(len(c),1)
+
+    def test_invalid_callback_stops_before_thermal_consumer(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,consumed=self.setup_native(t,event=[0.,0.])
+            with self.assertRaises(bridge.InitialPointRejected):n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertFalse(consumed)
+
+    def test_late_response_not_admitted(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t,advance=True,result={'x':[0.,0.],'budget_valid':True,'accepted_for_evaluation':True})
+            r=n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertFalse(r['budget_valid']);self.assertFalse(r['accepted_for_evaluation'])
+            self.assertFalse(list(Path(t).glob('*.original_admission_final.json')))
+
+    def test_root_identity_and_exhaustion_fail_before_native(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t)
+            with self.assertRaises(ValueError):n.solve(model(),budget=Budget(),x0=np.array([1.,0.]))
+            b.now=180.
+            with self.assertRaises(TimeoutError):n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertFalse(c)
+
+    def test_requested_cap_not_increased(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t);n.solve(model(),budget=b,x0=np.array([1.,0.]),solver_max_time_s=3.,remaining_s=9.)
+            self.assertEqual(c[0][1]['solver_max_time_s'],3.)
+            self.assertEqual(c[0][1]['remaining_s'],9.)
+
+    def test_missing_initial_and_duplicate_install_rejected(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t)
+            with self.assertRaises(ValueError):n.solve(model(),budget=b)
+            with self.assertRaises(RuntimeError):adapter.install_equivalent_solver(n,bridge,b)
+            self.assertFalse(c)
+
+    def test_transform_exception_cannot_start_native(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t)
+            with patch.object(adapter,'transform',side_effect=ValueError('bad certificate')):
+                with self.assertRaises(ValueError):n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertFalse(c)
+
+    def test_newly_published_event_cannot_bypass_actual_assess(self):
+        # The consumer receives a vector created during its own poll, not present
+        # in any earlier file scan. Actual assess must gate it before evaluation.
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            b=Budget();consumed=[];calls=[]
+            class Recorder:
+                def assess(self,vector,source):consumed.append(vector)
+                def poll(self,prefix):return self.assess([0.,0.],'published_during_poll')
+            r=Recorder();original=r.assess
+            n=SimpleNamespace(counter=0,workdir=Path(t),event_consumer=r.poll)
+            def solve(payload,**kwargs):
+                calls.append(1);n.counter+=1;n.event_consumer(n.workdir/'request_000001')
+            n.solve=solve;adapter.install_equivalent_solver(n,bridge,b)
+            with self.assertRaises(bridge.InitialPointRejected):n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertFalse(consumed);self.assertEqual(calls,[1]);self.assertEqual(r.assess,original)
+
+    def test_unbound_consumer_fails_closed_before_native(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            n,b,c,_=self.setup_native(t);n.event_consumer=lambda p:None
+            with self.assertRaises(ValueError):n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertFalse(c)
+
+    def test_wrong_frozen_model_hash_stops_before_native(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent/"fixtures") as t:
+            b=Budget();calls=[]
+            n=SimpleNamespace(counter=0,workdir=Path(t),event_consumer=None,solve=lambda *a,**k:calls.append(1))
+            adapter.install_equivalent_solver(n,bridge,b,expected_model_hashes=('wrong',))
+            with self.assertRaisesRegex(ValueError,'identity/order'):n.solve(model(),budget=b,x0=np.array([1.,0.]))
+            self.assertFalse(calls)

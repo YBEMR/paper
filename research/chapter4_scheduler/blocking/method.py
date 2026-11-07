@@ -90,8 +90,11 @@ def energy_targets(instance, incumbent, budget):
         t["scene_id"], t["stage_id"], t["target_opp"]))
 
 
-def candidate_packets(instance, incumbent, budget, *, diagnostics=None):
+def candidate_packets(instance, incumbent, budget, *, diagnostics=None,
+                      allow_blocking_edges=True):
     """Only a deadline failure of the same base skeleton permits an extra edge."""
+    if type(allow_blocking_edges) is not bool:
+        raise ValueError("allow_blocking_edges must be bool")
     diagnostics = [] if diagnostics is None else diagnostics
     with budget.phase("activity_saving_targets"):
         targets = energy_targets(instance, incumbent, budget)
@@ -147,7 +150,7 @@ def candidate_packets(instance, incumbent, budget, *, diagnostics=None):
                             record(packet, None)
                             # Each trial is rebuilt from this base, never from a
                             # previously repaired (or merely worse SAFE) plan.
-                            for edge in core.blocking_edges(packet):
+                            for edge in (core.blocking_edges(packet) if allow_blocking_edges else ()):
                                 budget.check()
                                 repaired = core.reconstruct(instance, incumbent, sid, selected, overrides,
                                     orientation=orientation, template=template,
@@ -162,9 +165,11 @@ def candidate_packets(instance, incumbent, budget, *, diagnostics=None):
 
 
 def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
-                           clock=time.monotonic, budget=None):
+                           clock=time.monotonic, budget=None, allow_blocking_edges=True):
     """One bounded call; no CLI selecting research cases or granting a budget."""
     entered = clock() if budget is None else None
+    if type(allow_blocking_edges) is not bool:
+        raise ValueError("allow_blocking_edges must be bool")
     from timing import MethodBudget
     from thermal import Exhausted
     if isinstance(seconds, bool) or not math.isfinite(seconds) or not 0 < seconds <= 300:
@@ -183,6 +188,7 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
     workdir.mkdir(parents=True)
     result = {"method": "activity_saving_deadline_edge_graph", "rule_version": RULE_VERSION,
         "rules": deepcopy(RULES), "state": "UNRESOLVED", "run_terminal": None,
+        "blocking_edge_adjustment_enabled": allow_blocking_edges,
         "reason": None, "safe_candidate": None, "safe_upper_bound_J": None,
         "evaluation": None, "coverage_complete": False,
         "independently_proven_optimal": False, "independently_proven_infeasible": False,
@@ -229,14 +235,16 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
             base = digest(recorder.current["candidate"])
             improved = False
             for packet in candidate_packets(instance, recorder.current["candidate"], budget,
-                                            diagnostics=diagnostics):
+                                            diagnostics=diagnostics,
+                                            allow_blocking_edges=allow_blocking_edges):
                 budget.check()
-                if len(packet.get("additional_reversed_edges", [])) > 1:
+                extra_edges = packet.get("additional_reversed_edges", [])
+                if len(extra_edges) > 1 or (extra_edges and not allow_blocking_edges):
                     raise SearchStop("INVALID_ADDITIONAL_EDGE_SCOPE")
                 key = digest(packet["candidate"])
                 if key in seen:
                     continue
-                event = {k: deepcopy(v) for k, v in packet.items() if k != "candidate"}
+                event = deepcopy(packet)
                 event.update(base_candidate_sha256=base, candidate_sha256=key,
                     proposed_at_s=budget.elapsed, strict_accepted=False)
                 proposals.append(event)

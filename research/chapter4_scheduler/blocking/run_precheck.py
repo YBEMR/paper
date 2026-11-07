@@ -88,6 +88,8 @@ def main():
                 "research.chapter4_scheduler.blocking.tests.test_core",
                 "research.chapter4_scheduler.blocking.tests.test_targets",
                 "research.chapter4_scheduler.blocking.tests.test_blocking_method",
+                "research.chapter4_scheduler.blocking.tests.test_ablation",
+                "research.chapter4_scheduler.mechanism_check.test_run",
             ):
                 suites.addTests(unittest.defaultTestLoader.loadTestsFromName(name))
             result = unittest.TextTestRunner(stream=output, verbosity=2).run(suites)

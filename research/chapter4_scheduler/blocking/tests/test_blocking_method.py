@@ -317,7 +317,8 @@ class BlockingMethodLifecycleTests(unittest.TestCase):
         def initialize(instance, config, supplied, assess, *, allow_auto_low):
             roots.append(supplied)
             return self.initialize(instance, config, supplied, assess, allow_auto_low=allow_auto_low)
-        def packets(instance, incumbent, supplied, *, diagnostics):
+        def packets(instance, incumbent, supplied, *, diagnostics, allow_blocking_edges):
+            self.assertTrue(allow_blocking_edges)
             roots.append(supplied)
             self.clock.now += 2
             return iter(())

@@ -1,0 +1,47 @@
+--- research/chapter4_scheduler/validation/lifecycle.py	2026-11-07 13:30:57.722284474 +0000
++++ research/chapter4_scheduler/c01/heft_lifecycle.py	2026-11-08 06:01:03.411086808 +0000
+@@ -1,11 +1,13 @@
+-"""Original enhanced HEFT with the same complete recorder used by OFF/ON.
++"""Isolated C01 HEFT lifecycle, allowing a predeclared shorter caller root.
+ 
+-Only the lifecycle/archival layer is new. The original run_heft and continuous
+-evaluator are required for real bindings. No graph generator is invoked.
++Copied from validation.lifecycle: only the input budget guard and the late-SAFE
++cutoff use the supplied cap. Original run_heft, complete recorder, search,
++acceptance and archival behavior are unchanged; 300s equivalence is tested.
+ """
+ from copy import deepcopy
+ from pathlib import Path
+ import time
++import math
+ 
+ 
+ def execute_heft(input_loader, workdir, *, bindings, budget):
+@@ -13,8 +15,10 @@
+     from auto_heuristic_policy import require_heuristic_control
+     from timing import MethodBudget
+     from thermal import Exhausted
+-    if not isinstance(budget, MethodBudget) or budget.seconds != 300:
+-        raise ValueError("The unchanged caller-owned 300-second root is required")
++    if (not isinstance(budget, MethodBudget) or isinstance(budget.seconds, bool)
++            or not math.isfinite(budget.seconds) or not 0 < budget.seconds <= 300
++            or budget.deadline != budget.start + float(budget.seconds)):
++        raise ValueError("One unchanged caller-owned root in (0,300] seconds is required")
+     budget.check()
+     workdir=Path(workdir)
+     if workdir.exists():
+@@ -60,12 +64,12 @@
+         reason=str(error)
+         terminal=("NORMAL_NO_SAFE" if reason=="NO_SAFE_CONSTRUCTED_WITNESS" else
+             "UNRESOLVED_STOP" if reason in ("INITIALIZATION_NOT_COMPLETED","NO_COMPLETE_SAFE_HEFT_INITIALIZATION","NUMERICAL_UNRESOLVED") else
+-            "BUDGET_EXHAUSTED" if reason=="SAFE_FORMED_AFTER_DEADLINE" and budget.elapsed>=300 else "TECHNICAL_STOP")
++            "BUDGET_EXHAUSTED" if reason=="SAFE_FORMED_AFTER_DEADLINE" and budget.elapsed>=budget.seconds else "TECHNICAL_STOP")
+         result.update(run_terminal=terminal,reason=reason)
+     except Exception as error:
+         result.update(run_terminal="TECHNICAL_STOP",reason="INTERFACE_ERROR",error=f"{type(error).__name__}: {error}")
+     stopped=budget.elapsed
+-    result.update(timing=budget.summary(stopped),budget_exhausted=stopped>=300)
++    result.update(timing=budget.summary(stopped),budget_exhausted=stopped>=budget.seconds)
+     result["timing"]["clock_origin"]="caller root before scientific imports, input and initialization"
+     if recorder is not None:
+         final=recorder.current if recorder.current is not None else recorder.best

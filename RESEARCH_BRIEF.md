@@ -1,6 +1,10 @@
 # 研究状态
 
-更新：2026-11-08。
+更新：2026-11-10。
+
+**论文展示补充完成（2026-11-10）。** [图表与执行总览](research/chapter4_scheduler/results/evaluation_workpackages_20261110/paper_presentation_20261110/README.md)：新增AB/NPU0双面板论文图（全H四周期启动至3s、90ms三模板周期稳态），PDF/SVG/PNG及中文/LaTeX图注齐全；固定原时间表与热核补绘图点恰10调用、137.510秒，6396向量点/25584节点行，后续布局0热调用。七方案主表、九配置周期表CSV/Markdown及能量分项保留全部SA种子与原null；科学界限向外舍入。采样线不替代连续安全证据，旧1.575/2.315s及新1.572/2.310s均为点见证非首次穿越，仍同21/29违规轮；超温后的延续仅模型诊断。269表派生/630绘图断言及587交付检查通过，原A/B/C413工件SHA不变；未新增调度搜索/参数扫描、提交推送或合并。
+
+**固定方案评价工作包A/C/B完成（2026-11-10）。** [总览](research/chapter4_scheduler/results/evaluation_workpackages_20261110/SUMMARY.md)、[A来源/七方案](research/chapter4_scheduler/results/evaluation_workpackages_20261110/workpackage_A/A_summary.md)、[B轨迹/均温](research/chapter4_scheduler/results/evaluation_workpackages_20261110/workpackage_B/B_summary.md)、[C九周期复核](research/chapter4_scheduler/results/evaluation_workpackages_20261110/workpackage_C/C_summary.md)。依据主会话读取附件后的明确细则，绑定4339bdcc的6执行β1/50–80°C/400ms独立AB/AC七终解，46份来源一致，42行时间表/56节点峰温/完整能量分项及耗时保存，MILP全H模板与HEFT首构造身份不同。A216条核查通过；B复用14份既有积分生成56节点均温和14张四节点图，0新热积分，最坏均温均AB/NPU0约49.022–49.358°C，8纯算术检查/294核查通过。旧周期CSV/纪要取自92cd9f17，生成程序未附，最小重建原模型固定模板后验复核器；仅9指定配置，242次原区间核调用，21.202秒，7全轮安全界/2实际启动超温/0未决。全H AB75/80分别第21/29轮有NPU点下界80.092269/80.145588°C；AB85稳态峰温约79.112397°C、全轮保守界79.929731°C，不能混称实际最大值。九行分类及稳态峰温与原CSV舍入相容，保守界差异单列；15+2人工检查/1052只读核查通过。A/B/C源码/输入/固定时间表及证据hash保存，旧结果不改。完整能耗仍唯一优化目标，峰温/均温/周期热/耗时仅描述，无寿命比例、新调度搜索/参数扫描/热修复或周期最优性主张；共享原核非独立证书，未推送或合并。此前附件访问阻碍已由主会话补齐正文细则解决，早期准备工件保留为历史。
 
 **第四章 C01 50/78°C紧热配对完成（2026-11-08）。** [报告](research/chapter4_scheduler/results/thermal_pair_20261108/summary.md)、[逐组指标](research/chapter4_scheduler/results/thermal_pair_20261108/metrics.csv)、[冻结方案](research/chapter4_scheduler/results/thermal_pair_20261108/execution/plan.json)。基线0a01ae35，保留原C01双场景/230ms/72模式、80°C温限及算法，仅派生入口初温50/78°C；两次原ON各300秒、另两次最多60秒同评价器post，真实批次46.924秒，无补跑。两组完整HEFT安全初始化及ON自然完成，最终及复评均SAFE；50°C初始化0.882913165881→ON0.839132424261 J、峰温53.530889°C；78°C为0.908129637265→同值，峰温78.461184°C、余量1.538816K，未获ON增量收益。方法内92实际评价/88完整SAFE/4超温点见证/0未决、9缓存；4超温全部在热组HEFT初始化，原后备构造及改进获得安全解，未增加热修复。同一首贪心候选从冷组SAFE变为热组GPU0 96.1ms处下界80.625951°C。19项最终人工接口检查及1046条只读断言通过；532冻结身份/3930旧文件不变，首轮人工假峰温夹具失败保留。78°C在原声明20–100°C内，代表外部热启动，不含预热能耗/非实测；仅本例候选可行性变化，不证明普遍性、最优或ON新增热引导收益。原模型/算法/历史输入不改，本轮停止，未扩例/推送/合并。
 

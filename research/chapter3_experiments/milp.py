@@ -484,6 +484,8 @@ class Model:
             result['preprocessing'] = deepcopy(self.preprocessing)
             if self.preprocessing['fixed_scene_id'] is not None:
                 result['objective'] = 'unweighted complete scene energy including leakage and idle tail'
+        if hasattr(self, 'option_propagation'):
+            result['option_propagation'] = deepcopy(self.option_propagation)
         if hasattr(self, 'cumulative_precedence_stats'):
             result['cumulative_precedence'] = deepcopy(self.cumulative_precedence_stats)
         if hasattr(self, 'neighborhood_stats'):
@@ -713,7 +715,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
                 fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None,
                 fixed_shared_deployment=None, cumulative_precedence=False,
-                neighborhood_condition=None, preeliminate_closed_anchors=False):
+                neighborhood_condition=None, preeliminate_closed_anchors=False,
+                propagate_options=False):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
@@ -736,6 +739,10 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     condition. It removes original resource/direct-edge impossibilities before
     events; physical coefficients and all numerical lifts must be rebuilt.
 
+    Optional option propagation removes unsupported local choices through exact
+    dependency and shared-unit implications before event construction. The
+    rebuilt numerical enclosure can differ from the original enclosure.
+
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
     so a partially generated model is never returned as a solver-ready one.
@@ -744,6 +751,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         raise ValueError('cumulative_precedence must be a bool')
     if type(preeliminate_closed_anchors) is not bool:
         raise ValueError('preeliminate_closed_anchors must be a bool')
+    if type(propagate_options) is not bool:
+        raise ValueError('propagate_options must be a bool')
     budget = budget if budget is not None else Budget()
     budget.check()
     idle_policy = resolve_idle_policy(instance)
@@ -880,6 +889,12 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             budget=budget, scene_ids=[scene['id'] for scene in model.instance['scenarios']])
         model.preprocessing['closed_anchor_preelimination'] = stats
         model.formulation['preeliminate_closed_anchors'] = True
+    if propagate_options:
+        from option_propagation import propagate_local_options
+        model.report('option_propagation')
+        with model.measure_construction('option_propagation'):
+            options, model.option_propagation = propagate_local_options(model.instance, options, budget=budget)
+        model.formulation['propagate_options'] = True
     model.options = options
     model.report('mode_variables')
     model.option_vars = [model.var('y:'+o['option_id'], integer=True) for o in options]

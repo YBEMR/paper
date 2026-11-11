@@ -1,0 +1,187 @@
+--- milp.before.py
++++ milp.py
+@@ -708,13 +708,52 @@
+         'scope': 'all old exported integer-state points on existing variable boxes; not original LP equivalence'})
+ 
+ 
++def _audit_joint_state_gate_off(model, sources, temperature_targets, energy_target,
++                                deleted_states, duration):
++    """Preview only removed-state rows in an isolated, identical-box model.
++
++    No unchecked ON model can be returned. Columns change identity only; row
++    export, interval coefficients, both directions and exact boxes are original.
++    No row from this probe is added to the scheduling model.
++    """
++    from joint_state_support import verify_gate_off_rows
++    began = time.monotonic()
++    if not deleted_states:
++        return {'states_checked': 0, 'rows_checked': 0, 'elapsed_s': time.monotonic()-began}
++    probe = Model(model.instance, model.budget)
++    originals = list(sources)+list(temperature_targets)+[energy_target]
++    mapped = {}
++    for original in originals:
++        lo, hi = model.bounds[original]
++        mapped[original] = probe.var('probe:'+model.names[original], lo, hi)
++        if probe.bounds[mapped[original]] != model.bounds[original]:
++            raise ValueError('Joint-state gate audit changed an original box')
++    gate = probe.var('probe:removed_joint_state', integer=True)
++    source_indices = [mapped[j] for j in sources]
++    reports = []
++    for state in deleted_states:
++        model.budget.check()
++        coeff = model.coefficients.get(state, duration)
++        probe.rows.clear(); probe.row_nonzeros = 0
++        for target, row in zip(temperature_targets, coeff['temperature']):
++            probe.affine_conditional_eq(mapped[target], source_indices, row, gate, 'thermal_propagation')
++        probe.affine_conditional_eq(mapped[energy_target], source_indices, coeff['energy'], gate, 'complete_energy')
++        expected = 2*(len(temperature_targets)+1)
++        if len(probe.rows) != expected:
++            raise ValueError('Incomplete removed-state physical-row audit')
++        proof = verify_gate_off_rows(probe.rows, probe.lb, probe.ub, gate)
++        reports.append(dict(state=list(state), **proof))
++    return dict(states_checked=len(reports), rows_checked=sum(r['checked_rows'] for r in reports),
++                states=reports, elapsed_s=time.monotonic()-began)
++
++
+ def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None,
+                 *, fix_late_options=True, aggregate_opp_locks=True,
+                 relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
+                 fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None,
+                 fixed_shared_deployment=None, cumulative_precedence=False,
+                 neighborhood_condition=None, preeliminate_closed_anchors=False,
+-                propagate_support=False):
++                propagate_support=False, prune_joint_states=False):
+     """Build an equivalent finite-domain formulation with budget checks.
+ 
+     Exact deadline fixing and unit/OPP aggregation are enabled by default.
+@@ -737,6 +776,12 @@
+     condition. It removes original resource/direct-edge impossibilities before
+     events; physical coefficients and all numerical lifts must be rebuilt.
+ 
++    Default-off joint-state pruning exhausts necessary active-option supports
++    using exact exported structural rows before joint variables are created.
++    Every removed state has its original physical conditional rows audited as
++    redundant at gate zero over the unchanged exported box. Unknown states are
++    retained. This is not equality of the fractional LP relaxation.
++
+     Default-off support propagation removes only options lacking a direct
+     predecessor/successor or common shared-unit support, before any event or
+     physical construction. It preserves complete physical schedules relative
+@@ -748,6 +793,8 @@
+     """
+     if type(propagate_support) is not bool:
+         raise ValueError('propagate_support must be a bool')
++    if type(prune_joint_states) is not bool:
++        raise ValueError('prune_joint_states must be a bool')
+     if type(cumulative_precedence) is not bool:
+         raise ValueError('cumulative_precedence must be a bool')
+     if type(preeliminate_closed_anchors) is not bool:
+@@ -758,6 +805,8 @@
+     if resolve_idle_policy(config) != idle_policy:
+         raise ValueError('MILP instance/config control policies must match')
+     auto_low = idle_policy == AUTO_LOW_IMMEDIATE_V1
++    if prune_joint_states and not auto_low:
++        raise ValueError('Joint-state support pruning requires auto-low idle semantics')
+     partial_fixed = fixed_shared_deployment is not None
+     if partial_fixed and fixed_deployment is not None:
+         raise ValueError('full and shared-only fixed deployments are mutually exclusive')
+@@ -819,7 +868,7 @@
+         model.formulation['cumulative_precedence'] = True
+     if auto_low:
+         model.formulation['idle_policy'] = idle_policy
+-    if adapted:
++    if adapted or prune_joint_states:
+         model.preprocessing = {
+             'source_input_sha256': _digest(instance),
+             'fixed_deployment': None if partial_fixed else deepcopy(normalized),
+@@ -841,6 +890,12 @@
+         model.neighborhood_condition = n1_condition
+         model.formulation['fixed_device_neighborhood'] = True
+         model.preprocessing['neighborhood_condition_sha256'] = n1_condition['condition_sha256']
++    if prune_joint_states:
++        from joint_state_support import PROTOCOL as JOINT_SUPPORT_PROTOCOL
++        model.formulation['prune_joint_states'] = True
++        model.preprocessing['joint_state_pruning'] = {
++            'protocol': JOINT_SUPPORT_PROTOCOL, 'scenes': {},
++            'numeric_scope': 'exact exported structural rows with integer original options; gate-off exact box audited'}
+     energy_specs, energy_onehot_rows = [], {}
+     auxiliary = dict(integer=not relax_auxiliary_integrality,
+                      implied_binary=relax_auxiliary_integrality)
+@@ -931,6 +986,7 @@
+             stage_options[o['stage_instance_id']].append((o, y))
+             starting_at.setdefault(option_start[y], []).append(position)
+             ending_at.setdefault(option_end[y], []).append(position)
++        stage_onehot_rows, dependency_rows = {}, {}
+         deadlines = {r['id']: F(r['deadline_ms'])/1000 for r in scene['requests']}
+         for stage in scene['stage_instances']:
+             choices = stage_options[stage['id']]
+@@ -938,6 +994,8 @@
+                 # Keep the exact contradictory one-hot rows. An empty local
+                 # set is not an input/thermal error and is never silently lost.
+                 model.preprocessing['empty_stage_option_sets'].append(stage['id'])
++            if prune_joint_states:
++                stage_onehot_rows[stage['id']] = (len(model.rows), len(model.rows)+1)
+             model.eq({y: 1 for o, y in choices}, 1, 'stage_unique')
+             for unit, x in shared_by_stage[stage['shared_stage_id']]:
+                 model.eq({x: -1, **{y: 1 for o, y in choices if o['unit_id'] == unit}}, 0, 'shared_link')
+@@ -948,6 +1006,8 @@
+             row = {y: option_end[y] for o, y in stage_options[before]}
+             for o, y in stage_options[after]:
+                 _plus(row, y, -option_start[y])
++            if prune_joint_states:
++                dependency_rows[before, after] = len(model.rows)
+             model.le(row, 0, 'dependency')
+         model.report('event_topology')
+         events = sorted({F(0), F(model.instance['window_ms'])/1000} |
+@@ -957,6 +1017,12 @@
+                 'active': [], 'options': scene_options, 'stage_options': stage_options,
+                 'start_indicators': {}, 'states': []}
+         model.scenes[sid] = meta
++        if prune_joint_states:
++            from joint_state_support import SceneSupport, filter_interval
++            support_context = SceneSupport(scene, stage_options, stage_onehot_rows,
++                dependency_rows, model.rows, model.integer, model.bounds, budget)
++            model.preprocessing['joint_state_pruning']['scenes'][sid] = support_context.report
++            meta['candidate_states'] = []
+         fixed_idle = ({did: 'L' if auto_low else scene['entry']['domain_opp'][did] for did in domains
+                        if not any(unit_domain[o['unit_id']] == did for o, y in scene_options)}
+                       if adapted else {})
+@@ -1043,6 +1109,11 @@
+                     # before any possible Stage using it has started.
+                     possible.append(sorted(prefix_opps[domain_id]))
+             states = list(product(*possible))
++            if prune_joint_states:
++                meta['candidate_states'].append(states)
++                with model.measure_construction('joint_state_support_pruning'):
++                    states, interval_support = filter_interval(support_context, active,
++                        list(domains), states, l)
+             meta['states'].append(states)
+             for state in states:
+                 meta['joint'][l, state] = model.var(f'w:{sid}:{l}:{state}', **auxiliary)
+@@ -1082,16 +1153,24 @@
+                     meta['q'][l].append(qv)
+                     model.activity_power_eq(qv, (y for o, y in active_node), activity_exports)
+             states = meta['states'][l]
++            box_states = meta['candidate_states'][l] if prune_joint_states else states
+             with model.measure_construction('power_upper_and_energy_variable'):
+-                for state in states:
++                for state in box_states:
+                     if state not in state_power:
+                         base, slopes = model.coefficients.power(state)
+                         state_power[state] = sum(base)+sum(lam*(upper-reference) for lam, upper in zip(slopes, temp_upper))+F(p['external_common_power_W'])
+                 # qmax is common to all states; arithmetic is exact rational.
+-                power_upper = max(state_power[s] for s in states)+sum(qmax)
++                power_upper = max(state_power[s] for s in box_states)+sum(qmax)
+                 ev = model.var(f'energy:{sid}:{l}', 0, power_upper*(right-left), cost=F(scene['weight']))
+                 meta['energy'].append(ev)
+             sources = meta['theta'][l]+meta['q'][l]
++            if prune_joint_states:
++                retained_states = set(states)
++                deleted_states = [state for state in box_states if state not in retained_states]
++                with model.measure_construction('joint_state_gate_off_audit'):
++                    gate_report = _audit_joint_state_gate_off(model, sources,
++                        meta['theta'][l+1], ev, deleted_states, right-left)
++                support_context.report['interval_reports'][l]['gate_off_audit'] = gate_report
+             energy_source_rows = []
+             for state in states:
+                 model.report(control_state=list(state))

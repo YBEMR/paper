@@ -713,7 +713,8 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
                 relax_auxiliary_integrality=False, strengthen_energy_lower_bounds=False,
                 fixed_deployment=None, prefilter_deadlines=False, fixed_scene_id=None,
                 fixed_shared_deployment=None, cumulative_precedence=False,
-                neighborhood_condition=None, preeliminate_closed_anchors=False):
+                neighborhood_condition=None, preeliminate_closed_anchors=False,
+                propagate_support=False):
     """Build an equivalent finite-domain formulation with budget checks.
 
     Exact deadline fixing and unit/OPP aggregation are enabled by default.
@@ -736,10 +737,17 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
     condition. It removes original resource/direct-edge impossibilities before
     events; physical coefficients and all numerical lifts must be rebuilt.
 
+    Default-off support propagation removes only options lacking a direct
+    predecessor/successor or common shared-unit support, before any event or
+    physical construction. It preserves complete physical schedules relative
+    to the supplied option domain; rebuilt numerical rows are freshly enclosed.
+
     Optional ``progress(stage, model, detail)`` receives phase boundaries and
     periodic counts; it must not mutate the model. Budget expiry propagates,
     so a partially generated model is never returned as a solver-ready one.
     """
+    if type(propagate_support) is not bool:
+        raise ValueError('propagate_support must be a bool')
     if type(cumulative_precedence) is not bool:
         raise ValueError('cumulative_precedence must be a bool')
     if type(preeliminate_closed_anchors) is not bool:
@@ -777,7 +785,7 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
         if n1_condition is None or n1_condition['protocol'] != LINKED_PROTOCOL:
             raise ValueError('Closed-anchor preelimination requires a validated linked condition')
     adapted = (fixed_deployment is not None or partial_fixed or prefilter_deadlines
-               or fixed_scene_id is not None)
+               or fixed_scene_id is not None or propagate_support)
     if fixed_scene_id is not None and fixed_deployment is None and not partial_fixed:
         raise ValueError('single-scene construction requires a fixed deployment condition')
     normalized = None
@@ -880,6 +888,12 @@ def build_model(instance, config, starts=None, budget=None, include_physics=True
             budget=budget, scene_ids=[scene['id'] for scene in model.instance['scenarios']])
         model.preprocessing['closed_anchor_preelimination'] = stats
         model.formulation['preeliminate_closed_anchors'] = True
+    if propagate_support:
+        from option_support import propagate_option_support
+        model.report('option_support_propagation')
+        options, support_report = propagate_option_support(model.instance, options, budget=budget)
+        model.preprocessing['option_support'] = support_report
+        model.formulation['propagate_support'] = True
     model.options = options
     model.report('mode_variables')
     model.option_vars = [model.var('y:'+o['option_id'], integer=True) for o in options]

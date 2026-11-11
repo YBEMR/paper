@@ -1,0 +1,55 @@
+--- /workspace/paper/research/chapter3_support_autol_lp_20261111/lp_diagnostic/run_lp_pair.py
++++ /workspace/paper/research/chapter3_support_formal_lp_timebudget_20261111/lp_diagnostic/run_lp_pair.py
+@@ -64,12 +64,12 @@
+         assert digest(p)==source_manifest[f'local_records/r1_pair_run01/{v}/method/matlab/request_000001.mat']
+         _,hashes,shape=load_original(p)
+         records[v]=dict(path=str(p.relative_to(REPO)),sha256=digest(p),array_fingerprints=hashes,**shape)
+-    plan=dict(schema='archived-hold-last-lp-pair-v1',frozen_utc=now(),
++    plan=dict(schema='archived-hold-last-lp-timebudget-pair-v2',frozen_utc=now(),
+         original_archive_sha256='b0aab1f9d62df45634400a45b526fc5a8652eaa9d4ef594270df20f7998a79f1',
+         original_source_commit='2fc52c63814d06b039e24a3bde887a2b411be298',records=records,
+         environment=dict(python=sys.version,scipy=scipy.__version__,numpy=numpy.__version__,
+             highs=f'{hc.HIGHS_VERSION_MAJOR}.{hc.HIGHS_VERSION_MINOR}.{hc.HIGHS_VERSION_PATCH}',platform=sys.platform),
+-        method='highs-ds',options=dict(presolve=False,disp=True,maxiter=100000,
++        method='highs-ds',options=dict(presolve=False,disp=True,maxiter=2147483647,
+             primal_feasibility_tolerance=1e-9,dual_feasibility_tolerance=1e-9,
+             simplex_dual_edge_weight_strategy='steepest-devex'),
+         method_budget_s_each=300,residual_and_archive_reserve_s=2,slot_watchdog_s=330,
+@@ -81,6 +81,20 @@
+         thread_environment=dict(OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1'),
+         highs_unchanged_defaults={k:getattr(hc.HighsOptions(),k) for k in ['small_matrix_value','large_matrix_value','threads','random_seed','parallel','simplex_strategy']},
+         code_sha256=digest(Path(__file__)),documentation='https://docs.scipy.org/doc/scipy-1.17.0/reference/optimize.linprog-highs-ds.html')
++    previous=read(REPO/'research/chapter3_support_autol_lp_20261111/lp_diagnostic/plan.json')
++    assert plan['records']==previous['records']
++    assert plan['environment']==previous['environment']
++    assert {k:v for k,v in plan['options'].items() if k!='maxiter'}=={k:v for k,v in previous['options'].items() if k!='maxiter'}
++    for key in ['method','method_budget_s_each','residual_and_archive_reserve_s','slot_watchdog_s','thread_environment','highs_unchanged_defaults','order']:
++        assert plan[key]==previous[key],key
++    plan.update(previous_plan_sha256=digest(REPO/'research/chapter3_support_autol_lp_20261111/lp_diagnostic/plan.json'),
++        solver_configuration_delta={'options.maxiter':{'before':100000,'after':2147483647}},
++        authorization='One OFF/ON pair only, no retries, no full MILP or thermal simulation; local save only',
++        effective_total_budget_note='300 seconds starts at worker entry, includes imports/loading/verification/native call/checks; same 2-second post reserve as previous pair',
++        iteration_limit_reason='INT32_MAX matches solver-scale unlimited cap; far above observed iterations achievable in 300 seconds; actual termination retained',
++        based_on_published_commit='37c9b12efb29f5970dfab1b8922d12ccbedaae75',
++        solver_bound_output_note='SciPy LP OptimizeResult does not expose a separate solver best-bound field; mark absent; do not infer certified bound from internal progress log',
++        no_candidate_thermal_or_MILP_calls=True)
+     save(HERE/'plan.json',plan)
+     print(json.dumps(plan,ensure_ascii=False,indent=2))
+ 
+@@ -137,6 +151,16 @@
+         else:result['residuals']=None
+     except Exception:
+         result['error']=traceback.format_exc()
++    result.setdefault('objective',None)
++    result.setdefault('residuals',None)
++    result.update(solver_reported_bound=None,
++        solver_bound_availability='Not exposed by this SciPy linprog LP interface; not independently certified',
++        original_residual_check_kind='Original sparse arrays checked with NumPy floating-point arithmetic, distinct from solver residual outputs; not a rigorous rational/interval certificate',
++        iteration_limit=int(plan['options']['maxiter']) if 'plan' in locals() else None)
++    if result.get('status')==0:result['termination_reason']='solver_reported_optimal'
++    elif result.get('status')==1:
++        result['termination_reason']='time_limit' if 'Time limit' in result.get('message','') else 'iteration_or_other_limit'
++    else:result['termination_reason']='solver_status_or_error_see_message'
+     result.update(ended_utc=now(),method_elapsed_s=time.monotonic()-start)
+     result['completed_within_method_budget']=result['method_elapsed_s']<=300
+     save(folder/'result.json',result)

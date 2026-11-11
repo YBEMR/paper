@@ -1,0 +1,232 @@
+--- fe6216af/milp.py
++++ optimized_rev2/milp.py
+@@ -30,6 +30,7 @@
+ _EXPORT_CACHE_LIMIT = 4096  # memory policy only; eviction changes no coefficient
+ _CONDITIONAL_CACHE_LIMIT = 4096  # complete row templates; local to one model
+ _AFFINE_CACHE_LIMIT = 2048  # pairs of complete rows, not a restriction on modes
++_GATE_AUDIT_CACHE_LIMIT = 4096  # per-Model strict certificates; no cross-run warm cache
+ 
+ 
+ def _digest(value):
+@@ -708,43 +709,197 @@
+         'scope': 'all old exported integer-state points on existing variable boxes; not original LP equivalence'})
+ 
+ 
++def _clear_joint_state_gate_audit_cache(model, reason='explicit'):
++    """Drop reusable proofs/probes, retaining the charged evidence journal."""
++    cache = getattr(model, '_joint_state_gate_audit_cache', None)
++    if cache is None:
++        return False
++    cache['entries'].clear()
++    cache['probes'].clear()
++    cache['stats']['clears'] += 1
++    reasons = cache['stats']['clear_reasons']
++    reasons[reason] = reasons.get(reason, 0)+1
++    return True
++
++
++def _joint_gate_audit_environment(model, verifier, cache):
++    """Actual source/input/runtime context identity; all work is charged."""
++    from pathlib import Path
++    import thermal
++    paths = (Path(__file__).resolve(), Path(thermal.__file__).resolve(),
++             Path(thermal.KERNEL_PATH).resolve(),
++             Path(__file__).resolve().with_name('joint_state_support.py'),
++             Path(__file__).resolve().with_name('milp_coefficients.py'))
++    stamps = tuple((str(path), path.stat().st_size, path.stat().st_mtime_ns)
++                   for path in paths)
++    # Callable objects detect runtime replacements without serializing process
++    # addresses into an alleged portable scientific identity.
++    kernel = thermal._kernel
++    # Bind the contexts used by I's actual arithmetic globals. The public
++    # thermal.UP/DOWN aliases can stay stale after a kernel-only rebinding.
++    for name in ('__init__', 'rational', '__add__', '__neg__', '__sub__',
++                 '__rsub__', '__mul__', '__truediv__'):
++        if getattr(getattr(I, name), '__globals__', None) is not kernel.__dict__:
++            raise ValueError('Interval arithmetic globals differ from authenticated kernel')
++    runtime = (Model, I, verifier, _box, _plus, _up, _down,
++               tuple(vars(Model).items()), tuple(vars(I).items()),
++               kernel.box, kernel.UP, kernel.DOWN, thermal.UP, thermal.DOWN)
++    def context_token(value):
++        return (value.prec, value.rounding, value.Emin, value.Emax,
++                value.capitals, value.clamp,
++                tuple(sorted((key.__name__, flag) for key, flag in value.traps.items())))
++    numeric = (context_token(kernel.UP), context_token(kernel.DOWN),
++               context_token(thermal.UP), context_token(thermal.DOWN))
++    actual_input = _digest(model.instance)
++    changed = (cache.get('source_stamps') != stamps or
++               cache.get('runtime_identity') != runtime or
++               cache.get('numeric_context') != numeric or
++               cache.get('input_identity') != (model.input_sha256, actual_input))
++    if changed:
++        if 'namespace_sha256' in cache:
++            _clear_joint_state_gate_audit_cache(model, 'identity_changed')
++            cache['stats']['identity_invalidations'] += 1
++        source_manifest = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
++                           for path in paths}
++        identity = dict(protocol='exact-exported-gate-certificate-cache-v1',
++                        source_sha256=source_manifest,
++                        numeric_context=numeric,
++                        declared_input_sha256=model.input_sha256,
++                        actual_input_sha256=actual_input)
++        namespace = _digest(identity)
++        # Runtime-only replacements may have identical file bytes. Give each
++        # re-prepared generation a new local namespace; no old proof is reused.
++        generation = len(cache['public']['source_namespaces'])
++        namespace = _digest((namespace, generation))
++        identity['generation'] = generation
++        cache.update(source_stamps=stamps, runtime_identity=runtime,
++                     numeric_context=numeric,
++                     input_identity=(model.input_sha256, actual_input),
++                     namespace_sha256=namespace)
++        cache['public']['source_namespaces'][namespace] = identity
++    return cache['namespace_sha256']
++
++
+ def _audit_joint_state_gate_off(model, sources, temperature_targets, energy_target,
+                                 deleted_states, duration):
+-    """Preview only removed-state rows in an isolated, identical-box model.
+-
+-    No unchecked ON model can be returned. Columns change identity only; row
+-    export, interval coefficients, both directions and exact boxes are original.
+-    No row from this probe is added to the scheduling model.
++    """Reuse only strictly certified identical exported-row/box templates.
++
++    Every first occurrence still uses the original row exporter and exact
++    Fraction box verifier. A hit changes only the variable/state identity:
++    ordered alias layout, complete coefficient endpoint text, every bound,
++    source/input identity and numeric context must match. Cache and probes are
++    local to this Model; a clear/change forces the original certification.
+     """
+     from joint_state_support import verify_gate_off_rows
+     began = time.monotonic()
+     if not deleted_states:
+         return {'states_checked': 0, 'rows_checked': 0, 'elapsed_s': time.monotonic()-began}
+-    probe = Model(model.instance, model.budget)
++    cache = getattr(model, '_joint_state_gate_audit_cache', None)
++    if cache is None:
++        stats = dict(misses=0, hits=0, clears=0, identity_invalidations=0,
++                     states_represented=0, rows_represented=0,
++                     strict_rows_evaluated=0, prepared_probes=0,
++                     preparation_s=0.0, key_s=0.0, probe_prepare_s=0.0,
++                     export_s=0.0, verify_s=0.0, cache_hit_s=0.0,
++                     clear_reasons={})
++        public = dict(protocol='exact-exported-gate-certificate-cache-v1',
++                      cache_limit=_GATE_AUDIT_CACHE_LIMIT,
++                      scope='Fresh per Model; no disk/cross-run warm cache',
++                      key_contract=['source/input/numeric namespace',
++                          'source/target role counts and ordered alias layout',
++                          'actual exported float.hex and internal rational boxes',
++                          'five complete ordered interval coefficient rows'],
++                      source_namespaces={}, template_catalogue={}, stats=stats)
++        cache = dict(entries={}, probes={}, stats=stats, public=public)
++        model._joint_state_gate_audit_cache = cache
++        model.preprocessing['joint_state_pruning']['audit_certificate_cache'] = public
++    t = time.monotonic()
++    namespace = _joint_gate_audit_environment(model, verify_gate_off_rows, cache)
++    cache['stats']['preparation_s'] += time.monotonic()-t
++    t = time.monotonic()
+     originals = list(sources)+list(temperature_targets)+[energy_target]
+-    mapped = {}
+-    for original in originals:
+-        lo, hi = model.bounds[original]
+-        mapped[original] = probe.var('probe:'+model.names[original], lo, hi)
+-        if probe.bounds[mapped[original]] != model.bounds[original]:
+-            raise ValueError('Joint-state gate audit changed an original box')
+-    gate = probe.var('probe:removed_joint_state', integer=True)
+-    source_indices = [mapped[j] for j in sources]
++    first_position = {}
++    layout = tuple(first_position.setdefault(j, i) for i, j in enumerate(originals))
++    boxes = tuple((float(model.lb[j]).hex(), float(model.ub[j]).hex(),
++                   str(model.bounds[j][0]), str(model.bounds[j][1])) for j in originals)
++    box_key = (namespace, len(sources), len(temperature_targets), layout,
++               boxes, ('-0x0.0p+0', '0x1.0000000000000p+0'))
++    cache['stats']['key_s'] += time.monotonic()-t
++    expected = 2*(len(temperature_targets)+1)
+     reports = []
+     for state in deleted_states:
+         model.budget.check()
+         coeff = model.coefficients.get(state, duration)
+-        probe.rows.clear(); probe.row_nonzeros = 0
+-        for target, row in zip(temperature_targets, coeff['temperature']):
+-            probe.affine_conditional_eq(mapped[target], source_indices, row, gate, 'thermal_propagation')
+-        probe.affine_conditional_eq(mapped[energy_target], source_indices, coeff['energy'], gate, 'complete_energy')
+-        expected = 2*(len(temperature_targets)+1)
+-        if len(probe.rows) != expected:
+-            raise ValueError('Incomplete removed-state physical-row audit')
+-        proof = verify_gate_off_rows(probe.rows, probe.lb, probe.ub, gate)
+-        reports.append(dict(state=list(state), **proof))
++        t = time.monotonic()
++        coefficients = tuple(tuple((str(a.lo), str(a.hi)) for a in row)
++                             for row in [*coeff['temperature'], coeff['energy']])
++        key = (box_key, coefficients)
++        entry = cache['entries'].get(key)
++        cache['stats']['key_s'] += time.monotonic()-t
++        if entry is None:
++            cache['stats']['misses'] += 1
++            if len(cache['entries']) >= _GATE_AUDIT_CACHE_LIMIT:
++                _clear_joint_state_gate_audit_cache(model, 'capacity')
++            t = time.monotonic()
++            prepared = cache['probes'].get(box_key)
++            if prepared is None:
++                probe = Model(model.instance, model.budget)
++                mapped = {}
++                for original in originals:
++                    lo, hi = model.bounds[original]
++                    mapped[original] = probe.var('probe:'+model.names[original], lo, hi)
++                    if (probe.bounds[mapped[original]] != model.bounds[original] or
++                        probe.lb[mapped[original]] != model.lb[original] or
++                        probe.ub[mapped[original]] != model.ub[original]):
++                        raise ValueError('Joint-state gate audit changed an original box')
++                gate = probe.var('probe:removed_joint_state', integer=True)
++                if (probe.lb[gate].hex(), probe.ub[gate].hex()) != box_key[-1]:
++                    raise ValueError('Joint-state gate box identity changed')
++                slots = [mapped[j] for j in originals]
++                prepared = (probe, slots, gate)
++                cache['probes'][box_key] = prepared
++                cache['stats']['prepared_probes'] += 1
++            probe, slots, gate = prepared
++            probe.budget = model.budget
++            source_indices = slots[:len(sources)]
++            targets = slots[len(sources):len(sources)+len(temperature_targets)]
++            cache['stats']['probe_prepare_s'] += time.monotonic()-t
++            t = time.monotonic()
++            probe.rows.clear(); probe.row_nonzeros = 0
++            for target, row in zip(targets, coeff['temperature']):
++                probe.affine_conditional_eq(target, source_indices, row, gate, 'thermal_propagation')
++            probe.affine_conditional_eq(slots[-1], source_indices, coeff['energy'], gate, 'complete_energy')
++            if len(probe.rows) != expected:
++                raise ValueError('Incomplete removed-state physical-row audit')
++            cache['stats']['export_s'] += time.monotonic()-t
++            t = time.monotonic()
++            proof = verify_gate_off_rows(probe.rows, probe.lb, probe.ub, gate)
++            cache['stats']['verify_s'] += time.monotonic()-t
++            cache['stats']['strict_rows_evaluated'] += len(probe.rows)
++            template_sha = _digest(key)
++            # An immutable tuple of scalar values cannot be changed through a
++            # returned per-state report. Publish only a completed strict proof.
++            entry = (tuple(proof.items()), template_sha)
++            cache['entries'][key] = entry
++            cache['public']['template_catalogue'][template_sha] = dict(
++                complete_key=key, proof=dict(entry[0]))
++            hit = False
++        else:
++            t = time.monotonic()
++            cache['stats']['hits'] += 1
++            hit = True
++            cache['stats']['cache_hit_s'] += time.monotonic()-t
++        proof = dict(entry[0])
++        cache['stats']['states_represented'] += 1
++        cache['stats']['rows_represented'] += expected
++        reports.append(dict(state=list(state), **proof,
++            certificate_cache_hit=hit, template_sha256=entry[1]))
++    snapshot = dict(cache['stats'], cache_entries=len(cache['entries']),
++                    cache_limit=_GATE_AUDIT_CACHE_LIMIT)
++    snapshot['clear_reasons'] = dict(snapshot['clear_reasons'])
+     return dict(states_checked=len(reports), rows_checked=sum(r['checked_rows'] for r in reports),
+-                states=reports, elapsed_s=time.monotonic()-began)
++                states=reports, elapsed_s=time.monotonic()-began,
++                cache_snapshot=snapshot)
+ 
+ 
+ def build_model(instance, config, starts=None, budget=None, include_physics=True, progress=None,

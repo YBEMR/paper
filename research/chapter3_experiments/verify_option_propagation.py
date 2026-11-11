@@ -20,6 +20,7 @@ ARCHIVE = '4339bdcc'
 RESULTS = 'research/chapter3_experiments/results'
 R1 = f'{RESULTS}/prefilter_diagnostic01/base__R1__prefilter'
 HEFT = f'{RESULTS}/formal_comparison01/base__R1__heft/result.json'
+AUTO_LOW_R1 = f'{RESULTS}/p0_execution01/calls/base__R1/heft'
 FLAGS = dict(prefilter_deadlines=True, fix_late_options=True, aggregate_opp_locks=True,
              relax_auxiliary_integrality=True, strengthen_energy_lower_bounds=True)
 SECONDS = 300
@@ -29,8 +30,15 @@ def archived(path):
     return subprocess.check_output(['git', 'show', f'{ARCHIVE}:{path}'], cwd=REPO)
 
 
-def r1_input(budget):
-    config, instance = (json.loads(archived(f'{R1}/input_{name}.json')) for name in ('config', 'instance'))
+def r1_input(budget, profile='hold-last'):
+    folder = AUTO_LOW_R1 if profile == 'auto-low' else R1
+    raw = {name: archived(f'{folder}/input_{name}.json') for name in ('config', 'instance')}
+    if profile == 'auto-low':
+        expected = {'config': '132323b4b18dd514b9baa929543d235ff91bb07026a60e7b629e1adb6aaaa5e2',
+                    'instance': '01eacb2a653d56419c32f38740021a787ea01ac9e7ade407bef2edd81ec6ef89'}
+        if any(hashlib.sha256(raw[name]).hexdigest() != expected[name] for name in raw):
+            raise ValueError('Current auto-L R1 input identity differs from the frozen experiment')
+    config, instance = (json.loads(raw[name]) for name in ('config', 'instance'))
     budget.check()
     return config, instance
 
@@ -71,7 +79,7 @@ def check_small_domain():
                 propagation=trace)
 
 
-def check_r1(out, arm):
+def check_r1(out, arm, profile='hold-last'):
     from method_runner import execute_milp
 
     def build(instance, config, **kwargs):
@@ -79,15 +87,17 @@ def check_r1(out, arm):
         counts = {sid: dict(options=len(s['options']), intervals=len(s['events'])-1,
                             joint_states=len(s['joint'])) for sid, s in model.scenes.items()}
         rows = Counter(r['tag'] for r in model.rows)
-        save(Path(out)/'structure.json', dict(arm=arm, archive=ARCHIVE, scenes=counts,
+        save(Path(out)/'structure.json', dict(arm=arm, archive=ARCHIVE, profile=profile, scenes=counts,
              conditional_electrothermal_rows=2*(len(instance['platform']['node_order'])+1)
                  *sum(s['joint_states'] for s in counts.values()), raw_row_tags=dict(rows)))
         return model
 
-    return execute_milp(r1_input, out, seconds=SECONDS, construct_only=True, model_builder=build)
+    return execute_milp(partial(r1_input, profile=profile), out,
+                        seconds=60 if profile == 'auto-low' else SECONDS,
+                        construct_only=True, model_builder=build)
 
 
-def prepare_common_seed(model, config, budget):
+def prepare_common_seed(model, config, budget, profile='hold-last'):
     from heft_method import run_heft
     from heuristic_runner import CandidateRecorder
     from initial_point import complete_initial_point
@@ -98,8 +108,10 @@ def prepare_common_seed(model, config, budget):
 
     with budget.phase('common_heft_generation_and_validation'):
         recorder = CandidateRecorder(model.instance, config['accuracy_targets'], budget, evaluator=evaluate)
-        search = run_heft(model.instance, config, budget, recorder.assess)
-        expected = json.loads(archived(HEFT))['safe_candidate']
+        search = run_heft(model.instance, config, budget, recorder.assess,
+                          allow_auto_low=profile == 'auto-low')
+        reference = f'{AUTO_LOW_R1}/result.json' if profile == 'auto-low' else HEFT
+        expected = json.loads(archived(reference))['safe_candidate']
         if search['status'] != 'BOUNDED_SEARCH_COMPLETED' or recorder.best is None:
             raise ValueError('The common HEFT seed search did not complete with SAFE')
         best = recorder.best
@@ -112,15 +124,15 @@ def prepare_common_seed(model, config, budget):
     return best, completion
 
 
-def check_r1_seed(arm):
+def check_r1_seed(arm, profile='hold-last'):
     import matlab_bridge
     from numeric_case_diagnostic.equality_session import _normalise
     from timing import MethodBudget
 
-    budget = MethodBudget(SECONDS)
-    config, instance = r1_input(budget)
+    budget = MethodBudget(120 if profile == 'auto-low' else SECONDS)
+    config, instance = r1_input(budget, profile)
     model = build_model(instance, config, **FLAGS, propagate_options=arm == 'propagation', budget=budget)
-    seed, completion = prepare_common_seed(model, config, budget)
+    seed, completion = prepare_common_seed(model, config, budget, profile)
     x0 = completion.pop('x0')
     represented = None
     if x0 is not None:
@@ -130,9 +142,11 @@ def check_r1_seed(arm):
                                nonzeros=int(native['A'].nnz+native['Aeq'].nnz),
                                equivalence_checks=certificate['checks'])
         budget.check()
-    return dict(state=completion['state'], initial_vector_size=None if x0 is None else len(x0),
+    return dict(state=completion['state'], profile=profile,
+                initial_vector_size=None if x0 is None else len(x0),
                 candidate_sha256=seed['candidate_sha256'], safe_upper_bound_J=seed['evaluation']['safe_upper_bound_J'],
-                completion=completion, represented=represented, phases_s=budget.summary()['phases_exclusive_s'])
+                completion=completion, represented=represented, seed=seed,
+                phases_s=budget.summary()['phases_exclusive_s'])
 
 
 def solve_r1_pair(out, matlab):
@@ -194,9 +208,11 @@ def main():
     r1 = commands.add_parser('build')
     r1.add_argument('arm', choices=('baseline', 'propagation'))
     r1.add_argument('output', type=Path)
+    r1.add_argument('--profile', choices=('hold-last', 'auto-low'), default='hold-last')
     seed = commands.add_parser('seed')
     seed.add_argument('arm', choices=('baseline', 'propagation'))
     seed.add_argument('output', type=Path)
+    seed.add_argument('--profile', choices=('hold-last', 'auto-low'), default='hold-last')
     pair = commands.add_parser('pair')
     pair.add_argument('output', type=Path)
     pair.add_argument('--matlab', required=True, type=Path)
@@ -205,13 +221,13 @@ def main():
         save(args.output, check_small_domain())
         return 0
     if args.command == 'seed':
-        receipt = check_r1_seed(args.arm)
+        receipt = check_r1_seed(args.arm, args.profile)
         save(args.output, receipt)
         return 0 if receipt['state'] == 'INITIAL_POINT_READY' else 1
     if args.command == 'pair':
         solve_r1_pair(args.output, args.matlab)
         return 0
-    return 0 if check_r1(args.output, args.arm)['state'] == 'CONSTRUCTION_COMPLETE' else 1
+    return 0 if check_r1(args.output, args.arm, args.profile)['state'] == 'CONSTRUCTION_COMPLETE' else 1
 
 
 if __name__ == '__main__':

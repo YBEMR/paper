@@ -1,0 +1,1581 @@
+research/chapter3_experiments/matlab_bridge.py SHA256=c56527e4836c5154c1ad567060a94c5fa8df125d761131c71e53dc187bc7e8e1
+    59  def _read_json_until(path, deadline, clock=time.monotonic, process=None,
+    60                       sleep=time.sleep, on_poll=None):
+    61      """Wait for a complete readable message without moving the deadline.
+    62  
+    63      Existence alone is insufficient on Windows: publication or a transient
+    64      file lock can make the name visible before Python can read it.  A result
+    65      is formed only after reading and decoding the full message inside the
+    66      original deadline.  Diagnostics retain retries rather than hiding them.
+    67      """
+    68      diagnostics = {'attempts': 0, 'transient_read_errors': {}, 'last_read_error': None}
+    69      while True:
+    70          if clock() >= deadline:
+    71              raise PublicationTimeout(path, diagnostics)
+    72          if on_poll is not None:
+    73              on_poll()
+    74              if clock() >= deadline:
+    75                  raise PublicationTimeout(path, diagnostics)
+    76          diagnostics['attempts'] += 1
+    77          try:
+    78              value = json.loads(path.read_text(encoding='utf-8-sig'))
+    79          except (FileNotFoundError, PermissionError, json.JSONDecodeError,
+    80                  UnicodeDecodeError) as exc:
+    81              name = type(exc).__name__
+    82              diagnostics['transient_read_errors'][name] = (
+    83                  diagnostics['transient_read_errors'].get(name, 0) + 1)
+    84              diagnostics['last_read_error'] = f'{name}: {exc}'
+    85              if isinstance(exc, FileNotFoundError) and process is not None:
+    86                  returncode = process.poll()
+    87                  if returncode is not None:
+    88                      raise WorkerExited(returncode, diagnostics) from exc
+    89              sleep(min(.005, max(0.0, deadline - clock())))
+    90              continue
+    91          if clock() >= deadline:
+    92              raise PublicationTimeout(path, diagnostics)
+    93          if not isinstance(value, dict):
+    94              raise ValueError(f'MATLAB publication is not a JSON object: {path}')
+    95          if on_poll is not None:
+    96              on_poll()  # drain events published immediately before final response
+    97              if clock() >= deadline:
+    98                  raise PublicationTimeout(path, diagnostics)
+    99          return value, diagnostics
+   127  def _check_initial_point(payload, x0):
+   128      """Check, without rounding or repairing, the optional numerical x0.
+   129  
+   130      These floating residuals are an admission check, not a thermal witness or
+   131      independent mathematical certificate.  The receiving solver still checks
+   132      x0 under its own implementation of the same declared tolerances.
+   133      """
+   134      info = {'provided': True, 'accepted_numerically': False,
+   135              'constraint_tolerance': 1e-9, 'integer_tolerance': 1e-6,
+   136              'reasons': [], 'thermal_safe_claim': False,
+   137              'independent_certificate': False,
+   138              'rounding_or_repair_performed': False}
+   139      if np.iscomplexobj(x0):
+   140          info['reasons'].append('x0 must be real; imaginary parts cannot be discarded')
+   141          raise InitialPointRejected(info)
+   142      try:
+   143          raw = np.asarray(x0, dtype=float)
+   144      except (TypeError, ValueError) as exc:
+   145          info['reasons'].append('x0 cannot be converted to a numerical vector')
+   146          raise InitialPointRejected(info) from exc
+   147      if raw.ndim > 2 or (raw.ndim == 2 and min(raw.shape) != 1):
+   148          info['reasons'].append('x0 must be a vector')
+   149          raise InitialPointRejected(info)
+   150      x = raw.reshape(-1)
+   151      info['length'] = int(len(x))
+   152      if len(x) != len(payload['c']):
+   153          info['reasons'].append('x0 length differs from model variable count')
+   154      if not np.isfinite(x).all():
+   155          info['reasons'].append('x0 contains nonfinite values')
+   156      if info['reasons']:
+   157          raise InitialPointRejected(info)
+   158      indices = payload['intcon'].astype(np.int64) - 1
+   159      with np.errstate(over='ignore', invalid='ignore'):
+   160          residual = np.asarray(payload['A'] @ x).reshape(-1) - payload['b']
+   161          equality = np.asarray(payload['Aeq'] @ x).reshape(-1) - payload['beq']
+   162          lower = payload['lb'] - x
+   163          upper = x - payload['ub']
+   164          integer = np.abs(x[indices] - np.rint(x[indices]))
+   165          objective = float(payload['c'] @ x)
+   166      if (not np.isfinite(residual).all() or not np.isfinite(equality).all()
+   167              or not math.isfinite(objective)):
+   168          info['reasons'].append('x0 produces nonfinite residuals or objective')
+   169      info.update({
+   170          'inequality_violation': float(max(0.0, np.max(residual, initial=0.0))),
+   171          'equality_violation': float(np.max(np.abs(equality), initial=0.0)),
+   172          'lower_bound_violation': float(max(0.0, np.max(lower, initial=0.0))),
+   173          'upper_bound_violation': float(max(0.0, np.max(upper, initial=0.0))),
+   174          'integer_violation': float(np.max(integer, initial=0.0)),
+   175          'initial_objective': objective if math.isfinite(objective) else None,
+   176      })
+   177      for key in ('inequality_violation', 'equality_violation',
+   178                  'lower_bound_violation', 'upper_bound_violation'):
+   179          if info[key] > info['constraint_tolerance']:
+   180              info['reasons'].append(key + ' exceeds ConstraintTolerance')
+   181      if info['integer_violation'] > info['integer_tolerance']:
+   182          info['reasons'].append('integer_violation exceeds IntegerTolerance')
+   183      # Error diagnostics must remain valid JSON even for overflowed products.
+   184      for key in ('inequality_violation', 'equality_violation',
+   185                  'lower_bound_violation', 'upper_bound_violation',
+   186                  'integer_violation'):
+   187          if not math.isfinite(info[key]):
+   188              info[key] = None
+   189      if info['reasons']:
+   190          raise InitialPointRejected(info)
+   191      info['accepted_numerically'] = True
+   192      return x, info
+   193  
+   194  
+   195  def _prepare(model, x0=None):
+   196      """Convert numerical solver input; exact legality is checked by the caller."""
+   197      c = _finite_vector(model['c'], 'c')
+   198      n = len(c)
+   199      if n == 0:
+   200          raise ValueError('Empty models must be handled before invoking solver')
+   201      A = _matrix(model.get('A', sparse.csc_matrix((0, n))), 'A', n)
+   202      Aeq = _matrix(model.get('Aeq', sparse.csc_matrix((0, n))), 'Aeq', n)
+   203      b = _finite_vector(model.get('b', []), 'b', A.shape[0])
+   204      beq = _finite_vector(model.get('beq', []), 'beq', Aeq.shape[0])
+   205      lb = _finite_vector(model.get('lb', np.zeros(n)), 'lb', n, True)
+   206      ub = _finite_vector(model.get('ub', np.ones(n)), 'ub', n, True)
+   207      if (lb > ub).any():
+   208          raise ValueError('Inconsistent variable bounds')
+   209      indices = np.asarray(model.get('intcon', np.arange(n)))
+   210      if indices.ndim > 1 or not np.isfinite(indices).all():
+   211          raise ValueError('intcon must be a finite one-dimensional index array')
+   212      if ((indices != np.floor(indices)).any() or (indices < 0).any()
+   213              or (indices >= n).any() or len(set(indices.tolist())) != len(indices)):
+   214          raise ValueError('intcon must contain unique zero-based integer indices')
+   215      result = {'c': c, 'A': A, 'b': b, 'Aeq': Aeq, 'beq': beq,
+   216                'lb': lb, 'ub': ub, 'intcon': indices.astype(float) + 1}
+   217      if x0 is not None:
+   218          result['x0'], result['x0_validation'] = _check_initial_point(result, x0)
+   219      return result
+   220  
+   221  
+   222  def _initial_point_status_conflict(initial_point, returned, *, explicit_x0,
+   223                                     request_number, within_budget):
+   224      """Same-request engineering diagnostic, never an exact feasibility proof.
+   225  
+   226      Python's tolerance admission and native infeasibility can disagree without
+   227      establishing a mathematical contradiction. Do not infer admission from a
+   228      previous request or from the worker merely reporting that x0 was received.
+   229      """
+   230      if not (explicit_x0 and initial_point.get('provided') is True
+   231              and initial_point.get('accepted_numerically') is True
+   232              and returned.get('status') == 'SOLVED' and returned.get('exitflag') == -2):
+   233          return None
+   234      native_initial = returned.get('initial_point') or {}
+   235      return {'state': NUMERICAL_CONSISTENCY_CONFLICT,
+   236              'request_number': request_number,
+   237              'explicit_x0_in_this_request': True,
+   238              'python_x0_admission': deepcopy(initial_point),
+   239              'worker_reported_x0_received': native_initial.get('provided'),
+   240              'worker_solver_x0_acceptance': native_initial.get('solver_acceptance', 'not_independently_observed'),
+   241              'solver_reported_status': returned.get('status'),
+   242              'solver_reported_exitflag': returned.get('exitflag'),
+   243              'formed_within_request_budget': bool(within_budget),
+   244              'independent_certificate': False, 'thermal_safe_claim': False,
+   245              'retry_performed': False,
+   401  def cleanup_is_complete(receipt):
+   402      """Pure receipt check; historical nonzero exits are never upgraded."""
+   403      if not isinstance(receipt, dict) or _cleanup_has_error(receipt):
+   404          return False
+   405      code = receipt.get('returncode')
+   406      if isinstance(code, bool) or not isinstance(code, int):
+   407          return False
+   408      if 'cleanup_status' not in receipt:
+   409          return code == 0
+   410      status = receipt['cleanup_status']
+   411      verified = receipt.get('process_tree_verification')
+   412      if not isinstance(verified, dict) or not isinstance(verified.get('identities'), list):
+   413          return False
+   414      identities = verified['identities']
+   415      count = receipt.get('observed_tree_identity_count')
+   416      if (status not in ('graceful_closed', 'forced_closed')
+   417              or receipt.get('observed_tree_verified_terminated') is not True
+   418              or receipt.get('observed_tree_capture_complete') is not True
+   419              or verified.get('capture_complete') is not True
+   420              or verified.get('verified_terminated') is not True
+   421              or isinstance(count, bool) or not isinstance(count, int) or count <= 0
+   422              or count != len(identities)):
+   423          return False
+   424      for item in identities:
+   425          if not isinstance(item, dict):
+   426              return False
+   427          pid, created = item.get('pid'), item.get('create_time')
+   428          if (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0
+   429                  or isinstance(created, bool) or not isinstance(created, Real)
+   430                  or not math.isfinite(created) or created <= 0
+   431                  or item.get('state') not in ('EXITED', 'PID_REUSED_ORIGINAL_EXITED')):
+   432              return False
+   433      if status == 'graceful_closed':
+   434          return code == 0 and receipt.get('force_requested') is False
+   435      return (receipt.get('force_requested') is True
+   436          and receipt.get('force_termination_succeeded') is True
+   437          and (receipt.get('own_process_tree_kill_returncode') == 0
+   438               or receipt.get('own_process_kill_succeeded') is True))
+   454      def __init__(self, workdir, total_budget_s=600, matlab_path=DEFAULT_MATLAB,
+   455                   clock=time.monotonic, budget=None, cut_max_iterations=None):
+   456          self.cut_max_iterations = _cut_iteration_limit(cut_max_iterations)
+   457          if not math.isfinite(total_budget_s) or total_budget_s <= 0:
+   458              raise ValueError('total_budget_s must be positive and finite')
+   459          self.clock = clock
+   460          self.started = clock()
+   461          self.deadline = self.started + float(total_budget_s)
+   462          self.budget = budget
+   463          if budget is not None:
+   464              self.deadline = min(self.deadline, _absolute_deadline(budget))
+   465          self.workdir = Path(workdir).resolve()
+   466          self.counter = 0
+   467          self.closed = False
+   468          self.request_blocked = False
+   469          self.proc = None
+   470          self.log = None
+   471          if self.clock() >= self.deadline:
+   472              raise TimeoutError('Method budget exhausted before MATLAB session preparation')
+   473          self.workdir.mkdir(parents=True, exist_ok=False)
+   474          prefs = REPO / '.runtime/matlab_prefs'
+   475          prefs.mkdir(parents=True, exist_ok=True)
+   476          self.metadata = {
+   477              'scope': ('method_absolute_deadline_transport' if budget is not None
+   478                        else 'small_domain_precheck_transport_not_formal_comparison'),
+   479              'matlab_executable': str(matlab_path), 'preference_directory': str(prefs),
+   480              'worker_guard_seconds': float(total_budget_s),
+   481              'source_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+   482                                for p in [Path(__file__), HERE / 'solve_model.m']},
+   483              'warm_start_shared': False, 'candidate_or_thermal_cache_shared': False,
+   484              'external_absolute_deadline': self.deadline,
+   485              'method_deadline_bound': budget is not None,
+   486              'deadline_is_not_a_hard_realtime_interrupt': True,
+   487              'callback_candidates': 'recorded_only_not_independently_thermal_checked',
+   488              'external_evaluation': 'final_returned_candidate_only_within_method_deadline',
+   489              'engineering_compatibility': {
+   490                  'IntegerPreprocess': 'none',
+   491                  'basis': 'results/milp_numeric_diagnostic04',
+   492                  'LPPreprocess': 'none',
+   493                  'LPPreprocess_basis': 'results/infeasible_audit01/fixed_logic_no_lp_preprocess_probe',
+   494                  'mathematical_model_unchanged': True,
+   495                  'general_solver_defect_claim': False,
+   496              },
+   497          }
+   498          if self.cut_max_iterations is not None:
+   499              self.metadata['cut_max_iterations_declared'] = self.cut_max_iterations
+   500              self.metadata['cut_max_iterations_scope'] = 'native_cut_pass_limit_only'
+   501          _json(self.workdir / 'session.json', self.metadata)
+   502          quote = lambda p: Path(p).as_posix().replace("'", "''")
+   503          try:
+   504              guard = self.deadline - self.clock()
+   505              if guard <= 0:
+   506                  raise TimeoutError('Method budget exhausted during MATLAB session preparation')
+   507              # MATLAB cannot share Python's monotonic epoch. This relative
+   508              # guard is advisory; Python's original deadline controls receipt.
+   509              script = "addpath('%s'); solve_model('%s',%.17g);" % (
+   510                  quote(HERE), quote(self.workdir), guard)
+   511              self.log = (self.workdir / 'matlab.log').open('wb')
+   512              if self.clock() >= self.deadline:
+   513                  raise TimeoutError('Method budget exhausted before MATLAB process launch')
+   514              self.proc = subprocess.Popen(
+   515                  [str(matlab_path), '-batch', script],
+   516                  env=dict(os.environ, MATLAB_PREFDIR=str(prefs)),
+   517                  stdout=self.log, stderr=subprocess.STDOUT,
+   518                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+   519              self.metadata['pid'] = self.proc.pid
+   520              _json(self.workdir / 'session.json', self.metadata)
+   521              ready = self.workdir / 'ready.json'
+   522              self.environment, read_info = _read_json_until(
+   523                  ready, self.deadline, self.clock, self.proc)
+   524              self.metadata['ready_publication_read'] = read_info
+   525              if self.environment.get('status') != 'READY':
+   526                  raise RuntimeError('MATLAB worker unavailable: ' + str(self.environment))
+   527              if self.environment.get('release') != '2023b':
+   528                  raise RuntimeError('This bridge is checked only against MATLAB R2023b')
+   529              self.process_tree = _capture_owned_process_tree(self.proc, phase='ready')
+   530              self.metadata['process_tree_at_ready'] = deepcopy(self.process_tree)
+   531              self.metadata['startup_wall_seconds'] = self.clock() - self.started
+   532              self.metadata['startup_outcome'] = 'READY'
+   533              _json(self.workdir / 'session.json', self.metadata)
+   534              if self.clock() >= self.deadline:
+   535                  raise TimeoutError('Method budget exhausted before MATLAB startup receipt')
+   536          except BaseException as exc:
+   537              # Startup evidence only, not a retry or an accepted solver result.
+   538              self.metadata['startup_outcome'] = 'FAILED_OR_DEADLINE'
+   539              self.metadata['startup_wall_seconds'] = self.clock()-self.started
+   540              self.metadata['startup_error'] = f'{type(exc).__name__}: {exc}'
+   541              if hasattr(exc, 'diagnostics'):
+   542                  self.metadata['startup_publication_read'] = exc.diagnostics
+   543              try:
+   544                  _json(self.workdir / 'session.json', self.metadata)
+   545              except Exception as archive_error:
+   546                  self.metadata['startup_archive_error'] = repr(archive_error)
+   547              try:
+   548                  self.close()
+   549              except BaseException as cleanup_error:
+   550                  # Preserve the original startup exception even if an
+   551                  # unexpected cleanup failure escapes the best-effort steps.
+   552                  self.cleanup = getattr(self, 'cleanup', {})
+   553                  self.cleanup['cleanup_error'] = repr(cleanup_error)
+   554              # A failed constructor has no session handle for the caller's
+   555              # finally block. Expose cleanup separately from startup timing.
+   556              exc.matlab_cleanup = self.cleanup
+   557              exc.matlab_workdir = str(self.workdir)
+   558              exc.matlab_startup_metadata = dict(self.metadata)
+   561      def solve(self, model, remaining_s=None, budget=None, x0=None,
+   562                solver_max_time_s=None):
+   563          if self.closed or self.request_blocked:
+   564              raise RuntimeError('Worker is closed or a timed-out request still needs cleanup')
+   565          solver_cap = _solver_time_cap(solver_max_time_s)
+   566          cut_limit = _cut_iteration_limit(getattr(self, 'cut_max_iterations', None))
+   567          started = self.clock()
+   568          deadline = self.deadline
+   569          if budget is not None:
+   570              deadline = min(deadline, _absolute_deadline(budget))
+   571          if self.budget is not None:
+   572              deadline = min(deadline, _absolute_deadline(self.budget))
+   573          if remaining_s is not None:
+   574              if not math.isfinite(remaining_s):
+   575                  raise ValueError('remaining_s must be finite')
+   576              deadline = min(deadline, started + float(remaining_s))
+   577          if started >= deadline:
+   578              return {'status': 'BUDGET_EXHAUSTED', 'budget_valid': False,
+   579                      'x': [], 'accepted_for_evaluation': False}
+   580          method_bound = budget is not None or self.budget is not None
+   581          phase = getattr(budget if budget is not None else self.budget, 'phase',
+   582                          lambda name: nullcontext())
+   583          self.counter += 1
+   584          prefix = self.workdir / f'request_{self.counter:06d}'
+   585          if getattr(self, 'event_consumer', None) is not None:
+   586              self.metadata['callback_candidates'] = 'immutable live publications; independently evaluated by diagnostic consumer'
+   587              self.metadata['external_evaluation'] = 'callback and final candidates within one absolute method deadline'
+   588              _json(self.workdir/'session.json', self.metadata)
+   589          def expire_before_submission(phase):
+   590              result = {'status': 'BUDGET_EXHAUSTED_BEFORE_PUBLICATION',
+   591                        'phase': phase, 'budget_valid': False, 'x': [],
+   592                        'accepted_for_evaluation': False,
+   593                        'wall_seconds': self.clock()-started,
+   594                        'absolute_deadline': deadline}
+   595              _json(prefix.with_suffix('.python.json'), result)
+   596              return result
+   597          try:
+   598              with phase('transport_numerical_conversion'):
+   599                  payload = _prepare(model) if x0 is None else _prepare(model, x0=x0)
+   600          except InitialPointRejected as exc:
+   601              _json(prefix.with_suffix('.initial.json'), exc.diagnostics)
+   602              raise
+   603          initial_point = payload.get('x0_validation', {'provided': False})
+   604          if x0 is not None:
+   605              _json(prefix.with_suffix('.initial.json'), initial_point)
+   606          if self.clock() >= deadline:
+   607              return expire_before_submission('numerical_conversion')
+   608          request_info = {
+   609              'request_number': self.counter, 'case_budget_at_entry_s': deadline-started,
+   610              'absolute_deadline': deadline, 'method_deadline_bound': method_bound,
+   611              'session_elapsed_at_entry_s': started - self.started,
+   612              'model_metadata': model.get('metadata', {}),
+   613              'intcon_convention': 'Python_zero_based_converted_to_MATLAB_one_based',
+   614              'initial_point': initial_point,
+   615          }
+   616          if solver_cap is not None:
+   617              request_info['solver_max_time_s_declared'] = solver_cap
+   618              request_info['solver_max_time_s_scope'] = 'native_MaxTime_only_not_response_or_evidence_deadline'
+   619          if cut_limit is not None:
+   620              request_info['cut_max_iterations_declared'] = cut_limit
+   621              request_info['cut_max_iterations_scope'] = 'native_cut_pass_limit_only'
+   622          with phase('transport_input_metadata'):
+   623              _json(prefix.with_suffix('.input.json'), request_info)
+   624          if self.clock() >= deadline:
+   625              return expire_before_submission('input_metadata')
+   626          # The numerical conversion, sparse serialization, and publication are
+   627          # inside the request budget.  MATLAB receives only the time still left.
+   628          temporary = prefix.with_suffix('.mat.tmp')
+   629          payload['remaining_s'] = max(0.0, deadline - self.clock())
+   630          if cut_limit is not None:
+   631              payload['cut_max_iterations'] = cut_limit
+   632          if solver_cap is not None:
+   633              payload['solver_max_time_s_declared'] = solver_cap
+   634              payload['solver_max_time_s'] = min(solver_cap, payload['remaining_s'])
+   635          with phase('transport_mat_serialization'):
+   636              savemat(str(temporary), payload, appendmat=False, oned_as='column')
+   637          if self.clock() >= deadline:
+   638              return expire_before_submission('mat_serialization')
+   639          with phase('transport_mat_publication'):
+   640              temporary.replace(prefix.with_suffix('.mat'))
+   641          allocated = deadline - self.clock()
+   642          if allocated <= 0:
+   643              return expire_before_submission('mat_publication')
+   644          # Separate JSON is written last so the worker never reads partial MAT.
+   645          request = {
+   646              'remaining_s': allocated,
+   647              'stream_events': bool(getattr(self, 'event_consumer', None))}
+   648          if cut_limit is not None:
+   649              request['cut_max_iterations'] = cut_limit
+   650          if solver_cap is not None:
+   651              request['solver_max_time_s_declared'] = solver_cap
+   652              request['solver_max_time_s'] = min(solver_cap, allocated)
+   653          with phase('transport_request_publication'):
+   654              _json(prefix.with_suffix('.request.json'), request)
+   655          response = prefix.with_suffix('.response.json')
+   656          try:
+   657              with phase('solver_wait_and_response_read'):
+   658                  extra = {}
+   659                  if getattr(self, 'event_consumer', None) is not None:
+   660                      extra['on_poll'] = lambda: self.event_consumer(prefix)
+   661                  result, read_info = _read_json_until(
+   662                      response, deadline, self.clock, self.proc, **extra)
+   663          except PublicationTimeout as exc:
+   664              prefix.with_suffix('.cancel').write_text('budget\n', encoding='ascii')
+   665              result = {'status': 'BUDGET_EXHAUSTED', 'budget_valid': False,
+   666                        'accepted_for_evaluation': False, 'x': [],
+   667                        'request_number': self.counter,
+   668                        'wall_seconds': self.clock() - started,
+   669                        'response_may_arrive_later': True,
+   670                        'publication_read': exc.diagnostics}
+   671              _json(prefix.with_suffix('.python.json'), result)
+   672              # A timed-out request may still be unwinding.  Do not enqueue
+   673              # another request and accidentally reuse additional case time.
+   674              self.request_blocked = True
+   675              if not method_bound:
+   676                  self.close()
+   677              return result
+   678          except WorkerExited as exc:
+   679              result = {'status': 'WORKER_EXITED', 'budget_valid': False,
+   680                        'accepted_for_evaluation': False, 'x': [],
+   681                        'returncode': exc.returncode, 'publication_read': exc.diagnostics}
+   682              _json(prefix.with_suffix('.python.json'), result)
+   683              return result
+   684          result['publication_read'] = read_info
+   685          # MATLAB jsonencode collapses a one-element numeric vector to a
+   686          # scalar; the public Python interface always returns a vector.
+   687          raw_x = result.get('x')
+   688          result['x'] = ([] if raw_x is None else
+   689                         np.asarray(raw_x, dtype=float).reshape(-1).tolist())
+   690          result['wall_seconds'] = self.clock() - started
+   691          result['budget_valid'] = bool(self.clock() < deadline)
+   692          consistency = _initial_point_status_conflict(initial_point, result,
+   693              explicit_x0=x0 is not None, request_number=self.counter,
+   694              within_budget=result['budget_valid'])
+   695          if consistency is not None:
+   696              # Keep native status/exitflag/output intact. The loop consumes the
+   697              # separate diagnostic only after its original budget checks.
+   698              result['numerical_consistency'] = consistency
+   699          result['accepted_for_evaluation'] = bool(
+   700              result['budget_valid'] and result.get('status') == 'SOLVED'
+   701              and result['x'] and consistency is None)
+   702          result['request_number'] = self.counter
+   703          result['evidence_scope'] = 'solver_reported_only_no_thermal_or_optimality_certificate'
+   704          result['solver_response_complete_at_monotonic'] = self.clock()
+   705          _json(prefix.with_suffix('.python.json'), result)
+   706          # Archiving is part of method execution, not free extra candidate time.
+   707          # Even a timely solver response is not returned for thermal evaluation
+   708          # when transport/archiving consumes the remaining method budget.
+   709          if self.clock() >= deadline:
+   710              result['budget_valid'] = False
+   711              result['accepted_for_evaluation'] = False
+   712              result['status'] = 'BUDGET_EXHAUSTED_BEFORE_RETURN'
+   713              result['x'] = []
+   714              _json(prefix.with_suffix('.python.json'), result)
+   715          return result
+
+research/chapter3_experiments/solve_model.m SHA256=907750330928eff94479cc4eb68429730715a42f420066e766d794734278a48b
+     1  function solve_model(folder, guardSeconds)
+     2  % One R2023b worker for correctness checks or one budgeted method call. Every request is
+     3  % a new problem with no reused incumbent. An explicitly supplied, independently
+     4  % checked x0 belongs to this request only. Thermal/energy acceptance is
+     5  % performed by Python; optional live events permit in-budget incumbent checks.
+     6  workerClock = tic;
+     7  info = struct('version',version,'release',version('-release'), ...
+     8      'intlinprog_path',which('intlinprog'),'license_test', ...
+     9      license('test','Optimization_Toolbox'));
+    10  [ok,message] = license('checkout','Optimization_Toolbox');
+    11  info.license_checkout = logical(ok); info.license_message = message;
+    12  if ok && ~isempty(info.intlinprog_path), info.status = 'READY';
+    13  else, info.status = 'TOOLBOX_UNAVAILABLE'; end
+    14  writejson(fullfile(folder,'ready.json'),info);
+    15  if ~strcmp(info.status,'READY'), return; end
+    16  requestNumber = 1;
+    17  while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
+    18      prefix = fullfile(folder,sprintf('request_%06d',requestNumber));
+    19      if ~isfile([prefix '.request.json']), pause(.01); continue; end
+    20      requestClock = tic; callbacks = {}; callbackFields = {}; callbackError = '';
+    21      streamEvents = false; eventNumber = 0;
+    22      result = struct('status','ERROR','x',[],'fval',[],'exitflag',[], ...
+    23          'output',struct(),'callbacks',{{}},'callback_fields',{{}}, ...
+    24          'intlinprog_entered',false,'phase_seconds',struct(), ...
+    25          'initial_point',struct('provided',false));
+    26      try
+    27          phaseClock=tic;
+    28          [requestText,readInfo,readError] = read_request_text(prefix,folder,workerClock,guardSeconds);
+    29          result.request_publication_read=readInfo;
+    30          if ~isempty(readError), throw(readError); end
+    31          % Atomic publication can still be temporarily locked on Windows.
+    32          % Only file-open failures are retried; complete malformed JSON is an
+    33          % immediate protocol error, not a transient publication to accept.
+    34          req = jsondecode(requestText);
+    35          streamEvents = isfield(req,'stream_events') && req.stream_events;
+    36          p = load([prefix '.mat']);
+    37          initialPoint=[];
+    38          if isfield(p,'x0')
+    39              initialPoint=p.x0(:);
+    40              result.initial_point=struct('provided',true, ...
+    41                  'length',numel(initialPoint),'initial_objective',p.c(:)'*initialPoint, ...
+    42                  'thermal_safe_claim',false,'solver_acceptance','not_independently_observed');
+    43              if isfield(p,'x0_validation')
+    44                  result.initial_point.python_admission=p.x0_validation;
+    45              end
+    46          end
+    47          result.phase_seconds.request_and_mat_load=toc(phaseClock);
+    48          phaseClock=tic;
+    49          % A relative timer cannot represent Python's monotonic epoch or all
+    50          % publication latency. Python's original absolute deadline governs
+    51          % acceptance; MATLAB MaxTime/callbacks provide best-effort stopping.
+    52          remaining = req.remaining_s;
+    53          % This optional cap applies only to one native solve. The request's
+    54          % original remaining time and Python's evidence deadline are unchanged.
+    55          hasSolverTimeCap=isfield(req,'solver_max_time_s');
+    56          solverTimeCap=inf;
+    57          if hasSolverTimeCap
+    58              solverTimeCap=req.solver_max_time_s;
+    59              declaredSolverTimeCap=req.solver_max_time_s_declared;
+    60              if ~isnumeric(solverTimeCap) || ~isscalar(solverTimeCap) ...
+    61                      || ~isreal(solverTimeCap) || isnan(solverTimeCap) || isinf(solverTimeCap) ...
+    62                      || solverTimeCap<=0 ...
+    63                      || ~isnumeric(declaredSolverTimeCap) || ~isscalar(declaredSolverTimeCap) ...
+    64                      || ~isreal(declaredSolverTimeCap) || isnan(declaredSolverTimeCap) ...
+    65                      || isinf(declaredSolverTimeCap) ...
+    66                      || declaredSolverTimeCap<=0 || solverTimeCap>declaredSolverTimeCap
+    67                  error('chapter3:solverTimeCap','Invalid native-only MaxTime cap');
+    68              end
+    69              result.solver_max_time_s_declared=declaredSolverTimeCap;
+    70              result.solver_max_time_s_allocated=solverTimeCap;
+    71              result.solver_max_time_s_scope='native_MaxTime_only_not_response_or_evidence_deadline';
+    72          end
+    73          hasCutIterationLimit=isfield(req,'cut_max_iterations');
+    74          if hasCutIterationLimit ~= isfield(p,'cut_max_iterations')
+    75              error('chapter3:cutIterationLimit','Cut limit request/MAT declaration mismatch');
+    76          end
+    77          if hasCutIterationLimit
+    78              cutIterationLimit=req.cut_max_iterations;
+    79              if ~isnumeric(cutIterationLimit) || ~isscalar(cutIterationLimit) ...
+    80                      || ~isreal(cutIterationLimit) || isnan(cutIterationLimit) ...
+    81                      || isinf(cutIterationLimit) || cutIterationLimit~=fix(cutIterationLimit) ...
+    82                      || cutIterationLimit<1 || cutIterationLimit>50 ...
+    83                      || ~isnumeric(p.cut_max_iterations) || ~isscalar(p.cut_max_iterations) ...
+    84                      || ~isreal(p.cut_max_iterations) || p.cut_max_iterations~=cutIterationLimit
+    85                  error('chapter3:cutIterationLimit','CutMaxIterations must be an integer from 1 to 50');
+    86              end
+    87              result.cut_max_iterations_declared=cutIterationLimit;
+    88          end
+    89          opts = optimoptions('intlinprog','Display','off', ...
+    90              'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
+    91              'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
+    92              'IntegerPreprocess','none', ...
+    93              'LPPreprocess','none', ...
+    94              'OutputFcn',@callback);
+    95          if hasCutIterationLimit
+    96              opts.CutMaxIterations=cutIterationLimit;
+    97              result.cut_max_iterations_actual_effective=opts.CutMaxIterations;
+    98          end
+    99          % Engineering compatibility setting, fixed before formal runs:
+   100          % numeric_diagnostic04 solved the unchanged small physical model with
+   101          % IntegerPreprocess='none', where 'basic' reported infeasible despite
+   102          % independent feasible lifts.  This preserves the mathematical model;
+   103          % it does not establish a general MATLAB preprocessing defect.
+   104          % K.106's fixed-logic feasibility pair also requires LPPreprocess='none'
+   105          % for this R2023b numerical representation. The original matrices,
+   106          % variable domain and tolerances are unchanged. Full free-schedule
+   107          % optimization speed is not established by that compatibility check.
+   108          opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+   109              guardSeconds-toc(workerClock),solverTimeCap]));
+   110          result.options_text = evalc('disp(opts)');
+   111          % LPPreprocess is documented for R2023b but hidden from properties().
+   112          % Archive it explicitly; IntegerPreprocess='none' does not disable it.
+   113          names = [properties(opts); {'LPPreprocess'}]; optionValues = struct();
+   114          if hasCutIterationLimit, names=[names; {'CutMaxIterations'}]; end
+   115          for k=1:numel(names)
+   116              value=opts.(names{k});
+   117              if isa(value,'function_handle'), value=func2str(value); end
+   118              optionValues.(names{k})=value;
+   119          end
+   120          result.options = optionValues;
+   121          % Options inspection and MAT loading belong to this same request.
+   122          opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+   123              guardSeconds-toc(workerClock),solverTimeCap]));
+   124          result.options.MaxTime = opts.MaxTime;
+   125          if hasSolverTimeCap
+   126              result.solver_max_time_s_used=opts.MaxTime;
+   127              solverTimeAllocation=struct('declared',declaredSolverTimeCap, ...
+   128                  'allocated',solverTimeCap,'native_MaxTime_used',opts.MaxTime, ...
+   129                  'response_deadline_shortened',false);
+   130          end
+   131          result.options_text = evalc('disp(opts)');
+   132          result.phase_seconds.options_preparation=toc(phaseClock);
+   133          if opts.MaxTime<=0 || isfile([prefix '.cancel']) ...
+   134                  || isfile(fullfile(folder,'stop')) || toc(workerClock)>=guardSeconds
+   135              result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
+   136          else
+   137              result.intlinprog_entered=true;
+   138              if streamEvents
+   139                  entered=struct('kind','solver_entered','request_wall_seconds',toc(requestClock));
+   140                  if hasSolverTimeCap, entered.solver_time_allocation=solverTimeAllocation; end
+   141                  if hasCutIterationLimit
+   142                      entered.cut_max_iterations_declared=cutIterationLimit;
+   143                      entered.cut_max_iterations_actual_effective=opts.CutMaxIterations;
+   144                  end
+   145                  publish(entered);
+   146              end
+   147              phaseClock=tic;
+   148              lastwarn('');
+   149              [x,fval,exitflag,output] = intlinprog(p.c(:),p.intcon(:)', ...
+   150                  p.A,p.b(:),p.Aeq,p.beq(:),p.lb(:),p.ub(:),initialPoint,opts);
+   151              [warningMessage,warningIdentifier]=lastwarn;
+   152              result.solver_warning_message=warningMessage;
+   153              result.solver_warning_identifier=warningIdentifier;
+   154              result.phase_seconds.intlinprog_call=toc(phaseClock);
+   155              result.x=x(:)'; result.fval=fval; result.exitflag=exitflag;
+   156              result.output=output; result.status='SOLVED';
+   157              if ~isempty(callbackError)
+   158                  result.status='CALLBACK_ERROR'; result.callback_error=callbackError;
+   159              end
+   160              % MAT retains NaN/Inf and all native solver fields independently
+   161              % of JSON's null representation.  This is raw solver evidence.
+   162              phaseClock=tic;
+   163              if hasSolverTimeCap
+   164                  save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks', ...
+   165                      'initialPoint','solverTimeAllocation');
+   166              else
+   167                  save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks','initialPoint');
+   168              end
+   169              result.phase_seconds.native_result_archive=toc(phaseClock);
+   170          end
+   171      catch err
+   172          if any(strcmp(err.identifier,{'chapter3:requestReadCancelled', ...
+   173                  'chapter3:requestReadStopped','chapter3:requestReadGuardExpired'}))
+   174              result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
+   175          end
+   176          result.error_identifier=err.identifier;
+   177          result.error_message=getReport(err,'extended','hyperlinks','off');
+   178      end
+   179      result.callbacks=callbacks; result.callback_fields=callbackFields;
+   180      result.matlab_request_wall_seconds=toc(requestClock);
+   181      result.worker_elapsed_seconds=toc(workerClock);
+   182      result.solver_information_is_independently_certified=false;
+   183      result.callback_candidates_independently_thermal_checked=false;
+   184      result.deadline_authority='Python absolute monotonic deadline';
+   185      writejson([prefix '.response.json'],result);
+   186      requestNumber=requestNumber+1;
+   187  end
+   188  
+   189      function stop = callback(x,values,state)
+   190          stop = false;
+   191          try
+   192              callbackFields=union(callbackFields,fieldnames(values));
+   193              entry=struct('state',state,'request_wall_seconds',toc(requestClock), ...
+   194                  'values',values,'x',x(:)');
+   195              if streamEvents
+   196                  entry.kind='callback';
+   197                  publish(entry);
+   198                  % The immutable event file retains x; avoid duplicate large
+   199                  % vectors in the final response. Historical path is unchanged.
+   200                  entry.x=[]; entry.event_number=eventNumber;
+   201              end
+   202              callbacks{end+1}=entry; %#ok<AGROW>
+   203              stop = toc(requestClock)>=remaining || toc(workerClock)>=guardSeconds ...
+   204                  || isfile([prefix '.cancel']) || isfile(fullfile(folder,'stop'));
+   205          catch err
+   206              callbackError=getReport(err,'extended','hyperlinks','off');
+   207              stop=true;
+   208          end
+   209      end
+   210  
+   211      function publish(entry)
+   212          eventNumber=eventNumber+1;
+   213          entry.event_number=eventNumber;
+   214          writejson(sprintf('%s.event_%06d.json',prefix,eventNumber),entry);
+   215      end
+   216  end
+
+research/chapter3_experiments/diagnostic_search.py SHA256=398a7dd977c522093d9dc0a6a9486386aab2b19e0f18cf95515bee7799578eee
+     1  """Live receipts for one diagnostic; no new model, solver rule or heat cut.
+     2  
+     3  MATLAB publishes immutable events. Python checks candidates on the same
+     4  absolute budget while MATLAB continues; monitoring/validation contention is
+     5  part of this invocation. Callback bounds remain solver-reported only.
+     6  """
+     7  from fractions import Fraction
+     8  import hashlib
+     9  import json
+    10  from pathlib import Path
+    11  
+    12  from matlab_bridge import NUMERICAL_CONSISTENCY_CONFLICT, NUMERICAL_CONSISTENCY_UNRESOLVED
+    13  from milp import decode, evaluate_model_candidate, add_thermal_feedback, logical_candidate_diagnostics
+    14  from thermal import Exhausted
+    15  
+    16  
+    17  class Recorder:
+    18      def __init__(self, model, accuracy, budget, folder, *, decoder=decode,
+    19                   evaluator=evaluate_model_candidate):
+    20          self.model, self.accuracy, self.budget = model, accuracy, budget
+    21          self.folder = Path(folder)
+    22          self.decoder, self.evaluator = decoder, evaluator
+    23          self.next_event = {}
+    24          self.cache = {}
+    25          self.best = None
+    26          self.evaluations = []
+    27          self.progress = []
+    28          self.first_candidate_s = self.first_legal_s = self.first_safe_s = None
+    29          self.solver_entered_s = None
+    30          self.event_count = self.candidate_count = self.duplicates = 0
+    31          self.decode_records = []
+    32  
+    33      def log(self, row):
+    34          # Logging cost is charged; receipt time is never replaced by log time.
+    35          with (self.folder/'diagnostic_events.jsonl').open('a', encoding='utf-8') as f:
+    36              f.write(json.dumps(row, ensure_ascii=False, allow_nan=False)+'\n')
+    37  
+    38      def poll(self, prefix):
+    39          number = self.next_event.get(str(prefix), 1)
+    40          while self.budget.remaining > 0:
+    41              path = Path(f'{prefix}.event_{number:06d}.json')
+    42              try:
+    43                  event = json.loads(path.read_text(encoding='utf-8-sig'))
+    44              except (FileNotFoundError, PermissionError, UnicodeDecodeError, json.JSONDecodeError):
+    45                  break
+    46              self.budget.check()  # complete publication read must be in-budget
+    47              number += 1
+    48              self.next_event[str(prefix)] = number
+    49              self.event_count += 1
+    50              stamp = self.budget.elapsed
+    51              row = {k: v for k, v in event.items() if k != 'x'}
+    52              row.update(event='worker_event_received', method_elapsed_s=stamp,
+    53                         request=prefix.name, evidence='solver-reported')
+    54              self.progress.append(row)
+    55              if event.get('kind') == 'solver_entered' and self.solver_entered_s is None:
+    56                  self.solver_entered_s = stamp
+    57              self.log(row)
+    58              if event.get('x'):
+    59                  self.assess(event['x'], f'{prefix.name}:event{number-1}')
+    60  
+    61      def assess(self, x, source):
+    62          self.budget.check()
+    63          appeared = self.budget.elapsed
+    64          if self.first_candidate_s is None:
+    65              self.first_candidate_s = appeared
+    66          self.candidate_count += 1
+    67          self.log({'event': 'candidate_received', 'source': source, 'method_elapsed_s': appeared})
+    68          record = {'source': source, 'received_at_s': appeared}
+    69          try:
+    70              with self.budget.phase('decode_and_legality'):
+    71                  if hasattr(self.model, 'logical_binary'):
+    72                      record['logical_values'] = logical_candidate_diagnostics(self.model, x)
+    73                      self.budget.check()
+    74                  candidate = self.decoder(self.model, x)
+    75          except ValueError as exc:
+    76              completed = self.budget.elapsed
+    77              record.update(state='REJECTED', reason=str(exc), completed_at_s=completed,
+    78                            within_budget=completed < self.budget.seconds)
+    79              self.decode_records.append(record)
+    80              self.log({'event': 'invalid_candidate', 'source': source, 'error': str(exc),
+    81                        'method_elapsed_s': self.budget.elapsed, 'decode': record})
+    82              self.budget.check()
+    83              return None, None
+    84          except Exhausted:
+    85              record.update(state='UNRESOLVED', reason='DECODE_BUDGET_EXHAUSTED',
+    86                            completed_at_s=self.budget.elapsed, within_budget=False)
+    87              self.decode_records.append(record)
+    88              self.log({'event': 'decode_unresolved', 'decode': record})
+    89              raise
+    90          completed = self.budget.elapsed
+    91          record.update(state='LEGAL' if completed < self.budget.seconds else 'LATE',
+    92                        completed_at_s=completed, within_budget=completed < self.budget.seconds)
+    93          self.decode_records.append(record)
+    94          if record['within_budget'] and self.first_legal_s is None:
+    95              self.first_legal_s = record['completed_at_s']
+    96          self.log({'event': 'candidate_decoded', 'decode': record})
+    97          self.budget.check()
+    98          identity = hashlib.sha256(json.dumps(candidate, sort_keys=True).encode()).hexdigest()
+    99          if identity in self.cache:
+   100              self.duplicates += 1
+   101              self.log({'event': 'duplicate_receipt_reused', 'candidate_sha256': identity,
+   102                        'source': source, 'method_elapsed_s': self.budget.elapsed})
+   103              return candidate, self.cache[identity]
+   104          with self.budget.phase('continuous_thermal_energy_evaluation'):
+   105              evaluation = self.evaluator(self.model, candidate, self.accuracy, self.budget)
+   106          completed = evaluation.get('completed_at_elapsed_s')
+   107          timely_safe = (evaluation['state'] == 'SAFE' and evaluation.get('rankable_energy')
+   108                         and completed is not None and completed < self.budget.seconds)
+   109          receipt = {'candidate': candidate, 'evaluation': evaluation,
+   110                     'candidate_sha256': identity, 'source': source,
+   111                     'evaluation_returned_at_s': self.budget.elapsed,
+   112                     'accepted_safe': bool(timely_safe)}
+   113          self.evaluations.append(receipt)  # preserve in-budget witness on interruption
+   114          if timely_safe:
+   115              if self.first_safe_s is None:
+   116                  self.first_safe_s = completed
+   117              if self.best is None or Fraction(evaluation['safe_upper_bound_J']) < Fraction(self.best['evaluation']['safe_upper_bound_J']):
+   118                  self.best = receipt
+   119          # Only complete decisions are reusable, not unresolved/prefix energies.
+   120          if timely_safe or evaluation['state'] == 'THERMAL_VIOLATION':
+   121              self.cache[identity] = evaluation
+   122          self.log({'event': 'candidate_evaluated', **receipt})
+   123          return candidate, evaluation
+   124  
+   125      def summary(self):
+   126          return {'first_candidate_received_s': self.first_candidate_s,
+   127                  'first_legal_candidate_s': self.first_legal_s,
+   128                  'first_safe_receipt_s': self.first_safe_s,
+   129                  'solver_entered_received_s': self.solver_entered_s,
+   130                  'worker_events': self.event_count, 'candidate_receipts': self.candidate_count,
+   131                  'duplicate_receipts': self.duplicates, 'evaluations': self.evaluations,
+   132                  'decode_records': self.decode_records,
+   133                  'decode_rejections': sum(r['state'] == 'REJECTED' and r['within_budget'] for r in self.decode_records),
+   134                  'solver_progress': self.progress,
+   135                  'time_semantics': 'Python complete receipt/decode/independent SAFE commit; native callback time recorded separately',
+   136                  'solver_bounds_independently_certified': False}
+
+research/chapter3_experiments/method_runner.py SHA256=c7e30ce68f813d658347a947be1a5f1f9657dee878cfcf1f1e7256e9e0197a00
+    35  def execute_milp(input_loader, workdir, *, seconds=60, construct_only=True,
+    36                   clock=time.monotonic, model_builder=build_model,
+    37                   session_factory=MatlabSession, solve=solve_with_feedback):
+    38      """One isolated invocation; input_loader(budget) returns (config, instance).
+    39  
+    40      The same interface can later wrap other methods. No candidate/cache/session
+    41      can be supplied from a previous call. Precheck dependency injection is not
+    42      an alternative research workload or a runtime algorithm choice.
+    43      """
+    44      budget = MethodBudget(float(seconds), clock=clock)  # before ANY case I/O
+    45      result = {'state': 'UNRESOLVED', 'reason': None, 'safe_candidate': None,
+    46                'safe_upper_bound_J': None, 'evaluation': None,
+    47                'independently_proven_optimal': False,
+    48                'independently_proven_infeasible': False,
+    49                'remaining_domain': 'retained', 'formal_comparison': False,
+    50                'construct_only': construct_only, 'model_complete': False,
+    51                'matrix_complete': False, 'solver_started': False,
+    52                'matlab_worker_ready': False,
+    53                'solver_started_semantics': 'legacy field means MATLAB worker ready, not intlinprog entry'}
+    54      session = model = observer = config = instance = None
+    55      active_stage = 'invocation_setup'
+    56      constructor_cleanup_s = 0.0
+    57      workdir = Path(workdir)
+    58      if workdir.exists():
+    59          raise FileExistsError(f'Invocation directory already exists: {workdir}')
+    60      workdir.mkdir(parents=True, exist_ok=False)
+    61      try:
+    62          with budget.phase('input_read_and_expansion'):
+    63              active_stage = 'input_read_and_expansion'
+    64              config, instance = input_loader(budget)
+    65          budget.check()
+    66          result['problem_id'] = instance['id']
+    67          observer = BuildObserver(budget, workdir/'build_progress.jsonl')
+    68          with budget.phase('model_construction'):
+    69              active_stage = 'model_construction'
+    70              model = model_builder(instance, config, budget=budget, progress=observer)
+    71              observer.finish('MODEL_CONSTRUCTED')
+    72          budget.check()
+    73          result['model_complete'] = True
+    74          result['model_completed_at_s'] = budget.elapsed
+    75          if construct_only:
+    76              with budget.phase('matrix_export'):
+    77                  active_stage = 'matrix_export'
+    78                  exported = model.as_solver_dict()
+    79              budget.check()
+    80              result['matrix_complete'] = True
+    81              result['matrix_completed_at_s'] = budget.elapsed
+    82              result['matrix'] = {'shape': list(exported['A'].shape),
+    83                                  'nonzeros': int(exported['A'].nnz)}
+    84              result.update(state='CONSTRUCTION_COMPLETE', reason='CONSTRUCT_ONLY_NO_SOLVE')
+    85          else:
+    86              with budget.phase('solver_startup'):
+    87                  active_stage = 'solver_startup'
+    88                  session = session_factory(workdir/'matlab', total_budget_s=budget.remaining,
+    89                                            budget=budget)
+    90              budget.check()
+    91              result['solver_started'] = True
+    92              result['matlab_worker_ready'] = True
+    93              active_stage = 'candidate_search'
+    94              solved = solve(model, session, config['accuracy_targets'], budget=budget)
+    95              result.update(solved)
+    96              # solve owns receipt preservation at an expiry boundary. Never
+    97              # discard a SAFE/violation receipt merely because return is late.
+    98          result['stop_stage'] = active_stage
+    99      except Exhausted as error:
+   100          if hasattr(error, 'matlab_cleanup'):
+   101              result['startup_cleanup'] = error.matlab_cleanup
+   102              constructor_cleanup_s = error.matlab_cleanup.get('cleanup_wall_seconds', 0.0)
+   103          result.update(reason=str(error), stop_stage=active_stage)
+   104      except MemoryError:
+   105          result.update(reason='RESOURCE_LIMIT', stop_stage=active_stage)
+   106      except Exception as error:
+   107          if hasattr(error, 'matlab_cleanup'):
+   108              result['startup_cleanup'] = error.matlab_cleanup
+   109              constructor_cleanup_s = error.matlab_cleanup.get('cleanup_wall_seconds', 0.0)
+   110          search_stopped_s = budget.elapsed-constructor_cleanup_s
+   111          result.update(reason=('WALL_TIME_LIMIT' if search_stopped_s >= budget.seconds else 'INTERFACE_ERROR'),
+   112                        error=f'{type(error).__name__}: {error}', stop_stage=active_stage)
+   113      finally:
+   114          stopped = budget.elapsed
+   115          result['timing'] = budget.summary(stopped)
+   116          result['timing']['startup_failure_cleanup_in_method_elapsed_s'] = constructor_cleanup_s
+   117          result['timing']['method_elapsed_excluding_cleanup_s'] = max(0.0, stopped-constructor_cleanup_s)
+   118          result['timing']['wall_until_constructor_cleanup_return_s'] = stopped
+   119          result['timing']['method_elapsed_s'] = max(0.0, stopped-constructor_cleanup_s)
+   120          result['timing']['deadline_overshoot_s'] = max(0.0, stopped-constructor_cleanup_s-budget.seconds)
+   121          if constructor_cleanup_s:
+   122              # A failed constructor cannot return a session to the finally
+   123              # block. Its known internal cleanup is removed from phase cost.
+   124              totals = result['timing']['phases_exclusive_s']
+   125              totals['solver_startup'] = max(0.0, totals.get('solver_startup', 0)-constructor_cleanup_s)
+   126              for frame in result['timing']['phase_records']:
+   127                  if frame['phase']=='solver_startup':
+   128                      frame['startup_cleanup_inclusive_s'] = constructor_cleanup_s
+   129                      frame['exclusive_s'] = max(0.0, frame['exclusive_s']-constructor_cleanup_s)
+   130              result['timing']['unattributed_s'] = max(0.0, stopped-constructor_cleanup_s-sum(totals.values()))
+   131          result['timing']['cleanup_s'] = constructor_cleanup_s
+   132          cleanup_start = clock()
+   133          if session is not None:
+   134              try:
+   135                  session.close()
+   136              except Exception as error:
+   137                  result['cleanup_error'] = f'{type(error).__name__}: {error}'
+   138          result['timing']['cleanup_s'] += clock()-cleanup_start
+   139          result['budget_exhausted'] = stopped-constructor_cleanup_s >= budget.seconds
+   140          result['counted_energy_source'] = 'only complete independent evaluator receipt'
+   141          result['callback_candidates_independently_thermal_checked'] = 'diagnostic' in result
+   142          result['candidate_and_cache_shared_between_calls'] = False
+   143          result['solver_request_attempts'] = getattr(session, 'counter', 0)
+   144          rounds = result.get('rounds', [])
+   145          known_solver_entries = [r.get('intlinprog_entered') for r in rounds]
+   146          result['integer_solver_entered'] = (True if True in known_solver_entries else
+   147              False if not result['solver_request_attempts'] or
+   148                  (known_solver_entries and all(v is False for v in known_solver_entries)) else None)
+   149          result['integer_solver_entry_evidence'] = 'returned worker record only; null means unconfirmed'
+   150          if result.get('diagnostic', {}).get('solver_entered_received_s') is not None:
+   151              result['integer_solver_entered'] = True
+   152              result['integer_solver_entry_evidence'] = 'in-budget immutable worker entry event received'
+   153          completed_exports = [f for f in budget.records if f['phase']=='matrix_export'
+   154                               and 'exception' not in f and f['end_s']<budget.seconds]
+   155          if completed_exports:
+   156              result['matrix_complete'] = True
+   157              result['matrix_completed_at_s'] = completed_exports[-1]['end_s']
+   158  
+   159      # Post-budget code is archival only: no re-solve, re-evaluation or repair.
+   160      report_start = clock()
+   161      if observer is not None:
+   162          status = 'MODEL_CONSTRUCTED' if result['model_complete'] else 'CONSTRUCTION_INTERRUPTED'
+   163          result['construction'] = (observer.snapshot() if observer.finished_at is not None
+   164                                    and result['model_complete'] else observer.finish(status))
+   165      if model is not None and result['model_complete']:
+   166          result['model_summary'] = model.summary()
+   167      if config is not None:
+   168          _save(workdir/'input_config.json', config)
+   169      if instance is not None:
+   170          _save(workdir/'input_instance.json', instance)
+   171      result['environment'] = {'python': sys.version, 'platform': platform.platform(),
+   172                               'scope': 'construction/full-method diagnostic or correctness precheck, not a formal comparison'}
+   173      result['timing']['postprocess_before_serialization_s'] = clock()-report_start
+   174      _save(workdir/'result.json', result)
+   175      _save(workdir/'archive_timing.json', {
+   176          'report_wall_s': clock()-report_start,
+   177          'scope': 'serialization of existing evidence only; no new search evidence',
+
+research/chapter3_experiments/initial_point.py SHA256=3725c2a4416acd86631f9db5d733b359f464dd00fe249fb8c4fb8cbb39dc9b93
+   101  def complete_initial_point(model, candidate, evaluation, budget):
+   102      """Propose and check a full vector for an already independently SAFE schedule."""
+   103      budget.check()
+   104      identity = {'input_sha256': _digest(model.instance), 'candidate_sha256': _digest(candidate)}
+   105      if (evaluation.get('state') != 'SAFE' or not evaluation.get('rankable_energy')
+   106              or evaluation.get('evidence_identity') != identity
+   107              or evaluation.get('completed_at_elapsed_s', budget.seconds) >= budget.seconds):
+   108          raise ValueError('A matching complete in-budget SAFE receipt is required before x0 completion')
+   109      try:
+   110          with _phase(budget, 'initial_point_completion'):
+   111              vector = _propose_vector(model, candidate, budget)
+   112          with _phase(budget, 'initial_point_decode_and_row_admission'):
+   113              decoded = decode(model, vector)
+   114              if _key(decoded) != _key(candidate):
+   115                  raise ValueError('Initial vector does not decode to its SAFE schedule')
+   116              payload = _prepare(model.as_solver_dict(), x0=vector)
+   117          budget.check()
+   118      except InitialPointRejected as error:
+   119          return {'state': 'INITIAL_POINT_REJECTED', 'x0': None,
+   120                  'reason': str(error), 'numerical_acceptance': error.diagnostics,
+   121                  'decoded_roundtrip': True, 'completed_at_s': budget.elapsed}
+   122      except ValueError as error:
+   123          return {'state': 'INITIAL_POINT_REJECTED', 'x0': None, 'reason': str(error),
+   124                  'decoded_roundtrip': False, 'completed_at_s': budget.elapsed}
+   125      return {'state': 'INITIAL_POINT_READY', 'x0': vector,
+   126              'numerical_acceptance': payload['x0_validation'],
+   127              'decoded_roundtrip': True, 'completed_at_s': budget.elapsed,
+   128              'scope': 'numerical row admission only; SAFE comes from the independent receipt'}
+   129  
+   130  
+   131  def prepare_initial_witness(model, accuracy, budget, starts=None, max_attempts=3):
+   132      """Stop at first complete SAFE seed; keep it even when vector completion fails."""
+   133      out = {'state': 'UNRESOLVED', 'witness': None, 'x0': None,
+   134             'attempts': [], 'completion': None, 'reason': 'NO_SAFE_INITIAL_WITNESS',
+   135             'remaining_domain': 'retained', 'independently_proven_infeasible': False}
+   136      try:
+   137          iterator = iter_initial_candidates(model.instance, starts, budget, max_attempts)
+   138          while True:
+   139              with _phase(budget, 'initial_schedule_construction'):
+   140                  try:
+   141                      attempt = next(iterator)
+   142                  except StopIteration:
+   143                      break
+   144              attempt['schedule_completed_at_s'] = budget.elapsed
+   145              out['attempts'].append(attempt)
+   146              if attempt['status'] != 'COMPLETE_LEGAL_CANDIDATE':
+   147                  continue
+   148              with _phase(budget, 'initial_continuous_evaluation'):
+   149                  evaluation = evaluate_model_candidate(model, attempt['candidate'], accuracy, budget)
+   150              attempt['evaluation'] = evaluation
+   151              safe = (evaluation.get('state') == 'SAFE' and evaluation.get('rankable_energy')
+   152                      and evaluation.get('safe_upper_bound_J') is not None
+   153                      and evaluation.get('completed_at_elapsed_s', budget.seconds) < budget.seconds)
+   154              if not safe:
+   155                  budget.check()
+   156                  continue
+   157              out['witness'] = {'candidate': attempt['candidate'], 'evaluation': evaluation,
+   158                                'schedule_completed_at_s': attempt['schedule_completed_at_s']}
+   159              completion = complete_initial_point(model, attempt['candidate'], evaluation, budget)
+   160              out['x0'] = completion.pop('x0')
+   161              out['completion'] = completion
+   162              out.update(state=('SAFE_POINT_READY' if out['x0'] is not None else 'SAFE_POINT_REJECTED'),
+   163                         reason=completion['state'])
+   164              break
+   165      except Exhausted as error:
+   166          out.update(state='SAFE_POINT_UNRESOLVED' if out['witness'] else 'UNRESOLVED',
+   167                     reason=str(error))
+   168      except Exception as error:
+   169          out.update(state='SAFE_POINT_REJECTED' if out['witness'] else 'UNRESOLVED',
+   170                     reason=type(error).__name__+': '+str(error))
+   171      out['completed_at_s'] = budget.elapsed
+   172      return out
+   173  
+   174  
+   175  class _InitialSession:
+   176      """Inject this call's admitted x0 once, without constraining later rounds."""
+   177      def __init__(self, session, x0):
+   178          self.session, self.x0, self.first = session, x0, True
+   179          self.workdir = session.workdir
+   180  
+   181      @property
+   182      def event_consumer(self):
+   183          return self.session.event_consumer
+   184  
+   185      @event_consumer.setter
+   186      def event_consumer(self, value):
+   187          self.session.event_consumer = value
+   188  
+   189      def solve(self, model, **kwargs):
+   190          if self.first:
+   191              self.first = False
+   192              return self.session.solve(model, x0=self.x0, **kwargs)
+   193          return self.session.solve(model, **kwargs)
+   194  
+   195  
+   196  def solve_with_initial_witness(model, session, accuracy, budget, starts=None, max_attempts=3,
+   197                                 checkpoint=None, *, diagnostic_solver=None):
+   198      """Complete operational entry; all initialization uses this method's budget."""
+   199      initial = prepare_initial_witness(model, accuracy, budget, starts, max_attempts)
+   200      public = {k: v for k, v in initial.items() if k != 'x0'}
+   201      witness = initial['witness']
+   202      checkpoint_status = {'requested': checkpoint is not None, 'completed': False}
+   203      if checkpoint is not None:
+   204          try:
+   205              with _phase(budget, 'initial_receipt_checkpoint'):
+   206                  checkpoint(public)
+   207              checkpoint_status.update(completed=True, completed_at_s=budget.elapsed)
+   208          except Exception as error:
+   209              checkpoint_status.update(error=type(error).__name__+': '+str(error),
+   210                                       completed_at_s=budget.elapsed)
+   211      result = {'state': 'UNRESOLVED', 'safe_candidate': None, 'safe_upper_bound_J': None,
+   212                'evaluation': None, 'reason': initial['reason'], 'rounds': [], 'feedback': [],
+   213                'independently_proven_optimal': False, 'independently_proven_infeasible': False,
+   214                'remaining_domain': 'retained', 'solver_diagnostic': None}
+   215      if initial['state'] == 'SAFE_POINT_READY' and budget.remaining > 0:
+   216          if diagnostic_solver is None:
+   217              from diagnostic_search import solve_diagnostic
+   218              diagnostic_solver = solve_diagnostic
+   219          try:
+   220              solved = diagnostic_solver(model, _InitialSession(session, initial['x0']), accuracy, budget)
+   221          except Exception as error:
+   222              solved = {'state': 'UNRESOLVED', 'safe_upper_bound_J': None,
+   223                        'reason': 'INITIALISED_SOLVER_INTERRUPTED' if isinstance(error, Exhausted)
+   224                                  else 'INITIALISED_SOLVER_INTERFACE_ERROR',
+   225                        'error': type(error).__name__+': '+str(error),
+   226                        'independently_proven_optimal': False,
+   227                        'independently_proven_infeasible': False}
+   228          result.update(solved)
+   229          result['solver_diagnostic'] = solved
+   230      milp_upper = result.get('safe_upper_bound_J')
+   231      milp_evaluation = result.get('evaluation')
+   232      result['safe_solution_source'] = 'MILP_candidate' if milp_upper is not None else None
+   233      if witness and (milp_upper is None or F(witness['evaluation']['safe_upper_bound_J']) <= F(milp_upper)):
+   234          result.update(state='SAFE', safe_candidate=witness['candidate'],
+   235                        safe_upper_bound_J=witness['evaluation']['safe_upper_bound_J'],
+   236                        evaluation=witness['evaluation'], safe_solution_source='initial_constructor')
+   237      result.update(initialisation=public, milp_safe_upper_bound_J=milp_upper,
+   238                    initial_checkpoint=checkpoint_status,
+   239                    initial_safe_upper_bound_J=witness['evaluation']['safe_upper_bound_J'] if witness else None,
+   240                    first_initial_safe_s=witness['evaluation']['completed_at_elapsed_s'] if witness else None,
+   241                    elapsed_s=budget.elapsed,
+   242                    attribution='initial constructor and subsequent MILP progress are recorded separately')
+   243      result['milp_improved_initial_upper_bound'] = bool(witness and milp_upper is not None
+   244          and F(milp_upper) < F(witness['evaluation']['safe_upper_bound_J']))
+
+research/chapter3_experiments/timing.py SHA256=313017671f40146e50b2fca109a7b40673dc31c5b32c485fb2a80d2651b770b8
+     9  class MethodBudget(Budget):
+    10      """Evidence cutoff is strict; execution stops at cooperative checkpoints.
+    11  
+    12      Interpreter startup/imports precede the method. Start this clock before
+    13      reading any case input. Cleanup/reporting are outside the method and may
+    14      only serialize evidence already formed before the deadline.
+    15      """
+    16      def __init__(self, seconds=60, *, clock=time.monotonic, hook=None):
+    17          if not math.isfinite(seconds) or seconds <= 0:
+    18              raise ValueError('method seconds must be finite and positive')
+    19          super().__init__(seconds=seconds, hook=hook)
+    20          self.clock = clock
+    21          self.start = clock()
+    22          self.deadline = self.start + float(seconds)
+    23          self.records = []
+    24          self._stack = []
+    25  
+    26      @property
+    27      def elapsed(self):
+    28          return self.clock() - self.start
+    29  
+    30      @property
+    31      def remaining(self):
+    32          return max(0.0, self.deadline-self.clock())
+    33  
+    34      def check(self):
+    35          if self.clock() >= self.deadline:
+    36              raise Exhausted('wall_time_limit')
+    37  
+    38      @contextmanager
+    39      def phase(self, name):
+    40          self.check()
+    41          frame = {'phase': name, 'start_s': self.elapsed, 'children_s': 0.0,
+    42                   'depth': len(self._stack)}
+    43          self._stack.append(frame)
+    44          try:
+    45              yield
+    46          except BaseException as error:
+    47              frame['exception'] = type(error).__name__
+    48              raise
+    49          finally:
+    50              frame['end_s'] = self.elapsed
+    51              frame['wall_s'] = frame['end_s']-frame['start_s']
+    52              frame['exclusive_s'] = max(0.0, frame['wall_s']-frame.pop('children_s'))
+    53              self._stack.pop()
+    54              if self._stack:
+    55                  self._stack[-1]['children_s'] += frame['wall_s']
+    56              self.records.append(frame)
+    57          # Intentionally no exit check: the caller first commits any evaluator
+    58          # receipt formed before the deadline, then checks remaining time.
+    59  
+    60      def summary(self, stopped_s=None):
+    61          stopped_s = self.elapsed if stopped_s is None else stopped_s
+    62          totals = {}
+    63          for frame in self.records:
+    64              totals[frame['phase']] = totals.get(frame['phase'], 0.0)+frame['exclusive_s']
+    65          return {'limit_s': self.seconds, 'method_elapsed_s': stopped_s,
+    66                  'deadline_overshoot_s': max(0.0, stopped_s-self.seconds),
+    67                  'phases_exclusive_s': totals, 'phase_records': list(self.records),
+    68                  'unattributed_s': max(0.0, stopped_s-sum(totals.values())),
+    69                  'clock_origin': 'before input read; imports excluded for all methods',
+    70                  'execution_stop': 'cooperative checkpoints, not a hard real-time process stop',
+    71                  'evidence_cutoff': 'one absolute monotonic deadline; no round reset'}
+
+research/chapter3_experiments/run_warm_diagnostic.py SHA256=642c9dbe4215da95b31106735fdb98a5f7299f210905e864f30c15d19c842ea8
+    67  def execute_warm(input_loader, out, *, seconds=LIMIT_SECONDS,
+    68                   clock=time.monotonic, model_builder=build_model,
+    69                   session_factory=MatlabSession, solver=solve_with_initial_witness):
+    70      """Injected dependencies support small correctness fixtures, never research choices."""
+    71      out = Path(out)
+    72  
+    73      def solve(model, session, accuracy, budget):
+    74          def checkpoint(receipt):
+    75              # Observation only. No vector/candidate is read back for search.
+    76              seed.save(out/'initial_receipt_checkpoint.json', {
+    77                  'initialisation': receipt, 'publication_started_at_s': budget.elapsed,
+    78                  'scope': 'formed evidence only; checkpoint cost inside the method budget'})
+    79          return solver(model, session, accuracy, budget, checkpoint=checkpoint)
+    80  
+    81      return execute_milp(input_loader, out, seconds=seconds, construct_only=False,
+    82                          clock=clock, model_builder=partial(model_builder, **FLAGS),
+    83                          session_factory=session_factory, solve=solve)
+
+research/chapter3_support_local_migration_20261110/run_local_pair.py SHA256=67dbf133185bc4eeca110b28eb1335abbe0106685f2425036b909b70d12eb34a
+   216  def validate_initialization(initial, expected_candidate_sha256, expected_input_sha256, seconds=SECONDS):
+   217      if seconds != SECONDS or not isinstance(initial, dict) or initial.get('state') != 'SAFE_POINT_READY':
+   218          raise LocalPairError('FRESH_INITIAL_POINT_NOT_READY')
+   219      witness = initial.get('witness') or {}; candidate = witness.get('candidate'); evaluation = witness.get('evaluation') or {}
+   220      completion = initial.get('completion') or {}; admission = completion.get('numerical_acceptance') or {}
+   221      identity = {'input_sha256': expected_input_sha256, 'candidate_sha256': expected_candidate_sha256}
+   222      if candidate is None or canonical_sha(candidate) != expected_candidate_sha256 or evaluation.get('evidence_identity') != identity:
+   223          raise LocalPairError('FRESH_SEED_IDENTITY_MISMATCH')
+   224      if (evaluation.get('state') != 'SAFE' or evaluation.get('rankable_energy') is not True
+   225              or evaluation.get('safe_upper_bound_J') is None or not _timely(evaluation.get('completed_at_elapsed_s'), seconds)):
+   226          raise LocalPairError('FRESH_COMPLETE_SAFE_RECEIPT_REQUIRED')
+   227      if (completion.get('state') != 'INITIAL_POINT_READY' or completion.get('decoded_roundtrip') is not True
+   228              or admission.get('accepted_numerically') is not True or not _timely(completion.get('completed_at_s'), seconds)):
+   229          raise LocalPairError('FRESH_FULL_VECTOR_ADMISSION_REQUIRED')
+   230      return {'candidate_sha256': expected_candidate_sha256, 'input_sha256': expected_input_sha256,
+   231          'safe_upper_bound_J': evaluation['safe_upper_bound_J'],
+   232          'SAFE_formed_at_s': evaluation['completed_at_elapsed_s'], 'x0_formed_at_s': completion['completed_at_s']}
+   233  
+   234  
+   235  class GuardedSession:
+   236      def __init__(self, session, checkpoint_path, expected_candidate_sha256,
+   237                   expected_input_sha256, guard_path, admit=None, decode_candidate=None):
+   238          self.session = session; self.checkpoint_path = Path(checkpoint_path)
+   239          self.expected_candidate = expected_candidate_sha256; self.expected_input = expected_input_sha256
+   240          self.guard_path = Path(guard_path); self.admit = admit; self.decode_candidate = decode_candidate
+   241          self.guard = {'status': 'NOT_REACHED', 'native_request_attempts': 0}
+   242  
+   243      def __getattr__(self, name): return getattr(self.session, name)
+   244  
+   245      @property
+   246      def event_consumer(self): return self.session.event_consumer
+   247  
+   248      @event_consumer.setter
+   249      def event_consumer(self, value): self.session.event_consumer = value
+   250  
+   251      def close(self): return self.session.close()
+   252  
+   253      def solve(self, model, *, budget, x0=None, **kwargs):
+   254          budget.check()
+   255          if self.guard['status'] == 'REJECTED': raise LocalPairError('INITIAL_GUARD_ALREADY_REJECTED')
+   256          if self.guard['status'] == 'NOT_REACHED':
+   257              try:
+   258                  with budget.phase('local_pair_initial_guard'):
+   259                      receipt = read_json(self.checkpoint_path)
+   260                      if self.checkpoint_path.parent.resolve() != self.session.workdir.parent.resolve():
+   261                          raise LocalPairError('CHECKPOINT_NOT_OWNED_BY_FRESH_METHOD')
+   262                      facts = validate_initialization(receipt['initialisation'], self.expected_candidate, self.expected_input, budget.seconds)
+   263                      if x0 is None or self.decode_candidate is None:
+   264                          raise LocalPairError('ACTUAL_X0_AND_DECODER_REQUIRED')
+   265                      if canonical_sha(self.decode_candidate(x0)) != self.expected_candidate:
+   266                          raise LocalPairError('ACTUAL_X0_DECODE_IDENTITY_MISMATCH')
+   267                      if self.admit is None:
+   268                          from matlab_bridge import _prepare
+   269                          admit = _prepare
+   270                      else: admit = self.admit
+   271                      admitted = admit(model, x0=x0)
+   272                      if admitted.get('x0_validation', {}).get('accepted_numerically') is not True:
+   273                          raise LocalPairError('ACTUAL_X0_ADMISSION_FAILED')
+   274                      budget.check()
+   275                      self.guard = {'status': 'PASSED', **facts, 'guard_completed_at_s': budget.elapsed,
+   276                          'actual_vector_length': len(x0), 'native_request_attempts': 0,
+   277                          'scope': 'Fresh in-budget receipt and actual full vector; expected hash is identity only, no historical candidate read.'}
+   278                      write_new_json(self.guard_path, self.guard)
+   279              except BaseException as error:
+   280                  self.guard = {'status': 'REJECTED', 'reason': type(error).__name__+': '+str(error),
+   281                      'formed_at_s': budget.elapsed, 'native_request_attempts': 0}
+   282                  if not self.guard_path.exists(): write_new_json(self.guard_path, self.guard)
+   283                  raise
+   284          budget.check(); self.guard['native_request_attempts'] += 1
+   285          return self.session.solve(model, budget=budget, x0=x0, **kwargs)
+   288  def execute_slot(plan, variant, slot_dir, lifecycle=None, session_class=None):
+   289      if variant not in VARIANTS: raise LocalPairError('UNKNOWN_VARIANT')
+   290      folder = Path(slot_dir).resolve(); folder.mkdir(parents=True, exist_ok=False)
+   291      root = Path(plan['repo_root']).resolve(); sys.path.insert(0, str(root/'research/chapter3_experiments'))
+   292      if lifecycle is None:
+   293          from prefilter_method import execute_prefilter_method
+   294          lifecycle = execute_prefilter_method
+   295      if session_class is None:
+   296          from matlab_bridge import MatlabSession
+   297          session_class = MatlabSession
+   298      from milp import build_model, decode
+   299      from matlab_bridge import cleanup_is_complete
+   300      model_holder = {}; session_holder = {}; started = utc(); began = time.monotonic(); failure = None; result = None
+   301  
+   302      def loader(budget):
+   303          budget.check()
+   304          instance = read_json(safe_repo_path(root, plan['instance_file']))
+   305          config = read_json(safe_repo_path(root, plan['config_file']))
+   306          if canonical_sha(instance) != plan['expected_input_canonical_sha256']:
+   307              raise LocalPairError('IN_BUDGET_INPUT_IDENTITY_DRIFT')
+   308          budget.check(); return config, instance
+   309  
+   310      def builder(instance, config, **kwargs):
+   311          # The old lifecycle supplies exactly its four established flags and
+   312          # the existing prefilter. No new strengthening/model option is added.
+   313          actual = {name: kwargs.get(name, False) for name in plan['baseline_flags']}
+   314          if actual != plan['baseline_flags']: raise LocalPairError('LIFECYCLE_BUILDER_FLAGS_DRIFT')
+   315          model = build_model(instance, config, propagate_support=variant == 'on', **kwargs)
+   316          model_holder['model'] = model; return model
+   317  
+   318      def factory(workdir, **kwargs):
+   319          native = session_class(workdir, matlab_path=plan['matlab_executable'], **kwargs)
+   320          wrapped = GuardedSession(native, folder/'method/initial_receipt_checkpoint.json',
+   321              plan['expected_candidate_sha256'], plan['expected_input_canonical_sha256'], folder/'initial_guard.json',
+   322              decode_candidate=lambda vector: decode(model_holder['model'], vector))
+   323          session_holder['session'] = wrapped; return wrapped
+   324  
+   325      event(folder, 'METHOD_START', variant=variant, seconds=SECONDS)
+   326      try:
+   327          result = lifecycle(loader, folder/'method', seconds=SECONDS, variant='prefilter', model_builder=builder, session_factory=factory)
+   328      except BaseException as error:
+   329          failure = {'type': type(error).__name__, 'reason': str(error), 'traceback': traceback.format_exc()}
+   330      session = session_holder.get('session'); guard = session.guard if session else {'status': 'NOT_REACHED'}
+   331      cleanup = getattr(session, 'cleanup', None) if session else None
+   332      clean = bool(session and cleanup and cleanup_is_complete(cleanup))
+   333      entry_value = result.get('integer_solver_entered') if result else None
+   334      entered = entry_value if type(entry_value) is bool else None
+   335      technical = bool(failure or (result and (result.get('error') or result.get('cleanup_error') or
+   336          'INTERFACE' in str(result.get('reason')) or 'NUMERICAL' in str(result.get('reason')))))
+   337      complete = bool(result and guard['status'] == 'PASSED' and clean and entered is True and not technical)
+   338      record = {'variant': variant, 'status': 'COMPLETE' if complete else 'INVALID_OR_INCOMPLETE',
+   339          'started_utc': started, 'ended_utc': utc(), 'process_body_wall_s': time.monotonic()-began,
+   340          'method_seconds': SECONDS, 'guard': guard, 'cleanup_complete': clean, 'cleanup': cleanup,
+   341          'native_entry_confirmed': entered, 'failure': failure, 'legacy_result_path': 'method/result.json',
+   342          'legacy_state': result.get('state') if result else None, 'legacy_reason': result.get('reason') if result else None,
+   343          'limits': 'One invocation only. SAFE initialization does not imply native solve success or optimality. No automatic retry/resume.'}
+   344      write_new_json(folder/'slot_result.json', record); event(folder, 'METHOD_END', status=record['status'])
+   372  def _launch_worker(plan_path, variant, slot_dir, batch_dir):
+   373      import psutil
+   374      plan = read_json(plan_path); claim = read_json(Path(batch_dir)/'batch_claim.json')
+   375      args = [sys.executable, '-B', str(Path(__file__).resolve()), '_worker', '--plan', str(plan_path),
+   376          '--output', str(batch_dir), '--variant', variant, '--token', claim['worker_token']]
+   377      started = utc(); began = time.monotonic(); timed_out = False; cleanup = None
+   378      with (Path(batch_dir)/(variant+'_worker.stdout.log')).open('xb') as stdout, (Path(batch_dir)/(variant+'_worker.stderr.log')).open('xb') as stderr:
+   379          process = subprocess.Popen(args, cwd=plan['repo_root'], stdout=stdout, stderr=stderr)
+   380          identity = psutil.Process(process.pid).create_time()
+   381          event(batch_dir, 'WORKER_STARTED', variant=variant, pid=process.pid, create_time=identity, argv=args)
+   382          try: process.wait(timeout=plan['worker_watchdog_seconds'])
+   383          except subprocess.TimeoutExpired:
+   384              timed_out = True; cleanup = _stop_owned_worker(process, identity)
+   385      command = {'argv': args, 'started_utc': started, 'ended_utc': utc(), 'wall_s': time.monotonic()-began,
+   386          'returncode': process.poll(), 'watchdog_expired': timed_out, 'watchdog_cleanup': cleanup}
+   387      write_new_json(Path(batch_dir)/(variant+'_worker_return.json'), command)
+   388      record_path = Path(slot_dir)/'slot_result.json'
+   389      if timed_out or process.returncode != 0 or not record_path.is_file():
+   390          return {'variant': variant, 'status': 'CRASH_OR_WATCHDOG', 'guard': {'status': 'UNKNOWN'},
+   391              'cleanup_complete': False, 'native_entry_confirmed': None, 'command': command}
+   392      return read_json(record_path)
+   393  
+   394  
+   395  def status_pair(output):
+   396      folder = Path(output).resolve(); result = {'output': str(folder), 'read_only': True, 'slots': {}, 'resume_allowed': False}
+   397      for name in ['batch_claim.json', 'pair_summary.json']:
+   398          path = folder/name
+   399          if path.is_file():
+   400              try: result[name] = read_json(path)
+   401              except (OSError, ValueError): result[name] = {'status': 'INCOMPLETE_JSON'}
+   402      for variant in VARIANTS:
+   403          path = folder/variant/'slot_result.json'; claim = folder/(variant+'_slot_claim.json')
+   404          if path.is_file():
+   405              try: result['slots'][variant] = read_json(path)
+   406              except (OSError, ValueError): result['slots'][variant] = {'status': 'INCOMPLETE_JSON'}
+   407          else: result['slots'][variant] = {'status': 'CLAIMED_INCOMPLETE_OR_RUNNING' if claim.exists() else 'NOT_CLAIMED'}
+   408      return result
+   409  
+   410  
+   411  def run_pair(plan_path, output, *, run=False, launch_worker=None):
+   412      if run is not True: raise LocalPairError('EXPLICIT_RUN_FLAG_REQUIRED')
+   413      plan_path = Path(plan_path).resolve(); plan = verify_local_plan(plan_path)['plan']
+   414      folder = Path(output).resolve()
+   415      if folder.exists(): raise LocalPairError('NEW_BATCH_DIRECTORY_REQUIRED_NO_RESUME')
+   416      token = secrets.token_hex(24)
+   417      claim = {'utc': utc(), 'plan_path': str(plan_path), 'plan_sha256': sha256(plan_path),
+   418          'output': str(folder), 'worker_token': token, 'scope': 'One OFF and one ON invocation, no retry or extra method budget.'}
+   419      # Bind consumption to the local plan, not just a changeable output path.
+   420      write_new_json(claim_path(plan_path), claim)
+   421      folder.mkdir(parents=True, exist_ok=False); write_new_json(folder/'batch_claim.json', claim)
+   422      rows = []; failure = None; started = utc(); launch = _launch_worker if launch_worker is None else launch_worker
+   423      for variant in VARIANTS:
+   424          try:
+   425              verify_local_plan(plan_path)
+   426              write_new_json(folder/(variant+'_slot_claim.json'), {'utc': utc(), 'variant': variant,
+   427                  'plan_sha256': claim['plan_sha256'], 'method_seconds': SECONDS})
+   428              event(folder, 'SLOT_CLAIMED', variant=variant)
+   429              row = launch(plan_path, variant, folder/variant, folder); rows.append(row)
+   430              valid = (row.get('status') == 'COMPLETE' and row.get('guard', {}).get('status') == 'PASSED'
+   431                  and row['guard'].get('candidate_sha256') == plan['expected_candidate_sha256']
+   432                  and row.get('cleanup_complete') is True and row.get('native_entry_confirmed') is True)
+   433              if not valid:
+   434                  failure = variant+':SLOT_INVALID_OR_CLEANUP_UNCONFIRMED'; break
+   435              event(folder, 'SLOT_ACCEPTED', variant=variant)
+   436          except BaseException as error:
+   437              failure = variant+':'+type(error).__name__+': '+str(error)
+   438              event(folder, 'SLOT_EXCEPTION', variant=variant, error=failure); break
+   439      summary = {'schema': SCHEMA, 'started_utc': started, 'ended_utc': utc(),
+   440          'plan_sha256': claim['plan_sha256'], 'status': 'VALID_PAIR' if len(rows) == 2 and failure is None else 'INVALID_OR_INCOMPLETE_PAIR',
+   441          'results': rows, 'failure': failure, 'retries': 0, 'resume_allowed': False,
+   442          'not_run': [v for v in VARIANTS if not (folder/(v+'_slot_claim.json')).exists()],
+   443          'claim_preserved': str(claim_path(plan_path)), 'independently_proven_optimal': False,
+   444          'limits': 'A valid pair is one bounded local comparison only. Native bounds are solver-reported. Cleanup/archive are not extra search time.'}
+   445      write_new_json(folder/'pair_summary.json', summary); event(folder, 'PAIR_END', status=summary['status'])
+   446      return summary
+   447  
+   448  
+   449  def _worker(plan_path, output, variant, token):
+   450      plan_path = Path(plan_path).resolve(); folder = Path(output).resolve()
+   451      plan = verify_local_plan(plan_path)['plan']; claim = read_json(folder/'batch_claim.json')
+   452      external = read_json(claim_path(plan_path)); slot_claim = read_json(folder/(variant+'_slot_claim.json'))
+   453      if (claim != external or claim['worker_token'] != token or claim['plan_sha256'] != sha256(plan_path)
+   454              or Path(claim['output']).resolve() != folder or slot_claim['variant'] != variant):
+   455          raise LocalPairError('WORKER_CLAIM_IDENTITY_MISMATCH')
+   456      record = execute_slot(plan, variant, folder/variant)
+
+research/chapter3_support_propagation_20261110/execution_source/milp.py SHA256=f34809ad6d8e15d4639af8cdcfb62b3ebb4603772e513289280ccdefa783fefb
+    30  _EXPORT_CACHE_LIMIT = 4096  # memory policy only; eviction changes no coefficient
+    31  _CONDITIONAL_CACHE_LIMIT = 4096  # complete row templates; local to one model
+    32  _AFFINE_CACHE_LIMIT = 2048  # pairs of complete rows, not a restriction on modes
+    33  
+   413      def affine_conditional_eq(self, target, sources, coefficients, gate, tag):
+   414          """Bind a repeated interval affine propagation/energy equality.
+   415  
+   416          All coefficients come from Coefficients.get and are interval objects.
+   417          The key snapshots their text, so a changed coefficient cannot reuse a
+   418          stale template. Both directions remain present, with separate budget
+   419          checks. Feedback and generic rows retain conditional_eq/conditional_le.
+   420          """
+   421          self.budget.check()
+   422          if len(coefficients) != len(sources)+1 or not all(isinstance(a, I) for a in coefficients):
+   423              raise ValueError('affine template requires an interval coefficient per source and constant')
+   424          slots = (target, *sources, gate)
+   425          if len(set(slots)) != len(slots):
+   426              # Preserve the original dictionary's overwrite semantics.
+   427              self.conditional_eq({target: 1, **{j: -a for j, a in zip(sources, coefficients[:-1])}},
+   428                                  coefficients[-1], gate, tag)
+   429              return
+   430          with self.measure_construction('affine_key_and_lookup', detail=True):
+   431              key = (tuple((str(a.lo), str(a.hi)) for a in coefficients),
+   432                     tuple(self.bound_signature(j) for j in slots))
+   433              pair = self._affine_templates.get(key)
+   434          if pair is not None:
+   435              with self.measure_construction('affine_hit_assembly', detail=True):
+   436                  self.append_template(pair[0], slots, tag+'/upper')
+   437                  self.append_template(pair[1], slots, tag+'/lower')
+   438              self.affine_stats['hits'] += 1
+   439              return
+   440          self.affine_stats['misses'] += 1
+   441          with self.measure_construction('affine_miss_binding', detail=True):
+   442              self.conditional_eq({target: 1, **{j: -a for j, a in zip(sources, coefficients[:-1])}},
+   443                                  coefficients[-1], gate, tag)
+   444              positions = {j: k for k, j in enumerate(slots)}
+   445              pair = []
+   446              for record in self.rows[-2:]:
+   447                  values = tuple((positions[j], a) for j, a in record['coef'].items())
+   448                  metadata = {k: v for k, v in record.items() if k not in ('coef', 'tag')}
+   449                  metadata['rhs_interval'] = tuple(metadata['rhs_interval'])
+   450                  pair.append((values, metadata))
+   451              if len(self._affine_templates) >= _AFFINE_CACHE_LIMIT:
+   452                  self._affine_templates.clear()
+   453                  self.affine_stats['clears'] += 1
+   454              self._affine_templates[key] = tuple(pair)
+  1100                      coeff = model.coefficients.get(state, right-left)
+  1101                  with model.measure_construction('thermal_conditional_rows'):
+  1102                      for i, row in enumerate(coeff['temperature']):
+  1103                          model.affine_conditional_eq(meta['theta'][l+1][i], sources, row, gate, 'thermal_propagation')
+  1104                      row = coeff['energy']
+  1105                      model.affine_conditional_eq(ev, sources, row, gate, 'complete_energy')
+  1106                      if strengthen_energy_lower_bounds:
+  1107                          energy_source_rows.append(len(model.rows)-1)
+
+research/chapter3_support_propagation_20261110/r1_diagnostic/off/result.json SHA256=001e8e46a279745a41daa2f190be0d9f78cdbe89d762d59c04ee4bba32f4e93f
+   220        },
+   221        "template_miss_construction": {
+   222          "calls": 15120,
+   223          "inclusive_s": 4.141133278924826,
+   224          "nested_observation_s": 0.00038437198600149713,
+   225          "exclusive_s": 4.140748906938825
+   226        },
+   227        "affine_miss_binding": {
+   228          "calls": 7560,
+   229          "inclusive_s": 4.826576902923989,
+   230          "nested_observation_s": 0.00038437198600149713,
+   231          "exclusive_s": 4.826192530937988
+   232        },
+   233        "affine_hit_assembly": {
+   234          "calls": 70875,
+   235          "inclusive_s": 0.5403071792934497,
+   236          "nested_observation_s": 0.0007177690058597364,
+   237          "exclusive_s": 0.53958941028759
+   238        }
+   239      },
+   240      "affine_templates": {
+   241        "hits": 70875,
+   242        "misses": 7560,
+   243        "clears": 3,
+   244        "retained": 1416
+   245      },
+   246      "row_reuse": {
+   247        "rhs_metadata_retained": 498,
+   248        "activity_export_patterns_retained": 27,
+   249        "scope": "per-model immutable values; rows and coefficient dictionaries remain distinct"
+   250      },
+   251      "detail_scope": "nested within thermal_conditional_rows; generic template details also nest in affine misses; never sum with parents",
+   252      "component_scope": "disjoint timed regions; inclusive includes nested observation; unfinished calls counted on exception unwind",
+   253      "observation_cost_scope": "callbacks including synchronous progress logging; budget checks excluded",
+   254      "complete_model_only_when": "status MODEL_CONSTRUCTED and successful build_model return",
+   255      "partial_counts_are_not_solver_ready": false
+   256    },
+   257    "variant": "off",
+   258    "started_utc": "2026-11-10T11:01:16.869448+00:00",
+   259    "ended_utc": "2026-11-10T11:01:30.856130+00:00",
+   260    "method_diagnostic_elapsed_s": 13.482806405001611,
+   261    "archive_wall_s": 0.5038961380014371,
+   262    "stop_stage": "diagnostic_complete",
+   263    "failure": null,
+   264    "model_complete": true,
+   265    "matrix_complete": true,
+   335        }
+   336      ],
+   337      "unattributed_s": 0.0010376700047345366,
+   338      "clock_origin": "before input read; imports excluded for all methods",
+   339      "execution_stop": "cooperative checkpoints, not a hard real-time process stop",
+   340      "evidence_cutoff": "one absolute monotonic deadline; no round reset"
+   341    },
+   342    "scipy_version": "1.17.0",
+   343    "numpy_version": "2.3.5",
+   344    "new_native_solver_calls": 0,
+   345    "no_new_optimization_search": true,
+   346    "initial_schedule_source": "original deterministic initial_schedule, not enhanced HEFT; no historical solution read",
+   347    "formal_pair_status": "NOT_RUN_NO_MATLAB_R2023b",
+   348    "timing_limit": "No MATLAB startup/solve occurred. The initialization SAFE time is a construction diagnostic, not formal first-SAFE performance."
+   349  }
+
+research/chapter3_support_propagation_20261110/r1_diagnostic/on/result.json SHA256=ffbca518d915a1fe75dec49eb56700f4a5cd0b12e7e745ce4af1016f7956b322
+ 11948        },
+ 11949        "template_miss_construction": {
+ 11950          "calls": 14988,
+ 11951          "inclusive_s": 4.0681653721221664,
+ 11952          "nested_observation_s": 0.0001226980057253968,
+ 11953          "exclusive_s": 4.068042674116441
+ 11954        },
+ 11955        "affine_miss_binding": {
+ 11956          "calls": 7494,
+ 11957          "inclusive_s": 4.660374414092075,
+ 11958          "nested_observation_s": 0.0001226980057253968,
+ 11959          "exclusive_s": 4.66025171608635
+ 11960        },
+ 11961        "affine_hit_assembly": {
+ 11962          "calls": 49266,
+ 11963          "inclusive_s": 0.23114983339837636,
+ 11964          "nested_observation_s": 0.0003341379851917736,
+ 11965          "exclusive_s": 0.23081569541318459
+ 11966        }
+ 11967      },
+ 11968      "affine_templates": {
+ 11969        "hits": 49266,
+ 11970        "misses": 7494,
+ 11971        "clears": 3,
+ 11972        "retained": 1350
+ 11973      },
+ 11974      "row_reuse": {
+ 11975        "rhs_metadata_retained": 3864,
+ 11976        "activity_export_patterns_retained": 27,
+ 11977        "scope": "per-model immutable values; rows and coefficient dictionaries remain distinct"
+ 11978      },
+ 11979      "detail_scope": "nested within thermal_conditional_rows; generic template details also nest in affine misses; never sum with parents",
+ 11980      "component_scope": "disjoint timed regions; inclusive includes nested observation; unfinished calls counted on exception unwind",
+ 11981      "observation_cost_scope": "callbacks including synchronous progress logging; budget checks excluded",
+ 11982      "complete_model_only_when": "status MODEL_CONSTRUCTED and successful build_model return",
+ 11983      "partial_counts_are_not_solver_ready": false
+ 11984    },
+ 11985    "variant": "on",
+ 11986    "started_utc": "2026-11-10T11:02:30.441159+00:00",
+ 11987    "ended_utc": "2026-11-10T11:02:43.118476+00:00",
+ 11988    "method_diagnostic_elapsed_s": 12.078241090999654,
+ 11989    "archive_wall_s": 0.599098063998099,
+ 11990    "stop_stage": "diagnostic_complete",
+ 11991    "failure": null,
+ 11992    "model_complete": true,
+ 12068      "evidence_cutoff": "one absolute monotonic deadline; no round reset"
+ 12069    },
+ 12070    "scipy_version": "1.17.0",
+ 12071    "numpy_version": "2.3.5",
+ 12072    "new_native_solver_calls": 0,
+ 12073    "no_new_optimization_search": true,
+ 12074    "initial_schedule_source": "original deterministic initial_schedule, not enhanced HEFT; no historical solution read",
+ 12075    "formal_pair_status": "NOT_RUN_NO_MATLAB_R2023b",
+ 12076    "timing_limit": "No MATLAB startup/solve occurred. The initialization SAFE time is a construction diagnostic, not formal first-SAFE performance."
+ 12077  }
+

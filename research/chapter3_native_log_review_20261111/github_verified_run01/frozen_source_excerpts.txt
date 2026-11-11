@@ -1,0 +1,196 @@
+research/chapter3_experiments/milp.py
+655: def add_energy_lower_bound(model, target, sources, gates, source_rows, onehot_rows,
+656:                            *, scene=None, interval=None):
+657:     """Add a disjunctive affine bound implied by exported integer-state rows.
+658: 
+659:     Read binary64 rows/bounds as exact rationals, including their old outward
+660:     allowances. For -E+a_h*z+g_h*w_h<=b_h, w_h=1 implies E>=a_h*z+g_h-b_h.
+661:     A common slope beta and a signed box minimum give E>=beta*z+delta_h.
+662:     Integer one-hot states then imply E>=beta*z+sum(delta_h*w_h). Exporting
+663:     this inequality outwards preserves even the old enclosure's integer points.
+664:     It is a relaxation strengthening, not a certificate of solver arithmetic.
+665:     """
+666:     model.budget.check()
+667:     sources, gates, source_rows = list(sources), list(gates), list(source_rows)
+668:     if not gates or len(gates) != len(source_rows):
+669:         raise ValueError('one source energy row per state required')
+670:     if len({target, *sources, *gates}) != 1+len(sources)+len(gates):
+671:         raise ValueError('energy target, sources and gates must be distinct')
+672:     membership = getattr(model, '_energy_gate_membership', None)
+673:     if membership is None or membership[0] != len(model.logical_binary):
+674:         membership = (len(model.logical_binary), frozenset(model.logical_binary))
+675:         model._energy_gate_membership = membership
+676:     if any(j not in membership[1] or model.lb[j] != 0 or model.ub[j] != 1 for j in gates):
+677:         raise ValueError('logical binary gates on [0,1] required')
+678:     if len(onehot_rows) != 2:
+679:         raise ValueError('exact one-hot row pair required')
+680:     for row_index, sign in zip(onehot_rows, (1.0, -1.0)):
+681:         record = model.rows[row_index]
+682:         if record['coef'] != {j: sign for j in gates} or record['rhs'] != sign:
+683:             raise ValueError('state sum must equal one without row allowance')
+684:     coefficients, constants = [], []
+685:     for gate, row_index in zip(gates, source_rows):
+686:         model.budget.check()
+687:         record = model.rows[row_index]
+688:         row = record['coef']
+689:         if row.get(target) != -1.0 or set(row)-{target, gate, *sources}:
+690:             raise ValueError('expected exported lower energy row with coefficient -1')
+691:         coefficients.append([F.from_float(float(row.get(j, 0.0))) for j in sources])
+692:         constants.append(F.from_float(float(row.get(gate, 0.0)))-F.from_float(float(record['rhs'])))
+693:     boxes = [(F.from_float(float(model.lb[j])), F.from_float(float(model.ub[j]))) for j in sources]
+694:     beta = [min(row[k] for row in coefficients) for k in range(len(sources))]
+695:     offsets = []
+696:     for row, constant in zip(coefficients, constants):
+697:         model.budget.check()
+698:         offsets.append(constant+sum((min((a-b)*lo, (a-b)*hi)
+699:                        for a, b, (lo, hi) in zip(row, beta, boxes)), F(0)))
+700:     cut = {target: -1, **dict(zip(sources, beta)), **dict(zip(gates, offsets))}
+701:     row_index = len(model.rows)
+702:     model.le(cut, 0, 'energy_state_lower_bound')
+703:     model.energy_bound_certificates.append({
+704:         'scene': scene, 'interval': interval, 'target': target, 'sources': sources,
+705:         'gates': gates, 'source_rows': source_rows, 'onehot_rows': list(onehot_rows),
+706:         'cut_row': row_index, 'common_slopes': list(map(str, beta)),
+707:         'state_offsets': list(map(str, offsets)),
+881:                 retained.append(option)
+882:         model.preprocessing['deadline_removed_count'] = len(options)-len(retained)
+883:         options = retained
+884:     if preeliminate_closed_anchors:
+885:         from anchor_preelimination import filter_closed_anchor_options
+886:         model.report('closed_anchor_preelimination')
+887:         options, stats = filter_closed_anchor_options(instance, n1_condition, options,
+888:             budget=budget, scene_ids=[scene['id'] for scene in model.instance['scenarios']])
+889:         model.preprocessing['closed_anchor_preelimination'] = stats
+890:         model.formulation['preeliminate_closed_anchors'] = True
+891:     if propagate_support:
+892:         from option_support import propagate_option_support
+893:         model.report('option_support_propagation')
+894:         options, support_report = propagate_option_support(model.instance, options, budget=budget)
+895:         model.preprocessing['option_support'] = support_report
+896:         model.formulation['propagate_support'] = True
+897:     model.options = options
+898:     model.report('mode_variables')
+899:     model.option_vars = [model.var('y:'+o['option_id'], integer=True) for o in options]
+900:     # These indices retain the original option order and exact rational times.
+901:     # They replace repeated parsing/filtering, not any constraint or choice.
+902:     option_start, option_end, option_power = {}, {}, {}
+1110:                     [meta['joint'][l, state] for state in states], energy_source_rows))
+1111:     if fix_late_options:
+1112:         model.report('deadline_fixing', scene=None, interval=None, control_state=None)
+1113:         for option, y in zip(model.options, model.option_vars):
+1114:             model.budget.check()
+1115:             if F(option['end_ms']) > F(option['request_deadline_ms']):
+1116:                 model.fix_zero_option(y)
+1117:     if strengthen_energy_lower_bounds:
+1118:         model.report('energy_lower_bounds', scene=None, interval=None, control_state=None)
+1119:         with model.measure_construction('energy_lower_bounds'):
+1120:             for sid, l, ev, sources, gates, rows in energy_specs:
+1121:                 add_energy_lower_bound(model, ev, sources, gates, rows, energy_onehot_rows[sid, l],
+1122:                                        scene=sid, interval=l)
+1123:     if cumulative_precedence:
+1124:         model.report('cumulative_precedence', scene=None, interval=None, control_state=None)
+1125:         with model.measure_construction('cumulative_precedence'):
+1126:             for scene in model.instance['scenarios']:
+research/chapter3_experiments/solve_model.m
+30:         if ~isempty(readError), throw(readError); end
+31:         % Atomic publication can still be temporarily locked on Windows.
+32:         % Only file-open failures are retried; complete malformed JSON is an
+33:         % immediate protocol error, not a transient publication to accept.
+34:         req = jsondecode(requestText);
+35:         streamEvents = isfield(req,'stream_events') && req.stream_events;
+36:         p = load([prefix '.mat']);
+37:         initialPoint=[];
+38:         if isfield(p,'x0')
+39:             initialPoint=p.x0(:);
+40:             result.initial_point=struct('provided',true, ...
+41:                 'length',numel(initialPoint),'initial_objective',p.c(:)'*initialPoint, ...
+42:                 'thermal_safe_claim',false,'solver_acceptance','not_independently_observed');
+43:             if isfield(p,'x0_validation')
+44:                 result.initial_point.python_admission=p.x0_validation;
+45:             end
+89:         opts = optimoptions('intlinprog','Display','off', ...
+90:             'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
+91:             'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
+92:             'IntegerPreprocess','none', ...
+93:             'LPPreprocess','none', ...
+94:             'OutputFcn',@callback);
+95:         if hasCutIterationLimit
+96:             opts.CutMaxIterations=cutIterationLimit;
+97:             result.cut_max_iterations_actual_effective=opts.CutMaxIterations;
+98:         end
+99:         % Engineering compatibility setting, fixed before formal runs:
+100:         % numeric_diagnostic04 solved the unchanged small physical model with
+101:         % IntegerPreprocess='none', where 'basic' reported infeasible despite
+102:         % independent feasible lifts.  This preserves the mathematical model;
+103:         % it does not establish a general MATLAB preprocessing defect.
+104:         % K.106's fixed-logic feasibility pair also requires LPPreprocess='none'
+105:         % for this R2023b numerical representation. The original matrices,
+106:         % variable domain and tolerances are unchanged. Full free-schedule
+107:         % optimization speed is not established by that compatibility check.
+108:         opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+109:             guardSeconds-toc(workerClock),solverTimeCap]));
+122:         opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+123:             guardSeconds-toc(workerClock),solverTimeCap]));
+124:         result.options.MaxTime = opts.MaxTime;
+125:         if hasSolverTimeCap
+126:             result.solver_max_time_s_used=opts.MaxTime;
+127:             solverTimeAllocation=struct('declared',declaredSolverTimeCap, ...
+128:                 'allocated',solverTimeCap,'native_MaxTime_used',opts.MaxTime, ...
+129:                 'response_deadline_shortened',false);
+130:         end
+131:         result.options_text = evalc('disp(opts)');
+132:         result.phase_seconds.options_preparation=toc(phaseClock);
+133:         if opts.MaxTime<=0 || isfile([prefix '.cancel']) ...
+134:                 || isfile(fullfile(folder,'stop')) || toc(workerClock)>=guardSeconds
+135:             result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
+136:         else
+137:             result.intlinprog_entered=true;
+138:             if streamEvents
+139:                 entered=struct('kind','solver_entered','request_wall_seconds',toc(requestClock));
+140:                 if hasSolverTimeCap, entered.solver_time_allocation=solverTimeAllocation; end
+141:                 if hasCutIterationLimit
+142:                     entered.cut_max_iterations_declared=cutIterationLimit;
+143:                     entered.cut_max_iterations_actual_effective=opts.CutMaxIterations;
+144:                 end
+145:                 publish(entered);
+146:             end
+147:             phaseClock=tic;
+148:             lastwarn('');
+149:             [x,fval,exitflag,output] = intlinprog(p.c(:),p.intcon(:)', ...
+150:                 p.A,p.b(:),p.Aeq,p.beq(:),p.lb(:),p.ub(:),initialPoint,opts);
+151:             [warningMessage,warningIdentifier]=lastwarn;
+152:             result.solver_warning_message=warningMessage;
+153:             result.solver_warning_identifier=warningIdentifier;
+154:             result.phase_seconds.intlinprog_call=toc(phaseClock);
+155:             result.x=x(:)'; result.fval=fval; result.exitflag=exitflag;
+156:             result.output=output; result.status='SOLVED';
+157:             if ~isempty(callbackError)
+158:                 result.status='CALLBACK_ERROR'; result.callback_error=callbackError;
+159:             end
+160:             % MAT retains NaN/Inf and all native solver fields independently
+161:             % of JSON's null representation.  This is raw solver evidence.
+162:             phaseClock=tic;
+163:             if hasSolverTimeCap
+164:                 save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks', ...
+165:                     'initialPoint','solverTimeAllocation');
+166:             else
+167:                 save([prefix '.native.mat'],'x','fval','exitflag','output','opts','callbacks','initialPoint');
+168:             end
+169:             result.phase_seconds.native_result_archive=toc(phaseClock);
+research/chapter3_support_local_migration_20261110/run_local_pair.py
+305:         config = read_json(safe_repo_path(root, plan['config_file']))
+306:         if canonical_sha(instance) != plan['expected_input_canonical_sha256']:
+307:             raise LocalPairError('IN_BUDGET_INPUT_IDENTITY_DRIFT')
+308:         budget.check(); return config, instance
+309: 
+310:     def builder(instance, config, **kwargs):
+311:         # The old lifecycle supplies exactly its four established flags and
+312:         # the existing prefilter. No new strengthening/model option is added.
+313:         actual = {name: kwargs.get(name, False) for name in plan['baseline_flags']}
+314:         if actual != plan['baseline_flags']: raise LocalPairError('LIFECYCLE_BUILDER_FLAGS_DRIFT')
+315:         model = build_model(instance, config, propagate_support=variant == 'on', **kwargs)
+316:         model_holder['model'] = model; return model
+317: 
+318:     def factory(workdir, **kwargs):
+319:         native = session_class(workdir, matlab_path=plan['matlab_executable'], **kwargs)
+320:         wrapped = GuardedSession(native, folder/'method/initial_receipt_checkpoint.json',

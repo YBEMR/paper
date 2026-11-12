@@ -1,0 +1,576 @@
+work/equality_pair_source/research/chapter3_experiments/matlab_bridge.py SHA256=c56527e4836c5154c1ad567060a94c5fa8df125d761131c71e53dc187bc7e8e1
+45: 
+46: class PublicationTimeout(TimeoutError):
+47:     def __init__(self, path, diagnostics):
+48:         super().__init__(f'No complete readable publication within deadline: {path}')
+49:         self.diagnostics = diagnostics
+50: 
+51: 
+52: class WorkerExited(RuntimeError):
+53:     def __init__(self, returncode, diagnostics):
+54:         super().__init__(f'MATLAB worker exited before publication, code {returncode}')
+55:         self.returncode = returncode
+56:         self.diagnostics = diagnostics
+57: 
+58: 
+59: def _read_json_until(path, deadline, clock=time.monotonic, process=None,
+60:                      sleep=time.sleep, on_poll=None):
+61:     """Wait for a complete readable message without moving the deadline.
+62: 
+63:     Existence alone is insufficient on Windows: publication or a transient
+64:     file lock can make the name visible before Python can read it.  A result
+65:     is formed only after reading and decoding the full message inside the
+66:     original deadline.  Diagnostics retain retries rather than hiding them.
+67:     """
+68:     diagnostics = {'attempts': 0, 'transient_read_errors': {}, 'last_read_error': None}
+69:     while True:
+70:         if clock() >= deadline:
+71:             raise PublicationTimeout(path, diagnostics)
+72:         if on_poll is not None:
+73:             on_poll()
+74:             if clock() >= deadline:
+75:                 raise PublicationTimeout(path, diagnostics)
+76:         diagnostics['attempts'] += 1
+77:         try:
+78:             value = json.loads(path.read_text(encoding='utf-8-sig'))
+79:         except (FileNotFoundError, PermissionError, json.JSONDecodeError,
+80:                 UnicodeDecodeError) as exc:
+81:             name = type(exc).__name__
+82:             diagnostics['transient_read_errors'][name] = (
+83:                 diagnostics['transient_read_errors'].get(name, 0) + 1)
+84:             diagnostics['last_read_error'] = f'{name}: {exc}'
+85:             if isinstance(exc, FileNotFoundError) and process is not None:
+86:                 returncode = process.poll()
+87:                 if returncode is not None:
+88:                     raise WorkerExited(returncode, diagnostics) from exc
+89:             sleep(min(.005, max(0.0, deadline - clock())))
+90:             continue
+91:         if clock() >= deadline:
+92:             raise PublicationTimeout(path, diagnostics)
+93:         if not isinstance(value, dict):
+94:             raise ValueError(f'MATLAB publication is not a JSON object: {path}')
+95:         if on_poll is not None:
+96:             on_poll()  # drain events published immediately before final response
+97:             if clock() >= deadline:
+98:                 raise PublicationTimeout(path, diagnostics)
+99:         return value, diagnostics
+100: 
+101: 
+102: def _finite_vector(value, name, length=None, allow_infinity=False):
+103:     result = np.asarray(value, dtype=float).reshape(-1)
+104:     if length is not None and len(result) != length:
+105:         raise ValueError(f'{name} length must equal {length}')
+106:     bad = np.isnan(result) if allow_infinity else ~np.isfinite(result)
+107:     if bad.any():
+108:         raise ValueError(f'{name} contains unsupported nonfinite values')
+109:     return result
+110: 
+111: 
+112: def _matrix(value, name, n):
+113:     result = sparse.csc_matrix(value, dtype=float)
+114:     if result.shape[1] != n or not np.isfinite(result.data).all():
+115:         raise ValueError(f'{name} has invalid dimensions or coefficients')
+451:     ``budget=...``. Its ``deadline`` must use the bridge's monotonic clock.
+452:     """
+453: 
+454:     def __init__(self, workdir, total_budget_s=600, matlab_path=DEFAULT_MATLAB,
+455:                  clock=time.monotonic, budget=None, cut_max_iterations=None):
+456:         self.cut_max_iterations = _cut_iteration_limit(cut_max_iterations)
+457:         if not math.isfinite(total_budget_s) or total_budget_s <= 0:
+458:             raise ValueError('total_budget_s must be positive and finite')
+459:         self.clock = clock
+460:         self.started = clock()
+461:         self.deadline = self.started + float(total_budget_s)
+462:         self.budget = budget
+463:         if budget is not None:
+464:             self.deadline = min(self.deadline, _absolute_deadline(budget))
+465:         self.workdir = Path(workdir).resolve()
+466:         self.counter = 0
+467:         self.closed = False
+468:         self.request_blocked = False
+469:         self.proc = None
+470:         self.log = None
+471:         if self.clock() >= self.deadline:
+472:             raise TimeoutError('Method budget exhausted before MATLAB session preparation')
+473:         self.workdir.mkdir(parents=True, exist_ok=False)
+474:         prefs = REPO / '.runtime/matlab_prefs'
+475:         prefs.mkdir(parents=True, exist_ok=True)
+476:         self.metadata = {
+477:             'scope': ('method_absolute_deadline_transport' if budget is not None
+478:                       else 'small_domain_precheck_transport_not_formal_comparison'),
+479:             'matlab_executable': str(matlab_path), 'preference_directory': str(prefs),
+480:             'worker_guard_seconds': float(total_budget_s),
+481:             'source_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+482:                               for p in [Path(__file__), HERE / 'solve_model.m']},
+483:             'warm_start_shared': False, 'candidate_or_thermal_cache_shared': False,
+484:             'external_absolute_deadline': self.deadline,
+485:             'method_deadline_bound': budget is not None,
+486:             'deadline_is_not_a_hard_realtime_interrupt': True,
+487:             'callback_candidates': 'recorded_only_not_independently_thermal_checked',
+488:             'external_evaluation': 'final_returned_candidate_only_within_method_deadline',
+489:             'engineering_compatibility': {
+490:                 'IntegerPreprocess': 'none',
+491:                 'basis': 'results/milp_numeric_diagnostic04',
+492:                 'LPPreprocess': 'none',
+493:                 'LPPreprocess_basis': 'results/infeasible_audit01/fixed_logic_no_lp_preprocess_probe',
+494:                 'mathematical_model_unchanged': True,
+495:                 'general_solver_defect_claim': False,
+496:             },
+497:         }
+498:         if self.cut_max_iterations is not None:
+499:             self.metadata['cut_max_iterations_declared'] = self.cut_max_iterations
+500:             self.metadata['cut_max_iterations_scope'] = 'native_cut_pass_limit_only'
+501:         _json(self.workdir / 'session.json', self.metadata)
+502:         quote = lambda p: Path(p).as_posix().replace("'", "''")
+503:         try:
+504:             guard = self.deadline - self.clock()
+505:             if guard <= 0:
+506:                 raise TimeoutError('Method budget exhausted during MATLAB session preparation')
+507:             # MATLAB cannot share Python's monotonic epoch. This relative
+508:             # guard is advisory; Python's original deadline controls receipt.
+509:             script = "addpath('%s'); solve_model('%s',%.17g);" % (
+510:                 quote(HERE), quote(self.workdir), guard)
+511:             self.log = (self.workdir / 'matlab.log').open('wb')
+512:             if self.clock() >= self.deadline:
+513:                 raise TimeoutError('Method budget exhausted before MATLAB process launch')
+514:             self.proc = subprocess.Popen(
+515:                 [str(matlab_path), '-batch', script],
+516:                 env=dict(os.environ, MATLAB_PREFDIR=str(prefs)),
+517:                 stdout=self.log, stderr=subprocess.STDOUT,
+518:                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+519:             self.metadata['pid'] = self.proc.pid
+520:             _json(self.workdir / 'session.json', self.metadata)
+521:             ready = self.workdir / 'ready.json'
+522:             self.environment, read_info = _read_json_until(
+523:                 ready, self.deadline, self.clock, self.proc)
+524:             self.metadata['ready_publication_read'] = read_info
+525:             if self.environment.get('status') != 'READY':
+526:                 raise RuntimeError('MATLAB worker unavailable: ' + str(self.environment))
+527:             if self.environment.get('release') != '2023b':
+528:                 raise RuntimeError('This bridge is checked only against MATLAB R2023b')
+529:             self.process_tree = _capture_owned_process_tree(self.proc, phase='ready')
+530:             self.metadata['process_tree_at_ready'] = deepcopy(self.process_tree)
+531:             self.metadata['startup_wall_seconds'] = self.clock() - self.started
+532:             self.metadata['startup_outcome'] = 'READY'
+533:             _json(self.workdir / 'session.json', self.metadata)
+534:             if self.clock() >= self.deadline:
+535:                 raise TimeoutError('Method budget exhausted before MATLAB startup receipt')
+536:         except BaseException as exc:
+537:             # Startup evidence only, not a retry or an accepted solver result.
+538:             self.metadata['startup_outcome'] = 'FAILED_OR_DEADLINE'
+539:             self.metadata['startup_wall_seconds'] = self.clock()-self.started
+540:             self.metadata['startup_error'] = f'{type(exc).__name__}: {exc}'
+541:             if hasattr(exc, 'diagnostics'):
+542:                 self.metadata['startup_publication_read'] = exc.diagnostics
+543:             try:
+544:                 _json(self.workdir / 'session.json', self.metadata)
+545:             except Exception as archive_error:
+546:                 self.metadata['startup_archive_error'] = repr(archive_error)
+547:             try:
+548:                 self.close()
+549:             except BaseException as cleanup_error:
+550:                 # Preserve the original startup exception even if an
+551:                 # unexpected cleanup failure escapes the best-effort steps.
+552:                 self.cleanup = getattr(self, 'cleanup', {})
+553:                 self.cleanup['cleanup_error'] = repr(cleanup_error)
+554:             # A failed constructor has no session handle for the caller's
+555:             # finally block. Expose cleanup separately from startup timing.
+556:             exc.matlab_cleanup = self.cleanup
+557:             exc.matlab_workdir = str(self.workdir)
+558:             exc.matlab_startup_metadata = dict(self.metadata)
+559:             raise
+560: 
+561:     def solve(self, model, remaining_s=None, budget=None, x0=None,
+562:               solver_max_time_s=None):
+563:         if self.closed or self.request_blocked:
+564:             raise RuntimeError('Worker is closed or a timed-out request still needs cleanup')
+565:         solver_cap = _solver_time_cap(solver_max_time_s)
+566:         cut_limit = _cut_iteration_limit(getattr(self, 'cut_max_iterations', None))
+567:         started = self.clock()
+568:         deadline = self.deadline
+569:         if budget is not None:
+570:             deadline = min(deadline, _absolute_deadline(budget))
+571:         if self.budget is not None:
+572:             deadline = min(deadline, _absolute_deadline(self.budget))
+573:         if remaining_s is not None:
+574:             if not math.isfinite(remaining_s):
+575:                 raise ValueError('remaining_s must be finite')
+576:             deadline = min(deadline, started + float(remaining_s))
+577:         if started >= deadline:
+578:             return {'status': 'BUDGET_EXHAUSTED', 'budget_valid': False,
+579:                     'x': [], 'accepted_for_evaluation': False}
+580:         method_bound = budget is not None or self.budget is not None
+581:         phase = getattr(budget if budget is not None else self.budget, 'phase',
+582:                         lambda name: nullcontext())
+583:         self.counter += 1
+584:         prefix = self.workdir / f'request_{self.counter:06d}'
+585:         if getattr(self, 'event_consumer', None) is not None:
+586:             self.metadata['callback_candidates'] = 'immutable live publications; independently evaluated by diagnostic consumer'
+587:             self.metadata['external_evaluation'] = 'callback and final candidates within one absolute method deadline'
+588:             _json(self.workdir/'session.json', self.metadata)
+589:         def expire_before_submission(phase):
+590:             result = {'status': 'BUDGET_EXHAUSTED_BEFORE_PUBLICATION',
+591:                       'phase': phase, 'budget_valid': False, 'x': [],
+592:                       'accepted_for_evaluation': False,
+593:                       'wall_seconds': self.clock()-started,
+594:                       'absolute_deadline': deadline}
+595:             _json(prefix.with_suffix('.python.json'), result)
+596:             return result
+597:         try:
+598:             with phase('transport_numerical_conversion'):
+599:                 payload = _prepare(model) if x0 is None else _prepare(model, x0=x0)
+600:         except InitialPointRejected as exc:
+601:             _json(prefix.with_suffix('.initial.json'), exc.diagnostics)
+602:             raise
+603:         initial_point = payload.get('x0_validation', {'provided': False})
+604:         if x0 is not None:
+605:             _json(prefix.with_suffix('.initial.json'), initial_point)
+606:         if self.clock() >= deadline:
+607:             return expire_before_submission('numerical_conversion')
+608:         request_info = {
+609:             'request_number': self.counter, 'case_budget_at_entry_s': deadline-started,
+610:             'absolute_deadline': deadline, 'method_deadline_bound': method_bound,
+611:             'session_elapsed_at_entry_s': started - self.started,
+612:             'model_metadata': model.get('metadata', {}),
+613:             'intcon_convention': 'Python_zero_based_converted_to_MATLAB_one_based',
+614:             'initial_point': initial_point,
+615:         }
+616:         if solver_cap is not None:
+617:             request_info['solver_max_time_s_declared'] = solver_cap
+618:             request_info['solver_max_time_s_scope'] = 'native_MaxTime_only_not_response_or_evidence_deadline'
+619:         if cut_limit is not None:
+620:             request_info['cut_max_iterations_declared'] = cut_limit
+621:             request_info['cut_max_iterations_scope'] = 'native_cut_pass_limit_only'
+622:         with phase('transport_input_metadata'):
+623:             _json(prefix.with_suffix('.input.json'), request_info)
+624:         if self.clock() >= deadline:
+625:             return expire_before_submission('input_metadata')
+626:         # The numerical conversion, sparse serialization, and publication are
+627:         # inside the request budget.  MATLAB receives only the time still left.
+628:         temporary = prefix.with_suffix('.mat.tmp')
+629:         payload['remaining_s'] = max(0.0, deadline - self.clock())
+630:         if cut_limit is not None:
+631:             payload['cut_max_iterations'] = cut_limit
+632:         if solver_cap is not None:
+633:             payload['solver_max_time_s_declared'] = solver_cap
+634:             payload['solver_max_time_s'] = min(solver_cap, payload['remaining_s'])
+635:         with phase('transport_mat_serialization'):
+636:             savemat(str(temporary), payload, appendmat=False, oned_as='column')
+637:         if self.clock() >= deadline:
+638:             return expire_before_submission('mat_serialization')
+639:         with phase('transport_mat_publication'):
+640:             temporary.replace(prefix.with_suffix('.mat'))
+641:         allocated = deadline - self.clock()
+642:         if allocated <= 0:
+643:             return expire_before_submission('mat_publication')
+644:         # Separate JSON is written last so the worker never reads partial MAT.
+645:         request = {
+646:             'remaining_s': allocated,
+647:             'stream_events': bool(getattr(self, 'event_consumer', None))}
+648:         if cut_limit is not None:
+649:             request['cut_max_iterations'] = cut_limit
+650:         if solver_cap is not None:
+651:             request['solver_max_time_s_declared'] = solver_cap
+652:             request['solver_max_time_s'] = min(solver_cap, allocated)
+653:         with phase('transport_request_publication'):
+654:             _json(prefix.with_suffix('.request.json'), request)
+655:         response = prefix.with_suffix('.response.json')
+656:         try:
+657:             with phase('solver_wait_and_response_read'):
+658:                 extra = {}
+659:                 if getattr(self, 'event_consumer', None) is not None:
+660:                     extra['on_poll'] = lambda: self.event_consumer(prefix)
+661:                 result, read_info = _read_json_until(
+662:                     response, deadline, self.clock, self.proc, **extra)
+663:         except PublicationTimeout as exc:
+664:             prefix.with_suffix('.cancel').write_text('budget\n', encoding='ascii')
+665:             result = {'status': 'BUDGET_EXHAUSTED', 'budget_valid': False,
+666:                       'accepted_for_evaluation': False, 'x': [],
+667:                       'request_number': self.counter,
+668:                       'wall_seconds': self.clock() - started,
+669:                       'response_may_arrive_later': True,
+670:                       'publication_read': exc.diagnostics}
+671:             _json(prefix.with_suffix('.python.json'), result)
+672:             # A timed-out request may still be unwinding.  Do not enqueue
+673:             # another request and accidentally reuse additional case time.
+674:             self.request_blocked = True
+675:             if not method_bound:
+676:                 self.close()
+677:             return result
+678:         except WorkerExited as exc:
+679:             result = {'status': 'WORKER_EXITED', 'budget_valid': False,
+680:                       'accepted_for_evaluation': False, 'x': [],
+681:                       'returncode': exc.returncode, 'publication_read': exc.diagnostics}
+682:             _json(prefix.with_suffix('.python.json'), result)
+683:             return result
+684:         result['publication_read'] = read_info
+685:         # MATLAB jsonencode collapses a one-element numeric vector to a
+686:         # scalar; the public Python interface always returns a vector.
+687:         raw_x = result.get('x')
+688:         result['x'] = ([] if raw_x is None else
+689:                        np.asarray(raw_x, dtype=float).reshape(-1).tolist())
+690:         result['wall_seconds'] = self.clock() - started
+691:         result['budget_valid'] = bool(self.clock() < deadline)
+692:         consistency = _initial_point_status_conflict(initial_point, result,
+693:             explicit_x0=x0 is not None, request_number=self.counter,
+694:             within_budget=result['budget_valid'])
+695:         if consistency is not None:
+696:             # Keep native status/exitflag/output intact. The loop consumes the
+697:             # separate diagnostic only after its original budget checks.
+698:             result['numerical_consistency'] = consistency
+699:         result['accepted_for_evaluation'] = bool(
+700:             result['budget_valid'] and result.get('status') == 'SOLVED'
+701:             and result['x'] and consistency is None)
+702:         result['request_number'] = self.counter
+703:         result['evidence_scope'] = 'solver_reported_only_no_thermal_or_optimality_certificate'
+704:         result['solver_response_complete_at_monotonic'] = self.clock()
+705:         _json(prefix.with_suffix('.python.json'), result)
+706:         # Archiving is part of method execution, not free extra candidate time.
+707:         # Even a timely solver response is not returned for thermal evaluation
+708:         # when transport/archiving consumes the remaining method budget.
+709:         if self.clock() >= deadline:
+710:             result['budget_valid'] = False
+711:             result['accepted_for_evaluation'] = False
+712:             result['status'] = 'BUDGET_EXHAUSTED_BEFORE_RETURN'
+713:             result['x'] = []
+714:             _json(prefix.with_suffix('.python.json'), result)
+715:         return result
+
+work/equality_pair_source/research/chapter3_experiments/solve_model.m SHA256=907750330928eff94479cc4eb68429730715a42f420066e766d794734278a48b
+1: function solve_model(folder, guardSeconds)
+2: % One R2023b worker for correctness checks or one budgeted method call. Every request is
+3: % a new problem with no reused incumbent. An explicitly supplied, independently
+4: % checked x0 belongs to this request only. Thermal/energy acceptance is
+5: % performed by Python; optional live events permit in-budget incumbent checks.
+6: workerClock = tic;
+7: info = struct('version',version,'release',version('-release'), ...
+8:     'intlinprog_path',which('intlinprog'),'license_test', ...
+9:     license('test','Optimization_Toolbox'));
+10: [ok,message] = license('checkout','Optimization_Toolbox');
+11: info.license_checkout = logical(ok); info.license_message = message;
+12: if ok && ~isempty(info.intlinprog_path), info.status = 'READY';
+13: else, info.status = 'TOOLBOX_UNAVAILABLE'; end
+14: writejson(fullfile(folder,'ready.json'),info);
+15: if ~strcmp(info.status,'READY'), return; end
+16: requestNumber = 1;
+17: while toc(workerClock) < guardSeconds && ~isfile(fullfile(folder,'stop'))
+18:     prefix = fullfile(folder,sprintf('request_%06d',requestNumber));
+19:     if ~isfile([prefix '.request.json']), pause(.01); continue; end
+20:     requestClock = tic; callbacks = {}; callbackFields = {}; callbackError = '';
+21:     streamEvents = false; eventNumber = 0;
+22:     result = struct('status','ERROR','x',[],'fval',[],'exitflag',[], ...
+23:         'output',struct(),'callbacks',{{}},'callback_fields',{{}}, ...
+24:         'intlinprog_entered',false,'phase_seconds',struct(), ...
+25:         'initial_point',struct('provided',false));
+26:     try
+27:         phaseClock=tic;
+28:         [requestText,readInfo,readError] = read_request_text(prefix,folder,workerClock,guardSeconds);
+29:         result.request_publication_read=readInfo;
+30:         if ~isempty(readError), throw(readError); end
+31:         % Atomic publication can still be temporarily locked on Windows.
+32:         % Only file-open failures are retried; complete malformed JSON is an
+33:         % immediate protocol error, not a transient publication to accept.
+34:         req = jsondecode(requestText);
+35:         streamEvents = isfield(req,'stream_events') && req.stream_events;
+36:         p = load([prefix '.mat']);
+37:         initialPoint=[];
+38:         if isfield(p,'x0')
+39:             initialPoint=p.x0(:);
+40:             result.initial_point=struct('provided',true, ...
+90:             'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
+91:             'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
+92:             'IntegerPreprocess','none', ...
+93:             'LPPreprocess','none', ...
+94:             'OutputFcn',@callback);
+95:         if hasCutIterationLimit
+96:             opts.CutMaxIterations=cutIterationLimit;
+97:             result.cut_max_iterations_actual_effective=opts.CutMaxIterations;
+98:         end
+99:         % Engineering compatibility setting, fixed before formal runs:
+100:         % numeric_diagnostic04 solved the unchanged small physical model with
+101:         % IntegerPreprocess='none', where 'basic' reported infeasible despite
+102:         % independent feasible lifts.  This preserves the mathematical model;
+103:         % it does not establish a general MATLAB preprocessing defect.
+104:         % K.106's fixed-logic feasibility pair also requires LPPreprocess='none'
+105:         % for this R2023b numerical representation. The original matrices,
+106:         % variable domain and tolerances are unchanged. Full free-schedule
+107:         % optimization speed is not established by that compatibility check.
+108:         opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+109:             guardSeconds-toc(workerClock),solverTimeCap]));
+110:         result.options_text = evalc('disp(opts)');
+111:         % LPPreprocess is documented for R2023b but hidden from properties().
+112:         % Archive it explicitly; IntegerPreprocess='none' does not disable it.
+113:         names = [properties(opts); {'LPPreprocess'}]; optionValues = struct();
+114:         if hasCutIterationLimit, names=[names; {'CutMaxIterations'}]; end
+115:         for k=1:numel(names)
+116:             value=opts.(names{k});
+117:             if isa(value,'function_handle'), value=func2str(value); end
+118:             optionValues.(names{k})=value;
+119:         end
+120:         result.options = optionValues;
+121:         % Options inspection and MAT loading belong to this same request.
+122:         opts.MaxTime = max(0,min([remaining-toc(requestClock), ...
+123:             guardSeconds-toc(workerClock),solverTimeCap]));
+124:         result.options.MaxTime = opts.MaxTime;
+125:         if hasSolverTimeCap
+126:             result.solver_max_time_s_used=opts.MaxTime;
+127:             solverTimeAllocation=struct('declared',declaredSolverTimeCap, ...
+128:                 'allocated',solverTimeCap,'native_MaxTime_used',opts.MaxTime, ...
+129:                 'response_deadline_shortened',false);
+130:         end
+131:         result.options_text = evalc('disp(opts)');
+132:         result.phase_seconds.options_preparation=toc(phaseClock);
+133:         if opts.MaxTime<=0 || isfile([prefix '.cancel']) ...
+134:                 || isfile(fullfile(folder,'stop')) || toc(workerClock)>=guardSeconds
+135:             result.status='BUDGET_EXHAUSTED_BEFORE_SOLVER';
+136:         else
+137:             result.intlinprog_entered=true;
+138:             if streamEvents
+139:                 entered=struct('kind','solver_entered','request_wall_seconds',toc(requestClock));
+140:                 if hasSolverTimeCap, entered.solver_time_allocation=solverTimeAllocation; end
+270: end
+271: 
+272: function writejson(path,value)
+273: temporary=[path '.tmp'];
+274: fid=fopen(temporary,'w','n','UTF-8');
+275: if fid<0,error('chapter3:bridgeOutput','Cannot open output %s',temporary);end
+276: cleanup=onCleanup(@()fclose(fid));
+277: fprintf(fid,'%s\n',jsonencode(value));
+278: clear cleanup % close before exposing the final name
+279: % Same-directory atomic rename uses MATLAB's bundled JVM, not a new solver
+280: % or external dependency.  A receiver still retries transient Windows locks
+281: % under its original deadline and never accepts a partially readable message.
+282: sourceFile=javaObject('java.io.File',temporary); source=sourceFile.toPath();
+283: destinationFile=javaObject('java.io.File',path); destination=destinationFile.toPath();
+284: options=javaArray('java.nio.file.CopyOption',2);
+285: options(1)=javaMethod('valueOf','java.nio.file.StandardCopyOption','ATOMIC_MOVE');
+286: options(2)=javaMethod('valueOf','java.nio.file.StandardCopyOption','REPLACE_EXISTING');
+287: javaMethod('move','java.nio.file.Files',source,destination,options);
+288: end
+
+work/on_diagnostic/control.py SHA256=7ceb059c69881e89593befd9f0a33ef0ee9207e10ca545dd2e8b6e7b4a59e566
+1: """One-shot ON diagnostic policy. Standard library only; no scientific calls."""
+2: from fractions import Fraction
+3: import math
+4: 
+5: SECONDS = 300.0
+6: NATIVE_SECONDS = 240.0
+7: RESERVE = 10.0
+8: WATCHDOG = 380.0
+9: 
+10: 
+11: class StopWindow(Exception):
+12:     pass
+13: 
+14: 
+15: def timely(elapsed):
+16:     return isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) and 0 <= elapsed < SECONDS
+17: 
+18: 
+65:                   error=None, terminal_state=None, cleanup=None, identity=None,
+66:                   native=None, model_builds=0, formal_ABC_runs=0, retries=0)
+67:     try:
+68:         runtime.check()
+69:         runtime.prepare()
+70:         runtime.check()
+71:         result['physical_evaluation_attempts'] += 1
+72:         result['initial_evaluation'] = runtime.evaluate_initial()
+73:         runtime.check()
+74:         if not full_safe(result['initial_evaluation'], runtime.scene_count):
+75:             result['terminal_state'] = 'INITIAL_SAFE_NOT_ESTABLISHED_NO_CALL'
+76:         else:
+77:             runtime.start_native()
+78:             runtime.check()
+79:             if runtime.remaining < NATIVE_SECONDS + RESERVE:
+80:                 result['terminal_state'] = 'INSUFFICIENT_FIXED_CAP_RESERVE_NO_CALL'
+81:             else:
+82:                 result['native_request_attempts'] = 1
+83:                 native = runtime.solve(NATIVE_SECONDS)
+84:                 result['native'] = native
+85:                 # Identity must be checked regardless of vector, exitflag, or ordinary timeout.
+86:                 result['identity'] = runtime.inspect_identity(native)
+87:                 if result['identity']['state'] == 'INVALID':
+88:                     result['terminal_state'] = 'INVALID_INPUT_OR_NATIVE_SETTINGS'
+89:                 elif (native.get('status') == 'SOLVED' and native.get('budget_valid') is True
+90:                       and native.get('accepted_for_evaluation') is True and native.get('x')):
+91:                     runtime.check()
+92:                     validation = runtime.validate_returned(native['x'])
+93:                     result['returned_vector_validation'] = validation
+94:                     runtime.check()
+95:                     if validation['state'] == 'ADMITTED':
+96:                         result['candidate'] = validation['candidate']
+97:                         result['same_initial'] = validation['same_initial']
+98:                         result['physical_evaluation_attempts'] += 1
+99:                         result['returned_evaluation'] = runtime.evaluate_returned(validation['candidate'])
+100:                         if full_safe(result['returned_evaluation'], runtime.scene_count):
+101:                             initial_interval = result['initial_evaluation']['weighted_energy_J']
+102:                             returned_interval = result['returned_evaluation']['weighted_energy_J']
+103:                             result['strict_energy_improvement'] = Fraction(returned_interval[1]) < Fraction(initial_interval[0])
+104:                             result['terminal_state'] = 'RETURNED_COMPLETE_SAFE'
+105:                         else:
+106:                             result['terminal_state'] = 'RETURNED_PHYSICAL_SAFE_NOT_ESTABLISHED'
+107:                     else:
+108:                         result['terminal_state'] = 'RETURNED_VECTOR_REJECTED'
+109:                 elif native.get('status') == 'SOLVED' and native.get('exitflag') == 0:
+110:                     result['terminal_state'] = 'ORDINARY_NATIVE_LIMIT_NO_ACCEPTED_VECTOR'
+111:                 elif str(native.get('status', '')).startswith('BUDGET_EXHAUSTED'):
+112:                     result['terminal_state'] = 'DIAGNOSTIC_WINDOW_EXHAUSTED'
+113:                 elif native.get('status') == 'SOLVED' and native.get('exitflag') == -2:
+114:                     result['terminal_state'] = 'NATIVE_INFEASIBILITY_REPORT_NOT_EXACT_PROOF'
+115:                 else:
+
+work/on_diagnostic/adapter.py SHA256=900eeff8077d95a9118ba3e7db5cb397567f2d15b4bcda9f262a7401a89a3763
+90:         sys.path.insert(0, str(self.workspace / 'work/stable_expression'))
+91:         import complement_gate
+92:         self.cg = complement_gate
+93:         sys.path.insert(0, str(self.workspace / 'work/equality_pair_source/research/chapter3_experiments'))
+94:         import matlab_bridge
+95:         from timing import MethodBudget
+96:         from thermal import evaluate_candidate, Exhausted
+97:         from schedules import validate_schedule
+98:         self.bridge = matlab_bridge; self.evaluate = evaluate_candidate
+99:         self.validate_schedule = validate_schedule; self.Exhausted = Exhausted
+100:         runtime = self
+101:         class GuardedBudget(MethodBudget):
+102:             @contextmanager
+103:             def phase(self, name):
+104:                 if name == 'transport_request_publication' and runtime.remaining < NATIVE_SECONDS + RESERVE:
+105:                     raise StopWindow('No time to retain the unchanged native cap before publication')
+106:                 with super().phase(name):
+107:                     yield
+108:         self.budget = GuardedBudget(SECONDS)
+109:         self.budget.start = self.start; self.budget.deadline = self.start + SECONDS
+110:         self.check()
+111:         with self.budget.phase('saved_input_read_and_admission'):
+112:             full = self.workspace / 'work/stable_expression/full'
+113:             self.instance = read(full / 'input_instance.json'); self.config = read(full / 'input_config.json')
+114:             self.initial = read(full / 'initial_candidate.json'); self.options = read(full / 'options.json')['options']
+115:             self.old = self.payload(full / 'on.original.mat'); self.new = self.payload(full / 'on.mat')
+116:             self.certificate = read(full / 'on.certificate.json')
+186:             except (PermissionError, json.JSONDecodeError): continue
+187:             self.capture(event)
+188: 
+189:     def solve(self, cap):
+190:         self._permit()
+191:         if self.solve_attempted: raise RuntimeError('Single native request already consumed')
+192:         if cap != NATIVE_SECONDS: raise ValueError('Native cap changed')
+193:         self.solve_attempted = True
+194:         result = self._call('native_request_total', self.session.solve, self.new, x0=self.new['x0'],
+195:                             budget=self.budget, remaining_s=self.remaining, solver_max_time_s=NATIVE_SECONDS)
+196:         self.poll(None)
+197:         if result.get('budget_valid') and self.remaining > 0:
+198:             for event in result.get('callbacks', []): self.capture(event)
+199:         save(self.folder / 'native_receipt.json', result)
+200:         return result
+201: 
+202:     def inspect_identity(self, native, after_cleanup=False):
+203:         """Read-only checks even for an empty timeout receipt. No late candidate evaluation."""
+204:         root = self.folder / 'matlab'
+205:         checks = {}
+206:         if (root / 'request_000001.mat').exists():
+207:             checks['actual_arrays'] = self.cg.array_digest(self.payload(root / 'request_000001.mat')) == self.cg.array_digest(self.new)
+208:         else: checks['actual_arrays'] = None
+209:         raw = read(root / 'request_000001.response.json') if (root / 'request_000001.response.json').exists() else native
+210:         checks['native_options'] = raw.get('options') == self.plan['native_options'] if 'options' in raw else None
+211:         checks['matlab_release'] = read(root / 'ready.json').get('release') == '2023b' if (root / 'ready.json').exists() else None
+

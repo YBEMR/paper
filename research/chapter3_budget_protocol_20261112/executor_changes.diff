@@ -1,0 +1,248 @@
+--- 7b723b1/control.py
++++ candidate_on/control.py
+@@ -1,14 +1,19 @@
+ """One-shot ON diagnostic policy. Standard library only; no scientific calls."""
+ from fractions import Fraction
+ import math
++from budget_policy import NEXT_ON, ResponseDeadline
+ 
+-SECONDS = 300.0
++SECONDS = 420.0
+ NATIVE_SECONDS = 240.0
+-RESERVE = 10.0
+-WATCHDOG = 380.0
++RESERVE = 60.0
++WATCHDOG = 500.0
+ 
+ 
+ class StopWindow(Exception):
++    pass
++
++
++class InsufficientNativeBudget(Exception):
+     pass
+ 
+ 
+@@ -25,9 +30,9 @@
+                         for s in evaluation['scenes'].values()))
+ 
+ 
+-def progress(events, objective_reference):
++def progress(events, objective_reference, cutoff=SECONDS, baseline_bound=None):
+     """Native bounds remain solver-reported; the reference is numerical, not exact feasible."""
+-    valid = [e for e in events if timely(e.get('received_elapsed_s'))]
++    valid = [e for e in events if timely(e.get('received_elapsed_s')) and e['received_elapsed_s']<cutoff]
+     roots = [e for e in valid if e.get('values', {}).get('phase') == 'rootlp']
+     later = [e for e in valid if e.get('values', {}).get('phase') in ('heuristics', 'cutgen', 'branching')]
+     bounds = []
+@@ -42,12 +47,14 @@
+                            event_number=e.get('event_number'), consistency=consistency,
+                            independently_certified=False))
+     checked = [b for b in bounds if b['consistency'] == 'CONSISTENT_WITH_NUMERICAL_REFERENCE']
++    advances = [b for b in checked if baseline_bound is not None and Fraction(b['value_exact_binary64'])>Fraction(baseline_bound)]
+     vectors = [dict(event_number=e.get('event_number'), received_elapsed_s=e['received_elapsed_s'],
+                     state='AVAILABLE_UNVALIDATED', length=len(e['x']))
+                for e in valid if isinstance(e.get('x'), list) and e['x']]
+     return dict(root_lp_entry_observed=bool(roots), root_lp_completion_via_later_phase=bool(later),
+                 root_lp_actual_completion='OBSERVED_LATER_PHASE' if later else 'UNKNOWN',
+                 finite_bounds=bounds, best_consistent_native_bound=max(checked, key=lambda b:b['value']) if checked else None,
++                box_lower_bound_exact=baseline_bound,native_bound_exceeds_box_bound=bool(advances),
+                 independent_lower_bound_certificate=False, callback_vectors=vectors,
+                 callback_counter_records=[dict(event_number=e.get('event_number'), state=e.get('state'),
+                     numfeaspoints=e.get('values', {}).get('numfeaspoints')) for e in valid if e.get('kind') == 'callback'])
+@@ -62,6 +69,7 @@
+     result = dict(arm='ON', native_request_attempts=0, physical_evaluation_attempts=0,
+                   initial_evaluation=None, returned_evaluation=None, candidate=None,
+                   returned_vector_validation=None, same_initial=None, strict_energy_improvement=None,
++                  energy_identity_conflict=False,
+                   error=None, terminal_state=None, cleanup=None, identity=None,
+                   native=None, model_builds=0, formal_ABC_runs=0, retries=0)
+     try:
+@@ -74,9 +82,11 @@
+         if not full_safe(result['initial_evaluation'], runtime.scene_count):
+             result['terminal_state'] = 'INITIAL_SAFE_NOT_ESTABLISHED_NO_CALL'
+         else:
++            if not NEXT_ON.allocate(runtime.elapsed)['can_submit']:
++                raise InsufficientNativeBudget()
+             runtime.start_native()
+             runtime.check()
+-            if runtime.remaining < NATIVE_SECONDS + RESERVE:
++            if not NEXT_ON.allocate(runtime.elapsed)['can_submit']:
+                 result['terminal_state'] = 'INSUFFICIENT_FIXED_CAP_RESERVE_NO_CALL'
+             else:
+                 result['native_request_attempts'] = 1
+@@ -100,7 +110,10 @@
+                         if full_safe(result['returned_evaluation'], runtime.scene_count):
+                             initial_interval = result['initial_evaluation']['weighted_energy_J']
+                             returned_interval = result['returned_evaluation']['weighted_energy_J']
+-                            result['strict_energy_improvement'] = Fraction(returned_interval[1]) < Fraction(initial_interval[0])
++                            improved = Fraction(returned_interval[1]) < Fraction(initial_interval[0])
++                            disjoint = improved or Fraction(initial_interval[1]) < Fraction(returned_interval[0])
++                            result['energy_identity_conflict'] = bool(result['same_initial'] is True and disjoint)
++                            result['strict_energy_improvement'] = bool(improved and result['same_initial'] is False)
+                             result['terminal_state'] = 'RETURNED_COMPLETE_SAFE'
+                         else:
+                             result['terminal_state'] = 'RETURNED_PHYSICAL_SAFE_NOT_ESTABLISHED'
+@@ -109,11 +122,15 @@
+                 elif native.get('status') == 'SOLVED' and native.get('exitflag') == 0:
+                     result['terminal_state'] = 'ORDINARY_NATIVE_LIMIT_NO_ACCEPTED_VECTOR'
+                 elif str(native.get('status', '')).startswith('BUDGET_EXHAUSTED'):
+-                    result['terminal_state'] = 'DIAGNOSTIC_WINDOW_EXHAUSTED'
++                    result['terminal_state'] = 'SOLVER_RESPONSE_WINDOW_EXHAUSTED' if runtime.elapsed<SECONDS else 'DIAGNOSTIC_WINDOW_EXHAUSTED'
+                 elif native.get('status') == 'SOLVED' and native.get('exitflag') == -2:
+                     result['terminal_state'] = 'NATIVE_INFEASIBILITY_REPORT_NOT_EXACT_PROOF'
+                 else:
+                     result['terminal_state'] = 'OTHER_NATIVE_STATUS'
++    except InsufficientNativeBudget:
++        result['terminal_state'] = 'INSUFFICIENT_FIXED_CAP_RESERVE_NO_CALL'
++    except ResponseDeadline:
++        result['terminal_state'] = 'SOLVER_RESPONSE_WINDOW_EXHAUSTED'
+     except StopWindow:
+         result['terminal_state'] = 'DIAGNOSTIC_WINDOW_EXHAUSTED'
+     except Exception as error:
+@@ -131,7 +148,8 @@
+         except Exception as error:
+             result['identity_after'] = dict(state='INVALID', error=repr(error))
+         result['total_elapsed_s'] = runtime.elapsed
+-    result['progress'] = progress(runtime.events, runtime.objective_reference)
++    result['progress'] = progress(runtime.events, runtime.objective_reference,
++                                  getattr(runtime,'solver_evidence_cutoff_s',SECONDS),getattr(runtime,'objective_lower_bound',None))
+     result['returned_complete_SAFE'] = full_safe(result['returned_evaluation'], runtime.scene_count)
+     result['new_complete_SAFE'] = result['returned_complete_SAFE'] and result['same_initial'] is False
+     after_identity = result['identity_after'].get('native_identity_after')
+@@ -142,12 +160,14 @@
+     identity_ok = (result['identity'] or {}).get('state') == 'VERIFIED'
+     after_ok = result['identity_after'].get('state') == 'VERIFIED'
+     cleanup_ok = result['cleanup'].get('complete') is True
++    result['lifecycle_integrity'] = 'VERIFIED' if after_ok and cleanup_ok and result['error'] is None else 'NOT_ESTABLISHED'
++    result['native_observation_state'] = 'NOT_REQUESTED' if result['native_request_attempts']==0 else 'SEE_NATIVE_RECEIPT'
+     native_status = (result['native'] or {}).get('status', '')
+     status_ok = native_status == 'SOLVED' or native_status.startswith('BUDGET_EXHAUSTED')
+-    result['evidence_integrity'] = 'VERIFIED' if identity_ok and after_ok and cleanup_ok and result['error'] is None and status_ok else 'NOT_ESTABLISHED'
++    result['evidence_integrity'] = 'VERIFIED' if identity_ok and after_ok and cleanup_ok and result['error'] is None and status_ok and not result['energy_identity_conflict'] else 'NOT_ESTABLISHED'
+     p = result['progress']
+     result['progress_observed'] = bool(p['root_lp_completion_via_later_phase']
+-        or p['best_consistent_native_bound'] is not None or result['new_complete_SAFE'])
++        or p['native_bound_exceeds_box_bound'] or result['new_complete_SAFE'])
+     result['progress_usable'] = result['progress_observed'] and result['evidence_integrity'] == 'VERIFIED'
+     result['bound_scope'] = 'Solver-reported, checked against admitted numerical MILP objective; not an independently certified valid bound.'
+     result['next_action'] = 'STOP_NO_RETRY_NO_AUTOMATIC_ABC'
+--- 7b723b1/adapter.py
++++ candidate_on/adapter.py
+@@ -10,8 +10,10 @@
+ import os
+ import sys
+ import time
+-from control import SECONDS, NATIVE_SECONDS, RESERVE, StopWindow
++from control import SECONDS, NATIVE_SECONDS, RESERVE, StopWindow, InsufficientNativeBudget
+ from guard import read, save, sha, verify_plan, verify_approval
++from budget_policy import NEXT_ON, ResponseBudget, box_objective_bound
++from startup_observer import observe_startup
+ 
+ 
+ def digest(value):
+@@ -47,8 +49,10 @@
+         self.workspace = Path(workspace); self.package = Path(package); self.plan_path = Path(plan_path)
+         self.plan = plan; self.folder = Path(folder); self.start = start
+         self.events = []; self.seen = set(); self.scene_count = 0; self.objective_reference = None
++        self.objective_lower_bound = None
+         self.session = None; self.startup_cleanup = None; self.budget = None
+         self.solve_attempted = False; self.evaluations = 0; self.actual_native_entries = 0
++        self.solver_evidence_cutoff_s = NEXT_ON.response_cutoff
+ 
+     @property
+     def elapsed(self): return time.monotonic() - self.start
+@@ -101,8 +105,11 @@
+         class GuardedBudget(MethodBudget):
+             @contextmanager
+             def phase(self, name):
+-                if name == 'transport_request_publication' and runtime.remaining < NATIVE_SECONDS + RESERVE:
+-                    raise StopWindow('No time to retain the unchanged native cap before publication')
++                if name == 'transport_request_publication':
++                    allocation = NEXT_ON.allocate(runtime.elapsed)
++                    save(runtime.folder/'publication_allocation.json', allocation)
++                    if not allocation['can_submit'] or not NEXT_ON.allocate(runtime.elapsed)['can_submit']:
++                        raise InsufficientNativeBudget('No time to retain the unchanged native cap before publication')
+                 with super().phase(name):
+                     yield
+         self.budget = GuardedBudget(SECONDS)
+@@ -127,8 +134,10 @@
+             if schedule_key(candidate) != schedule_key(self.initial): raise ValueError('Initial schedule changed')
+             self.scene_count = len(self.instance['scenarios'])
+             self.objective_reference = self.objective(self.old['x0'])
++            self.objective_lower_bound = box_objective_bound(self.old['c'],self.old['lb'],self.old['ub'])
+             save(self.folder / 'saved_input_admission.json', dict(original=self.native_old['x0_validation'],
+                 transformed=self.native_new['x0_validation'], objective_reference_exact=self.objective_reference,
++                box_objective_lower_bound_exact=self.objective_lower_bound,
+                 scope='Numerical tolerance admission only; not an exact feasible-point certificate.'))
+         self.check()
+ 
+@@ -149,12 +158,18 @@
+     def start_native(self):
+         self._permit()
+         self.bridge.REPO = self.folder / 'isolated_preferences'
++        records=[]
+         try:
+-            self.session = self._call('native_startup', self.bridge.MatlabSession, self.folder / 'matlab',
+-                                     total_budget_s=self.remaining, budget=self.budget, matlab_path=self.plan['matlab'])
++            with observe_startup(self.bridge,time.monotonic,records):
++                self.session = self._call('native_startup', self.bridge.MatlabSession, self.folder / 'matlab',
++                                         total_budget_s=self.remaining, budget=self.budget, matlab_path=self.plan['matlab'])
+         except Exception as error:
+             self.startup_cleanup = getattr(error, 'matlab_cleanup', None)
+             raise
++        finally:
++            save(self.folder/'startup_timing_observer.json',dict(records=records,
++                clock='same Python monotonic clock',poll_cadence_changed=False,
++                interpretation='READY wait overlaps MATLAB initialization/license work; not a root-cause decomposition.'))
+         self.session.event_consumer = self.poll
+ 
+     def _permit(self):
+@@ -169,7 +184,7 @@
+     def capture(self, event):
+         # Never backdate using native request_wall_seconds. Time is receipt after complete JSON read.
+         elapsed = self.elapsed
+-        if elapsed >= SECONDS: return
++        if elapsed >= self.solver_evidence_cutoff_s: return
+         number = event.get('event_number')
+         if number in self.seen: return
+         self.seen.add(number)
+@@ -190,9 +205,13 @@
+         self._permit()
+         if self.solve_attempted: raise RuntimeError('Single native request already consumed')
+         if cap != NATIVE_SECONDS: raise ValueError('Native cap changed')
++        allocation=NEXT_ON.allocate(self.elapsed)
++        if not allocation['can_submit']:raise InsufficientNativeBudget('Frozen native cap no longer fits')
++        save(self.folder/'native_allocation.json',allocation)
+         self.solve_attempted = True
++        response_budget=ResponseBudget(self.budget,NEXT_ON,time.monotonic)
+         result = self._call('native_request_total', self.session.solve, self.new, x0=self.new['x0'],
+-                            budget=self.budget, remaining_s=self.remaining, solver_max_time_s=NATIVE_SECONDS)
++                            budget=response_budget, solver_max_time_s=NATIVE_SECONDS)
+         self.poll(None)
+         if result.get('budget_valid') and self.remaining > 0:
+             for event in result.get('callbacks', []): self.capture(event)
+--- 7b723b1/guard.py
++++ candidate_on/guard.py
+@@ -3,6 +3,7 @@
+ import json
+ from pathlib import Path
+ from control import SECONDS, NATIVE_SECONDS, WATCHDOG
++from budget_policy import NEXT_ON
+ 
+ 
+ def read(path):
+@@ -39,10 +40,12 @@
+     required = dict(arm='ON', slots=1, maximum_native_calls=1, retries=0,
+                     total_window_s=SECONDS, native_MaxTime_s=NATIVE_SECONDS, watchdog_s=WATCHDOG,
+                     physical_evaluation_limit=2, formal_ABC_runs=0, model_builds=0,
++                    validation_reserve_s=NEXT_ON.validation_reserve,dispatch_reserve_s=NEXT_ON.dispatch_reserve,
++                    solver_response_cutoff_s=NEXT_ON.response_cutoff,
+                     execution_authorized=False)
+     if any(plan.get(k) != v for k, v in required.items()):
+         raise ValueError('Unsupported frozen scope')
+-    if plan['execution_directory'] != 'work/on_diagnostic_execution_20261112':
++    if plan['execution_directory'] != 'work/on_budget_candidate_A420_execution_v1':
+         raise ValueError('One-shot ledger location changed')
+     for key, root in [('workspace_files', workspace), ('package_files', package)]:
+         for name, expected in plan[key].items():

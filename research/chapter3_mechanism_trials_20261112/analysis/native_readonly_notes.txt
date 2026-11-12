@@ -1,0 +1,56 @@
+正式 A/B/C 原生机制只读复核（基于 3baeae8）
+2026-11-12；本分析没有启动 MATLAB、MILP、LP、构模或热评价。
+
+一、证据边界与关键校正
+
+1. 直接读取各组 matlab/request_000001.event_*.json、native_receipt.json、request_000001.native.mat 的 x/initialPoint/fval/exitflag/output，以及原请求 MAT 的 c/intcon/x0。没有依赖报告转述认定向量身份。
+2. MATLAB R2023b 官方 OutputFcn 文档定义 phase=rootlp 为根 LP 已求解完成。因此 C 的 event3 本身就是原生根 LP 完成事件，event4 进一步印证进入后续流程。原报告采取“后续阶段才确认完成”的保守规则，不影响 C 完成结论，但不能把 rootlp 事件字面误解为刚进入根 LP。
+3. C event3: native callback time=184.4427252 s，fval=0.7452555210277565；lowerbound=[]，x=[]。此 fval 是根 LP 目标，不是整数候选目标。event4: time=184.7097451 s，phase=heuristics，fval=1.0848863713037113，lowerbound=0.7452555210277564，numfeaspoints=1，numnodes=0，x长度23780。两个 LP/界值相差1个binary64 ULP，不构成已发现的界冲突。
+4. 官方定义回调是事件通知，并不是连续阶段采样。因此“最后事件是 heuristics”不能证明余下271.526秒一直困于某个启发式。其间可能有未发布进展的割、启发式内部LP、第一分支计算等；目前未保存内部轨迹，具体来源未知。
+
+二、三组实际过程
+
+A: native MaxTime=438；调用墙钟439.2530894 s；只有init/done；最终exitflag=0、x/fval空、output.numfeaspoints=0、numnodes=0。
+B: native MaxTime=472；调用墙钟472.9287899 s；只有init/done；最终exitflag=0、x/fval空、output.numfeaspoints=0、numnodes=0。
+C: native MaxTime=456；调用墙钟456.7853632 s；rootlp→heuristics→done；最终exitflag=2、numfeaspoints=1、numnodes=0。
+
+A/B 的 done 回调均记 numfeaspoints=1，但 x/fval/下界为空，最终原生 MAT 和 JSON 一致地记0个可行点且空返回。不能用这项计数认定有效候选；也不能证明它一定是初解注册、计数错误或求解器缺陷。二者没有 rootlp 完成事件，不等于证明没有进行根 LP 或根 LP 不可行。
+
+C 方法入口269.360秒收到rootlp，269.657秒收到heuristics；此时间包括独立准备，不能当根 LP 本体耗时。根前native阶段总量约184.44秒也不等于精确LP内核CPU时间；启动、接口和求解器初始化采用不同计时原点。
+
+三、C只返回共同初解：已知与未知
+
+直接检验得到 C 的 event4.x == request.x0 == native.initialPoint == native.x（23780维全部binary64逐值相等），不是仅调度相同。原生最终目标、经原/新矩阵准入的投影及完整双场景能耗也没有改善。故只建立“原生返回一个经完整验证的共同初解”，没有新原生调度。
+
+所有组的整数列目标系数均严格为0。B/C各有424个非零目标连续列；整数选择要降低目标，必须伴随连续电热/能耗变量重新调整。由此能严格推出“连续坐标保持不动，仅变整数坐标不会改变线性目标”。不能进一步推断 MATLAB 的所有启发式都保持连续坐标不动，或任意邻域都不可能改善。原生启发式内部轨迹没有归档。
+
+C最终numnodes=0说明没有被报告的B&B节点进展；无法据此排除第一节点计算、内部启发式子搜索或未形成完成事件的处理。C没有获得任何不同于x0的回调/最终向量；没有证据支持更优调度不存在，也没有证据支持延长时间必然能找到更优调度。
+
+relativegap=16.29013719647362 可由100*(1.0848863713037113-0.7452555210277564)/(abs(1.0848863713037113)+1)重算。分母是|U|+1，而非U；这是R2023b原生定义。保留其原生数值含义，不当作独立精确物理最优性间隙。
+
+四、有限重复方案评价
+
+采用 C_repeat→B_repeat，各一次独立完整构模、初始化、认证、MATLAB会话与原生调用，沿用600秒方法窗、550秒响应截止、同一动态MaxTime函数及原全部设置。反转历史B→C顺序，检验C可见进展是否能在先运行时重现，及B在后运行时是否仍缺少根LP完成/候选。
+
+此设计只能检验本机本实例的有限重现，不能估计成功概率、显著性或可靠加速倍数。单次普通超时/无候选不阻断另一组；身份、正确性或清理错误按冻结影响范围停止。不追加重复，不因结果不理想更换顺序/预算。
+
+五、严格改善方案评价
+
+推荐与主执行器讨论的 C_noheur 单因素实验：只将 Heuristics=basic 改为none，完整模型、x0规则、容差、CutGeneration=basic、CutMaxIterations=10、其他算法选项及600/550预算不变；只执行一次。R2023b支持none；该设置不主动用启发式寻找可行点，而接受B&B搜索遇到的点。其机制问题是：禁用启发式是否释放根后资源、产生节点进展或新调度。不能预称当前瓶颈已经定位为启发式。
+
+none与basic比较比同时更换rins、割轮数或增大预算更容易解释，但它不保证更早分支：割与第一节点LP仍可能耗尽预算。若仍没有节点/新解，应如实保留未知；不能重复试别的参数。若产生节点但仍无新SAFE，只能说明搜索阶段推进，未通过优化收益验收。
+
+科学成功必须同时满足：及时原生最终向量；原/新矩阵数值准入；独立调度合法；完整AB/AC SAFE；调度身份不同于共同x0；完整加权能耗上端严格小于初解下端。回调向量只归档，不替代最终向量；没有修复、补跑或用外部改进当原生收益。只通过根LP、有限界、更多节点、同初解SAFE均不得记为成功。
+
+三次新请求的批预算按各600秒方法窗加实际清理核算；科学调用最多3次。新执行器及一次性授权单独冻结，历史claim不复用。原生设置差异须只在C_noheur中出现，不能把该组与历史B直接比较剪枝加速。C_noheur是求解策略机制试验，不是新一轮公平A/B/C结论。
+
+六、官方依据（2026-11-12读取，固定R2023b，避免混入新HiGHS版本）
+
+OutputFcn事件、rootlp/fval/lowerbound/numnodes含义：
+https://www.mathworks.com/help/releases/R2023b/optim/ug/intlinprog-output-functions-and-plot-functions.html
+intlinprog选项、relativegap定义、x0与rins建议：
+https://www.mathworks.com/help/releases/R2023b/optim/ug/intlinprog.html
+启发式、none、割与算法步骤：
+https://www.mathworks.com/help/releases/R2023b/optim/ug/mixed-integer-linear-programming-algorithms.html
+
+本地来源：work/equality_pair_source/research/chapter3_experiments/solve_model.m:89（选项）；149（唯一原生调用）；162（原生归档）；189（事件回调）；work/formal_abc_execution_v1/{A,B,C}/matlab/ 下保存的 request_000001.*。

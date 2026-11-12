@@ -1,0 +1,20 @@
+冻结执行器作用域静态复核（本轮未触发）
+
+范围：仅阅读控制器、控制函数及事后审计脚本；未运行测试、审计、MATLAB、LP/MILP、构模、热评价或加载保存大矩阵。
+
+潜在缺陷：work/mechanism_trials_v1/run_abc.py 在每组结束后调用 next_arms(plan['arms'], completed, receipt, plan['trials'])。next_arms 只读取本组 affected_arms，不累计先前已排除范围。
+
+可复核反事实：
+1. C_repeat 返回 FEATURE 且 affected_arms=['C']，完整清理、身份正常。
+2. next_arms 返回 ['B_repeat']，正确暂时排除 C_noheur。
+3. B_repeat 正常结束、affected_arms=[]。
+4. 控制器从完整 plan order 重新计算 pending，把 C_noheur 重新加入。
+因此“按影响范围停止”并未在跨越不受影响组后保持。
+
+本轮影响：root 已核 C_repeat 完成回执 fault_scope=null，故上述分支未触发。三个组均无触发该漏洞的前置 feature fault 时，不影响已执行结果和顺序。此文件是静态缺陷记录，不能代替最终回执审计。
+
+冻结处理：不修改正在执行的包、计划、审批或旧证据。本次一次性计划消费后不复用。事后审计应独立累计 blocked model scopes / blocked trial scopes；若实际违反，则标科学/执行完整性失败，不掩盖为普通超时。
+
+以后如另行授权复用框架：在父控制器维护永久排除集合；每个回执将其故障范围并入集合，下一组仅从未完成且不在累计排除范围的项目中选取。ALL、清理或身份异常继续终止全批。需增加纯控制测试：C故障→B普通结束仍不恢复C_noheur；trial-local C_repeat 故障不排除C_noheur；B/C支持证书故障排除全部有关余组；普通超时不新增排除范围。
+
+审计脚本另一个静态问题：progress 的原生界一致性参考值由执行器在候选数值准入后更新为 min(初解MILP精确binary64目标, 返回候选MILP精确binary64目标)。事后审计必须同样采用该值，不能仅比较初解目标。已告知审计作者修改未冻结脚本。严格物理能耗改善仍单独比较返回能耗上界与共同初解下界，并要求不同调度及完整SAFE；上述数值目标参考不替代物理评价。

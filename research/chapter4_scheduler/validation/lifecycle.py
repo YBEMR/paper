@@ -20,7 +20,8 @@ def execute_heft(input_loader, workdir, *, bindings, budget):
     if workdir.exists():
         raise FileExistsError(str(workdir))
     workdir.mkdir(parents=True)
-    result={"method":"original_enhanced_HEFT_common_complete_recorder", "state":"UNRESOLVED",
+    result={"method":"enhanced_HEFT_I1_common_complete_recorder" if bindings.kind=="REAL_I1" else "original_enhanced_HEFT_common_complete_recorder", "state":"UNRESOLVED",
+        "initialization_version":"I1" if bindings.kind=="REAL_I1" else "I0" if bindings.kind=="REAL_CORE" else "MOCK_ONLY",
         "run_terminal":None,"reason":None,"safe_candidate":None,"safe_upper_bound_J":None,
         "evaluation":None,"initial_safe_snapshot":None,"initialization":None,
         "evidence_kind":bindings.kind,"usable_as_research_evidence":False,
@@ -30,13 +31,15 @@ def execute_heft(input_loader, workdir, *, bindings, budget):
     recorder=instance=config=None
     try:
         with budget.phase("input_imports_and_context"):
-            if not isinstance(bindings,common.Bindings) or bindings.kind not in ("MOCK_ONLY","REAL_CORE"):
+            if not isinstance(bindings,common.Bindings) or bindings.kind not in ("MOCK_ONLY","REAL_CORE","REAL_I1"):
                 raise ValueError("Explicit original or mock bindings required")
-            if bindings.kind=="REAL_CORE":
+            from ..i1.initializer import run_heft_i1
+            if bindings.kind in ("REAL_CORE","REAL_I1"):
                 from heft_method import run_heft
                 from thermal import evaluate_candidate
-                if bindings.initializer is not run_heft or bindings.evaluator is not evaluate_candidate:
-                    raise ValueError("Real bindings must be the unchanged original functions")
+                expected_initializer=run_heft_i1 if bindings.kind=="REAL_I1" else run_heft
+                if bindings.initializer is not expected_initializer or bindings.evaluator is not evaluate_candidate:
+                    raise ValueError("Explicit versioned initializer and unchanged evaluator required")
             config,instance=input_loader(budget)
             require_heuristic_control(instance,config,"Enhanced HEFT",allow_auto_low=True)
             sources=common.source_identity()
@@ -47,10 +50,10 @@ def execute_heft(input_loader, workdir, *, bindings, budget):
             recorder.initializer_meta=bindings.initializer(instance,config,budget,recorder.assess,allow_auto_low=True)
         with budget.phase("complete_initial_safe_freeze"):
             status=(recorder.initializer_meta or {}).get("status")
-            allowed={"BOUNDED_SEARCH_COMPLETED"}
+            allowed={"SAFE_INIT_READY"} if bindings.initializer is run_heft_i1 else {"BOUNDED_SEARCH_COMPLETED"}
             if bindings.kind=="MOCK_ONLY":allowed.add("MOCK_INITIALIZER_COMPLETED")
-            if status=="NO_SAFE_CONSTRUCTED_WITNESS" and recorder.best is None:
-                raise common.SearchStop("NO_SAFE_CONSTRUCTED_WITNESS")
+            if status in ("NO_SAFE_CONSTRUCTED_WITNESS","NO_SAFE_INIT_ADMISSION_LIMIT") and recorder.best is None:
+                raise common.SearchStop(status)
             if status not in allowed:raise common.SearchStop("INITIALIZATION_NOT_COMPLETED")
             recorder.freeze_initial()
         result.update(run_terminal="SEARCH_COMPLETED",reason="NO_REFINEMENT_DECLARED")
@@ -58,7 +61,7 @@ def execute_heft(input_loader, workdir, *, bindings, budget):
         result.update(run_terminal="BUDGET_EXHAUSTED",reason="METHOD_BUDGET_EXHAUSTED")
     except common.SearchStop as error:
         reason=str(error)
-        terminal=("NORMAL_NO_SAFE" if reason=="NO_SAFE_CONSTRUCTED_WITNESS" else
+        terminal=("NORMAL_NO_SAFE" if reason in ("NO_SAFE_CONSTRUCTED_WITNESS","NO_SAFE_INIT_ADMISSION_LIMIT") else
             "UNRESOLVED_STOP" if reason in ("INITIALIZATION_NOT_COMPLETED","NO_COMPLETE_SAFE_HEFT_INITIALIZATION","NUMERICAL_UNRESOLVED") else
             "BUDGET_EXHAUSTED" if reason=="SAFE_FORMED_AFTER_DEADLINE" and budget.elapsed>=300 else "TECHNICAL_STOP")
         result.update(run_terminal=terminal,reason=reason)
@@ -70,13 +73,13 @@ def execute_heft(input_loader, workdir, *, bindings, budget):
     if recorder is not None:
         final=recorder.current if recorder.current is not None else recorder.best
         if final is not None:
-            result.update(state="SAFE" if bindings.kind=="REAL_CORE" else "MOCK_SAFE",
+            result.update(state="SAFE" if bindings.kind in ("REAL_CORE","REAL_I1") else "MOCK_SAFE",
                 safe_candidate=deepcopy(final["candidate"]),safe_upper_bound_J=final["energy"]["upper"],
                 evaluation=deepcopy(final["receipt"]),safe_context=deepcopy(final["context"]))
         result.update(initial_safe_snapshot=deepcopy(recorder.initial),initialization=recorder.initializer_meta,
             events=deepcopy(recorder.events),evaluations=deepcopy(recorder.rows),violations=deepcopy(recorder.violations),
             first_safe_at_s=recorder.first_safe_s,first_graph_strict_improvement_at_s=None,cache_hits=recorder.cache_hits,
-            usable_as_research_evidence=bindings.kind=="REAL_CORE" and final is not None
+            usable_as_research_evidence=bindings.kind in ("REAL_CORE","REAL_I1") and final is not None
                 and result["run_terminal"] not in ("TECHNICAL_STOP","UNRESOLVED_STOP"))
     archive_started=budget.clock()
     result=common.original._archivable(result)

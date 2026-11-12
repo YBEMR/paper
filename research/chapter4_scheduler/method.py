@@ -43,6 +43,7 @@ def source_identity():
         "control_policy.py", "auto_heuristic_policy.py", "thermal.py", "timing.py",
         "h02_pair_preflight/receipts.py", "h02_pair_preflight/common.py")]
     files.append(here.parent / "v1_evaluator/interval.py")
+    files.extend(here / "i1" / name for name in ("__init__.py", "admission.py", "fallback.py", "initializer.py"))
     return {str(p.relative_to(here.parent)).replace("\\", "/"):
         hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 
@@ -145,13 +146,21 @@ class CompleteRecorder:
         else:
             ei, ec, ea = deepcopy(self.instance), deepcopy(supplied), deepcopy(self.accuracy)
             before = (digest(ei), digest(ec), digest(ea))
+            evaluation_admitted_at_s = None
             with self.budget.phase("complete_continuous_evaluation"):
+                if self.phase == "initialization":
+                    from .i1.initializer import run_heft_i1
+                    if self.bindings.initializer is run_heft_i1:
+                        from .i1.admission import require_admission
+                        evaluation_admitted_at_s = require_admission(self.budget, "complete_evaluation")
                 receipt = self.bindings.evaluator(ei, ec, ea, self.budget)
             # Archive returned evidence before checks that may stop the method.
             row = {"source": source, "phase": self.phase, "candidate": supplied,
                 "candidate_sha256": identity, "receipt": deepcopy(receipt),
                 "returned_at_s": self.budget.elapsed, "accepted_safe": False,
                 "incumbent_replaced": False, "context": deepcopy(self.context)}
+            if evaluation_admitted_at_s is not None:
+                row["evaluation_admitted_at_s"] = evaluation_admitted_at_s
             self.rows.append(row)
             if before != (digest(ei), digest(ec), digest(ea)):
                 raise SearchStop("EVALUATOR_ARGUMENT_MUTATION")

@@ -189,6 +189,7 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
     result = {"method": "activity_saving_deadline_edge_graph", "rule_version": RULE_VERSION,
         "rules": deepcopy(RULES), "state": "UNRESOLVED", "run_terminal": None,
         "blocking_edge_adjustment_enabled": allow_blocking_edges,
+        "initialization_version": "I1" if getattr(bindings, "kind", None) == "REAL_I1" else "I0" if getattr(bindings, "kind", None) == "REAL_CORE" else "MOCK_ONLY",
         "reason": None, "safe_candidate": None, "safe_upper_bound_J": None,
         "evaluation": None, "coverage_complete": False,
         "independently_proven_optimal": False, "independently_proven_infeasible": False,
@@ -198,13 +199,15 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
     proposals, diagnostics, accepted = [], [], 0
     try:
         with budget.phase("input_imports_and_context"):
-            if not isinstance(bindings, Bindings) or bindings.kind not in ("MOCK_ONLY", "REAL_CORE"):
+            if not isinstance(bindings, Bindings) or bindings.kind not in ("MOCK_ONLY", "REAL_CORE", "REAL_I1"):
                 raise ValueError("recognized explicit backend bindings required")
-            if bindings.kind == "REAL_CORE":
+            from ..i1.initializer import run_heft_i1
+            if bindings.kind in ("REAL_CORE", "REAL_I1"):
                 from heft_method import run_heft
                 from thermal import evaluate_candidate
-                if bindings.initializer is not run_heft or bindings.evaluator is not evaluate_candidate:
-                    raise ValueError("real backends must be the unchanged original functions")
+                expected_initializer = run_heft_i1 if bindings.kind == "REAL_I1" else run_heft
+                if bindings.initializer is not expected_initializer or bindings.evaluator is not evaluate_candidate:
+                    raise ValueError("explicit versioned initializer and unchanged evaluator required")
             if not callable(bindings.initializer) or not callable(bindings.evaluator):
                 raise ValueError("callable initializer and evaluator required")
             from auto_heuristic_policy import require_heuristic_control
@@ -222,9 +225,11 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
                 recorder.assess, allow_auto_low=True)
         with budget.phase("complete_initial_safe_freeze"):
             status = (recorder.initializer_meta or {}).get("status")
-            allowed = {"BOUNDED_SEARCH_COMPLETED"}
+            allowed = {"SAFE_INIT_READY"} if bindings.initializer is run_heft_i1 else {"BOUNDED_SEARCH_COMPLETED"}
             if bindings.kind == "MOCK_ONLY":
                 allowed.add("MOCK_INITIALIZER_COMPLETED")
+            if bindings.initializer is run_heft_i1 and status in ("NO_SAFE_CONSTRUCTED_WITNESS", "NO_SAFE_INIT_ADMISSION_LIMIT") and recorder.best is None:
+                raise SearchStop(status)
             if status not in allowed:
                 raise SearchStop("INITIALIZATION_NOT_COMPLETED")
             recorder.freeze_initial()
@@ -266,7 +271,8 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
         result.update(run_terminal="BUDGET_EXHAUSTED", reason="METHOD_BUDGET_EXHAUSTED")
     except SearchStop as error:
         reason = str(error)
-        terminal = ("UNRESOLVED_STOP" if reason in ("NO_COMPLETE_SAFE_HEFT_INITIALIZATION",
+        terminal = ("NORMAL_NO_SAFE" if reason in ("NO_SAFE_CONSTRUCTED_WITNESS", "NO_SAFE_INIT_ADMISSION_LIMIT") else
+            "UNRESOLVED_STOP" if reason in ("NO_COMPLETE_SAFE_HEFT_INITIALIZATION",
             "NUMERICAL_UNRESOLVED", "INITIALIZATION_NOT_COMPLETED") else
             "BUDGET_EXHAUSTED" if reason == "SAFE_FORMED_AFTER_DEADLINE" and
             budget.elapsed >= budget.seconds else "TECHNICAL_STOP")
@@ -290,7 +296,7 @@ def execute_reconstruction(input_loader, workdir, *, bindings, seconds=300,
         result.update(initial_safe_snapshot=deepcopy(recorder.initial), initialization=recorder.initializer_meta,
             events=deepcopy(recorder.events), evaluations=deepcopy(recorder.rows), violations=deepcopy(recorder.violations),
             first_safe_at_s=recorder.first_safe_s, first_graph_strict_improvement_at_s=recorder.first_strict_s,
-            cache_hits=recorder.cache_hits, usable_as_research_evidence=bindings.kind == "REAL_CORE" and
+            cache_hits=recorder.cache_hits, usable_as_research_evidence=bindings.kind in ("REAL_CORE", "REAL_I1") and
                 final is not None and result["run_terminal"] not in ("TECHNICAL_STOP", "UNRESOLVED_STOP"))
     archive_started = clock()
     result = original._archivable(result)

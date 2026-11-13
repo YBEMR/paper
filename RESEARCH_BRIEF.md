@@ -1,5 +1,8 @@
 # 研究状态
 
+**D281 环境补充（2026-11-13，用户提供 CPLEX 路径、确认 IBM 学术授权并授权安装接入）：** 已在 F:/Anaconda3/python.exe 安装 cplex 22.2.0.0、docplex 2.32.264，并按官方 config --upgrade 绑定 F:/CPLEX/CPLEX_Studio222 的 Developer Edition 运行时；Windows 加载器路径及 DLL 哈希与 Studio 一致。四列三行、不调用求解的接口检查最终 20/20 通过，含 binary64 矩阵/目标/界/RHS、整数索引及完整 MIP start 存取；首次仅 psutil 路径缺盘符导致身份检查失败，改用 Windows 加载器查询后通过，两份回执保留。完成环境接入，后续首选改为现有 CPLEX Python；完整 R1 适配、原生 start 接纳与实际规模/数值表现仍未验证，不直接执行旧 Gurobi 候选。0 MATLAB/MILP/LP/R1 构模或加载/热评价；旧 D281 冻结文件不变。见[配置与无求解验收记录](research/chapter3_cplex_environment_setup_20261113/README.md)。
+
+
 **D281（2026-11-13，仅只读环境核查、接口准备和纯控制测试）：** 未发现已安装 Gurobi/CPLEX/highspy 或可覆盖完整 R1 的商业许可；主 Python 3.12.4、次 Python 3.9.9，SciPy 1.13.1 内嵌 HiGHS 的公开 milp 无完整 x0/回调入口。完整 C 为 23780 变量/101818 行，超过 Gurobi 2000/2000、CPLEX 1000/1000 限规模许可；学术资格未知，H 盘及任意便携安装未核实。按停止规则终止商业原生后端实施；有条件首选 Gurobi Python 12.0.3，唯一备用 native HiGHS/highspy，均未安装或调用。后端无关 binary64 契约、完整保存数组假后端逐位回读及 31 项纯控制通过；229 研究来源/15 执行器/4 MATLAB 历史哈希不变。已准备阻断状态的 600/550、单次 C 诊断候选（计划 SHA 9b1d3ce5e5093865202cef077ae8b5184913502ca4acd56d4d664cbf60f0b833）、公平同求解器 A/B/C 条件及固定整数 LP/Benders 割分析。原生 start 接纳、真实回读、原生计时/清理均未验证，**尚不具备申请科研求解授权条件**；下一步只补单一后端合法环境和真实无求解接线，再另行冻结申请，不自动求解或回到 MATLAB 扫参。本轮 MATLAB/MILP/LP/重构/热评价/安装/许可修改全为 0，未新增 SAFE 或节能结论。见[环境、接口、候选协议及停止决定](research/chapter3_solver_port_preparation_20261113/README.md)。
 
 

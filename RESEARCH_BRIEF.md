@@ -1,5 +1,8 @@
 # 研究状态
 
+**D282（2026-11-13，唯一完整 C 原生装载/回读，无求解）：** 基于 0432540/父 9b68ccb，22 项纯控制后冻结 8df9c337，现有 CPLEX 22.2.0.0 学术来源 DLL 下真实装入 23780 变量/1125 整数/94958 不等式/6860 等式。1004625 系数与坐标、全部向量及完整 MIP start 回读零差异；16 原生不变量、15 封存后只读审计通过。方法 8.707 秒、外层 9.702 秒、Job 峰值承诺 298.16 MiB，句柄释放且最终活动进程 0；Job 累计进程数 2 在无 CPLEX 控制也出现，计数原因保留未知。0 优化/LP/完整重构/热评价，历史证据不改，本次授权已消费。具备申请 D283 单次保存 C 科研求解的模型与协议条件：600/550 动态配额、固定参数/完整初解、两矩阵准入和完整 AB/AC SAFE，严格成功要求不同调度且新能耗上界低于共同初解下界。D283 未批准/未执行，求解回执与原评价链还须按候选接线、纯控制和冻结后才可执行；优化许可、start 接纳、根 LP/界/严格节能仍未知。不作历史 intlinprog A/B 对新 CPLEX C 的加速比较。见[完整回读报告](research/chapter3_cplex_full_C_preflight_20261113/README.md)、[D283 候选](research/chapter3_cplex_full_C_preflight_20261113/D283_candidate.md)。
+
+
 **D281 环境补充（2026-11-13，用户提供 CPLEX 路径、确认 IBM 学术授权并授权安装接入）：** 已在 F:/Anaconda3/python.exe 安装 cplex 22.2.0.0、docplex 2.32.264，并按官方 config --upgrade 绑定 F:/CPLEX/CPLEX_Studio222 的 Developer Edition 运行时；Windows 加载器路径及 DLL 哈希与 Studio 一致。四列三行、不调用求解的接口检查最终 20/20 通过，含 binary64 矩阵/目标/界/RHS、整数索引及完整 MIP start 存取；首次仅 psutil 路径缺盘符导致身份检查失败，改用 Windows 加载器查询后通过，两份回执保留。完成环境接入，后续首选改为现有 CPLEX Python；完整 R1 适配、原生 start 接纳与实际规模/数值表现仍未验证，不直接执行旧 Gurobi 候选。0 MATLAB/MILP/LP/R1 构模或加载/热评价；旧 D281 冻结文件不变。见[配置与无求解验收记录](research/chapter3_cplex_environment_setup_20261113/README.md)。
 
 

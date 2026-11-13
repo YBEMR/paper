@@ -1,0 +1,132 @@
+--- frozen_D277_C_noheur/solve_model.m
++++ D279/native/solve_model.m
+@@ -19,6 +19,9 @@
+     if ~isfile([prefix '.request.json']), pause(.01); continue; end
+     requestClock = tic; callbacks = {}; callbackFields = {}; callbackError = '';
+     streamEvents = false; eventNumber = 0;
++    observation=struct('protocol','D279-public-observer-v1','history_limit',100000, ...
++        'anchors',{{}},'callback_spans',[],'profile_started',false,'profile_archived',false);
++    profileActive=false;
+     result = struct('status','ERROR','x',[],'fval',[],'exitflag',[], ...
+         'output',struct(),'callbacks',{{}},'callback_fields',{{}}, ...
+         'intlinprog_entered',false,'phase_seconds',struct(), ...
+@@ -86,7 +89,21 @@
+             end
+             result.cut_max_iterations_declared=cutIterationLimit;
+         end
+-        opts = optimoptions('intlinprog','Display','off', ...
++        % Public R2023b interface only; no internal/protected profiler APIs.
++        observerClock=tic;
++        profile('clear');
++        profile('on','-timestamp','-historysize','100000','-timer','performance');
++        profileActive=true;
++        observation.profile_started=true;
++        observation.profile_status=profile('status');
++        st=observation.profile_status;
++        if ~strcmp(st.ProfilerStatus,'on') || ~strcmp(st.HistoryTracking,'timestamp') ...
++                || ~strcmp(st.Timer,'performance') || st.HistorySize~=100000 ...
++                || ~strcmp(st.DetailLevel,'mmex')
++            error('D279:profileStatus','Unexpected public Profiler settings; no fallback');
++        end
++        observation.profile_setup_s=toc(observerClock);
++        opts = optimoptions('intlinprog','Display','iter', ...
+             'AbsoluteGapTolerance',0,'RelativeGapTolerance',0, ...
+             'ConstraintTolerance',1e-9,'IntegerTolerance',1e-6, ...
+             'IntegerPreprocess','none', ...
+@@ -145,6 +162,8 @@
+                 end
+                 publish(entered);
+             end
++            observation.anchors{end+1}=mark('begin');
++            fprintf('D279_NATIVE_BEGIN\n');
+             phaseClock=tic;
+             lastwarn('');
+             [x,fval,exitflag,output] = intlinprog(p.c(:),p.intcon(:)', ...
+@@ -153,6 +172,8 @@
+             result.solver_warning_message=warningMessage;
+             result.solver_warning_identifier=warningIdentifier;
+             result.phase_seconds.intlinprog_call=toc(phaseClock);
++            observation.anchors{end+1}=mark('end');
++            fprintf('D279_NATIVE_END\n');
+             result.x=x(:)'; result.fval=fval; result.exitflag=exitflag;
+             result.output=output; result.status='SOLVED';
+             if ~isempty(callbackError)
+@@ -177,6 +198,27 @@
+         result.error_identifier=err.identifier;
+         result.error_message=getReport(err,'extended','hyperlinks','off');
+     end
++    % One final public snapshot. profile('info') stops recording: never use
++    % it in a callback or to obtain mid-solve progress.
++    if profileActive
++        observerClock=tic;
++        try
++            profileData=profile('info');
++            profileActive=false;
++            observation.profile_status_after=profile('status');
++            observation.history_events=size(profileData.FunctionHistory,2);
++            observation.history_capacity_reached=observation.history_events>=100000;
++            observation.profile_snapshot_s=toc(observerClock);
++            observerClock=tic;
++            save([prefix '.profile.mat'],'profileData','-v7');
++            observation.profile_archive_s=toc(observerClock);
++            observation.profile_archived=true;
++        catch observerError
++            profile('off');
++            observation.error=getReport(observerError,'extended','hyperlinks','off');
++        end
++    end
++    result.observation=observation;
+     result.callbacks=callbacks; result.callback_fields=callbackFields;
+     result.matlab_request_wall_seconds=toc(requestClock);
+     result.worker_elapsed_seconds=toc(workerClock);
+@@ -184,12 +226,16 @@
+     result.callback_candidates_independently_thermal_checked=false;
+     result.deadline_authority='Python absolute monotonic deadline';
+     writejson([prefix '.response.json'],result);
+-    requestNumber=requestNumber+1;
++    return; % Exactly one request in this independent observation worker.
+ end
+ 
+     function stop = callback(x,values,state)
++        callbackStart=toc(requestClock);
+         stop = false;
+         try
++            if isfield(values,'phase') && strcmp(values.phase,'rootlp')
++                observation.anchors{end+1}=mark('root');
++            end
+             callbackFields=union(callbackFields,fieldnames(values));
+             entry=struct('state',state,'request_wall_seconds',toc(requestClock), ...
+                 'values',values,'x',x(:)');
+@@ -207,6 +253,18 @@
+             callbackError=getReport(err,'extended','hyperlinks','off');
+             stop=true;
+         end
++        observation.callback_spans(end+1,:)=[callbackStart,toc(requestClock)];
++    end
++
++    function anchor=mark(label)
++        before=toc(requestClock);
++        switch label
++            case 'begin', measured=d279_begin_marker(requestClock);
++            case 'root', measured=d279_root_marker(requestClock);
++            case 'end', measured=d279_end_marker(requestClock);
++        end
++        after=toc(requestClock);
++        anchor=struct('label',label,'before_s',before,'inside_s',measured,'after_s',after);
+     end
+ 
+     function publish(entry)
+@@ -287,3 +345,13 @@
+ options(2)=javaMethod('valueOf','java.nio.file.StandardCopyOption','REPLACE_EXISTING');
+ javaMethod('move','java.nio.file.Files',source,destination,options);
+ end
++
++function t=d279_begin_marker(clock)
++t=toc(clock);
++end
++function t=d279_root_marker(clock)
++t=toc(clock);
++end
++function t=d279_end_marker(clock)
++t=toc(clock);
++end

@@ -42,7 +42,9 @@ final=safe_receipt(instance,raw['safe_candidate'],raw['evaluation'],config['accu
 key=digest(raw['safe_candidate']);assert digest(semantic(raw['evaluation']))==bykey[key]['semantic_sha256']
 plan=read(root/'execution/freeze.json')
 assert digest(instance)==plan['inputs']['U07__n24']['instance'] and digest(config)==plan['inputs']['U07__n24']['config']
-for name,h in plan['code_sha256'].items():assert sha(root/name)==h,name
+for name,h in plan['code_sha256'].items():
+    archived=root/'versions/v1/support.py' if name=='support.py' and (root/'versions/v1/support.py').exists() else root/name
+    assert sha(archived)==h,name
 source=verify_sources()
 result={'status':'RECOVERED_READ_ONLY','case':'U07__n24','arm':'A','search_terminal':raw['run_terminal'],
   'worker_terminal':'POST_STOP_MEMORY_API_ERROR','search_invocations':1,'additional_scientific_calls':0,

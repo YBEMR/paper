@@ -1,0 +1,155 @@
+def evaluate_piecewise(platform, entry_temperatures, limits, segments, window_ms,
+                       accuracy=None, budget=None, scene_id='fixture', checkpoint=None, on_checkpoint=None):
+    """Evaluate a fully declared power history; no scheduling/search here.
+
+    This lower-level interface is useful for analytic tests. Production callers
+    must use evaluate_candidate so schedule legality is independently checked.
+    A violation is a point witness within the model's certified validity range.
+    Energy of an unsafe complete scene is diagnostic only, never rankable.
+    """
+    budget = budget if budget is not None else Budget()
+    out = _empty_scene(scene_id)
+    input_validated = False
+    try:
+        budget.check()
+        accuracy = _accuracy(accuracy)
+        data = _physical_input(platform, entry_temperatures, limits, segments, window_ms)
+        nodes, capacity, conductance, ambient, reference, valid, initial, maximum, prepared = data
+        input_validated = True
+        n = len(nodes)
+        theta = [I.rational((t-ambient)/SCALE) for t in initial]
+        peaks = [I.rational(t) for t in initial]
+        minima = [I.rational(t) for t in initial]
+        witnesses = [{'time_s': '0', 'temperature_degC': p.data()} for p in peaks]
+        energy_parts = {k: I(0) for k in ('baseline', 'activity', 'external_common', 'temperature_correction')}
+        node_energy = [I(0) for _ in nodes]
+        theta_integrals = [I(0) for _ in nodes]
+        tolerance = (_iv(accuracy['temperature_enclosure_width_K'])/SCALE).lo
+        seen_violation = set()
+        if checkpoint is not None:
+            theta = checkpoint['theta']
+            peaks = checkpoint['peaks']
+            minima = checkpoint['minima']
+            witnesses = checkpoint['witnesses']
+            energy_parts = checkpoint['energy_parts']
+            node_energy = checkpoint['node_energy']
+            theta_integrals = checkpoint['theta_integrals']
+            seen_violation = checkpoint['seen_violation']
+            out = checkpoint['out']
+
+        def record_point(index, when, scaled_value):
+            value = scaled_value*SCALE + I.rational(ambient)
+            if value.lo > I.rational(maximum[index]).hi and index not in seen_violation:
+                evidence = {'scene_id': scene_id, 'node': nodes[index],
+                    'time_s': str(when), 'temperature_degC': value.data(),
+                    'limit_degC': str(maximum[index])}
+                budget.check()  # Evidence must already be complete within budget.
+                evidence['formed_at_elapsed_s'] = budget.elapsed
+                out['violations'].append(evidence)
+                seen_violation.add(index)
+                budget.mark('after_violation_commit')
+
+        # Entry lies in the declared model range, so its violation is usable
+        # even if no propagation panel can complete.
+        if checkpoint is None:
+            for i in range(n):
+                record_point(i, F(0), theta[i])
+        for segment_index, (segment, matrix, base, activity, slopes, external) in enumerate(prepared):
+            if checkpoint is not None and segment_index < checkpoint['next_segment']:
+                continue
+            duration = _q(segment['duration_ms'])/1000
+            count = max(1, math.ceil(4*F(_kernel.norm(matrix))*duration))
+            h = duration/count
+            start = _q(segment['start_ms'])/1000
+            for panel_index in range(count):
+                budget.mark('before_panel')
+                budget.panel()
+                when = start + panel_index*h
+                state = theta + [I(0) for _ in nodes] + [I(1)]
+                panel = Panel(matrix, state, h, order=18)
+                image = panel.value(F(0), h)
+                broad = [v*SCALE+I.rational(ambient) for v in image[:n]]
+                range_known = all(v.lo >= I.rational(valid[0]).hi and v.hi <= I.rational(valid[1]).lo for v in broad)
+                local_peaks, local_minima, local_witnesses = [], [], []
+                # If the cheap whole-panel enclosure is too wide, refined
+                # extrema can certify the power model range. No physical
+                # violation witness is accepted before this range is known.
+                for i in range(n):
+                    callback = (lambda t, v, i=i: record_point(i, when+t, v)) if range_known else None
+                    peak, at = panel.extremum(i, tolerance, budget, on_point=callback)
+                    minus_min, _ = panel.extremum(i, tolerance, budget, sign=-1)
+                    local_peaks.append(peak*SCALE+I.rational(ambient))
+                    local_minima.append(-minus_min*SCALE+I.rational(ambient))
+                    value = panel.value(at)[i]*SCALE+I.rational(ambient)
+                    local_witnesses.append({'time_s': str(when+at), 'temperature_degC': value.data()})
+                if not range_known:
+                    range_known = all(local_minima[i].lo >= I.rational(valid[0]).hi and
+                                      local_peaks[i].hi <= I.rational(valid[1]).lo for i in range(n))
+                    if not range_known:
+                        out['reason'] = 'POWER_MODEL_RANGE_UNRESOLVED'
+                        raise Exhausted(out['reason'])
+                    for i, witness in enumerate(local_witnesses):
+                        t = F(witness['time_s'])-when
+                        record_point(i, when+t, panel.value(t)[i])
+                end = panel.value(h)
+                correction = [I.rational(slopes[i])*(end[n+i]*SCALE + I.rational((ambient-reference)*h)) for i in range(n)]
+                additions = {'baseline': I.rational(sum(base)*h), 'activity': I.rational(sum(activity)*h),
+                             'external_common': I.rational(external*h),
+                             'temperature_correction': sum(correction, I(0))}
+                budget.check()
+                # Panel commit: preserve only complete covered intervals.
+                theta = end[:n]
+                for i in range(n):
+                    theta_integrals[i] += end[n+i]*SCALE
+                    node_energy[i] += I.rational((base[i]+activity[i])*h)+correction[i]
+                    if local_peaks[i].lo > peaks[i].lo:
+                        witnesses[i] = local_witnesses[i]
+                    peaks[i] = I(max(peaks[i].lo, local_peaks[i].lo), max(peaks[i].hi, local_peaks[i].hi))
+                    minima[i] = I(min(minima[i].lo, local_minima[i].lo), min(minima[i].hi, local_minima[i].hi))
+                for key, value in additions.items():
+                    energy_parts[key] += value
+                out['covered_until_s'] = str(when+h)
+                out['peaks_degC'] = dict(zip(nodes, (v.data() for v in peaks)))
+                out['minimum_degC'] = dict(zip(nodes, (v.data() for v in minima)))
+                out['peak_witnesses'] = dict(zip(nodes, witnesses))
+                out['trace'].append({'time_s': str(when+h), 'segment': segment_index,
+                    'temperature_degC': {node: (theta[i]*SCALE+I.rational(ambient)).data() for i, node in enumerate(nodes)}})
+                budget.mark('after_panel_commit')
+                if on_checkpoint is not None and panel_index == count-1:
+                    on_checkpoint(dict(next_segment=segment_index+1, checkpoint_at_s=budget.elapsed, theta=theta, peaks=peaks, minima=minima, witnesses=witnesses, energy_parts=energy_parts, node_energy=node_energy, theta_integrals=theta_integrals, seen_violation=seen_violation, out=out))
+        energy = sum(energy_parts.values(), I(0))
+        # Independent accounting identity: sum(C*dtheta + G*integral(theta))
+        # equals heat injected. The external common power is added only here.
+        heat_balance = sum((I.rational(capacity[i])*(theta[i]*SCALE-I.rational(initial[i]-ambient)) +
+                            sum((I.rational(conductance[i][j])*theta_integrals[j] for j in range(n)), I(0))
+                            for i in range(n)), I(0)) + energy_parts['external_common']
+        if max(energy.lo, heat_balance.lo) > min(energy.hi, heat_balance.hi):
+            raise InternalConsistencyError('energy conservation enclosure mismatch')
+        accurate = _energy_accuracy(energy, accuracy)
+        safe = all(peaks[i].hi <= I.rational(maximum[i]).lo for i in range(n))
+        state = 'THERMAL_VIOLATION' if out['violations'] else 'SAFE' if safe and accurate else 'UNRESOLVED'
+        reason = 'POINT_WITNESS' if out['violations'] else 'COMPLETE_CONTINUOUS_ENCLOSURE' if state == 'SAFE' else 'ENERGY_ERROR_TARGET' if not accurate else 'TEMPERATURE_LIMIT_UNRESOLVED'
+        completed = dict(state=state, reason=reason, complete=True, rankable_energy=state == 'SAFE',
+                   energy_J=energy.data(), energy_components_J={k: v.data() for k, v in energy_parts.items()},
+                   final_temperature_degC={node: (theta[i]*SCALE+I.rational(ambient)).data() for i, node in enumerate(nodes)},
+                   node_injected_energy_J=dict(zip(nodes, (v.data() for v in node_energy))),
+                   temperature_rise_integrals_Ks=dict(zip(nodes, (v.data() for v in theta_integrals))),
+                   conservation_energy_J=heat_balance.data(), energy_accuracy_met=accurate)
+        budget.mark('before_scene_commit')
+        out.update(completed, completed_at_elapsed_s=budget.elapsed)
+    except Exhausted as error:
+        out.update(state='THERMAL_VIOLATION' if out['violations'] else 'UNRESOLVED',
+                   reason=str(error), budget_exhausted=str(error) in ('wall_time_limit', 'panel_limit', 'peak_refinement_limit'))
+    except MemoryError:
+        out.update(state='THERMAL_VIOLATION' if out['violations'] else 'UNRESOLVED',
+                   reason='RESOURCE_LIMIT')
+    except (InternalConsistencyError, ArithmeticError) as error:
+        out.update(state='THERMAL_VIOLATION' if out['violations'] else 'UNRESOLVED',
+                   reason='INTERNAL_CONSISTENCY_ERROR' if isinstance(error, InternalConsistencyError) else 'NUMERICAL_ERROR',
+                   error_type=type(error).__name__, error_details=str(error))
+    except (KeyError, TypeError, ValueError) as error:
+        out.update(state='THERMAL_VIOLATION' if out['violations'] else 'UNRESOLVED' if input_validated else 'INVALID_INPUT',
+                   reason='NUMERICAL_ERROR' if input_validated else str(error),
+                   error_type=type(error).__name__, error_details=str(error))
+    out['elapsed_s'] = budget.elapsed
+    return out

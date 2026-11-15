@@ -32,7 +32,10 @@ def peak_memory():
         p=PMC();p.cb=ctypes.sizeof(p)
         h=ctypes.windll.kernel32.GetCurrentProcess
         h.restype=wintypes.HANDLE
-        if not ctypes.windll.psapi.GetProcessMemoryInfo(h(),ctypes.byref(p),p.cb):raise OSError('PROCESS_MEMORY_QUERY')
+        query=ctypes.windll.psapi.GetProcessMemoryInfo
+        query.argtypes=[wintypes.HANDLE,ctypes.POINTER(PMC),wintypes.DWORD]
+        query.restype=wintypes.BOOL
+        if not query(h(),ctypes.byref(p),p.cb):raise OSError('PROCESS_MEMORY_QUERY')
         return {'peak_rss_bytes':p.PeakWorkingSetSize,'current_rss_bytes':p.WorkingSetSize,'kind':'process_lifetime_peak_working_set'}
     import resource
     return {'peak_rss_bytes':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024,'kind':'process_lifetime_maxrss'}

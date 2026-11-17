@@ -1,0 +1,382 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>共享内存与热频率限制：准入审计</title><style>body{max-width:1150px;margin:32px auto;padding:0 26px;color:#20303a;font:16px/1.85 system-ui,"Microsoft YaHei",sans-serif}h1{font-size:28px;color:#204e69}h2{font-size:21px;margin-top:32px;border-top:1px solid #d9e1e5;padding-top:14px}table{border-collapse:collapse;display:block;overflow-x:auto;font-size:14px;margin:18px 0}th,td{border:1px solid #d6dfe5;padding:9px 11px;text-align:left;vertical-align:top}th{background:#eaf2f6}tr:nth-child(even){background:#f7f9fa}code,pre{background:#eef2f4}pre{padding:12px;overflow:auto}a{color:#12698a}nav{background:#eaf2f6;padding:12px}section{margin-bottom:65px}</style><nav><a href="#report">结论</a> · <a href="#sources">资料审计</a> · <a href="#model">符号模型</a> · <a href="#review">复核</a></nav><section id="report"><h1>共享内存与热频率限制：联合调度价值准入结论</h1>
+<p><strong>当前不进入新算法开发，也不启动联合数值扫描。</strong> 硬件机制有依据，但可复用同平台参数不足，尚不能判断相对最强简单方案是否存在≥1%的完整能耗空间。结论是“数值证据未闭合”，不是“收益为0”，也不是“问题物理上不成立”。</p>
+<p>本轮按用户指定问题核查HaX-CoNN、OPTiC、RT-TAS与Orin官方EMC文档。结果仅包括文献/数据审计、符号条件、冻结评价协议、静态复算与归档。没有沿用TF20261114的合成数字，没有提高功率、降低温限、增加任务或筛选正例。</p>
+<h2>1. 问题是否值得继续投入</h2>
+<table>
+<thead>
+<tr>
+<th>用户关心的问题</th>
+<th>本轮可支持的结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>联合机制是否真正改变最佳调度？</td>
+<td>一般性能建模中已有直接近邻OPTiC；本轮固定服务总能耗实例尚无合格数值输入，不能声称最优选择已改变</td>
+</tr>
+<tr>
+<td>多少来自热限制，而非普通争用？</td>
+<td>未知。已定义M10选择在M11中的后悔值及固定安排交互量；未运行四组数值，不把争用改善冒充热收益</td>
+</tr>
+<tr>
+<td>相对最强简单方案是否仍有≥1%空间？</td>
+<td>未检验，数值为null。没有证据支持投入复杂算法</td>
+</tr>
+<tr>
+<td>是否存在无需联合热感知的条件？</td>
+<td>有解析充分条件：热cap全程不绑定；带宽约束不活跃；或强简单类含共同最优。条件及额外能量前提见符号模型</td>
+</tr>
+<tr>
+<td>是否依赖无依据极端参数？</td>
+<td>本轮未填这些参数，不能宣称存在有依据的正收益区域；符号区域仍需证明实际可达</td>
+</tr>
+</tbody>
+</table>
+<p><strong>研究投入判断：保留问题，暂停算法投入。</strong> 目前值得保留的是辨识缺口与条件判据，不是再构造一组能出正结果的仿真数字。OPTiC已经联合内存竞争和计算热降频，本轮若继续，价值必须落到固定服务/完整能量、EMC热限制与强简单方法之间的实证差额，不能仅凭新增机制命名贡献。</p>
+<h2>2. 已核实的依据与数据缺口</h2>
+<ul>
+<li><strong>HaX-CoNN</strong>：可复用层组时长、转移与竞争方法；原始工作树有部分预采集摘要。Orin与Xavier使用不同精度/软件版本；DLA引擎可能回退GPU，不能直接作为两种独占设备的合法支持表。</li>
+<li><strong>OPTiC</strong>：已经把内存竞争与热降频共同纳入CPU/GPU执行时间预测，并有机制消融；其XU3内存控制器不可调，仲裁特征也不能移植到Orin。目标不同不意味着方法不能适配。</li>
+<li><strong>RT-TAS</strong>：有Tegra X1热耦合、CPU/GPU分段功率和时长数据；其两段不是可选设备实现。关风扇、65°C设定属于该实验，不是Orin出厂门槛。</li>
+<li><strong>Orin官方</strong>：确认EMC/DRAM DVFS会受热管理限制；只证明机制存在，不给出本轮任务的实际cap、带宽、热惯性与系统能量参数。</li>
+</ul>
+<p>上述逐项来源、阅读范围和边界见<a href="#sources">文献/工件审计</a>与<a href="source_registry.json">source_registry.json</a>。</p>
+<p>固定HaX作者提交<code>87f5f25e6571ae04b577d1c38ddd241ffacab983</code>，核对54个文本工件；另核对7.32MB Zenodo公开归档。共61份缓存来源逐一核对哈希，静态提取65行摘要：10组GPU时长、10项DLA差分、25个EMC峰值百分比和20项转移相关时长。未运行作者求解器或硬件采集。</p>
+<p>两个直接阻碍：DLA差分有3个负值，保留而不截零；EMC脚本只保留百分比并取最大值，丢失运行频率、时间、温度和功率关联。它们不能分别作为真实任务时长和GB/s带宽曲线。公开归档工作树也未补齐联合数据。所有发现均可用<a href="results/artifact_audit.json">静态审计结果</a>及<a href="results/hax_extracted_summaries.csv">提取表</a>复核。</p>
+<p><a href="parameter_identifiability.csv">参数可辨识性表</a>列22项，20项联合数值输入尚未闭合；部分资料存在不等于可以为联合模型赋值。模型值保持null，包含有效带宽/仲裁、任务随频点的执行进度、计算与内存功率、基础能耗、热动态、传感器到cap映射及延迟。负载与窗口也未擅自填成TF的数值。</p>
+<h2>3. 已冻结的模型和消融口径</h2>
+<p>只冻结两条二节点链、X/Y两个抽象资源和一个共享内存资源；实际任务支持、频点、工作量、到达/期限与热状态机数值待识别。任务不可中途迁移，候选必须显式包括映射、工作点和重叠/串行选择。一般进度函数依赖实际计算频率与得到的带宽，完整窗口计计算、内存、基础、转换/传输、监测与共同尾段，禁止重复计电。</p>
+<table>
+<thead>
+<tr>
+<th>选择模型</th>
+<th>争用</th>
+<th>热cap</th>
+<th>本轮状态</th>
+<th>共同M11复评</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M00</td>
+<td>无</td>
+<td>无</td>
+<td>NOT_RUN_DATA_GATE</td>
+<td>未运行</td>
+</tr>
+<tr>
+<td>M10</td>
+<td>有</td>
+<td>无</td>
+<td>NOT_RUN_DATA_GATE</td>
+<td>未运行</td>
+</tr>
+<tr>
+<td>M01</td>
+<td>无</td>
+<td>有</td>
+<td>NOT_RUN_DATA_GATE</td>
+<td>未运行</td>
+</tr>
+<tr>
+<td>M11</td>
+<td>有</td>
+<td>有</td>
+<td>NOT_RUN_DATA_GATE</td>
+<td>未运行</td>
+</tr>
+</tbody>
+</table>
+<p>无争用只解除带宽共享约束，不删除内存工作/功耗；无热cap只关闭频率限制反馈，不删除温度递推与温度相关能耗。各模型选择后必须统一放回M11评价，不比较各自理想世界的能耗百分比。只有完整服务且期限均可行才计算节能率。</p>
+<p>强参照已定义为最佳固定、仅争用优化、热感知固定重叠规则、最佳至多一次切换、完整有限目录；结果全部NOT_RUN。离线预排知道未来和准确参数，不冒充在线阈值控制。特别地，若只有一或两个重复窗口，至多一次切换类等于全模板序列空间，额外收益为0是集合恒等；不能靠增加任务数逃避这个边界。</p>
+<p>详见<a href="PROTOCOL.md">运行前协议</a>、<a href="#model">符号模型/条件判据</a>、<a href="results/admission.json">准入结果</a>、<a href="results/ablation_status.json">四组状态</a>、<a href="results/baseline_status.json">强对照状态</a>。协议哈希在protocol_freeze.json；从未启动调度数值运行。</p>
+<h2>4. 正例条件、无收益条件与停止</h2>
+<p>符号模型给出一个<strong>尚未实例化的条件构型</strong>：冷态带宽足以支撑两个阶段重叠；重叠引发EMC cap，而串行不引发；cap后的剩余访问完成时间和总能量损失超过原并发优势，才可能改选串行。这里的cap强度、进入时刻、切换暂停、功率、尾段与期限必须同时满足约束；缺数据时不能任选。计算cap也可能降低请求带宽、缓解争用，交互不必总偏向串行。</p>
+<p>无收益条件不能省略：全目录无热cap时热独立价值为0；无有效争用时没有共享竞争贡献；强简单类已达目录最优时复杂算法空间为0。仅“运行时间不变”不足以判定能耗无变化，还须核查内存功率与尾段。</p>
+<p>本轮停止于<strong>同平台数据准入未通过</strong>。不宣布热感知假设已被否定，不提交伪造的正/负数值实例，不恢复B或旧MILP/ON-P。后续若另行授权，应先补证据或做有限符号研究；本轮没有自动安排新的仿真、硬件或算法开发。</p>
+<h2>5. 复核和复算</h2>
+<p><code>python admission.py</code>重现准入失败与四组/五类NOT_RUN记录；<code>python symbolic_checks.py</code>核对14个代数、剩余工作守恒及目录集合恒等式。它们不是调度实验、物理验证或收益证据。源数据静态复算：<code>python download_sources.py --all</code>（可选联网，校验哈希）后<code>python audit_artifacts.py</code>；仅下载/读取，绝不执行作者控制脚本。Python3.12，符号核验用SymPy1.13.3；报告构建用Markdown3.8。</p>
+<p>完整质量边界见<a href="#review">REVIEW.md</a>。原论文PDF、作者原始代码和归档仅在本地证据缓存；GitHub提交来源清单、哈希、提取结果、本轮代码及报告，不重新分发原文/原始包。既有第三、四章及前几轮实验保持不变。</p></section><section id="sources"><h1>文献和原始工件：准入审计</h1>
+<p>截止2026-11-14，有界定向核查；不是穷尽性综述。“未取得”不等于不存在。论文、官方机制、公开工件与联合数值标定分别评级，不把目标不同解释为方法不可适配。</p>
+<h2>最近邻及适用边界</h2>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>已核到的内容</th>
+<th>本轮可用性和边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://doi.org/10.1145/3627535.3638502">HaX-CoNN，PPoPP 2024</a>，全文§3.1–3.4、§5与工件说明</td>
+<td>用层组时长、转移和共享内存竞争预测选择并发DNN的异构分配，目标为时延/吞吐。对黑盒DLA通过EMC相关性推断访存特征</td>
+<td>支持“竞争会影响分配/重叠”的实测依据；没有给本轮所需的联合热频率限制与固定服务全窗能量闭环。其分组/竞争方法可以适配，不因目标不同排除</td>
+</tr>
+<tr>
+<td><a href="https://www.comp.nus.edu.sg/~tulika/OPTiC.pdf">OPTiC，TCAD 2019</a>，2018作者稿§IV-B/C/D、§V-D</td>
+<td>已联合预测CPU/GPU热降频及内存竞争；消融包括去掉竞争、同时去掉竞争与热反馈。选择划分点和频率优化共同执行时间</td>
+<td>是直接方法近邻，不能声称“首次联合两机制”。Odroid XU3观察到GPU访问优先，模型主要惩罚CPU；该平台EMC频率不能调。回归系数和完整原始档位/功率/热序列未取得，不能移植为Orin仲裁或EMC热cap模型。能耗目标及服务期限仍可另行适配</td>
+</tr>
+<tr>
+<td><a href="https://doi.org/10.1145/3358235">RT-TAS，TECS/EMSOFT 2019</a>，<a href="https://rtcl.eecs.umich.edu/rtclweb/assets/publications/2019/youngmoon-TECS-19.pdf">正式版全文</a>§5–7</td>
+<td>Tegra X1上的CPU/GPU热耦合、任务功率差异及避免热任务同时执行；目标为满足期限下抑制峰温。Table 1给稳态耦合系数，Table 2给任务CPU/GPU段时长、功率和周期</td>
+<td>CPU段和GPU段不是同一任务的两个可选替代实现。实验关风扇并设65°C门槛，不能当Orin出厂热门槛。无共享带宽—频率竞争标定和完整内存能量；稳态耦合矩阵也不能单独识别动态热容</td>
+</tr>
+<tr>
+<td><a href="https://docs.nvidia.com/jetson/archives/r35.3.1/DeveloperGuide/text/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html#emc-frequency-scaling-policy">Orin官方电源与性能文档，L4T r35.3.1</a></td>
+<td>EMC/DRAM支持DVFS；运行策略受板级DVFS表、带宽使用、驱动请求和热限制影响；MAXN仍可能受功率限制</td>
+<td><strong>官方确认机制存在，不给出当前任务实例的EMC热cap轨迹、有效带宽曲线或系统能量。</strong> 不把功率/电气节流都归因温度，也不把模式最高频率当实测运行频率</td>
+</tr>
+</tbody>
+</table>
+<p>RT-TAS原先检到的11页作者稿有模板页眉，随后取得25页正式版并以正式版核对表格/实验设置。OPTiC沿用已验证作者PDF；其页眉为2018稿，正式卷期为2019，DOI为10.1109/TCAD.2018.2873210。阅读覆盖与获取状态另存source_registry.json、provenance/；四份PDF结构预检均因缺pypdf为UNAVAILABLE，Poppler提取可用，RT-TAS第18页和OPTiC第7页已目视核对；不声称结构预检通过。</p>
+<h2>HaX-CoNN工件逐项核查</h2>
+<p>固定<a href="https://github.com/ismetdagli/HaX-CoNN/tree/87f5f25e6571ae04b577d1c38ddd241ffacab983">作者提交87f5f25e6571ae04b577d1c38ddd241ffacab983</a>：完整树105条目，选54个代码/文档/结果文本，逐文件Git blob与SHA256核对。另核查<a href="https://doi.org/10.5281/zenodo.10225025">Zenodo归档10.5281/zenodo.10225025</a>，7,321,491字节，MD5匹配，135个成员。归档工作树84个普通文件，其<code>.csv/.json/.log/.profile</code>数据只有EMC摘要；未穷挖其打包Git历史。作者硬件采集、TensorRT构建和Z3程序均未执行。</p>
+<table>
+<thead>
+<tr>
+<th>工件</th>
+<th>静态复算结果</th>
+<th>禁止的误读</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/output_expected/layer_results.json">layer_results.json</a></td>
+<td>10组GPU时长摘要</td>
+<td>不能当同一Orin、多个频点与热状态的标定表</td>
+</tr>
+<tr>
+<td><a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/output_expected/dla_compute_times.json">dla_compute_times.json</a></td>
+<td>10项中3个<code>layer_diff</code>负值，约−.406556、−1.145858、−1.881030ms</td>
+<td>这是预处理差分异常，不是负的物理执行时间；保留原值、不截零、不擅自推断根因</td>
+</tr>
+<tr>
+<td><a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/output_expected/emc_results.json">emc_results.json</a></td>
+<td>25个峰值百分比，24%–89%</td>
+<td>不是GB/s，也不是完整时间序列</td>
+</tr>
+<tr>
+<td><a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/scripts/emc_analysis/emc_single_run.sh">采集脚本</a>、<a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/scripts/emc_analysis/emc_util_all.py">汇总脚本</a></td>
+<td>从tegrastats只截取EMC百分比，汇总取max；频率、温度、功率和时间关联未保留</td>
+<td>不能反推出有效EMC频点、服务期间积分功率或热cap因果轨迹</td>
+</tr>
+<tr>
+<td><a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/output_expected/transition_results.json">transition_results.json</a></td>
+<td>20项转移相关时长摘要，含参考项</td>
+<td>缺转移能量及频点/热状态轴，不补成零成本</td>
+</tr>
+<tr>
+<td><a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/build_engine_orin.py">Orin构建脚本</a>、<a href="https://github.com/ismetdagli/HaX-CoNN/blob/87f5f25e6571ae04b577d1c38ddd241ffacab983/README.md#reusability-on-orin-agx">README</a></td>
+<td>Orin使用INT8并允许GPU回退；Xavier示例用FP16；README说明prob不能在DLA执行</td>
+<td>不能把“DLA engine”当全程纯DLA，也不能拼接两芯片/两精度数据</td>
+</tr>
+</tbody>
+</table>
+<p>README总述的TensorRT 8.4.0/CUDA11.2与后文Orin 8.5/8.5.2有不一致。<a href="https://developer.nvidia.com/embedded/jetpack-sdk-511">官方JetPack 5.1.1</a>为L4T35.3.1、TensorRT8.5.2、CUDA11.4；因此官方文档选择同代r35.3.1，但这不自动修复所有结果文件的软件来源标签。<a href="https://docs.nvidia.com/jetson/archives/r35.3.1/DeveloperGuide/text/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html">tegrastats官方定义</a>中EMC百分比相对于当前运行频率，正说明丢掉MHz后无法得到绝对带宽。</p>
+<p>检查归档没有找到额外联合功率/温度数据可填缺口；代码中的已有时长/慢化数组也没有本轮要求的逐任务、精度、有效频点和功率热元数据。不能以“有数值”替代“数值可辨识”。静态提取65行摘要及检查记录在results/，不是新实验结果。</p>
+<h2>同平台准入决定</h2>
+<table>
+<thead>
+<tr>
+<th>平台组</th>
+<th>有资料的部分</th>
+<th>仍缺关键部分</th>
+<th>决定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HaX-CoNN Xavier/Orin，各自独立</td>
+<td>合法层组方法、时长/转移/竞争经验与代码；Orin有官方EMC机制</td>
+<td>同一精度/同一板卡的有效OPP全表、仲裁与带宽曲线、温度到cap映射/延迟、同步完整功率及动态热模型</td>
+<td>不准入联合数值</td>
+</tr>
+<tr>
+<td>OPTiC Odroid XU3</td>
+<td>联合热降频与争用的性能建模、功率建模方法和论文实验</td>
+<td>本轮两链任务的完整输入/拟合参数、全系统内存能耗与公共窗口；其不可调EMC不能替代Orin</td>
+<td>不准入联合数值</td>
+</tr>
+<tr>
+<td>RT-TAS Tegra X1</td>
+<td>CPU/GPU分段工作、功率、稳态热耦合和期限机制</td>
+<td>共享带宽竞争与EMC频率轴、动态参数及一致的全系统能量</td>
+<td>不准入联合数值</td>
+</tr>
+</tbody>
+</table>
+<p>检索界限包括上述论文全文/作者页、作者仓库固定工作树、公开归档及官方文档；未发作者邮件，未取得私有日志。没有证明不存在其他数据。本轮也不扩展到其他芯片寻找可拼接参数。</p></section><section id="model"><h1>符号模型与条件判据</h1>
+<p>本文件冻结<strong>模型结构和评价契约</strong>，不提供虚构参数。所有硬件/任务数值待辨识；没有运行调度仿真。它不是已标定Orin模型，也不继承TF20261114的数值。</p>
+<h2>1. 任务、资源、重叠和计费</h2>
+<p>两链A1→A2、B1→B2；抽象计算资源X/Y及共享内存M。令任务i具有固定计算工作c_i、访问量m_i、精度p_i、到达a_i和链期限d_i。允许用A1/B2代表计算偏重、A2/B1代表访存偏重的<strong>符号角色</strong>；没有将某个真实算子擅自归类。合法设备集合D_i、有限请求频点F_X/F_Y/F_M须逐项核实。已有GPU/DLA回退不能被解释成每个任务只用一个设备。</p>
+<p>每设备单执行槽；任务开始后不迁移，依赖和设备互斥始终满足。候选不仅含映射/请求档位，还包含两链之间的额外先后约束：既允许跨设备重叠，也允许人为串行。只取无环合法顺序，按就绪事件派发；不通过改变派发器偷偷固定所有重叠。内存分配由固定硬件仲裁函数A决定，调度器不拥有资料未证明的带宽配额控制权。</p>
+<p>一般进度模型为 <code>dz_i/dt = Φ_i(f_device, b_i, cache_state; θ_i)</code>，完成时z_i=1。Φ、实际访问量和计算/访存重叠需要联合识别。便于推导的<strong>理想流体子模型</strong>可写为 <code>dz_i/dt=min(S_i(f)/c_i, b_i/m_i)</code>；它假设访问量固定且计算/访存充分流水，不能从单点时长或EMC百分比直接推出。真实相位交替、缓存和延迟隐藏未知时不将该子模型当实测事实。</p>
+<p>共享模型约束 <code>Σ b_i(t) ≤ B(f_M(t))</code>；仲裁允许非对称和优先级，不能默认CPU/GPU各半。无争用消融为每个任务保留其孤立带宽服务曲线，去掉共享总量约束；<strong>访问字节、内存功耗、转移开销仍存在</strong>。此消融是诊断反事实，允许总供给超过真实物理带宽，不能作为部署平台。</p>
+<p>热状态可符号化为 <code>C dT/dt = −G(T−T_amb)+H P</code>，C正、散热网络被动稳定，H把不重叠的功率分量映射到热节点。计算/EMC实际频率由请求、负载调频、模式限制和热cap共同决定。热cap状态机必须给出监测传感器、进入/恢复门槛、采样、确认延迟、切换暂停和能量；当前均未知。关闭热cap时仍保留温度递推、功率模型及其他限制，以免混入“删掉温度相关功率”的额外消融。</p>
+<p>统一窗口[0,H]+共同尾段[H,H+L]。完整能量 <code>E=∫(P_compute+P_memory+P_base)dt+E_transition+E_control</code>；传输占用带宽和能量必须计入相应分量且只计一次。使用板级输入功率时不得再叠加已经包含的DRAM/CPU/GPU功率。两方法均完成同一工作量、精度和全部期限才计算节能；失败只报完成量、违约和能量记录，节能率=null。</p>
+<h2>2. 四组消融和共同完整模型复评</h2>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>争用</th>
+<th>热cap</th>
+<th>选择与复评</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M00</td>
+<td>关</td>
+<td>关</td>
+<td>在同一候选目录中选最优，再以M11复评</td>
+</tr>
+<tr>
+<td>M10</td>
+<td>开</td>
+<td>关</td>
+<td>充分考虑共享竞争，不提前考虑热限制；M11复评</td>
+</tr>
+<tr>
+<td>M01</td>
+<td>关</td>
+<td>开</td>
+<td>充分考虑热反馈，目录不变；M11复评</td>
+</tr>
+<tr>
+<td>M11</td>
+<td>开</td>
+<td>开</td>
+<td>完整模型有限目录参照</td>
+</tr>
+</tbody>
+</table>
+<p>设σ_mh是相应模型下能耗最优可行安排，所有选择使用同一确定性并列规则；还保留最优集合，避免把并列解索引变化误认机制效应。若该模型无可行者，不伪造“最优失败”来算收益。</p>
+<p><strong>关键指标必须分开</strong>：</p>
+<ul>
+<li>固定同一安排σ的交互量 <code>I(σ)=E11(σ)−E10(σ)−E01(σ)+E00(σ)</code>，用于描述非加性；失败时能量仍可作过程描述，但不可称同服务收益。</li>
+<li>热的条件决策价值：比较M11中的σ10与σ11。二者均可行才算 <code>g_H|M=[E11(σ10)−E11(σ11)]/E11(σ10)</code>；若σ10失败，先记可行性改善。</li>
+<li>内存的条件决策价值：相同地比较M11中的σ01与σ11。</li>
+<li>算法投入空间：与下节<strong>最强简单可行者</strong>比较，不能拿M00弱基线代替。</li>
+</ul>
+<p><code>I≠0</code>既不保证选择改变，也不保证≥1%收益；<code>I=0</code>也不排除任务相关的可加热代价改变排序。不能把四个模型各自最小值做二阶差分，冒充固定安排的物理交互。即使热限制参与，最终选择完全由内存决定也应报告热感知独立价值未成立。</p>
+<h2>3. 强简单类及信息条件</h2>
+<p>所有类都按M11复评。需冻结下列集合及包含关系，再启动任何数值运行。</p>
+<table>
+<thead>
+<tr>
+<th>参照</th>
+<th>选择信息</th>
+<th>能力边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>最佳固定映射/工作点</td>
+<td>离线知道真实参数和到达</td>
+<td>每次重复沿用同任务类型映射及请求档位；硬件cap正常工作；预设重叠规则</td>
+</tr>
+<tr>
+<td>仅内存优化σ10</td>
+<td>离线知道工作及竞争模型</td>
+<td>在完整合法目录中找M10最优，然后M11复评</td>
+</tr>
+<tr>
+<td>热感知但不联合优化重叠</td>
+<td>离线，知道热反馈</td>
+<td>重叠规则固定为尽早执行或全局串行；各自充分优化映射/工作点。保留二者较优作为更强简单参照，避免故意选差规则；可用M11预测竞争，但不搜索逐任务重叠关系</td>
+</tr>
+<tr>
+<td>最多一次模板切换</td>
+<td>离线知道未来、真实参数与初温</td>
+<td>沿重复窗口执行预排，模板含映射/档位/重叠；不称在线阈值控制</td>
+</tr>
+<tr>
+<td>有限完整合法目录</td>
+<td>离线、已知未来</td>
+<td>目录内最佳，非所有连续开始时机的全局最优</td>
+</tr>
+</tbody>
+</table>
+<p>重复次数N尚未给数值。若每窗口m个模板，至多一次切换类大小为 <code>m+(N−1)m(m−1)</code>；N=1或2时它等于m^N全目录，<strong>比较额外收益必为0是集合恒等，不是实验发现</strong>。不为绕开这个负结果擅自增加N。当前无实际在线方法的实验结果。</p>
+<h2>4. 何时可能翻转：符号条件正例</h2>
+<p>先给一般判据。若两安排σ、ρ在M10下都可行且 <code>D10=E10(σ)−E10(ρ)&lt;0</code>，定义各自热增量h_σ、h_ρ。联合下次序翻转的条件是 <code>D11=D10+h_σ−h_ρ&gt;0</code>，即热的差分损失超过原优势；同时必须检查M11服务可行性。单一温度下降不是这个条件。</p>
+<p>一个嵌入两链访存阶段的条件构型：两个同规模访问阶段各需W字节、孤立计算瓶颈时长t，冷态带宽 <code>B_H≥2W/t</code>。无热cap时二者并发约t，串行约2t。若并发造成热cap在τ开始切换（0≤τ&lt;t，已含观察/确认延迟），切换期间暂停进度ℓ，随后带宽降至B_L并维持到完成，而串行全程不触发，则理想流体子模型给出：</p>
+<p><code>t_concurrent = τ + ℓ + 2W(1−τ/t)/B_L</code>，<code>t_serial=2t</code>。</p>
+<p>在 <code>τ+ℓ&lt;2t</code> 时，<code>B_L &lt; 2W(t−τ)/[t(2t−τ−ℓ)]</code> 使并发更慢；若剩余期限满足 <code>2t≤D&lt;t_concurrent</code>，便有“原并发可行、热反馈下串行更可行”的条件区域。若τ+ℓ≥2t，暂停本身已耗尽这个比较裕量。前驱、转移等公共成本须已扣除且确实相同。</p>
+<p>设k_H/k_L是并发前/后cap阶段相对共同基础功率的增量，k_pause为暂停增量，k_S是串行阶段平均增量，R保留不同泄漏、切换/转移冲量及尾段贡献。能耗翻转还要求：</p>
+<p><code>k_H t+R_C0 &lt; 2k_S t+R_S0</code>（无cap并发较省），</p>
+<p><code>k_H τ+k_pause ℓ+k_L·2W(1−τ/t)/B_L+R_C &gt; 2k_S t+R_S</code>（有cap串行较省）。</p>
+<p>这些不等式<strong>只定义可能区域</strong>，不证明实际芯片能同时满足它们。尤其“并发触发、串行不触发”、B_L、τ及功率项必须由同平台数据或已识别热模型给出；当前不能凭空指定。计算cap还可能降低请求带宽、缓解争用，交互符号也可能相反，不能预设热限制必然更偏向串行。</p>
+<h2>5. 无收益与停止条件</h2>
+<ol>
+<li>全目录热cap都不绑定：M10与M11相同，热独立决策价值为0（使用相同其他机制与并列规则）；普通内存优化仍可能有价值。</li>
+<li>全目录没有重叠，或最低合法EMC带宽仍足以满足所有请求：共享争用约束不起作用；不能宣称联合争用机制贡献。</li>
+<li>时间不受EMC cap影响但内存功率变了：<strong>不能仅据执行时间不变判零收益</strong>；还需证明能量改变量与安排无关或最优集合不变。</li>
+<li>同时无cap、无争用，且各强简单类包含一个共同最优安排并按同一规则选中：所有方法同质量。更强的退化例是任务能量可加、与映射/次序无关，固定窗基础能量相同、无额外转移/尾段差异且全部候选可行，此时整个目录同能量。</li>
+<li>最佳一次切换或固定类已达到完整目录值：复杂算法空间为0；离线预排不因此变成在线控制。</li>
+<li>相对最强简单方案满足 <code>E_joint+E_extra≤0.99 E_simple</code> 才达到用户1%参考；误差存在时需对<strong>同一个</strong>有依据参数集合检查服务及能量，而非每点重选后声称部署鲁棒。</li>
+</ol>
+<p>本轮没有这个有依据的联合参数集合，因此没有正/负数值情景，也没有1%结论。<code>symbolic_checks.py</code>只核对14个代数关系、守恒与集合大小恒等式，不进行参数实例化或证明经验可达性。</p></section><section id="review"><h1>复核记录</h1>
+<p>状态：ANALYZED / NO_NUMERIC_ADMISSION。61份来源缓存哈希匹配；54个作者文本文件还匹配Git blob。65行公开摘要静态提取完成，3个负DLA差分完整保留；没有修复成能产生正结果的输入。14项符号关系核验通过，不代表其假设在实际芯片成立。</p>
+<p>没有数值调度候选、热轨迹、能源收益率、置信区间或算法性能测量。四消融和五强对照全部明确NOT_RUN，收益null，不填0。没有外部独立审查；资料核验、推导和复算由同一助手完成。PDF结构预检缺依赖为UNAVAILABLE，不掩饰为PASS；正式RT-TAS第18页与OPTiC第7页目视完成。</p>
+<h2>11项推断风险检查</h2>
+<table>
+<thead>
+<tr>
+<th>风险</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>选择性报告</td>
+<td>负差分、版本冲突、无数据、未运行全部保留</td>
+</tr>
+<tr>
+<td>事后调参</td>
+<td>数值参数填充为0项，未启动参数搜索</td>
+</tr>
+<tr>
+<td>伪重复</td>
+<td>65行描述性工件摘要不是独立实验样本</td>
+</tr>
+<tr>
+<td>显著性滥用</td>
+<td>无p值、显著性或统计收益结论</td>
+</tr>
+<tr>
+<td>不确定性伪装</td>
+<td>没有用任意范围充当实测可信区域</td>
+</tr>
+<tr>
+<td>相关当因果</td>
+<td>官方机制与论文观测不替代本轮四组因果消融</td>
+</tr>
+<tr>
+<td>服务分母偷换</td>
+<td>协议禁止可行者与失败者计算节能百分比</td>
+</tr>
+<tr>
+<td>弱基线</td>
+<td>冻结最佳固定、热固定重叠、内存优化、一次切换和完整目录</td>
+</tr>
+<tr>
+<td>并列解误判</td>
+<td>规定相同并列选择与最优集合比较，不能仅靠索引变了判机制</td>
+</tr>
+<tr>
+<td>跨平台外推</td>
+<td>Xavier/Orin/XU3/X1隔离，精度、回退和版本限制明确</td>
+</tr>
+<tr>
+<td>数值精度/可辨识性</td>
+<td>代数校验、静态文件一致性不冒充参数辨识或模型有效性</td>
+</tr>
+</tbody>
+</table>
+<h2>授权与停止</h2>
+<p>用户已指定问题、准入门槛及GitHub独立提交，故完成资料核查和归档不需再次确认。停止数值和算法是用户本轮的明示条件，不是审批阻断。网络下载首次因环境网络权限失败，随后只对公开证据下载执行获准的网络调用，全部成功；没有自动审批拒绝留下的未完成项。</p>
+<p>结构研究边界已完成：提供一般进度/共享容量/热状态/完整能量模型、四组公平消融、强简单类、排序翻转条件及无收益条件。条件正例尚未赋值，也未证明同一实际平台能同时满足所列不等式；这正是准入未闭合的部分。</p></section></html>

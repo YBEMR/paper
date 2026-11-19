@@ -46,8 +46,10 @@ def append(path, event):
         os.fsync(stream.fileno())
 
 
-def verify_freeze():
-    freeze = read(HERE / "execution_freeze.json")
+def verify_freeze(freeze_bytes=None):
+    if freeze_bytes is None:
+        freeze_bytes = (HERE / "execution_freeze.json").read_bytes()
+    freeze = json.loads(freeze_bytes)
     for name, expected in freeze["sha256"].items():
         data = (ROOT / name).read_bytes()
         # Historic Windows archives and Git can use different text checkout endings.
@@ -73,23 +75,28 @@ def verify_freeze():
     return manifest
 
 
-def committed_freeze(subject):
+def committed_freeze(subject, freeze_bytes=None):
     git = ["git", "-C", str(ROOT)]
     head = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
     require(len(subject) == 40 and head == subject, "expected approved checkout SHA")
     rel = (HERE / "execution_freeze.json").relative_to(ROOT).as_posix()
     committed = subprocess.check_output(git + ["show", subject + ":" + rel])
-    require(committed.replace(b"\r\n", b"\n") == (HERE / "execution_freeze.json").read_bytes().replace(b"\r\n", b"\n"),
+    if freeze_bytes is None:
+        freeze_bytes = (HERE / "execution_freeze.json").read_bytes()
+    require(committed == freeze_bytes,
             "execution freeze differs from approved commit")
-    return sha(committed)
+    return sha(freeze_bytes)
 
 
 def worker(index):
     start = float(os.environ["PRESSURE_UNIT_START"])
-    manifest = verify_freeze()
-    job = manifest["execution_order"][index]
     output = RAW / ("%02d" % index)
     reservation = read(output / "reservation.json")
+    freeze_bytes = (HERE / "execution_freeze.json").read_bytes()
+    digest = committed_freeze(reservation["subject"], freeze_bytes)
+    require(digest == reservation["freeze_sha256"], "worker reservation freeze SHA256 mismatch")
+    manifest = verify_freeze(freeze_bytes)
+    job = manifest["execution_order"][index]
     require(reservation["job"] == job and reservation["index"] == index, "worker reservation mismatch")
     require(not (RAW / "stop.json").exists(), "batch already stopped")
     with (output / "worker.lock").open("x", encoding="ascii") as lock:

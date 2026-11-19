@@ -165,6 +165,65 @@ class PressureTests(unittest.TestCase):
                 execute.main()
             self.assertEqual(len(records),6)
 
+    def test_worker_binds_head_and_exact_freeze_before_science(self):
+        from contextlib import ExitStack
+        import subprocess
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp, ExitStack() as stack:
+            root = Path(temp).resolve()
+            here = root / "research" / "fixture"
+            here.mkdir(parents=True)
+            path = here / "execution_freeze.json"
+            frozen = b'{"mock":true}\n'
+            path.write_bytes(frozen)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-C", str(root), "-c", "core.autocrlf=false",
+                     "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                     "-c", "commit.gpgsign=false", *args], text=True).strip()
+
+            git("init", "--quiet")
+            git("add", "--", "research/fixture/execution_freeze.json")
+            git("commit", "--quiet", "-m", "pin mock freeze")
+            stale = git("rev-parse", "HEAD")
+            git("commit", "--quiet", "--allow-empty", "-m", "advance mock head")
+            subject = git("rev-parse", "HEAD")
+            digest = hashlib.sha256(frozen).hexdigest()
+            raw = here / "output"
+            out = raw / "00"
+            out.mkdir(parents=True)
+            job = MANIFEST["execution_order"][0]
+            stack.enter_context(patch.object(execute, "ROOT", root))
+            stack.enter_context(patch.object(execute, "HERE", here))
+            stack.enter_context(patch.object(execute, "RAW", raw))
+            stack.enter_context(patch.dict(execute.os.environ, PRESSURE_UNIT_START="0"))
+            inputs = stack.enter_context(patch.object(execute, "verify_freeze", return_value=MANIFEST))
+            science = stack.enter_context(patch.object(unit, "run_unit", return_value={}))
+            for label, pin, expected, disk, error in [
+                ("stale HEAD", stale, digest, frozen, "checkout SHA"),
+                ("wrong reservation digest", subject, "0"*64, frozen, "reservation freeze SHA256"),
+                ("edited checkout", subject, digest, b'{"mock":false}\n', "differs from approved commit"),
+                ("line endings", subject, digest, frozen.replace(b"\n", b"\r\n"), "differs from approved commit"),
+            ]:
+                with self.subTest(label=label):
+                    path.write_bytes(disk)
+                    execute.write(out / "reservation.json", dict(index=0, job=job, subject=pin, freeze_sha256=expected))
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        execute.worker(0)
+                    inputs.assert_not_called()
+                    science.assert_not_called()
+                    self.assertEqual({p.name for p in out.iterdir()}, {"reservation.json"})
+
+            path.write_bytes(frozen)
+            execute.write(out / "reservation.json", dict(index=0, job=job, subject=subject, freeze_sha256=digest))
+            execute.worker(0)
+            inputs.assert_called_once_with(frozen)
+            science.assert_called_once_with(MANIFEST, job, out)
+            self.assertEqual(execute.read(out / "result.json")["subject"], subject)
+            self.assertTrue((out / "finished.json").is_file())
+
     def test_deadline_once_without_a_worker(self):
         import subprocess
         from tempfile import TemporaryDirectory

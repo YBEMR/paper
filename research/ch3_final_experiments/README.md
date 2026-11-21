@@ -1,5 +1,7 @@
 # 第三章 P0–P1 归档核对与图 C/D/E
 
+**正式结果入口。** 25°C 四工况、81 部署主实验与逆序原驻留 25/27.5°C 共同四部署压力实验已完成，图 C 已补齐四节点事件轨迹。[第三章四法对比、图 A/B/C/F/G 与原始数据](formal/README.md) · [结果汇总 CSV](formal/tables/comparison_summary.csv)。下文保留 P0–P1 归档当时的覆盖状态。
+
 **P2 规范修订（2026-11-21）。** [Kim 主基线与 SetFreq 枚举的身份、SAFE 配对回退、Thermal-GA 试参数](protocols/kim_adaptation_spec.md) · [P2 成本验收与后续预算](protocols/P2-P4_minimum.md) · [图 E 全部 81 个固定部署的代表性分析](figE_representativeness.md)。图 C 的安全代表目前只有场景端点，完整安全轨迹标为**待补数据**，拟单独申请一次固定方案采样，上限 30 秒。
 
 **归档重建复核。** 从固定 Git 对象向新目录提取 512 个输入和原 P0–P1 的 3 个脚本，使用现有 Python 环境以隔离模式（`-I -B`）重新提取、绘图和校验。生成的 17 张原 CSV 与 `af6670fb` 的 Git blob 逐字节一致，C/D/E 的 PNG、PDF、SVG 通过格式校验。此项复核使用本机已安装依赖；新增科学调用为 0。

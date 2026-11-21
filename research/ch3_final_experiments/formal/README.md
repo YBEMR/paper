@@ -1,5 +1,22 @@
 # 第三章正式算法对比结果
 
+## 论文插图与正文
+
+[可插入第三章的 LaTeX 正文及四张结果表](thesis_results.tex) · [独立阅读版入口](thesis_preview.tex) · [A–G 可编辑 SVG 与 450 dpi PNG](figures)。绘图脚本同时生成矢量 PDF，图中保留原始种子点，图题及编号由论文模板排版。
+
+| 实验 | 论文图 | 原始或派生数据 |
+|---|---|---|
+| 一　算法综合效果 | [A 安全能耗及差距](figures/figA.svg) · [B 最低安全能耗命中数](figures/figB.svg) | [逐次结果](tables/run_results.csv) · [A 逐点能耗](tables/figA.csv) · [B 命中数与种子](tables/figB_optimal_hits.csv) |
+| 二　跨场景热继承 | [C GPU 温度轨迹](figures/figC.svg) · [D 误收与连续分类](figures/figD.svg) | [原轨迹](../derived/temperature_traces.csv) · [峰温证书](../derived/peak_certificates.csv) · [四节点安全轨迹](raw/figureC/samples.csv) · [误收](../derived/reset_confusion.csv) · [压力分类](../derived/pressure_classification.csv) |
+| 三　部署与调频消融 | [E 四策略对照](figures/figE.svg) | [四策略能耗及可用裕量](../derived/ablation_results.csv) · [固定部署敏感性](../derived/figE_sensitivity.csv) |
+| 四　匹配热压力 | [F 安全返回数](figures/figF.svg) · [G 安全能耗及热裕量](figures/figG.svg) | [F 计数](tables/figF.csv) · [G 逐点数据](tables/figG.csv) · [超温诊断](tables/non_safe_diagnostics.csv) |
+
+图 B 按未舍入能耗判定 SAFE 且绝对差不超过 10⁻⁹ J 的运行。分母为各方法每工况的五个种子，确定性参照只提供最低值。原图 B 的 [SAFE 返回数 CSV](tables/figB.csv) 保留为历史数据。图 D 的三个高温配置来自已有四部署候选域分类，图 F/G 的算法比较仅覆盖逆序原驻留。
+
+在本目录执行 `python -B plot_results.py` 即可从已接受的 CSV 与图 C 证书生成全部图。连续两次执行 `xelatex thesis_preview.tex` 可生成独立阅读版。论文模板中，将 `\ChThreeFigurePath` 定义为相对主文件的 `figures` 路径，再在第三章“仿真与结果分析”节使用 `\input{.../thesis_results}`。七幅图使用自动编号，图片格式优先 PDF，也支持 PNG。
+
+## 正式实验结果
+
 25°C、81 部署的四个工况中，Kim-Adapt、Kim-Adapt+SAFE、Thermal-GA 各有 20/20 次返回安全方案。本文连续热联合优化方法（CT-Joint）在每个工况均有同域最低安全能耗证书。Kim 在常温下已接近或达到该值。逆序原驻留升至 27.5°C 时，Kim 首选在五个种子中均超温，此时连续热检查和部署选择直接影响可用性。
 
 ## 25°C 主实验
@@ -45,7 +62,7 @@ Kim 每次完成 64 代，搜索从全部 81 个部署中取样，每次实际�
 | 用途 | 文件 |
 |---|---|
 | 汇总与配对 | [四法汇总](tables/comparison_summary.csv) · [Kim 种子配对](tables/kim_pairing.csv) · [逐候选检查](tables/kim_checks.csv) |
-| 主实验 | [图 A](figures/figA.png) · [A 数据](tables/figA.csv) · [图 B](figures/figB.png) · [B 数据](tables/figB.csv) |
+| 主实验 | [图 A](figures/figA.png) · [A 数据](tables/figA.csv) · [图 B](figures/figB.png) · [B 命中数据](tables/figB_optimal_hits.csv) |
 | 热轨迹与压力实验 | [图 C](figures/figC.png) · [图 F](figures/figF.png) · [F 数据](tables/figF.csv) · [图 G](figures/figG.png) · [G 数据](tables/figG.csv) |
 | 原始证据 | [30 个逐种子归档包](archives) · [图 C 原始记录](raw/figureC) · [实验设计](design.md) |
 | 脚本 | [执行](run_formal.py) · [采样](sample_c.py) · [打包](pack_runs.py) · [从归档重建表格](summarize.py) · [逐运行参数](actual_config.py) · [绘图](plot_results.py) |

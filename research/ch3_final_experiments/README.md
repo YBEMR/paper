@@ -1,5 +1,9 @@
 # 第三章 P0–P1 归档核对与图 C/D/E
 
+**P2 规范修订（2026-11-21）。** [Kim 主基线与 SetFreq 枚举的身份、SAFE 配对回退、Thermal-GA 试参数](protocols/kim_adaptation_spec.md) · [P2 成本验收与后续预算](protocols/P2-P4_minimum.md) · [图 E 全部 81 个固定部署的代表性分析](figE_representativeness.md)。图 C 的安全代表目前只有场景端点，完整安全轨迹标为**待补数据**，拟单独申请一次固定方案采样，上限 30 秒。
+
+**归档重建复核。** 从固定 Git 对象向新目录提取 512 个输入和原 P0–P1 的 3 个脚本，使用现有 Python 环境以隔离模式（`-I -B`）重新提取、绘图和校验。生成的 17 张原 CSV 与 `af6670fb` 的 Git blob 逐字节一致，C/D/E 的 PNG、PDF、SVG 通过格式校验。此项复核使用本机已安装依赖；新增科学调用为 0。
+
 基准为 [YBEMR/paper · b8187776](https://github.com/YBEMR/paper/commit/b8187776fdf2c995cbec410032b34a5a76fa774b)。本交付读取归档、筛选已有数组并绘图，新增科学仿真调用为 0。任务书为《第三章正式实验设计与Work执行任务书_v1》，文档 SHA-256 及逐输入 Git blob、SHA-256 见[证据清单](audit/sources.json)。
 
 | 交付项 | 阅读入口 |

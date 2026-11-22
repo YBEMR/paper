@@ -124,7 +124,8 @@ def read_slot(audit,domain,instance,stream,job,tar,historical,old_row):
                best_at_s=improvements[-1]["t_s"] if improvements else None,search_s=search_s,
                tested=len(seen),deadline=counts["DEADLINE"],overheat=counts["VIOLATION"],unresolved=counts["UNRESOLVED"],
                feasible=counts["SAFE"],completed_thermal=len(seen)-counts["DEADLINE"],
-               hot_children=len(repairs),hot_to_safe=sum(r["child_status"]=="SAFE" for r in repairs))
+               hot_children=None if historical else len(repairs),
+               hot_to_safe=None if historical else sum(r["child_status"]=="SAFE" for r in repairs))
     return row,improvements,repairs
 
 
@@ -170,8 +171,9 @@ def summaries(rows,curves):
         for meta,items in groups(rows,group):
             safe=[r for r in items if r["safe"]]
             tested=sum(r.get("tested",0) for r in items)
-            hot=sum(r.get("hot_children",0) for r in items)
-            recovered=sum(r.get("hot_to_safe",0) for r in items)
+            measured=[r for r in items if r.get("hot_children") is not None]
+            hot=sum(r["hot_children"] for r in measured) if measured else None
+            recovered=sum(r["hot_to_safe"] for r in measured) if measured else None
             met=dict(level="case" if "case" in group else "temperature" if "ambient_c" in group else "all",**meta)
             stats.append(dict(**met,n=len(items),safe=len(safe),mean_j=average(r["energy_j"] for r in safe),
                  mean_peak_c=average(r["peak_c"] for r in safe),min_slack_ms=min((r["min_slack_ms"] for r in safe),default=None),
@@ -215,6 +217,19 @@ def witness_rows(rows, history):
     return results
 
 
+def kim_target_times(rows,curves):
+    targets={(r["case"],r["seed"]):r["energy_j"] for r in rows if r["method"]=="Kim-Adapt+SAFE"}
+    result=[]
+    for row in rows:
+        case,method,seed=(row[f] for f in ("case","method","seed"))
+        target=targets[case,seed]
+        hit=next((ev["t_s"] for ev in curves[case,method,seed]
+                  if target is not None and ev["energy_j"]<=target+CFG["energy_tolerance_j"]),None)
+        result.append(dict(case=case,ambient_c=row["ambient_c"],seed=seed,method=method,kim_final_j=target,
+                           hit=int(hit is not None),first_match_s=hit,comparison_horizon_s=CFG["cap_s"]))
+    return result
+
+
 def main(root,out):
     sys.path[:0]=[str(root/"research/ch3_cooperative_cuts"),str(root/"research/ch3_final_experiments/p2")]
     import analyze as audit
@@ -245,6 +260,7 @@ def main(root,out):
     tables=dict(runs=rows,improvements=[r for v in curves.values() for r in v],repair_events=repairs,
                 repair_summary=repair_summary(repairs),
                 witnesses=witness_rows(rows,oldrows),
+                kim_target=kim_target_times(rows,curves),
                 **summaries(rows,curves))
     for name,table in tables.items():
         write_csv(out/(name+".csv"),table)

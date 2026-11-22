@@ -44,7 +44,7 @@ class Explorer:
                   +span*self.power["board_W"]*self.power["board_heat_fraction"][i] for i,r in enumerate(NODES)]
         return energy, heat_j, slope, demand
 
-    def evaluate(self, key, action, parent=None, target=None):
+    def evaluate(self, key, action, parent=None, target=None, proposal=None):
         if key in self.seen:
             return
         self.clock.check()
@@ -56,7 +56,7 @@ class Explorer:
                 self.seen.add(key)
                 self.counts["screen_deadline"] += 1
                 self.emit("candidate",[key,action,parent,"DEADLINE",None,schedule.min_slack_ns/1e6,
-                                       None,j,target])
+                                       None,j,target,proposal])
                 return
         result = self.ev.replay(dep,tuple(opps))
         self.clock.check()
@@ -65,8 +65,13 @@ class Explorer:
         self.seen.add(key)
         self.returned[key] = result
         self.counts[result.status] += 1
+        if target and proposal is not None:
+            j,node,_ = target
+            row = self.ev._physical[dep,tuple(opps)]["scene_rows"][j]
+            proposal["actual_target_peak_c"] = row["peak_upper_c"][node]
+            proposal["actual_target_entry_c"] = row["entry_c"][node]
         self.emit("candidate",[key,action,parent,result.status,result.energy_j,result.slack_ms,
-                               result.upper,None,target])
+                               result.upper,None,target,proposal])
         if result.status in self.archives:
             archive = self.archives[result.status]
             incumbent = archive.get(dep)
@@ -138,7 +143,7 @@ class Explorer:
         g = therm["ambient_conductance_W_K"][node]+sum(therm["pair_conductance_W_K"][node])
         tau = therm["capacity_J_K"][node]/g
         target = [jstar,node,peak] if self.returned[parent].status=="VIOLATION" else None
-        energy_rank, cooling_rank = {}, {}
+        energy_rank, cooling_rank, predicted = {}, {}, {}
         for key in pool:
             self.clock.check()
             total = excursion = response = 0.
@@ -154,7 +159,8 @@ class Explorer:
             energy_rank[key] = (excursion>0,total,excursion,key)
             # Residual >0 is ordered by predicted violation. Once repaired, rank by joules.
             cooling_rank[key] = (excursion>0,max(0.,peak+response-80.),total,key)
-        return energy_rank, cooling_rank, target
+            predicted[key] = peak+response if target and self.directed else None
+        return energy_rank, cooling_rank, target, predicted
 
     def run(self, starts):
         it = 0
@@ -168,17 +174,21 @@ class Explorer:
                     self.setfreq(self.rng.choice(self.domain.order),"restart")
                 if parent is not None:
                     pool = self.neighborhood(parent,it)
-                    energy,heat,target = self.rank(parent,pool)
+                    energy,heat,target,predicted = self.rank(parent,pool)
                     ranked = sorted(pool,key=energy.get)
                     chosen = list(dict.fromkeys([items[0] for items in (
                         [k for k in ranked if pool[k]=="dvfs"],
                         [k for k in ranked if pool[k]=="exchange"],
                         [k for k in ranked if pool[k] not in ("dvfs","exchange")]) if items]))
                     supplement = sorted(pool,key=heat.get) if target and self.directed else ranked
+                    reserved = set(chosen)
                     chosen = list(dict.fromkeys(chosen+supplement))[:self.cfg["proposals"]]
                     self.emit("parent",[parent,target,len(pool),len(chosen)])
                     for k in chosen:
-                        self.evaluate(k,pool[k],parent,target)
+                        rule = "operator_reservation" if k in reserved else (
+                            "hotspot" if target and self.directed else "energy")
+                        self.evaluate(k,pool[k],parent,target,dict(rule=rule,estimated_j=energy[k][1],
+                                      predicted_target_peak_c=predicted[k]))
                     unmapped = next((k[0] for k in ranked if k[0] not in self.mapped),None)
                     if unmapped is not None:
                         self.setfreq(unmapped,"setfreq",parent)

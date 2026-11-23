@@ -1,5 +1,4 @@
 """Single isolated, cold formal MILP worker. Run with launch.py."""
-import csv
 import hashlib
 import json
 import math
@@ -52,7 +51,7 @@ best = first = lb = proof_time = None
 certs, solves = [], []
 emit("input", cases=deps, request_sha256=ev.identity, opps=ev.opps,
      catalog_sha256=hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
-     frames=[len(s.requests)//2 for s in ev.scenes], window_ns=sum(s.duration_ns for s in ev.scenes))
+     frames=[(s.service_end_ns-s.start_ns)//40000000 for s in ev.scenes], window_ns=sum(s.duration_ns for s in ev.scenes))
 
 
 def compile_mode(d,j,f):

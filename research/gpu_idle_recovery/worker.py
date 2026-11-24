@@ -31,7 +31,7 @@ def main():
     from profiles import build_chains
     from control import Timeline
     from online_events import simulate
-    from physics import certify
+    from idle_certificate import certify
     from peak_selection import enumerate_bounds
     import events as base_events
     import csv

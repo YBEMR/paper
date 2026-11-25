@@ -1,5 +1,5 @@
 """Frozen wave order, physical affinity, time budgets and admission gate."""
-import ctypes,csv,gzip,hashlib,itertools,json,math,os,random,subprocess,sys,time
+import ctypes,csv,gzip,hashlib,itertools,json,math,os,random,shutil,subprocess,sys,time
 from datetime import datetime,timezone
 from pathlib import Path
 import psutil
@@ -57,11 +57,11 @@ def verify():
     assert rd(dest/"validation/finite_gate.json")["passed"] and rd(dest/"validation/replay_gate.json")["passed"]
 def command(case,method,seed,cpu,path,begin,cap,pilot):
     return [sys.executable,"-B","-u",str(ROOT/"arm.py"),case,method,str(seed),str(cpu),str(path),str(begin),str(begin+cap),str(int(pilot))]
-def boundary_replay():
+def boundary_replay(root):
     from base import Problem,decode,key,dynamic_region,Core
     from verify_core import fix,check
     results=[]
-    for dest in sorted((ROOT/"preflight").glob("pilot_*")):
+    for dest in sorted(root.glob("pilot_*")):
         z=rd(dest/"summary.json");p=Problem(z["case"])
         with gzip.open(dest/"iterations.jsonl.gz","rt",encoding="utf8") as f:r=json.loads(f.readline())
         with gzip.open(dest/"plans.jsonl.gz","rt",encoding="utf8") as f:plans=[json.loads(line) for line in f]
@@ -73,14 +73,30 @@ def boundary_replay():
             state,data=fix(core,plan);assert state=="ACCEPT"
             check(p,plan,*data,True)
             results.append(dict(pilot=dest.name,source=ident,region=region["identity"],current_window_centered=True))
-    wr(ROOT/"preflight/boundary_replay.json",results)
+    wr(root/"boundary_replay.json",results)
 def launch(tag,cmd):
     folder=ROOT/"logs";folder.mkdir(exist_ok=True);log=(folder/(tag+".txt")).open("wb")
     try:return subprocess.Popen(cmd,cwd=ROOT,stdout=log,stderr=subprocess.STDOUT)
     finally:log.close()
-def batch():
-    path=ROOT/"execution.json";assert not path.exists(),"one-shot experiment"
-    state=dict(start=utc(),status="PREFLIGHT",runs=[]);wr(path,state);t0=time.perf_counter()
+def batch(revised=False):
+    path=ROOT/"execution.json";pilot_root=ROOT/"preflight";precharged=0.;t0=time.perf_counter()
+    if revised:
+        old=rd(path)
+        assert old["status"]=="ENGINEERING_GATE_STOP" and not old["runs"] and not (ROOT/"runs").exists()
+        assert git("rev-parse","HEAD^").decode().strip()=="71335242a60eb0e929ad916478b41047daff54f9"
+        assert not git("diff","--name-only","HEAD","--",ROOT.relative_to(REPO).as_posix())
+        first=pilot_root/"first";first.mkdir(exist_ok=False)
+        for name in ("execution.json","manifest.json","snapshot.json","decision.md","results.csv"):
+            shutil.copyfile(ROOT/name,first/name)
+        pilot_root=pilot_root/"recheck";pilot_root.mkdir(exist_ok=False);precharged=old["preflight_s"]
+        man=rd(first/"manifest.json");man["first_freeze"]=man["freeze"];man["freeze"]=git("rev-parse","HEAD").decode().strip()
+        for p in [*ROOT.glob("*.py"),ROOT/"protocol.md",ROOT/"taskbook.md",ROOT/"inputs.lock.json"]:
+            rel=p.relative_to(REPO).as_posix();b=p.read_bytes();assert git("show",man["freeze"]+":"+rel)==b
+            man["files"][rel]=h(b)
+        assert all(h((REPO/n).read_bytes())==v for n,v in man["files"].items())
+        wr(ROOT/"manifest.json",man)
+    else:assert not path.exists(),"one-shot experiment"
+    state=dict(start=utc(),status="PREFLIGHT",runs=[],prior_preflight_s=precharged);wr(path,state)
     def phase(tag,cmd,limit):
         began=time.perf_counter();p=launch(tag,cmd)
         try:code=p.wait(timeout=limit)
@@ -94,23 +110,27 @@ def batch():
         except psutil.NoSuchProcess:pass
         p.kill();p.wait()
     try:
-        phase("verification",[sys.executable,"-B","-u",__file__,"verify"],400)
+        if not revised:phase("verification",[sys.executable,"-B","-u",__file__,"verify"],400)
         cpus=physical_cores();pilots=[]
         for c,m in itertools.product(("D1","D2","D3"),("CP-LNS","Proposed")):
-            tag="pilot_"+c+"_"+m;dest=ROOT/"preflight"/tag;begin=time.perf_counter()
-            phase(tag,command(c,m,101,cpus[0],dest,begin,65,True),min(66,600-(begin-t0)))
+            tag="pilot_"+c+"_"+m;dest=pilot_root/tag;begin=time.perf_counter()
+            phase(("recheck_" if revised else "")+tag,command(c,m,101,cpus[0],dest,begin,65,True),min(66,600-precharged-(begin-t0)))
             z=rd(dest/"summary.json")
             with gzip.open(dest/"iterations.jsonl.gz","rt",encoding="utf8") as f:item=json.loads(f.readline())
             assert item["source"]==z["initial"] and item["region"] and item["mode"]==1
+            if revised:
+                with gzip.open(ROOT/"preflight"/tag/"iterations.jsonl.gz","rt",encoding="utf8") as f:olditem=json.loads(f.readline())
+                assert all(item[k]==olditem[k] for k in ("Sf","St","Sr","mode","source","region","operator","blocks","arcs"))
+                assert all(s["require_config_and_time"]==s["alternative"] for s in item["solves"])
             pilots.append(dict(case=c,method=m,**z["counts"],peak=z["peak_bytes"],seconds=item["outer_s"],
                                actual_seed=[x["seed"] for x in item["solves"]],region=item["region"]))
         gate=all(p.get("nonseed",0)>0 and p["actual_seed"] and all(s==101 for s in p["actual_seed"]) and
                  p.get("watchdog",0)==0 and p["seconds"]<=30 for p in pilots)
         gate=gate and all(any(x.get("joint",0)>0 for x in pilots if x[k]==v) for k,vs in
                          [("case",["D1","D2","D3"]),("method",["CP-LNS","Proposed"])] for v in vs)
-        phase("boundary_replay",[sys.executable,"-B","-u",__file__,"boundary"],min(100,600-(time.perf_counter()-t0)))
-        wr(ROOT/"preflight/gate.json",dict(passed=gate,pilots=pilots))
-        state["preflight_s"]=time.perf_counter()-t0
+        phase("recheck_boundary" if revised else "boundary_replay",[sys.executable,"-B","-u",__file__,"boundary",str(pilot_root)],min(100,600-precharged-(time.perf_counter()-t0)))
+        wr(pilot_root/"gate.json",dict(passed=gate,pilots=pilots))
+        state["preflight_s"]=precharged+time.perf_counter()-t0
         if not gate:
             state["status"]="ENGINEERING_GATE_STOP";wr(path,state);return
         workers=max(1,min(6,len(cpus),int((psutil.virtual_memory().available-640*2**20)/
@@ -150,8 +170,8 @@ def batch():
         state.update(status="FAILED",error=str(e),end=utc(),wall_s=time.perf_counter()-t0);wr(path,state);raise
 def snapshot():
     wr(ROOT/"snapshot.json",dict(files={p.relative_to(ROOT).as_posix():h(p.read_bytes()) for p in sorted(ROOT.rglob("*"))
-        if p.is_file() and p.name!="snapshot.json" and "__pycache__" not in p.parts},freeze=rd(ROOT/"manifest.json")["freeze"]))
+        if p.is_file() and p!=ROOT/"snapshot.json" and "__pycache__" not in p.parts},freeze=rd(ROOT/"manifest.json")["freeze"]))
 if __name__=="__main__":
     if sys.argv[1]=="verify":verify()
-    elif sys.argv[1]=="boundary":boundary_replay()
-    else:batch()
+    elif sys.argv[1]=="boundary":boundary_replay(Path(sys.argv[2]))
+    else:batch(sys.argv[1]=="recheck")

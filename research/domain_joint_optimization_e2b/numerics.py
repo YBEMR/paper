@@ -13,6 +13,9 @@ def cp_candidates(core,current,seed,seconds,alternate):
     if alternate:
         pins=core.assignment(current)
         m.add_forbidden_assignments([v for v,x in pins],[[x for v,x in pins]])
+        # Diversify only this second call. The first still searches the original full domain.
+        m.add(sum(1-core.master.x[i, *current[0][i][:2]] for i in sorted(core.access.sf))>=1)
+        m.add(sum(core.master.devs)>=1)
     class Collect(cp.CpSolverSolutionCallback):
         def __init__(self):super().__init__();self.sol=[]
         def on_solution_callback(self):
@@ -24,7 +27,8 @@ def cp_candidates(core,current,seed,seconds,alternate):
     status=sl.solve(m,cb)
     if status==cp.MODEL_INVALID:raise ValueError(sl.response_stats())
     return cb.sol,dict(status=sl.status_name(status),seed=sl.parameters.random_seed,seconds=sl.wall_time,
-                        returned=len(cb.sol),callback_cap=6,bound_pJ=sl.best_objective_bound,alternative=alternate)
+                        returned=len(cb.sol),callback_cap=6,bound_pJ=sl.best_objective_bound,alternative=alternate,
+                        require_config_and_time=alternate)
 
 def rights_check(p,base,alt,access,region):
     rows,low=alt;orig=base[0]
@@ -78,6 +82,8 @@ class Engine:
             if not sols:record["unreturned"].append([alternate,log["status"]])
             for plan,parts,sw in sols:
                 k=key(p,plan)
+                if alternate:
+                    assert any(a[:2]!=b[:2] for a,b in zip(plan[0],current[0])) and any(a[2]!=b[2] for a,b in zip(plan[0],current[0]))
                 if k in options:continue
                 if clock()>=end-.10:
                     record["uncertified"].append([k,"time_limit"]);continue

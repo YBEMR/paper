@@ -64,6 +64,7 @@ def smoke():
 
 def main():
     assert read(ROOT/"witness_gate.json")["status"]==read(ROOT/"model_gate.json")["status"]=="PASS"
+    assert read(ROOT/"finite_gate.json")["status"]=="PASS"
     assert read(ROOT/"engineering/gate.json")["status"]=="PASS"
     assert git("remote","get-url","origin")=="https://github.com/YBEMR/paper.git"
     assert git("branch","--show-current")=="codex/critical-interval-g2"

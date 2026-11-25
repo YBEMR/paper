@@ -36,7 +36,9 @@ def work(action,name,method,seed,folder,start,deadline,budget,charged):
         source=init/"evidence";key=result["plan"]
     plan=load_at(source,key);assert assemble(p,[row[:2] for row in plan[0][1::3]])==plan[0]
     h,c=assess(p,plan);assert h==key and c["metrics"]["status"]=="SAFE"
-    lower=str(simple_bound(p,"C1")) if proof(p)["passed"] else None
+    from fractions import Fraction
+    from math import floor
+    lower=str(Fraction(floor(simple_bound(p,"C1")*10**12),10**12)) if proof(p)["passed"] else None
     result=run(p,m,plan,summary(c),method,seed,folder,start,deadline-1.2,budget,charged,smoke=action=="smoke")
     write(folder/"result.json",dict(case=name,method=method,seed=seed,status="COMPLETE",lower_J=lower,**result))
 

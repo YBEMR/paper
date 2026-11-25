@@ -74,7 +74,7 @@ def run(p,m,plan,initial,method,seed,folder,start,end,budget,charged,smoke=False
         write(folder/"progress.json",dict(phase=phase,turn=turn,best=best,elapsed_s=stamp()))
     update("initial")
     import math
-    rounds=max(1,math.ceil((phase_end-perf_counter())/30))
+    rounds=max(1,math.ceil((.80*budget-charged)/30))
     while perf_counter()<phase_end-1.2 and turn<rounds:
         tick=perf_counter();limit=min(phase_end,tick+29.6)
         if limit-tick<1:break

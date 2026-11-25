@@ -1,0 +1,854 @@
+diff --git a/research/cross_scene_taskflow_followup/README.md b/research/cross_scene_taskflow_followup/README.md
+new file mode 100644
+index 00000000..00510a96
+--- /dev/null
++++ b/research/cross_scene_taskflow_followup/README.md
+@@ -0,0 +1,21 @@
++# P1 v1.1 剩余节能空间与跨场景热冲突
++
++从结果基点 `be641ce06a4f496d2b1f233a09bdfc3776738668` 新建分支。只读复用同级 `cross_scene_taskflow_diagnostic` 的输入、热核和两个 G3 时间表。冻结配置列出原始身份、随机种子、0.1% 工程门槛及墙钟预算。执行入口为 `python -B run.py batch`。已有结果目录时拒绝追加。原始计能窗口和所有物理参数沿用 P1。
++
++## 目标与时间域
++
++保留 mechanism.targets 给出的正节能请求，并对同一请求补全正潜力的合法降档或换设备配置。潜力按 35°C、无交接的主计算活动能耗差精确计算。排序为潜力降序、原起点到场景边界距离升序、Stage 编号、设备和频档。先各取有时间可行见证的单任务、调整 post、必须移动资源竞争任务各一项，且请求不重复。其余席位按同一排序填满。候选分类与见证只读释放、期限、DAG、设备占用和频档切换信息。竞争类别要求每个原始局部候选起点均有其他请求或资源 Stage 的直接冲突。记录每个起点的阻塞者、原单任务合法起点范围和局部见证。覆盖类别的查找受选择时间限制，未获见证不算覆盖。
++
++每个邻域优先纳入直接阻塞者、后继 post 和冻结 timing 的时间关联排序，普通资源排序补足，不超过五个 Stage。绝对 5 ms 网格只取原始起点前后 50 ms 内的点，另保留原始起点。用冻结 ranges 与 gridpoints 生成各 Stage 相对外部任务的可选放置，再以共享域切换、互斥和依赖逐对组合。为限制旧 rebuild 对任意空闲间隙的随机改写，本轮复用其放置原语并单独重建控制。物理间隙按域、起止 tick、前后 OPP 匹配。匹配的间隙强制继承控制，只有新增或确实改变的间隙可选保持、降档。每个完整计划交冻结独立事件重建及热评价器认证。
++
++确定性遍历交错访问新放置和局部间隙控制。固定种子随机重构补充访问顺序。所有访问使用相同合法域，筛选按真实连续全窗能耗，无 80°C 接纳门槛。不同排程按归档 G3 同一规范计算 SHA-256。每个目标保存按真实能耗及身份排序的前 24 个 C0 有效候选，另存原始 G3 及全搜索中找到的最佳固定目标 SAFE 参照。收全目标清单后才开始搜索，收全候选池后才进行反事实评价。
++
++## 判据与预算
++
++C0/C1 共用同一次连续复算。C2 复用 evaluate(reset=True)，始终用连续能耗排序。所有共同池身份和排序均可从文件复核。门控参照同工况全部目标搜索发现的最佳连续 SAFE，包括未进入前 24 的安全参照。用所有已发现 SAFE 的最小能耗下界减候选连续能耗上界作为可靠净节能下界。固定活动、基准、切换及外部能耗以有理数从域驻留和执行时长重算。逐候选对照配置、资源边和域控制。严格节能但低于 0.1% 且非温度能耗下降的结构性冲突单列。对具有实质净收益且结构发生变化的热效应，保留非温度变化的符号和大小。
++
++若触发，选可靠净节能差最大的单个目标，复用冻结的热贡献和六种邻域选择，共用本轮的局部重构器。B1–B4b 实际规模一致，比较原始 G3、阶段一最佳 SAFE 及普通对照。三组反事实评价时间包含完整轨迹写入。每工况预选择时间计入该工况第一个目标的 120 s，不借用其他预算。搜索结束前预留最多 2.5 s 写回。每项有独立进程墙钟保护，整轮上限 1800 s。最后复核用另一路功率事件构造和 SciPy 仿射矩阵指数对全部共同池计划复算两条轨迹。
++
++## 结果入口
++
++`results/decision.md` 为中文结论，`summary.csv`、`targets_summary.csv` 和 `candidates.csv` 位于同一结果目录。`source.patch` 记录相对结果基点的冻结源码差异。plans 保存完整排程，certificates 的 JSON 保存物理变化与能耗分解，NPZ 的 events、continuous、reset 依次为冻结热核的 14 列功率事件和两份 17 列连续积分证据，列定义沿用 P1。targets、pools、counterfactual、gate.json、calls.jsonl 和 snapshot.json 分别保存选点、池冻结、同域比较、严格门控、预算和快照。结论只适用于本轮访问和认证范围。
+diff --git a/research/cross_scene_taskflow_followup/assets.py b/research/cross_scene_taskflow_followup/assets.py
+new file mode 100644
+index 00000000..e0f36fbc
+--- /dev/null
++++ b/research/cross_scene_taskflow_followup/assets.py
+@@ -0,0 +1,73 @@
++import csv
++import gzip
++import hashlib
++import json
++import os
++import sys
++import tempfile
++from pathlib import Path
++from fractions import Fraction
++
++HERE = Path(__file__).resolve().parent
++OLD = HERE.parent / "cross_scene_taskflow_diagnostic"
++CFG = json.loads((HERE / "frozen.json").read_bytes())
++for var in ("OMP_NUM_THREADS","MKL_NUM_THREADS","OPENBLAS_NUM_THREADS","BLIS_NUM_THREADS",
++            "NUMEXPR_NUM_THREADS","NUMBA_NUM_THREADS","VECLIB_MAXIMUM_THREADS"):
++    os.environ[var]="1"
++os.environ["NUMBA_CACHE_DIR"]=str(Path(tempfile.gettempdir()) / "p1-followup-v11-kernel")
++sys.dont_write_bytecode=True
++sys.path.insert(0,str(OLD))
++DATA=HERE/"results"
++
++def encode(obj):
++    return json.dumps(obj,separators=(",",":"),allow_nan=False,ensure_ascii=False).encode()
++
++def digest(data):
++    return hashlib.sha256(data).hexdigest()
++
++def write(rel,obj):
++    path=DATA/rel
++    path.parent.mkdir(parents=True,exist_ok=True)
++    tmp=path.with_suffix(".tmp")
++    tmp.write_bytes(encode(obj)+b"\n")
++    tmp.replace(path)
++
++def read(rel):
++    return json.loads((DATA/rel).read_bytes())
++
++def tab(rel,rows):
++    if not rows: return
++    with (DATA/rel).open("w",encoding="utf-8",newline="") as f:
++        out=csv.DictWriter(f,fieldnames=list(rows[0]),lineterminator="\n")
++        out.writeheader();out.writerows(rows)
++
++def plan_obj(case,plan):
++    return dict(case=case,rows=plan[0],low=sorted(plan[1]))
++
++def unpack(o):
++    return [tuple(r) for r in o["rows"]],frozenset(map(tuple,o["low"]))
++
++def base(case):
++    key=CFG["cases"][case]["sha"]
++    raw=gzip.decompress((OLD/"logs"/"plans"/(key+".json.gz")).read_bytes())
++    obj=json.loads(raw)
++    assert obj["case"]==case and digest(encode(obj))==key
++    return unpack(obj)
++
++def put_plan(case,plan):
++    obj=plan_obj(case,plan); raw=encode(obj);key=digest(raw)
++    path=DATA/"plans"/(key+".json.gz")
++    if not path.exists():
++        path.parent.mkdir(parents=True,exist_ok=True)
++        path.write_bytes(gzip.compress(raw,compresslevel=3,mtime=0))
++    return key
++
++def get_plan(key):
++    raw=gzip.decompress((DATA/"plans"/(key+".json.gz")).read_bytes())
++    assert digest(raw)==key
++    return unpack(json.loads(raw))
++
++def valid_c0(m):
++    lo,hi=m["E_bounds"]
++    return (max(m["peak_hi"])<=100 and min(m["minimum_lo"])>=20 and
++            max(m["peak_hi"])-max(m["peak_lo"])<=.001 and (hi-lo)/2<=1e-6)
+diff --git a/research/cross_scene_taskflow_followup/decision.py b/research/cross_scene_taskflow_followup/decision.py
+new file mode 100644
+index 00000000..146c21da
+--- /dev/null
++++ b/research/cross_scene_taskflow_followup/decision.py
+@@ -0,0 +1,209 @@
++from collections import Counter
++from fractions import Fraction as Q
++import math
++import time
++import numpy as np
++from scipy.linalg import expm
++from assets import CFG,DATA,base,digest,encode,get_plan,read,tab,valid_c0,write
++from diagnostic import differences,physical
++from local_domain import gap_table
++from model import Problem,event_arrays
++from mechanism import neighbors
++
++def records(folder):
++    return [read(path.relative_to(DATA)) for path in sorted((DATA/folder).glob("*.json"))]
++
++def gate():
++    pools=records("pools")
++    choices=[];cases={}
++    for case in CFG["cases"]:
++        pp=[x for x in pools if x["case"]==case]
++        ids=sorted({k for x in pp for k in x["common_ids"]})
++        cc={k:read("certificates/"+k+".json") for k in ids}
++        safe=[k for k in ids if cc[k]["continuous"]["status"]=="SAFE"]
++        best=min(safe,key=lambda k:(cc[k]["continuous"]["E_J"],k));bc=cc[best]
++        lb=min([bc["continuous"]["E_bounds"][0],*[cc[k]["continuous"]["E_bounds"][0] for k in safe],
++                *[x["least_pinned_SAFE_lower"] for x in pp if x["least_pinned_SAFE_lower"] is not None]])
++        flips=[]
++        for k,c in cc.items():
++            if c["continuous"]["status"]!="HOT" or c["reset"]["status"]!="SAFE":continue
++            change=differences(get_plan(best),get_plan(k),bc["physical"],c["physical"])
++            struct=bool(change["config_changes"] or change["added_edges"] or change["removed_edges"] or
++                        change["dwell_changed"] or change["control_changed"])
++            diff=lb-c["continuous"]["E_bounds"][1]
++            ratio=diff/lb
++            nt=Q(bc["physical"]["nonthermal_J"])-Q(c["physical"]["nonthermal_J"])
++            material=ratio>=CFG["material_ratio"]
++            passes=diff>0 and struct and (nt>0 or material)
++            targets=[x["target"] for x in pp if k in x["common_ids"]]
++            loss_upper=bc["continuous"]["E_bounds"][1]-c["continuous"]["E_bounds"][0]
++            f=dict(sha=k,case=case,targets=targets,case_best_SAFE=best,strict_energy=diff>0,
++                   reliable_gap_lower_J=diff,gap_upper_J=loss_upper,reliable_ratio=ratio,
++                   structure=struct,changes_from_best_SAFE=change,nonthermal_saving_J=str(nt),
++                   competitive=passes,subthreshold=passes and not material,trigger=passes and material,
++                   hotspot=c["continuous"]["hotspot"],peak_tick=c["continuous"]["peak_tick"],
++                   peak_lo=c["continuous"]["peak_lo"],peak_hi=c["continuous"]["peak_hi"])
++            flips.append(f)
++            if f["trigger"]:choices.append(f)
++        cases[case]=dict(common_ids=ids,all_safe=safe,best_SAFE=best,best_SAFE_lower_J=lb,
++                         flips=flips,strict_competitive=sum(f["competitive"] for f in flips))
++    chosen=min(choices,key=lambda f:(-f["reliable_gap_lower_J"],f["case"],f["sha"])) if choices else None
++    if chosen:
++        case=chosen["case"];num=min(chosen["targets"])
++        rec=read("targets/"+case+".json")["targets"][num]
++        hot=get_plan(chosen["sha"])
++        record=dict(stage=rec["stage"],opt=rec["opt"],hot_plan=[hot[0],sorted(hot[1])])
++        groups,ts,hs,hot=neighbors(Problem(case),base(case),record)
++        gs={g:[rec["stage"],*groups[g]] for g in CFG["arms"]}
++        assert len(set(len(gs[g]) for g in CFG["arms"] if g!="B0"))==1
++        write("ablation/groups.json",dict(case=case,target=num,groups=gs,source=chosen["sha"],
++              time_order=ts,heat_order=hs))
++    write("gate.json",dict(cases=cases,selected=chosen,trigger=bool(chosen),material_threshold=.001))
++
++def audit():
++    led=[__import__("json").loads(x) for x in (DATA/"calls.jsonl").read_text(encoding="utf8").splitlines()]
++    assert all(r["case"] in ("D1","D2","ALL") for r in led)
++    assert all(r["state"]=="OK" and r["elapsed_s"]<=r["limit_s"] for r in led if r["event"]=="end")
++    start=read("preflight.json");g=read("gate.json")
++    cells=[];summary=[];errors=[];per_candidate=[];max_dE=0.;max_dT=0.
++    winners={}
++    for case,meta in g["cases"].items():
++        p=Problem(case);seed=base(case);baseinfo=start["seeds"][case]
++        joined={};propagators={}
++        gap0={sig:key in seed[1] for key,sig in gap_table(p,seed[0]).items()}
++        main_pools=[r for r in records("pools") if r["case"]==case]
++        all_pools=main_pools+[r for r in records("ablation/pools") if r["case"]==case]
++        for pool in all_pools:
++            assert len(pool["members"])<=5 and len(pool["top"])<=24
++            assert pool["pool_hash"]==digest(encode(pool["common_ids"]))
++            selected=read("targets/"+case+".json")["targets"][pool["target"]]
++            for k in pool["common_ids"]:
++                if k==baseinfo["sha"]:continue
++                rows,low=get_plan(k)
++                assert rows[pool["stage"]][:2]==tuple(pool["opt"])
++                for j,(a,b) in enumerate(zip(seed[0],rows)):
++                    if a!=b:assert j in pool["members"] and (a[2]==b[2] or b[2]%50==0 and abs(b[2]-a[2])<=500)
++                gaps=gap_table(p,rows)
++                assert low.issubset(gaps)
++                assert all((key in low)==gap0[sig] for key,sig in gaps.items() if sig in gap0)
++        ids=sorted({k for pool in all_pools for k in pool["common_ids"]})
++        for k in ids:
++            c=read("certificates/"+k+".json");pl=get_plan(k)
++            ev,sw,ed=event_arrays(p,*pl)
++            phy=c["physical"]
++            assert ed==list(map(list,phy["edges"])) and list(map(list,sw))==phy["switches"]
++            with np.load(DATA/"certificates"/(k+".npz")) as tape:
++                assert np.array_equal(tape["events"],ev)
++                cont=tape["continuous"];reset=tape["reset"]
++            # Independent 6-dimensional affine exponential in seconds. The same
++            # event operator acts on both paths. The stored certificate supplies interior extrema.
++            X=np.zeros((6,2));X[:4]=p.initial[:,None];X[5]=1.
++            for j,line in enumerate(ev):
++                t,e=line[:2];b=line[2:6];beta=line[6:10]
++                if t in p.boundaries:X[:4,1]=p.initial
++                key=(int(e-t),*b,*beta)
++                F=propagators.get(key)
++                if F is None:
++                    A=np.zeros((6,6))
++                    A[:4,:4]=(-p.G+np.diag(beta))/p.cap[:,None]
++                    A[:4,5]=(p.G@np.full(4,p.ta)+b-35*beta)/p.cap
++                    A[4,:4]=beta;A[4,5]=b.sum()-35*beta.sum()+.30
++                    F=expm(A*(e-t)/10000);propagators[key]=F
++                X=F@X
++                max_dT=max(max_dT,np.max(np.abs(X[:4,0]-cont[j,4:8])),np.max(np.abs(X[:4,1]-reset[j,4:8])))
++            for col,label in enumerate(("continuous","reset")):
++                m=c[label];d=abs(m["E_J"]-X[4,col]);max_dE=max(max_dE,d)
++                assert m["E_bounds"][0]<=X[4,col]<=m["E_bounds"][1]
++                assert abs(float(Q(phy["nonthermal_J"]))+m["temperature_J"]-m["E_J"])<1e-9
++            assert max_dT<1e-7
++            joined[k]=c
++            per_candidate.append(dict(case=case,sha=k,continuous=c["continuous"]["status"],reset=c["reset"]["status"],
++                 real_J=c["continuous"]["E_J"],reset_diagnostic_J=c["reset"]["E_J"],
++                 base_J=float(Q(phy["base_J"])),activity_J=float(Q(phy["activity_J"])),switch_J=float(Q(phy["switch_J"])),
++                 external_J=float(Q(phy["external_J"])),temperature_J=c["continuous"]["temperature_J"],
++                 nonthermal_J=float(Q(phy["nonthermal_J"])),reset_temperature_J=c["reset"]["temperature_J"]))
++        for pool in main_pools:
++            num=pool["target"];v=read(f"counterfactual/{case}_{num}.json")
++            assert v["common_ids"]==pool["common_ids"] and pool["pool_hash"]==v["pool_hash"]
++            checks={"C0":lambda c:valid_c0(c["continuous"]),"C1":lambda c:c["continuous"]["status"]=="SAFE",
++                    "C2":lambda c:valid_c0(c["continuous"]) and c["reset"]["status"]=="SAFE"}
++            for group,fn in checks.items():
++                good=sorted((k for k in pool["common_ids"] if fn(joined[k])),key=lambda k:(joined[k]["continuous"]["E_J"],k))
++                assert good==v["ranked"][group]
++            stats=pool["stats"]
++            flips=[f for f in meta["flips"] if f["sha"] in pool["common_ids"]]
++            statuses=pool["all_unique_status"]
++            resolved=not statuses.get("UNRESOLVED",0)
++            hot_covered=statuses.get("HOT",0)==sum(joined[k]["continuous"]["status"]=="HOT" for k in pool["common_ids"])
++            scope=("CONFLICT_FOUND" if any(f["competitive"] for f in flips) else
++                   "CERTIFICATION_UNRESOLVED" if not resolved or any(joined[k]["reset"]["status"]=="UNRESOLVED" for k in pool["common_ids"]) else
++                   "PROVED_ABSENT_IN_SELECTED_FINITE_DOMAIN" if stats["exhausted"] and hot_covered else
++                   "NOT_FOUND_IN_LIMITED_SEARCH")
++            cells.append(dict(case=case,target=num,stage=pool["stage"],category=read("targets/"+case+".json")["targets"][num]["category"],
++                members=" ".join(map(str,pool["members"])),visited=stats["visits"],unique_visited=stats["unique"],
++                pool=len(pool["common_ids"]),pinned_top=len(pool["top"]),pinned_SAFE=bool(pool["best_pinned_SAFE"]),
++                exhaust=stats["exhausted"],C0=len(v["ranked"]["C0"]),C1=len(v["ranked"]["C1"]),C2=len(v["ranked"]["C2"]),
++                C1_minus_C0_J=v["point_gaps_J"].get("C1_minus_C0"),C1_minus_C2_J=v["point_gaps_J"].get("C1_minus_C2"),
++                flips=len(flips),competitive=sum(f["competitive"] for f in flips),conclusion=scope,
++                searched_HOT=statuses.get("HOT",0),searched_SAFE=statuses.get("SAFE",0),
++                unresolved=statuses.get("UNRESOLVED",0),out_of_model=statuses.get("OUT_OF_MODEL",0)))
++        best=joined[meta["best_SAFE"]]["continuous"];orig=baseinfo["metrics"]
++        savings=orig["E_bounds"][0]-best["E_bounds"][1]
++        summary.append(dict(case=case,G3_J=orig["E_J"],best_safe_J=best["E_J"],safe_sha=meta["best_SAFE"],
++              safe_peak_hi_C=max(best["peak_hi"]),safe_gain_lower_J=savings,safe_gain_upper_J=orig["E_bounds"][1]-best["E_bounds"][0],
++              safe_gain_lower_pct=100*savings/orig["E_bounds"][0],unique_pooled=len(meta["common_ids"]),
++              continuous_safe=len(meta["all_safe"]),flips=len(meta["flips"]),competitive=meta["strict_competitive"]))
++    if g["trigger"]:
++        ab=records("ablation/pools");assert len(ab)==6
++        gm=read("ablation/groups.json");case=gm["case"]
++        for arm in CFG["arms"]:
++            r=read("ablation/pools/"+arm+".json");m=r["best_pinned_SAFE"]
++            winners[arm]=dict(members=r["members"],candidates=r["stats"]["unique"],best_pinned=m and m["sha"],energy=m and m["metrics"]["E_bounds"])
++        best=winners["B3"]["energy"];caselb=g["cases"][case]["best_SAFE_lower_J"]
++        # A missing pinned control has the available unchanged G3 as fallback.
++        control_lb=min((winners[a]["energy"] or start["seeds"][case]["metrics"]["E_bounds"])[0] for a in ("B1","B4a","B4b"))
++        positive=bool(best and best[1]<min(caselb,control_lb))
++        write("ablation/comparison.json",dict(arms=winners,beat_time_and_controls=positive,case_best_SAFE_lower=caselb))
++    tab("summary.csv",summary);tab("targets_summary.csv",cells);tab("candidates.csv",per_candidate)
++    write("independent_audit.json",dict(unique_replays=len(per_candidate),two_paths_each=True,
++        max_energy_difference_J=max_dE,max_endpoint_difference_K=float(max_dT),same_nonthermal_events=True,
++        all_unaffected_idle_policies_preserved=True))
++    report(summary,cells,g,winners)
++
++def report(summary,cells,g,winners):
++    rows=["# P1 v1.1 剩余节能空间与跨场景热冲突",""]
++    rows+=["**"+("达到跨场景热冲突门槛，已作有限预算六组消融。" if g["trigger"] else "本轮未发现达到门槛的跨场景热冲突，停止时热联合机制探索。")+"**","",
++           "## 普通时间资源协调的剩余安全节能","",
++           "|工况|原 G3 能耗/J|本轮最佳连续 SAFE/J|严格节能下界/J|严格节能下界|共同池不同计划|连续 HOT、重置 SAFE|有竞争力|",
++           "|---|---:|---:|---:|---:|---:|---:|"]
++    for r in summary:
++        rows.append(f"|{r['case']}|{r['G3_J']:.9f}|{r['best_safe_J']:.9f}|{math.floor(r['safe_gain_lower_J']*1e8)/1e8:.8f}|{math.floor(r['safe_gain_lower_pct']*1e5)/1e5:.5f}%|{r['unique_pooled']}|{r['flips']}|{r['competitive']}|")
++    rows+=["","每个工况的比较对象均为指定 G3 排程。候选固定目标主任务的替代配置，搜索允许至多四个时间或资源相关 Stage 协调。跨目标汇总对完整排程去重。","",
++           "## 冻结候选池的反事实评价","",
++           "|工况/目标 Stage|时间阻塞类别|访问的不同计划数|共同池|C0/C1/C2 可行数|C1−C0/J|C1−C2/J|",
++           "|---|---|---:|---:|---|---:|---:|"]
++    labels={"solo":"单任务可放置","post":"移动 post 可解除","competitor_required":"须移动竞争任务","unclassified":"未取得类别见证"}
++    for r in cells:
++        a=r["C1_minus_C0_J"];b=r["C1_minus_C2_J"]
++        delta=lambda v:"未决" if v is None else f"{v:.9f}"
++        rows.append(f"|{r['case']} / {r['stage']}|{labels[r['category']]}|{r['unique_visited']}|{r['pool']}|{r['C0']}/{r['C1']}/{r['C2']}|{delta(a)}|{delta(b)}|")
++    rows+=["","三组按同一真实连续系统能耗排序。逐池可靠能耗差区间及可行集合差异见 counterfactual/，每个候选的活动、域基准、温度修正、切换及外部能量见 candidates.csv。","",
++           "## 冲突、消融与立项",""]
++    nf=sum(len(c["flips"]) for c in g["cases"].values())
++    if not nf:rows+=["共同池内没有连续 HOT、仅重置边界温度后 SAFE 的候选，因此没有可归因于热继承的竞争性能耗损失、热违规位置或配置变化。"]
++    for case,c in g["cases"].items():
++        for f in c["flips"]:
++            d=f["changes_from_best_SAFE"];n=f["hotspot"]
++            rows.append(f"\n{case} 计划 {f['sha'][:16]} 的真实热违规位于 {['CPU1','CPU2','GPU','NPU'][n]}，见证时刻 {f['peak_tick'][n]/10:.2f} ms，峰温下界 {f['peak_lo'][n]:.6f}°C。相对本轮最佳 SAFE 的可靠净节能下界 {f['reliable_gap_lower_J']:.9f} J，非温度相关节能 {float(Q(f['nonthermal_saving_J'])):.9f} J，配置变化 Stage {d['config_changes']}。完整资源边和驻留变化见 gate.json。")
++    if winners:
++        comp=read("ablation/comparison.json")
++        rows+=["","六组目标恢复、候选数及能耗界见 ablation/comparison.json。"+
++               ("B3 严格优于阶段一和同规模普通对照，取得该目标上的有限机制正例。第三章核心创新仍需更广证据。" if comp["beat_time_and_controls"] else "B3 未同时超过阶段一最佳 SAFE 和同规模普通对照，独立节能收益未证实。暂不作为第三章核心创新。")]
++    else:
++        rows+=["","六组消融未触发，270 s 配额取消。同规模时热关联选择的独立节能收益未测得。现有证据不足以支持把时热联合关联作为第三章核心创新。"]
++    total=sum(r["exhaust"] for r in cells)
++    categories=Counter(r["conclusion"] for r in cells)
++    rows+=["",f"逐目标证据分级：在指定有限域内证实无竞争性冲突 {categories['PROVED_ABSENT_IN_SELECTED_FINITE_DOMAIN']} 项，有限搜索内未发现 {categories['NOT_FOUND_IN_LIMITED_SEARCH']} 项，认证未决 {categories['CERTIFICATION_UNRESOLVED']} 项，发现严格竞争性冲突 {categories['CONFLICT_FOUND']} 项。阶段一各目标访问计数合计，连续认证 HOT {sum(r['searched_HOT'] for r in cells)} 次，SAFE {sum(r['searched_SAFE'] for r in cells)} 次，超出有效温区 {sum(r['out_of_model'] for r in cells)} 次。"]
++    rows+=["","## 结论边界","",f"共筛查 {len(cells)} 个冻结目标，其中 {total} 个完成其指定有限邻域的放置和空闲控制遍历。阶段二逐一认证固定共同池。每目标至多保留 24 个按能耗排序的候选，另含参照。未入池候选未作统一重置反事实验证。对更大邻域、其他起点或全局最优均无结论。",
++           "","初解工件身份见 preflight.json，实际访问数及未覆盖范围见 pools/ 和 targets_summary.csv，独立仿射指数复核见 independent_audit.json。"]
++    (DATA/"decision.md").write_bytes(("\n".join(rows)+"\n").encode())
+diff --git a/research/cross_scene_taskflow_followup/diagnostic.py b/research/cross_scene_taskflow_followup/diagnostic.py
+new file mode 100644
+index 00000000..645d6ea0
+--- /dev/null
++++ b/research/cross_scene_taskflow_followup/diagnostic.py
+@@ -0,0 +1,183 @@
++"""One worker operation. All output paths belong to the follow-up directory."""
++import gzip
++import json
++import math
++import subprocess
++import time
++from collections import Counter
++from fractions import Fraction as Q
++import numpy as np
++from assets import CFG,DATA,HERE,OLD,base,digest,encode,get_plan,plan_obj,put_plan,read,valid_c0,write
++from model import Problem,DOM,Invalid,transitions,event_arrays,independent_events
++from heat import evaluate
++from local_domain import Space,candidates,gap_table,select_targets
++
++def preflight():
++    def git(*a): return subprocess.check_output(["git",*a],cwd=HERE)
++    base_sha=CFG["base"]
++    assert git("rev-parse","HEAD^").decode().strip()==base_sha
++    assert git("rev-parse",base_sha+"^").decode().strip()==CFG["prior_freeze"]
++    snapshot=json.loads((OLD/"RESULT_SHA256.json").read_bytes())
++    assert digest(json.dumps(snapshot["files"],sort_keys=True,separators=(",",":")).encode())==snapshot["snapshot"]
++    evidence={}
++    inputs=["model.py","profiles.py","heat.py","search.py","mechanism.py","config/p1_frozen.json",
++            "config/gpu_profiles.csv","config/cpu_npu_profiles.csv"]
++    for case,info in CFG["cases"].items():
++        key=info["sha"]
++        inputs.extend(["logs/plans/"+key+".json.gz","g3_thermal/"+case+"_G3.json",
++                       "certificates/"+key+"_continuous.json.gz","instances/"+case+".csv"])
++    for name in inputs:
++        raw=(OLD/name).read_bytes()
++        assert digest(raw)==snapshot["files"][name]
++        oid=git("rev-parse",base_sha+":research/cross_scene_taskflow_diagnostic/"+name).decode().strip()
++        import hashlib
++        assert hashlib.sha1(("blob "+str(len(raw))+"\0").encode()+raw).hexdigest()==oid
++        evidence[name]=dict(sha256=digest(raw),git_blob=oid)
++    seeds={}
++    for case,info in CFG["cases"].items():
++        p=Problem(case);plan=base(case);key=put_plan(case,plan)
++        prior=json.loads((OLD/"g3_thermal"/(case+"_G3.json")).read_bytes())
++        assert prior["safe_plan"]==key==info["sha"]
++        assert prior["safe"]["E_J"]==info["J"]
++        cert=evaluate(p,plan,cert=True)
++        old=json.loads(gzip.decompress((OLD/"certificates"/(key+"_continuous.json.gz")).read_bytes()))["metrics"]
++        assert cert["status"]==old["status"]=="SAFE" and cert["E_bounds"][0]<=info["J"]<=cert["E_bounds"][1]
++        assert all(abs(a-b)<1e-9 for a,b in zip(cert["peak_hi"],old["peak_hi"]))
++        seeds[case]=dict(sha=key,metrics=cert,requests=len(p.req))
++    write("preflight.json",dict(verified=evidence,seeds=seeds,base=base_sha,prior_freeze=CFG["prior_freeze"],
++          freeze=git("rev-parse","HEAD").decode().strip(),prior_snapshot=snapshot["snapshot"]))
++
++def select(case,end):
++    p=Problem(case)
++    write("targets/"+case+".json",select_targets(p,base(case),end))
++
++def target(case,num):
++    return read("targets/"+case+".json")["targets"][int(num)]
++
++def search(case,num,end,arm=None):
++    p=Problem(case);seed=base(case);rec=target(case,num);i=rec["stage"];op=tuple(rec["opt"])
++    ids=read("ablation/groups.json")["groups"][arm] if arm else rec["members"]
++    label=f"{case}_{num}" if not arm else arm
++    folder="pools/" if not arm else "ablation/pools/"
++    space=Space(p,seed,ids,i,op)
++    stats=dict(deterministic_placements=0,exhausted=False,visits=0,unique=0,duplicates=0,illegal=0)
++    status=Counter();seen=set();pool=[];best_safe=None;min_safe_lower=math.inf
++    seedkey=CFG["cases"][case]["sha"]
++    stats["domain_sizes"]={str(j):len(rows) for j,rows in space.domains.items()}
++    stats["placement_product_before_pairwise_filter"]=math.prod(stats["domain_sizes"].values())
++    def snapshot():
++        # References use separate roles and never occupy one of the 24 target slots.
++        top=[]
++        for key,m,plan in pool:
++            assert put_plan(case,plan)==key
++            top.append(dict(sha=key,metrics=m))
++        safe=None
++        if best_safe:
++            key,m,plan=best_safe
++            assert put_plan(case,plan)==key
++            safe=dict(sha=key,metrics=m)
++        joint=[x["sha"] for x in top]
++        for key in [seedkey]+([safe["sha"]] if safe else []):
++            if key not in joint:joint.append(key)
++        write(folder+label+".json",dict(case=case,target=num,stage=i,opt=op,members=ids,stats=stats,
++             all_unique_status=status,top=top,baseline=seedkey,best_pinned_SAFE=safe,
++             least_pinned_SAFE_lower=None if min_safe_lower==math.inf else min_safe_lower,
++             common_ids=joint,pool_hash=digest(encode(joint)),
++             coverage="有限搜索。exhausted 仅表示所选目标、固定邻域及局部起点和空闲控制组合已遍历。"))
++    for plan in candidates(p,seed,space,end,stats):
++        if time.perf_counter()>=end:break
++        stats["visits"]+=1
++        key=digest(encode(plan_obj(case,plan)))
++        if key in seen:
++            stats["duplicates"]+=1;continue
++        seen.add(key);stats["unique"]+=1
++        try: m=evaluate(p,plan,cert=True)
++        except Invalid:
++            stats["illegal"]+=1;continue
++        status[m["status"]]+=1
++        if not valid_c0(m):continue
++        item=(key,m,plan)
++        if m["status"]=="SAFE":
++            min_safe_lower=min(min_safe_lower,m["E_bounds"][0])
++            if best_safe is None or (m["E_J"],key)<(best_safe[1]["E_J"],best_safe[0]):best_safe=item
++        if len(pool)<24 or (m["E_J"],key)<(pool[-1][1]["E_J"],pool[-1][0]):
++            pool.append(item);pool.sort(key=lambda x:(x[1]["E_J"],x[0]));del pool[24:]
++    snapshot()
++
++def physical(p,plan):
++    rows,low=plan;units,sw,edges=transitions(p,rows,low,edges=True)
++    dwell={};baseline=Q(0);activity=Q(0)
++    for d,members in enumerate(((0,1),(2,),(3,))):
++        old=last=0
++        seq=[(b,new) for a,b,dom,k,new in sw if dom==d]+[(p.horizon,0)]
++        for end,k in seq:
++            ticks=end-last
++            if ticks:dwell[d,old]=dwell.get((d,old),0)+ticks
++            for u in members:
++                b=next(v[0] for (_,w,f),v in p.exact.items() if w==u and f==old)
++                baseline+=b*ticks/10000
++            last=end;old=k
++    for i,(u,k,t) in enumerate(rows):
++        idle,_,busy,_=p.exact[p.kinds[i],u,k]
++        activity+=(busy-idle)*p.dur(i,u,k)/10000
++    switch=Q(15,10000)*len(sw);ext=Q(3,10)*p.horizon/10000
++    return dict(edges=edges,switches=sw,low=sorted(low),dwell={f"{d}.{k}":v for (d,k),v in dwell.items()},
++                base_J=str(baseline),activity_J=str(activity),switch_J=str(switch),external_J=str(ext),
++                nonthermal_J=str(baseline+activity+switch+ext))
++
++def differences(original,actual,orig_phy,phy):
++    before=set(map(tuple,orig_phy["edges"]));after=set(map(tuple,phy["edges"]))
++    a,b=original[0],actual[0]
++    return dict(stages=[[j,list(x),list(y)] for j,(x,y) in enumerate(zip(a,b)) if x!=y],
++                config_changes=[j for j,(x,y) in enumerate(zip(a,b)) if x[:2]!=y[:2]],
++                added_edges=sorted(after-before),removed_edges=sorted(before-after),
++                dwell_changed=orig_phy["dwell"]!=phy["dwell"],control_changed=original[1]!=actual[1])
++
++def certificate(p,key):
++    path=f"certificates/{key}.json"
++    if (DATA/path).exists():return read(path)
++    plan=get_plan(key);seed=base(p.case);phy=physical(p,plan)
++    ev,sw,edges=event_arrays(p,*plan)
++    real=evaluate(p,plan,cert=True,trace=True);reset=evaluate(p,plan,cert=True,reset=True,trace=True)
++    aa=np.asarray(real.pop("events"));bb=np.asarray(reset.pop("events"))
++    assert np.array_equal(aa[:,:14],ev) and np.array_equal(bb[:,:14],ev)
++    out=DATA/"certificates";out.mkdir(exist_ok=True)
++    np.savez_compressed(out/(key+".npz"),events=ev,continuous=aa[:,14:],reset=bb[:,14:])
++    obj=dict(sha=key,case=p.case,continuous=real,reset=reset,physical=phy,
++             changes_from_G3=differences(seed,plan,physical(p,seed),phy))
++    write(path,obj);return obj
++
++def assessment(case,num,arm=None):
++    p=Problem(case);label=f"{case}_{num}" if not arm else arm
++    f="" if not arm else "ablation/"
++    pool=read(f+"pools/"+label+".json")
++    keys=pool["common_ids"]
++    assert digest(encode(keys))==pool["pool_hash"] and len(keys)==len(set(keys))
++    certs={key:certificate(p,key) for key in keys}
++    prior={x["sha"]:x["metrics"] for x in pool["top"]}
++    safe=pool["best_pinned_SAFE"]
++    if safe:prior[safe["sha"]]=safe["metrics"]
++    for key,m in prior.items():
++        cc=certs[key]["continuous"]
++        assert cc["status"]==m["status"] and abs(cc["E_J"]-m["E_J"])<1e-10
++    groups={g:[] for g in ("C0","C1","C2")}
++    for key,cert in certs.items():
++        c=cert["continuous"];r=cert["reset"]
++        if valid_c0(c):
++            groups["C0"].append(key)
++            if c["status"]=="SAFE":groups["C1"].append(key)
++            if r["status"]=="SAFE":groups["C2"].append(key)
++    for keys0 in groups.values():
++        keys0.sort(key=lambda k:(certs[k]["continuous"]["E_J"],k))
++    def interval(group):
++        return [min(certs[k]["continuous"]["E_bounds"][j] for k in groups[group]) for j in (0,1)]
++    gaps={}
++    for g in ("C0","C2"):
++        if groups["C1"] and groups[g]:
++            a,b=interval("C1"),interval(g)
++            gaps["C1_minus_"+g]=[max(0.,a[0]-b[1]) if g=="C0" else a[0]-b[1],a[1]-b[0]]
++    write(f+"counterfactual/"+label+".json",dict(case=case,target=num,pool_hash=pool["pool_hash"],common_ids=keys,
++        ranked=groups,best={g:v[0] if v else None for g,v in groups.items()},gap_bounds_J=gaps,
++        point_gaps_J={"C1_minus_"+g:certs[groups["C1"][0]]["continuous"]["E_J"]-
++                     certs[groups[g][0]]["continuous"]["E_J"] for g in ("C0","C2") if groups[g] and groups["C1"]},
++        C2_only=sorted(set(groups["C2"])-set(groups["C1"])),C1_only=sorted(set(groups["C1"])-set(groups["C2"]))))
+diff --git a/research/cross_scene_taskflow_followup/frozen.json b/research/cross_scene_taskflow_followup/frozen.json
+new file mode 100644
+index 00000000..66802f35
+--- /dev/null
++++ b/research/cross_scene_taskflow_followup/frozen.json
+@@ -0,0 +1,40 @@
++{
++  "version": "P1-followup-1.1",
++  "base": "be641ce06a4f496d2b1f233a09bdfc3776738668",
++  "prior_freeze": "36aa03bddbaa37a1a70ea1732c993ae605e3b5bb",
++  "cases": {
++    "D1": {
++      "sha": "63fb7bdee8e8685036e743083be1d7ec61e061718e27ead677d57bb3a7618b6f",
++      "J": 10.951327485060524
++    },
++    "D2": {
++      "sha": "ef0518b03899e3d25aaa88269c22008fb688031d7cb4ad709b1e3da182edb862",
++      "J": 11.380186764497342
++    }
++  },
++  "threads": 1,
++  "seed": 101,
++  "random_neighbor_seed": 102,
++  "target_cap": 4,
++  "stage_cap": 5,
++  "pool_cap": 24,
++  "material_ratio": 0.001,
++  "absolute_grid_ticks": 50,
++  "radius_ticks": 500,
++  "budget_s": {
++    "preflight": 90,
++    "per_target_search_including_selection": 120,
++    "per_target_counterfactual": 45,
++    "per_arm": 45,
++    "archive": 120,
++    "whole": 1800
++  },
++  "arms": [
++    "B0",
++    "B1",
++    "B2",
++    "B3",
++    "B4a",
++    "B4b"
++  ]
++}
+diff --git a/research/cross_scene_taskflow_followup/local_domain.py b/research/cross_scene_taskflow_followup/local_domain.py
+new file mode 100644
+index 00000000..09d737e8
+--- /dev/null
++++ b/research/cross_scene_taskflow_followup/local_domain.py
+@@ -0,0 +1,195 @@
++"""Finite time/resource domain with immutable control in physically unchanged gaps."""
++from collections import deque
++from itertools import combinations
++from time import perf_counter
++from fractions import Fraction as Q
++import random
++from assets import CFG
++from model import DOM, Invalid, transitions
++from search import ranges,gridpoints,timing,ordinary
++from mechanism import targets
++
++def gap_table(p,rows):
++    units,sw,_=transitions(p,rows,())
++    gaps={}
++    for d,work in enumerate((sorted(units[0]+units[1]),units[2],units[3])):
++        end=old=0
++        for s,e,k,i in [*work,(p.horizon,p.horizon,0,-1)]:
++            if old and s-end>=5*(1+int(k!=0)) and (k or s-end>5):
++                gaps[(d,i)]=(d,end,s,old,k)
++            end=max(end,e);old=k
++    return gaps
++
++def controls(p,rows,old_by_signature):
++    new=gap_table(p,rows)
++    fixed=frozenset(key for key,sig in new.items() if old_by_signature.get(sig,False))
++    free=tuple(key for key,sig in new.items() if sig not in old_by_signature)
++    return fixed,free
++
++def compatible(p,i,a,j,b):
++    u,k,t=a;w,f,s=b
++    e=p.finish(i,a);z=p.finish(j,b)
++    if i//3==j//3 and (i+1==j and e>s or j+1==i and z>t):
++        return False
++    if DOM[u]!=DOM[w] or (u!=w and k==f): return True
++    guard=5*(k!=f)
++    return e+guard<=s or z+guard<=t
++
++class Space:
++    def __init__(self,p,base,ids,i,opt):
++        self.p=p;self.rows=base[0];self.ids=tuple(ids);self.i=i
++        self.domains={}
++        for j in ids:
++            choices=[]
++            for o in ([opt] if j==i else p.options[j]):
++                spans=list(ranges(p,self.rows,j,o,set(ids)-{j}))
++                for t in gridpoints(p,self.rows,j,spans): choices.append((*o,t))
++            self.domains[j]=sorted(choices,key=lambda a:(p.inc(j,*a[:2]),abs(a[2]-self.rows[j][2]),a))
++        self.order=sorted(ids,key=lambda j:(j!=i,len(self.domains[j]),j))
++    def assignments(self,rng=None,deadline=float("inf")):
++        rows=self.rows.copy(); order=self.order.copy()
++        if rng and len(order)>1:
++            tail=order[1:];rng.shuffle(tail);order=[order[0],*tail]
++        def walk(depth):
++            if perf_counter()>=deadline: return
++            if depth==len(order):
++                yield rows.copy();return
++            j=order[depth]
++            dom=self.domains[j]
++            if rng: dom=rng.sample(dom,len(dom))
++            for a in dom:
++                if perf_counter()>=deadline: return
++                if all(compatible(self.p,j,a,h,rows[h]) for h in order[:depth]):
++                    rows[j]=a
++                    yield from walk(depth+1)
++        return walk(0)
++
++def positive_options(p,rows):
++    # Preserve the pre-existing best-saving configuration for each request, and
++    # enumerate less aggressive positive alternatives so all timing classes can enter.
++    old={i:tuple(opt) for i,opt,gain in targets(p,rows)}
++    ranked=[]
++    for i in range(1,p.n,3):
++        u,k,t=rows[i]
++        def activity(o):
++            w,f=o
++            b,_,q,_=p.exact[p.kinds[i],w,f]
++            return (q-b)*p.compute[p.kinds[i],w,f]/1000
++        for opt in p.options[i]:
++            if opt[0]==u and opt[1]>=k: continue
++            gain=activity((u,k))-activity(opt)
++            if gain>0: ranked.append((i,opt,gain))
++    ranked.sort(key=lambda a:(-a[2],abs(rows[a[0]][2]-p.boundaries[0]),a[0],a[1]))
++    assert set(old)=={i for i,o,g in ranked}
++    return ranked
++
++def blockers(p,rows,i,opt):
++    u,k=opt;d=p.dur(i,u,k);t0=rows[i][2];req=p.req[i//3]
++    allowed=[(max(req["release_tick"],5 if k else 0),min(req["deadline_tick"],p.horizon-5*(k!=0))-d)]
++    points=gridpoints(p,rows,i,allowed)
++    near=[j for j,(w,f,s) in enumerate(rows) if j!=i and
++          (j in (i-1,i+1) or DOM[w]==DOM[u] and s<t0+500+d+5 and p.finish(j,rows[j])>t0-505)]
++    return [(t,tuple(j for j in near if not compatible(p,i,(*opt,t),j,rows[j]))) for t in points]
++
++def make_groups(p,rows,i,opt,raw):
++    ranking=timing(p,rows,i,opt)
++    closest=ordinary(p,rows,i,5,None)[1:]
++    def group(required,variant):
++        ids=list(dict.fromkeys([i,*required]))
++        partners=[j+1 for j in required if j%3==1]+[i+1]
++        fill=(partners+ranking+closest if variant==0 else ranking+partners+closest)
++        return tuple(dict.fromkeys(ids+fill))[:5]
++    groups=[]
++    for t,blocking in sorted(raw,key=lambda a:(len(a[1]),abs(rows[i][2]-a[0]),a[0])):
++        if len(blocking)>4: continue
++        for v in (0,1):
++            g=group(blocking,v)
++            if g not in groups: groups.append(g)
++    return groups or [group([],0)]
++
++def select_targets(p,base,end):
++    rows=base[0];ranked=positive_options(p,rows)
++    frozen=[];used=set();screen_cache={};stats={}
++    def classify(i,o):
++        key=(i,o)
++        if key in screen_cache: return screen_cache[key]
++        raw=blockers(p,rows,i,o); typ="unclassified"
++        if any(not block for _,block in raw):
++            typ="solo"
++        elif any(set(block)<={i+1} for _,block in raw):
++            pair=Space(p,base,[i,i+1],i,o)
++            if next(pair.assignments(deadline=end),None) is not None: typ="post"
++        if typ=="unclassified" and raw and all(any(j not in (i-1,i+1) for j in block) for _,block in raw):
++            typ="competitor_required"
++        screen_cache[key]=(typ,raw)
++        return typ,raw
++    def examine(item,require_witness):
++        i,o,gain=item;typ,raw=classify(i,o)
++        groups=make_groups(p,rows,i,o,raw)
++        first=None
++        for ids in groups[:8]:
++            space=Space(p,base,ids,i,o)
++            w=next(space.assignments(deadline=min(end,perf_counter()+.08)),None)
++            if w is not None:
++                first=w;break
++            if perf_counter()>=end: break
++        if first is None and require_witness: return None
++        if first is None: ids=groups[0]
++        return dict(case=p.case,stage=i,request=i//3,old=rows[i],opt=o,reference_gain_J=str(gain),
++            category=typ,members=ids,blocking_by_target_start_tick=raw,
++            solo_hold_start_ranges=list(ranges(p,rows,i,o)),witness_edits=None if first is None else
++            [[j,*first[j]] for j in ids if first[j]!=rows[j]])
++    for typ in ("solo","post","competitor_required"):
++        stop=end-1.6
++        for rank,item in enumerate(ranked):
++            if perf_counter()>=stop:break
++            i,o,g=item
++            if i in used or classify(i,o)[0]!=typ: continue
++            found=examine(item,True)
++            if found is not None:
++                found["selection"]="coverage";found["rank"]=rank+1
++                frozen.append(found);used.add(i);break
++    for rank,item in enumerate(ranked):
++        if len(frozen)>=CFG["target_cap"]:break
++        if item[0] not in used:
++            found=examine(item,False)
++            found["selection"]="gain_fill";found["rank"]=rank+1
++            frozen.append(found);used.add(item[0])
++    return dict(targets=frozen,ranked=[(i,o,str(g)) for i,o,g in ranked],
++                classified_count=len(screen_cache),cutoff=perf_counter()>=end-1.6)
++
++def masks(keys):
++    for count in range(len(keys)+1):
++        yield from combinations(keys,count)
++
++def candidates(p,base,space,end,stats):
++    # Interleave new placements, affected-gap alternatives and random restarts.
++    old={sig:key in base[1] for key,sig in gap_table(p,base[0]).items()}
++    rng=random.Random(101);queue=deque();done=False;step=0
++    seq=space.assignments(deadline=end)
++    while perf_counter()<end:
++        step+=1
++        if queue and (done or step%3==0):
++            rows,fixed,maskgen=queue.popleft()
++            mask=next(maskgen,None)
++            if mask is not None:
++                queue.append((rows,fixed,maskgen))
++                yield rows,fixed.union(mask)
++            continue
++        if done:break
++        if step%4==0:
++            rs=next(space.assignments(rng,min(end,perf_counter()+.04)),None)
++            if rs is not None:
++                fixed,keys=controls(p,rs,old)
++                yield rs,fixed.union(k for k in keys if rng.random()<.5)
++            continue
++        rs=next(seq,None)
++        if rs is None:
++            done=perf_counter()<end
++            if not done: return
++            continue
++        stats["deterministic_placements"]+=1
++        fixed,keys=controls(p,rs,old);it=masks(keys);next(it)
++        if keys:queue.append((rs,fixed,it))
++        yield rs,fixed
++    stats["exhausted"]=done and not queue and perf_counter()<end
+diff --git a/research/cross_scene_taskflow_followup/run.py b/research/cross_scene_taskflow_followup/run.py
+new file mode 100644
+index 00000000..2e46ef00
+--- /dev/null
++++ b/research/cross_scene_taskflow_followup/run.py
+@@ -0,0 +1,91 @@
++"""One-shot serial controller. Numerical workers have process-level wall deadlines."""
++import json
++import os
++import subprocess
++import sys
++import time
++from datetime import datetime,timezone
++from assets import CFG,DATA,HERE,digest,encode,read,write
++
++def now(): return datetime.now(timezone.utc).isoformat()
++def log(row):
++    with (DATA/"calls.jsonl").open("ab") as f:f.write(encode(dict(utc=now(),**row))+b"\n")
++
++def worker(kind,case,num,arm,end,last):
++    from diagnostic import preflight,select,search,assessment
++    if kind=="preflight":
++        preflight()
++        patch=subprocess.check_output(["git","diff","--binary",CFG["base"],"HEAD","--","."],cwd=HERE)
++        (DATA/"source.patch").write_bytes(patch)
++    elif kind=="selection":select(case,end)
++    elif kind=="search":search(case,num,end)
++    elif kind=="counterfactual":
++        assessment(case,num)
++        if last:
++            from decision import gate
++            gate()
++    elif kind=="arm":
++        search(case,num,end-6,arm)
++        assessment(case,num,arm)
++    elif kind=="archive":
++        from decision import audit
++        audit()
++
++def main():
++    if DATA.exists():raise RuntimeError("existing batch, no reruns")
++    if subprocess.check_output(["git","status","--porcelain"],cwd=HERE).strip():raise RuntimeError("unfrozen source")
++    DATA.mkdir()
++    start=time.perf_counter()
++    global_end=start+CFG["budget_s"]["whole"]
++    def call(kind,limit,case="ALL",num=-1,arm="",last=False):
++        begin=time.perf_counter()
++        end=min(begin+limit,global_end)
++        reserve=2.5 if kind in ("search","selection","arm") else 1
++        args=[sys.executable,"-B",str(HERE/"run.py"),"worker",kind,case,str(num),arm,str(end-reserve),str(int(last))]
++        log(dict(event="begin",kind=kind,case=case,target=num,arm=arm,limit_s=limit,start_s=begin-start))
++        print(f"{kind} {case} {num} {arm}",flush=True)
++        try:
++            proc=subprocess.run(args,cwd=HERE,capture_output=True,timeout=max(.001,end-time.perf_counter()-.35))
++            state="OK" if proc.returncode==0 else "ERROR"
++            error=proc.stderr.decode(errors="replace")[-4000:]
++        except subprocess.TimeoutExpired:
++            state="TIME_LIMIT";error="hard subprocess cutoff"
++        duration=time.perf_counter()-begin
++        log(dict(event="end",kind=kind,case=case,target=num,arm=arm,limit_s=limit,elapsed_s=duration,
++                 end_s=time.perf_counter()-start,state=state,error=error))
++        if state!="OK": raise RuntimeError(f"{kind} {state}: {error}")
++        return duration
++    try:
++        call("preflight",90)
++        charge={}
++        for c in CFG["cases"]: charge[c]=call("selection",35,c)
++        all_targets=[(c,j) for c in CFG["cases"] for j in range(len(read("targets/"+c+".json")["targets"]))]
++        if not all_targets: raise ValueError("no positive-energy targets in either case")
++        frozen={c:digest((DATA/"targets"/(c+".json")).read_bytes()) for c in CFG["cases"]}
++        write("target_freeze.json",dict(files=frozen,selection_seconds=charge,rule="all target lists bound before first search"))
++        for c,j in all_targets:
++            call("search",120-(charge[c] if j==0 else 0),c,j)
++        hashes={c+"_"+str(j):digest((DATA/"pools"/f"{c}_{j}.json").read_bytes()) for c,j in all_targets}
++        write("pool_freeze.json",dict(files=hashes,rule="all common pools bound before first C0/C1/C2 comparison"))
++        for n,(c,j) in enumerate(all_targets):call("counterfactual",45,c,j,last=(n==len(all_targets)-1))
++        if read("gate.json")["trigger"]:
++            groups=read("ablation/groups.json")
++            for arm in CFG["arms"]:call("arm",45,groups["case"],groups["target"],arm)
++        audit_start=time.perf_counter()
++        call("archive",min(115,global_end-audit_start-3))
++        for c,h in frozen.items():assert digest((DATA/"targets"/(c+".json")).read_bytes())==h
++        for label,h in hashes.items():assert digest((DATA/"pools"/(label+".json")).read_bytes())==h
++        files={p.relative_to(DATA).as_posix():digest(p.read_bytes()) for p in sorted(DATA.rglob("*")) if p.is_file()}
++        write("snapshot.json",dict(files=files,snapshot=digest(encode(files)),freeze=read("preflight.json")["freeze"],
++             archive_s=time.perf_counter()-audit_start,wall_s=time.perf_counter()-start,seeds=[101,102],threads=1))
++        assert time.perf_counter()<=min(audit_start+120,global_end)
++    except Exception as e:
++        write("stop.json",dict(reason=str(e),wall_s=time.perf_counter()-start,status="UNRESOLVED",retry=False))
++        raise
++
++if __name__=="__main__":
++    if sys.argv[1:2]==["worker"]:
++        _,_,kind,case,num,arm,end,last=sys.argv
++        worker(kind,case,int(num),arm,float(end),bool(int(last)))
++    elif sys.argv[1:]==["batch"]:main()
++    else:raise SystemExit("python -B run.py batch")

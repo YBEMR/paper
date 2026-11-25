@@ -6,7 +6,7 @@ import json
 from math import floor,ceil
 from fractions import Fraction as Q
 from pathlib import Path
-from summarize import ROOT,OUT,read,rows,sha
+from summarize import ROOT,OUT,PAIR,read,rows,sha,pair_completed,search_output
 
 def loadcsv(name):
     p=ROOT/name
@@ -22,7 +22,9 @@ def outward(x,d,*,upper):
     scale=10**d
     tick=(ceil if upper else floor)(value*scale)
     return f"{tick//scale}.{tick%scale:0{d}d}"
-def cert(key):return read(OUT/"certificates"/(key+".json"))
+def cert(key):
+    path=OUT/"certificates"/(key+".json")
+    return read(path if path.is_file() else PAIR/"certificates"/(key+".json"))
 def main():
     summ=loadcsv("summary.csv")
     base=loadcsv("baselines.csv")
@@ -48,7 +50,8 @@ def main():
         gain=max(float(x["delta_J"]),float(y["delta_J"]))
         comparisons_rows.append((case,outward(lb,9,upper=False),outward(ub,9,upper=True),outward(Q.from_float(ub)-lb,9,upper=True),outward(100*(Q.from_float(ub)-lb)/Q.from_float(ub),4,upper=True)+"%",num(gain*1e9,2),outward(Q.from_float(seed["E_bounds"][1])-lb,9,upper=True)))
     local=lambda s:datetime.fromisoformat(s).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-    title="G1 第一阶段结果" if fin and fin["outcome"]=="COMPLETED" else "G1 已完成阶段与运行进度"
+    complete=(fin and fin["outcome"]=="COMPLETED") or (pair_completed() and len(summ)==6)
+    title="G1 第一阶段结果" if complete else "G1 已完成阶段与运行进度"
     doc=["# "+title,"完整连续电热系统总能耗为主指标。除表头另列单位外，以下能耗单位均为 J。"]
     if comparisons:
         strict1=sum(c[-1]=="C1 严格更低" for c in comparisons)
@@ -75,7 +78,7 @@ def main():
             doc.append(message)
         bounds=[]
         for s in summ:
-            timeline=rows(OUT/"cp"/s["case"]/s["method"]/"timeline.jsonl")
+            timeline=rows(search_output(s["case"])/"cp"/s["case"]/s["method"]/"timeline.jsonl")
             initial=Q(timeline[0]["global_lower_exact_J"])
             final=Q(s["lower_exact_J"])
             bounds.append((s["case"]+"/"+s["method"],outward(initial,9,upper=False),
@@ -99,9 +102,9 @@ def main():
             partial.append((case+"/"+method,len(slices),num(slices[-1]["elapsed_s"] if slices else times[-1]["elapsed_s"],1),
                             len({c["plan"] for c in candidates if c["status"]=="SAFE"}),num(initial["E_J"]),num(best["E_J"])))
     if partial:
-        doc.extend(["## 尚无完整终点的记录",
+        doc.extend(["## 原批次中断记录",
                     md(["实例/方法","完整时间片","末次记录 (s)","不同 SAFE 候选","共同初解 (J)","末次记录的最佳 SAFE (J)"],partial),
-                    "表中耗时截止最后一条完整记录。等预算终点比较只使用有完整阶段回执的配对。"])
+                    "表中耗时截止最后一条完整记录。该段独立保留，等预算配对取各自批次的正式终点。"])
     group=[]
     for b in base:
         c=b["case"]
@@ -140,7 +143,7 @@ def main():
     if summ:
         comp=[]
         for s in summ:
-            a,b=[json.loads(gzip.decompress((OUT/"plans"/(s[k]+".json.gz")).read_bytes())) for k in ("common_seed","plan")]
+            a,b=[json.loads(gzip.decompress((search_output(s["case"])/"plans"/(s[k]+".json.gz")).read_bytes())) for k in ("common_seed","plan")]
             old,new=cert(s["common_seed"]),cert(s["plan"])
             moved=sum(x[2]!=y[2] for x,y in zip(a["rows"],b["rows"]))
             device=sum(x[0]!=y[0] for x,y in zip(a["rows"],b["rows"]))
@@ -154,6 +157,13 @@ def main():
         elapsed=f"实验自北京时间 {local(hdr['utc'])} 至 {local(fin['utc'])}，运行器登记状态为 {fin['outcome']}，墙钟 {fin['elapsed_s']:.1f} s，上限 16,200 s。"
     else:
         elapsed=f"原运行于北京时间 {local(hdr['utc'])} 启动，总墙钟额度为 16,200 s。现有原始日志保留了逐阶段回执，整批结束回执尚缺。"
+    if pair_completed():
+        pair=read(PAIR/"execution.json");end=read(PAIR/"end.json");pair_jobs=rows(PAIR/"jobs.jsonl")
+        doc.extend(["## S80 完整配对的执行回执",
+                    f"本次补跑的工作程序及数据来自原冻结版本，单独授权的预算为 C0、C1 各 3,600 s。两者按顺序使用种子 {pair['seed']} 与同一初解。原批次的七个时间片单独留档。补跑从北京时间 {local(pair_jobs[0]['utc'])} 至 {local(end['utc'])}，两臂总墙钟 {end['elapsed_s']:.1f} s。",
+                    md(["方法","启动时间（北京时间）","结束时间（北京时间）","墙钟 (s)","退出状态"],
+                       [(j["method"],local(j["utc"]),local(j["end_utc"]),num(j["elapsed_s"],2),j["status"]) for j in pair_jobs]),
+                    "[补跑协议](s80_pair/PROTOCOL.md) · [预算回执](s80_pair/results/jobs.jsonl) · [候选和时间片](s80_pair/results/cp/S80/) · [连续认证证书与轨迹](s80_pair/results/certificates/) · [完整排程](s80_pair/results/plans/)"])
     doc+=["## 正确性与复现",
           "原 E0/E1 四组夹具、E2-a 八组夹具和 15 项权限检查通过。新模型的两个夹具分别有 1,144 和 528 个不同合法物理排程。C0/C1 均与独立穷举的排程与切换集合完全相同，整数目标逐项向下包络。使用 Fraction 核实 C1 屏障的最小净输入分别为 0.0014、0.0014、0.0028、0.0051 W。推导与时间单位见 [冻结协议](PROTOCOL.md)。",
           f"本地执行冻结为 `{hdr['freeze']}`。{elapsed}按原 D3 热容倍率 10 和新增 S 系列倍率 1 运行。三种频域全程连续，301 ms 尾段完整计能。公开冻结提交与本地执行提交的文件树均为 `733f371d5cdd2354cbc493bf6f77a6965b4d3211`。[GitHub 冻结提交](https://github.com/YBEMR/paper/commit/1c3e2ae2299b18a20557d3b6044e198281f45126)。",

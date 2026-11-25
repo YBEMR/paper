@@ -9,8 +9,13 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parent
 OUT=ROOT/"results"
+PAIR=ROOT/"s80_pair"/"results"
 def read(path):return json.loads(path.read_bytes())
 def rows(path):return [json.loads(l) for l in path.read_bytes().splitlines()] if path.exists() else []
+def pair_completed():
+    return (PAIR/"end.json").is_file() and read(PAIR/"end.json")["outcome"]=="COMPLETED"
+def search_output(case):
+    return PAIR if case=="S80" and pair_completed() else OUT
 def csvout(name,records):
     if not records:return
     cols=list(dict.fromkeys(k for row in records for k in row))
@@ -29,14 +34,27 @@ def main():
     jobs=rows(OUT/"jobs.jsonl")
     refs=rows(OUT/"references.jsonl")
     auto=rows(OUT/"construction.jsonl")
-    certs={p.stem:read(p) for p in (OUT/"certificates").glob("*.json")}
-    for k,c in certs.items():
-        assert c["plan"]==k and sha(gzip.decompress((OUT/"plans"/(k+".json.gz")).read_bytes()))==k
-        assert (OUT/"certificates"/(k+".npz")).is_file()
+    evidence_dirs=[OUT]
+    if pair_completed():
+        receipt=read(PAIR/"execution.json")
+        pair_jobs=rows(PAIR/"jobs.jsonl")
+        assert [(j["method"],j["budget_s"]) for j in pair_jobs]==[("C0",3600),("C1",3600)]
+        assert all(j["job"]=="cp" and j["case"]=="S80" and j["status"] in ("OK","TIME_LIMIT") for j in pair_jobs)
+        assert receipt["seed"]==101 and receipt["threads"]==1
+        assert (PAIR/"seeds/S80.json").read_bytes()==(OUT/"seeds/S80.json").read_bytes()
+        evidence_dirs.append(PAIR)
+    certs={}
+    for path in (p for d in evidence_dirs for p in (d/"certificates").glob("*.json")):
+        k=path.stem;c=read(path);d=path.parent.parent
+        assert c["plan"]==k and sha(gzip.decompress((d/"plans"/(k+".json.gz")).read_bytes()))==k
+        assert (d/"certificates"/(k+".npz")).is_file()
+        if k in certs:
+            assert c["case"]==certs[k]["case"] and c["metrics"]["E_bounds"]==certs[k]["metrics"]["E_bounds"]
+        certs[k]=c
         m=c["metrics"]
         assert m["E_bounds"][0]<=m["E_J"]<=m["E_bounds"][1]
         import numpy as np
-        with np.load(OUT/"certificates"/(k+".npz"),allow_pickle=False) as archive:
+        with np.load(d/"certificates"/(k+".npz"),allow_pickle=False) as archive:
             tr=archive["events"]
         assert tr.ndim==2 and tr.shape[1]==31 and tr[0,0]==0 and np.all(tr[:,1]>tr[:,0])
         assert np.array_equal(tr[:-1,1],tr[1:,0])
@@ -62,10 +80,13 @@ def main():
     budgets={"S16":900,"S32":1800,"S80":3600}
     for case,tmax in budgets.items():
         for method in ("C0","C1"):
-            folder=OUT/"cp"/case/method
-            if not folder.is_dir() or not any((j["job"],j["case"],j["method"])==("cp",case,method) for j in jobs):continue
+            run=search_output(case)
+            case_jobs=rows(run/"jobs.jsonl") if run!=OUT else jobs
+            folder=run/"cp"/case/method
+            if not folder.is_dir() or not any((j["job"],j["case"],j["method"])==("cp",case,method) for j in case_jobs):continue
             tline=rows(folder/"timeline.jsonl")
-            assert tline
+            assert tline and tline[0]["plan"]==seeds[case]["plan"]
+            assert all(0<=r["elapsed_s"]<=tmax for r in tline)
             seed=seeds[case]["plan"]
             seed_m=certs[seed]["metrics"]
             latest=tline[-1]
@@ -89,6 +110,8 @@ def main():
                 assert audit_bound==Q(marked[ix]["global_lower_exact_J"])
                 for candidate in (c for c in candidates if c["slice"]==slice_["slice"]):
                     key=candidate["plan"]
+                    metric=certs[key]["metrics"]
+                    assert candidate["bounds"]==metric["E_bounds"] and candidate["status"]==metric["status"]
                     exact=Q(candidate["full_reference_J"])
                     assert Q(candidate["encoded_pJ"],10**12)<=exact
                     contribution=exact
@@ -99,12 +122,12 @@ def main():
                     known[key]=contribution
             if (folder/"completion.json").exists():
                 assert audit_bound==lower and audit_upper==Q.from_float(m["E_bounds"][1])
-            entry=next(j for j in jobs if (j["job"],j["case"],j["method"])==("cp",case,method))
+            entry=next(j for j in case_jobs if (j["job"],j["case"],j["method"])==("cp",case,method))
             real_improvement=best!=seed and m["E_bounds"][1]<seed_m["E_bounds"][0]
             unique={r["plan"]:r["status"] for r in candidates}
             counts=Counter(unique.values())
             gap=m["E_bounds"][1]-float(lower)
-            values=dict(case=case,method=method,budget_s=tmax,common_seed=seed,plan=best,**details(certs[best]),
+            values=dict(case=case,method=method,batch="s80_pair" if run==PAIR else "original",budget_s=tmax,common_seed=seed,plan=best,**details(certs[best]),
                         delta_J=seed_m["E_J"]-m["E_J"],strict=real_improvement,
                         gain_lower_J=(seed_m["E_bounds"][0]-m["E_bounds"][1] if best!=seed else 0),
                         gain_upper_J=(seed_m["E_bounds"][1]-m["E_bounds"][0] if best!=seed else 0),
@@ -128,7 +151,7 @@ def main():
     csvout("summary.csv",cp);csvout("checkpoints.csv",snap);csvout("candidates.csv",candidate_log)
     changes=[]
     for row in cp:
-        original,best=[json.loads(gzip.decompress((OUT/"plans"/(row[k]+".json.gz")).read_bytes())) for k in ("common_seed","plan")]
+        original,best=[json.loads(gzip.decompress((search_output(row["case"])/"plans"/(row[k]+".json.gz")).read_bytes())) for k in ("common_seed","plan")]
         for i,(a,b) in enumerate(zip(original["rows"],best["rows"])):
             if a!=b:
                 changes.append(dict(case=row["case"],method=row["method"],kind="stage",request=i//3,stage=("pre","main","post")[i%3],

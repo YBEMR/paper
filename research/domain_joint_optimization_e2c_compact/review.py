@@ -1,7 +1,7 @@
 """Independent event/thermal replay, stage-wise attribution and paired decision."""
 import csv,gzip,json,statistics
 from collections import Counter
-from assets import ROOT,C,read,write,digest
+from c1r_assets import ROOT,C,read,write,digest
 from bounded import options,graph,legal_assignment,proxy
 from base import Problem,Layout,Access,decode,changes,raw,dynamic_region,table,np
 from numerics import rights_check

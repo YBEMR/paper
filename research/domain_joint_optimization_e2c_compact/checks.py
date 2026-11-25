@@ -1,7 +1,7 @@
 """Finite exact checks precede all performance replay. UNKNOWN is not a proof."""
 import itertools,json
 from fractions import Fraction as Q
-from assets import ROOT,C,read,write
+from c1r_assets import ROOT,C,read,write
 from bounded import CompactModel,graph,options,propagate,legal_assignment
 from support import SupportModel,seeded,cp
 

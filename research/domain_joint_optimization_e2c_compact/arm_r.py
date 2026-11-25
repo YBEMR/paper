@@ -1,6 +1,6 @@
 """One replay. The auxiliary process has its own enforceable wall deadline."""
 import gzip,json,subprocess,sys,time,traceback
-from assets import ROOT,C,read,write
+from c1r_assets import ROOT,C,read,write
 from bounded import CompactModel,options,graph,propagate,legal_assignment,proxy
 from support import SupportModel,selected,warm_candidate,seeded,cp
 from replay import Replay

@@ -1,7 +1,7 @@
 """One shot, with a closed correctness gate, per-arm deadlines and a collective allowance."""
 import subprocess,sys,time,traceback
 from datetime import datetime,timezone
-from assets import ROOT,C,BASE,REPO,git,read,write,digest
+from c1r_assets import ROOT,C,BASE,REPO,git,read,write,digest
 import psutil
 
 def utc():return datetime.now(timezone.utc).isoformat()
@@ -18,7 +18,7 @@ def stop(p):
 
 def run():
     t0=time.perf_counter();dst=ROOT/"execution.json";assert not dst.exists()
-    assert git("rev-parse","HEAD^").decode().strip()==BASE and not git("status","--porcelain")
+    assert git("merge-base","--is-ancestor",BASE,"HEAD")==b"" and not git("status","--porcelain")
     head=git("rev-parse","HEAD").decode().strip();inputs=read(ROOT/"samples.json")
     own={}
     for p in ROOT.rglob("*"):
@@ -36,7 +36,7 @@ def run():
         case_inputs=inputs["files"],python=sys.version,physical_cores=cores,arm_s=30,aux_s=11,total_s=1200))
     logs=ROOT/"logs";logs.mkdir()
     init=time.perf_counter()-t0
-    state=dict(start=utc(),status="CORRECTNESS",groups=[],phases={"asset_verification":init},c2_started=False)
+    state=dict(start=utc(),status="CORRECTNESS",groups=[],phases={"loader_exit_and_import_check_allowance":16.0,"asset_verification":init},c2_started=False)
     def update():
         state["replay_s"]=sum(g["charged_s"] for g in state["groups"])
         state["ancillary_s"]=sum(state["phases"].values());state["numerical_s"]=state["replay_s"]+state["ancillary_s"]

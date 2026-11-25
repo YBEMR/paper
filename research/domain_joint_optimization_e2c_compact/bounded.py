@@ -1,5 +1,5 @@
 """Synchronous bounded displacement propagation and an exact-on-objectives submodel."""
-from assets import C
+from c1r_assets import C
 from support import pairs,cp
 from base import np,clock
 

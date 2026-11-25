@@ -1,4 +1,4 @@
-"""Pinned historical sources and pre-outcome sample selection."""
+"""Pinned historical sources and pre-outcome sample selection for E2-c1-r."""
 from pathlib import Path
 import sys,subprocess,json,hashlib,gzip
 ROOT=Path(__file__).resolve().parent

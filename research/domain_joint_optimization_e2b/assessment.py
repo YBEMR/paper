@@ -59,12 +59,13 @@ def inspect_run(case,method,seed,p,initial,base_metrics,lb):
             adopted=[i for i in cfg if i in planned and plan[0][i][:2]==planned[i]]
             support=set(last_try.get("final",{}).get("support",[]))
             real_support=[i for i in delta["only_timing"] if i in support and any(plan[0][i][0]!=plan[0][j][0] for j in adopted)]
-            paid=[i for i in op.get("compensation",[]) if i in cfg and p.dur(i,*plan[0][i][:2])<p.dur(i,*last[1][i][:2])]
+            previous_rows=last[1][0]
+            paid=[i for i in op.get("compensation",[]) if i in cfg and p.dur(i,*plan[0][i][:2])<p.dur(i,*previous_rows[i][:2])]
             released={tuple(x) for x in op.get("released",[])}
             used_edges=[v for v in inv if (v[0],min(v[1:]),max(v[1:])) in released]
             special=opname=="configuration_support"
             if method=="Proposed-Single":assert len(cfg)<=1
-            if method=="CP-FO":assert not inv and all(plan[0][i][0]==last[1][i][0] for i in cfg)
+            if method=="CP-FO":assert not inv and all(plan[0][i][0]==previous_rows[i][0] for i in cfg)
             row=dict(run=tag,case=case,method=method,seed=seed,t=h["t"],before=last[0],after=ident,
                 operator=opname,config_n=len(cfg),moved_n=len(moved),timing_only_n=len(delta["only_timing"]),inversions=len(inv),
                 target_combo_real=int(special and len(adopted)>=2),cross_resource_support=int(special and bool(real_support)),

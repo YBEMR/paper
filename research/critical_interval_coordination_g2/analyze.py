@@ -37,23 +37,32 @@ def compare(ab,pro):
 def changes(folder,a,b):
     x=plan_rows(folder,a["plan"]);y=plan_rows(folder,b["plan"])
     return sum(r[:2]!=s[:2] for r,s in zip(x[1::3],y[1::3]))
-def analyze():
-    assert read(RUNS/"end.json")["outcome"]=="COMPLETED"
+def analyze(checkpoint=False):
+    outcome=read(RUNS/"end.json") if not checkpoint else {"incomplete":read(RUNS/"continuation.json")["interrupted"]}
+    if not checkpoint:assert outcome["outcome"] in ("COMPLETED","CLOSED_WITH_INTERRUPTION")
     assert all(read(ROOT/p)["status"]=="PASS" for p in ("witness_gate.json","model_gate.json","finite_gate.json","engineering/gate.json"))
     runs=[];pairs=[];initial=[];mechanism=[];budgets=[];stored={}
     for folder in sorted(d for d in RUNS.iterdir() if d.is_dir()):
+        if checkpoint and not (folder/"receipt.json").exists():continue
         r=read(folder/"receipt.json");result=read(folder/"result.json");budgets.append(r)
-        assert r["status"]=="OK" and r["elapsed_s"]<=r["limit_s"]+.25
+        interrupted=r["status"]=="INTERRUPTED"
+        if interrupted:
+            assert folder.name in outcome["incomplete"] and result["final"] is None
+            assert r["elapsed_s"] is None
+        else:
+            assert r["status"]=="OK" and r["elapsed_s"]<=r["limit_s"]+.25
         checked=certify(folder)
         if r["action"]=="init":
             data=result["initial"] or {};initial.append(dict(case=r["case"],status=result["status"],**{k:data.get(k) for k in ("J","plan")},seconds=r["elapsed_s"],certificates=checked))
             continue
         key=(r["action"],r["case"],r["seed"],r["method"]);stored[key]=result
         line=dict(batch=r["action"],case=r["case"],seed=r["seed"],method=r["method"],status=result["status"],
-                  budget_s=r["limit_s"]+r["prior_charge_s"],charged_s=r["elapsed_s"]+r["prior_charge_s"],certificates=checked)
-        if result["status"]!="COMPLETE":runs.append(line);continue
+                  budget_s=r["limit_s"]+r["prior_charge_s"],charged_s=None if interrupted else r["elapsed_s"]+r["prior_charge_s"],certificates=checked)
+        if interrupted:line["last_observed_charged_s"]=r["last_observed_charged_s"]
+        if result["status"] not in ("COMPLETE","INTERRUPTED"):runs.append(line);continue
         a,b,c=(result[k] for k in ("initial","configuration","final"))
         for part,obj in zip(("initial","config","final"),(a,b,c)):
+            if obj is None:continue
             line.update({part+"_J":obj["J"],part+"_lo":obj["bounds"][0],part+"_hi":obj["bounds"][1],part+"_plan":obj["plan"]})
             assert obj["status"]=="SAFE" and obj["bounds"]==read(folder/"evidence/certificates"/(obj["plan"]+".json"))["metrics"]["E_bounds"]
         chain_hits=0;late_rounds=0;attributed=0;rounds=lines(folder/"rounds.jsonl")
@@ -79,29 +88,38 @@ def analyze():
                   realized_compensators=json.dumps(sorted(changed&chosen)),actual_main_changes=len(changed),round_gain_J=rd["before"]["J"]-rd["after"]["J"],
                   delta_activity_J=rd["before"]["activity_J"]-rd["after"]["activity_J"],delta_residency_J=rd["before"]["residency_J"]-rd["after"]["residency_J"],
                   delta_switch_J=rd["before"]["switch_J"]-rd["after"]["switch_J"],duration=rd["round_s"],solver_status=rd["solver"]["status"]))
-        line.update(config_gain_J=a["J"]-b["J"],post_gain_J=b["J"]-c["J"],total_gain_J=a["J"]-c["J"],lower_J=float(Fraction(result["lower_J"])) if result["lower_J"] else None,
-              final_peak_C=c["peak_upper_C"],final_slack_ms=c["deadline_slack_ms"],config_main_changes=changes(folder,a,b),
-              final_main_changes=changes(folder,a,c),config_rounds=result["configuration_rounds"],post_rounds=result["post_rounds"],
+        line.update(config_gain_J=a["J"]-b["J"],post_gain_J=b["J"]-c["J"] if c else None,total_gain_J=a["J"]-c["J"] if c else None,lower_J=float(Fraction(result["lower_J"])) if result.get("lower_J") else None,
+              final_peak_C=c["peak_upper_C"] if c else None,final_slack_ms=c["deadline_slack_ms"] if c else None,config_main_changes=changes(folder,a,b),
+              final_main_changes=changes(folder,a,c) if c else None,config_rounds=result["configuration_rounds"],post_rounds=result["post_rounds"],
               chain_rounds=late_rounds,realized_compensation_rounds=chain_hits,realized_round_gain_J=attributed)
         runs.append(line)
-    assert len(runs)==40 and len(initial)==5
+    assert (checkpoint or len(runs)==40) and len(initial)==5
     for (kind,case,seed,method),pro in sorted(stored.items()):
         if method!="Proposed":continue
+        if checkpoint and ((kind,case,seed,"AB") not in stored or (kind=="main" and (kind,case,seed,"Compact") not in stored)):continue
         ab=stored[kind,case,seed,"AB"];line=dict(batch=kind,case=case,seed=seed)
-        if not all(x["status"]=="COMPLETE" for x in (ab,pro)):line.update(final_verdict="未决",config_verdict="未决")
+        if not all(x["status"] in ("COMPLETE","INTERRUPTED") for x in (ab,pro)):line.update(final_verdict="未决",config_verdict="未决")
         else:
             assert ab["initial"]["plan"]==pro["initial"]["plan"]
             if kind=="main":
                 compact=stored[kind,case,seed,"Compact"];assert compact["initial"]["plan"]==ab["initial"]["plan"]
-                line["compact_final_J"]=compact["final"]["J"]
+                line["compact_final_J"]=compact["final"]["J"] if compact["final"] else None
             line.update(common=ab["initial"]["plan"])
             for phase,label in (("configuration","config"),("final","final")):
                 a,b=ab[phase],pro[phase]
+                if a is None or b is None:
+                    line[label+"_AB_J"]=a["J"] if a else None
+                    line[label+"_Proposed_J"]=b["J"] if b else None
+                    line[label+"_verdict"]="未决"
+                    continue
                 line.update({label+"_AB_J":a["J"],label+"_Proposed_J":b["J"],label+"_AB_minus_Proposed_J":a["J"]-b["J"],
                             label+"_verdict":compare(a,b),label+"_diff_lo":a["bounds"][0]-b["bounds"][1],
                             label+"_diff_hi":a["bounds"][1]-b["bounds"][0]})
         pairs.append(line)
-    assert len(pairs)==14
+    assert checkpoint or len(pairs)==14
     save("summary.csv",runs);save("paired.csv",pairs);save("mechanism.csv",mechanism);save("construction.csv",initial);save("budget_receipts.csv",budgets)
     print(json.dumps({"runs":len(runs),"pairs":len(pairs),"unique_inside_arms":sum(x["certificates"] for x in runs),"rounds":len(mechanism)}))
-if __name__=="__main__":analyze()
+if __name__=="__main__":
+    import sys
+    assert sys.argv[1:] in ([],["--checkpoint"])
+    analyze(checkpoint=bool(sys.argv[1:]))

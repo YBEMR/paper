@@ -10,8 +10,8 @@ from audit import thermal
 def reliable(first,last):
     return max(0.,1000*(first["lo"]-last["hi"]))
 
-def assess():
-    samples=read(ROOT/"samples.json")["cases"]
+def assess(samples=None):
+    if samples is None:samples=read(ROOT/"samples.json")["cases"]
     histories={r["sample"]:r for r in csv.DictReader((C/"paired.csv").open(encoding="utf8",newline=""))}
     states=read(ROOT/"execution.json");proofs={};per_arm=[];paired=[];candidates=[];findings=[];stages=[]
     for s in samples:

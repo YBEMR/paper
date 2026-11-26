@@ -18,7 +18,8 @@ def main(wait):
         if not wait:
             raise RuntimeError("Formal jobs are still active")
         time.sleep(30)
-    if json.loads((OUT/"batch_end.json").read_bytes())["outcome"]!="FINISHED":
+    closure=json.loads((OUT/"batch_end.json").read_bytes())
+    if closure["outcome"]!="FINISHED":
         raise RuntimeError("Batch interrupted; inspect original receipts")
     # Import heavy numerical and rendering libraries only after workers exit.
     import audit_results as audit
@@ -42,7 +43,8 @@ def main(wait):
     artifacts={p.relative_to(ROOT).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
         for d in (audit.RESULTS,ROOT/"archive") for p in sorted(d.rglob("*")) if p.is_file()}
     result=dict(subject=json.loads((ROOT/"publication_freeze.json").read_bytes())["remote_protocol_commit"],
-                physical_cells=165,logical_positions=174,figures=9,artifacts=artifacts)
+                physical_cells=165,physical_attempts=closure.get("physical_attempts_including_interrupted",165),
+                logical_positions=174,figures=9,artifacts=artifacts)
     (ROOT/"acceptance.json").write_text(json.dumps(result,indent=2)+"\n",encoding="utf8",newline="\n")
 
 

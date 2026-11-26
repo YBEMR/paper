@@ -26,7 +26,8 @@ def git(*args,**kwargs):
 def verify():
     acceptance=read(ROOT/"acceptance.json")
     assert acceptance["physical_cells"]==165 and acceptance["logical_positions"]==174 and acceptance["figures"]==9
-    assert read(ROOT/"formal"/"batch_end.json")["outcome"]=="FINISHED"
+    closure=read(ROOT/"formal"/"batch_end.json")
+    assert closure["outcome"]=="FINISHED"
     paths=[]
     for name,h in acceptance["artifacts"].items():
         p=(ROOT/name).resolve()
@@ -38,6 +39,15 @@ def verify():
     with (ROOT/"results"/"logical_positions.csv").open(encoding="utf8",newline="") as f:
         logical=list(csv.DictReader(f))
     assert len(logical)==174 and len({r["id"] for r in logical})==165 and sum(r["reused"]=="1" for r in logical)==9
+    with (ROOT/"results"/"execution_attempts.csv").open(encoding="utf8",newline="") as f:
+        attempts=list(csv.DictReader(f))
+    assert len(attempts)==acceptance["physical_attempts"]==closure.get("physical_attempts_including_interrupted",165)
+    assert len({(r["id"],r["attempt"]) for r in attempts})==len(attempts)
+    counted=[r for r in attempts if r["used_in_comparison"]=="1"]
+    assert len(counted)==165 and {r["id"] for r in counted}=={r["id"] for r in logical}
+    incomplete=[r for r in attempts if r["used_in_comparison"]=="0"]
+    assert {r["id"] for r in incomplete}==set(closure.get("originally_interrupted",[]))
+    assert all(r["status"]=="INTERRUPTED" and r["attempt"]=="1" and r["charged_s"]=="" for r in incomplete)
     for i in range(1,10):
         figs=ROOT/"results"/"figures"
         svg,=figs.glob(f"{i:02}_*.svg")

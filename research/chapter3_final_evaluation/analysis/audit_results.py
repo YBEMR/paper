@@ -64,6 +64,45 @@ def verify_final(folder,res,p):
     assert abs(sum(final[n] for n in ("activity","residency","switch","temperature","public"))-final["J"])<1e-8
 
 
+def audit_attempts(jobs, subject):
+    """Account for every launch, including original attempts without a closing receipt."""
+    history = OUT / "interruption_01"
+    prior = read(history / "before.json") if history.exists() else {}
+    interrupted = prior.get("interrupted", {})
+    done = prior.get("completed_receipt_sha256", {})
+    rows = []
+    if prior:
+        assert prior["subject"] == subject
+        assert set(done).isdisjoint(prior["pending"])
+        assert set(done) | set(prior["pending"]) == {j["id"] for j in jobs}
+        assert set(interrupted).issubset(prior["pending"])
+        for case, files in prior["original_pool_digests"].items():
+            folder = OUT / "pools" / case
+            assert all(hashlib.sha256((folder / n).read_bytes()).hexdigest() == digest for n, digest in files.items())
+    for job in jobs:
+        name = job["id"]
+        if name in interrupted:
+            previous = interrupted[name]
+            folder = history / "original_cells" / name
+            actual = {p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in folder.rglob("*") if p.is_file()}
+            assert actual == previous["files"]
+            start = read(folder / "start.json")
+            assert start["subject"] == subject and all(start[k] == v for k, v in job.items())
+            rows.append(dict(**job, attempt=1, status="INTERRUPTED", used_in_comparison=0,
+                             started=start["utc"], ended=None, charged_s=None, pool_charge_s=start["prior_charge_s"],
+                             observed_charged_lower_s=previous["last_observed_charged_s"]))
+        path = OUT / "cells" / name / "receipt.json"
+        r = read(path)
+        if name in done:
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == done[name]
+        rows.append(dict(**job, attempt=2 if name in interrupted else 1, status=r["status"], used_in_comparison=1,
+                         started=r["utc"], ended=r["ended"], charged_s=r["charged_s"],
+                         pool_charge_s=r["prior_charge_s"], observed_charged_lower_s=None))
+    assert len(rows) == read(OUT / "batch_end.json").get("physical_attempts_including_interrupted", len(jobs))
+    save("execution_attempts.csv", rows)
+
+
 def collect(require_end=True):
     cases={c:checked_problem(c) for c in CASES}
     lock=read(ROOT/"execution_lock.json")
@@ -134,6 +173,8 @@ def collect(require_end=True):
             row["SAFE_J"]=fin["J"]
     if require_end and any(r["receipt"] in ("NOT_STARTED","OPEN") for r in records):
         raise RuntimeError("Batch closure and per-cell receipt set disagree")
+    if require_end:
+        audit_attempts(lock["roster"], subject)
     by={(r["case"],r["method"],r["mode"],r["seed"]):r for r in records}
     saved_init=defaultdict(set)
     for r in records:

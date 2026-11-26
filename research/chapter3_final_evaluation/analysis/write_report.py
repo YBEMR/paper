@@ -34,12 +34,27 @@ def main():
     ncomplete=sum(records.receipt=="COMPLETE")
     nsafe=sum(main.status=="SAFE")
     docs=["# 第三章正式实验报告",
-        f"六个工况、三个固定种子共登记 165 次独立执行。{ncomplete} 次收回完整运行回执，126 个主比较位置中有 {nsafe} 个通过原连续认证并符合计时协议的 SAFE 终点。热实验中的九个 T3 位置各引用同一工况与种子的 Proposed 执行。",
+        f"六个工况、三个固定种子共登记 165 个运行单元。{ncomplete} 个单元收回完整运行回执，126 个主比较位置中有 {nsafe} 个通过原连续认证并符合计时协议的 SAFE 终点。热实验中的九个 T3 位置各引用同一工况与种子的 Proposed 执行。",
         "## 整体竞争力",
         "各格给出三个种子的完整 SAFE 能耗中位数、范围及有效数，单位为 J。有限种子的观测用于描述本批次表现。",
         md(["方法",*CASES],[[m,*[span(main[(main.case==c)&(main.method==m)].SAFE_J,5) for c in CASES]] for m in MAIN]),
         "节能率按同工况、同种子的完整 SAFE 排程配对计算，分母为基线能耗。正值表示 Proposed 耗能较低。下表单位为 %。",
         md(["基线",*CASES],[[m,*[span(pairs[(pairs.case==c)&(pairs.baseline==m)].savings_pct,3) for c in CASES]] for m in MAIN[:-1]])]
+    attempts = pd.read_csv(RESULTS / "execution_attempts.csv")
+    interrupted = attempts[attempts.status == "INTERRUPTED"]
+    if len(interrupted):
+        lost = interrupted.observed_charged_lower_s.sum()
+        docs.insert(2, f"本批共启动 {len(attempts)} 次。D1 种子 101 的 {len(interrupted)} 个单元在首次运行时中断，"
+                    f"已有 61 个完成回执。按统一恢复规则，这 6 个单元从原候选池重新运行，随后执行尚未启动的 98 个单元。"
+                    f"中断日志合计可确认至少 {lost:.1f} 秒已计费时间，包含各单元分摊的原构造时间，实际终止时刻未知。"
+                    f"每个登记单元在比较表占一个位置。首次日志、补跑标记和额外耗时见[逐次运行记录](execution_attempts.csv)。")
+    ga=pairs[pairs.baseline=="GA"].verdict.value_counts()
+    ab=pairs[pairs.baseline=="AB"].verdict.value_counts()
+    docs.insert(docs.index("## 整体竞争力")+1,
+        f"按同工况、同种子的认证区间比较，Proposed 相对 GA 有 {ga.get('strict_win',0)} 次能耗更低、"
+        f"{ga.get('strict_loss',0)} 次更高、{ga.get('same_plan',0)} 次排程完全相同。相对普通邻域 AB，"
+        f"对应为 {ab.get('strict_win',0)} 次更低、{ab.get('strict_loss',0)} 次更高、{ab.get('same_plan',0)} 次相同。"
+        "GA 用于衡量与全配置基线的整体竞争力，AB 用于衡量引入关键区间反馈后的变化。")
     for c in CASES:
         d=main[(main.case==c)&(main.status=="SAFE")].groupby("method").SAFE_J.median()
         if len(d):
@@ -60,6 +75,9 @@ def main():
     if len(matched):
         with_extra=matched[matched.extra.notna()]
         docs.append(f"其中 {len(with_extra)} 个匹配轮次实际改变了 AB 邻域之外的补偿请求。{int(with_extra.strict_pro.sum())} 个这样的轮次取得了认证区间严格分离的额外节能。")
+        if len(with_extra):
+            docs.append(md(["工况","种子","配置轮次（从 1 起）","AB 邻域外实际改动的请求","AB 减 Proposed（mJ）"],
+                [[r.case,r.seed,r.turn+1,r.extra,fmt(r.AB_minus_Pro_mJ,3)] for r in with_extra.itertuples()]))
     if len(actual):
         cross=actual[actual.crosses_release_scene==1]
         docs.append(f"{len(cross)} 条实际补偿记录的请求与至少一个目标请求分属不同释放场景。逐项数据包括实际源设备释放的运行时间、目标设备增加的时间，以及虚拟超期缺口。[实际补偿记录](realized_compensators.csv)")
@@ -79,6 +97,7 @@ def main():
     same=0
     same_cfg=0
     compare=0
+    paired_modes={m:[] for m in ("T0","T1","T2")}
     from audit_results import plan_for,OUT
     for c in THERMAL:
         for seed in (101,102,103):
@@ -86,13 +105,32 @@ def main():
             if d.plan.notna().all() and all(d.receipt=="COMPLETE"):
                 compare+=1
                 same+=int(d.plan.nunique()==1)
-                cfgs=set()
-                for _,x in d.iterrows():
+                cfgs={}
+                for mode,x in d.iterrows():
                     pl=plan_for(OUT/"cells"/x.id/"evidence",x.plan)
-                    cfgs.add(tuple(a[:2] for a in pl[0][1::3]))
-                same_cfg+=int(len(cfgs)==1)
+                    cfgs[mode]=tuple(a[:2] for a in pl[0][1::3])
+                same_cfg+=int(len(set(cfgs.values()))==1)
+                ref=d.loc["T3"]
+                for mode,observations in paired_modes.items():
+                    alt=d.loc[mode]
+                    if alt.status==ref.status=="SAFE":
+                        observations.append(dict(same_config=cfgs[mode]==cfgs["T3"],same_plan=alt.plan==ref.plan,
+                            delta_mJ=1000*(alt.actual_J-ref.actual_J),alt_lower=alt.actual_hi<ref.actual_lo,
+                            t3_lower=ref.actual_hi<alt.actual_lo))
     t2=th[th["mode"]=="T2"]
     docs.append(f"在四种模式均取得完整终点的 {compare} 组种子配对中，{same_cfg} 组最终主阶段配置完全一致，{same} 组完整排程 SHA 也完全一致。T2 有 {sum((t2.selected_status=='SAFE')&(t2.actual_status=='HOT'))} 个最终输出被连续认证判为 HOT。仅凭没有 HOT 的有限样本无法估计其他环境的误判率。")
+    mode_rows=[]
+    for mode,obs in paired_modes.items():
+        mode_rows.append([mode,len(obs),sum(x["same_config"] for x in obs),sum(x["same_plan"] for x in obs),
+            fmt(pd.Series([x["delta_mJ"] for x in obs],dtype=float).median(),3),sum(x["alt_lower"] for x in obs),
+            sum(x["t3_lower"] for x in obs)])
+    docs.extend(["下表在相同工况和种子内，将各模式输出与 T3 配对。能耗差为该模式减 T3，均取最终连续认证能耗。只有两个认证区间严格分离时，才记为一方更低。固定排程复评可直接量出评价规则的影响。各模式独立搜索的终点差异还包含在墙钟预算内实际探索的候选和轮数。",
+        md(["模式","SAFE 配对数","主配置相同","完整排程相同","能耗差中位数（mJ）","该模式更低","T3 更低"],mode_rows)])
+    safe_peaks=th.loc[th.status=="SAFE","peak_hi"].dropna()
+    if len(safe_peaks)==len(th):
+        docs.append(f"本批 {len(th)} 个热模式输出的连续峰温上界范围为 {safe_peaks.min():.2f}–{safe_peaks.max():.2f} °C，"
+                    f"距离 80 °C 限值至少 {80-safe_peaks.max():.2f} °C。这些工况可以检验温度修正对能耗评价和搜索路径的影响，"
+                    "硬温限拦截高温终点的作用仍缺少直接观测。")
     docs.extend(["## 适用边界与解质量",
         "六个实例逐一验证 G1 温度屏障、温度斜率、初始平衡和忙闲功耗差，使用全物理域解析下界 L。U 是主比较最佳 SAFE 排程的认证上端。(U−L)/U 给出相对该方案仍可能节省的比例上限。",
         md(["工况","L（J）","U（J）","U−L（J）","差距上限（%）"],[[r.case,fmt(r.lower_J,6),fmt(r.best_SAFE_upper_J,6),fmt(r.absolute_gap_J,6),fmt(r.gap_pct_of_upper,3)] for r in quality.itertuples()]),

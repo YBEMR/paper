@@ -54,9 +54,9 @@ def main():
     valid=df.loc[df.status=="SAFE"].copy()
     paired=pd.read_csv(RESULTS/"paired_savings.csv")
     summary=(df.groupby(["case","method"],sort=False)["SAFE_J"].agg(["count","median","min","max"]).reset_index())
-    summary.to_csv(RESULTS/"main_summary.csv",index=False)
+    summary.to_csv(RESULTS/"main_summary.csv",index=False,lineterminator="\n")
     (paired.groupby(["case","baseline"],sort=False)["savings_pct"].agg(["count","median","min","max"])
-       .reset_index().to_csv(RESULTS/"paired_summary.csv",index=False))
+       .reset_index().to_csv(RESULTS/"paired_summary.csv",index=False,lineterminator="\n"))
     for which,data,methods,colname,measure,labels in [
         ("01_safe_energy",df,M,"method","SAFE_J","完整 SAFE 能耗（J）"),
         ("02_paired_savings",paired,M[:-1],"baseline","savings_pct","配对节能率（%）")]:
@@ -178,7 +178,7 @@ def main():
     for a in (ax,bx):
         a.set_yticks(range(6),CASES)
         a.invert_yaxis()
-    ax.legend(handles=[Line2D([],[],marker="|",color="#354b5c",ls="",label="全域下界"),Line2D([],[],marker="o",color="#206b68",ls="",label="最佳 SAFE 上端")],loc="lower right",frameon=False)
+    fig.legend(handles=[Line2D([],[],marker="|",color="#354b5c",ls="",label="全域下界"),Line2D([],[],marker="o",color="#206b68",ls="",label="最佳 SAFE 上端")],loc="outside upper center",ncol=2,frameon=False)
     ax.set_xlabel("完整能耗（J）")
     bx.set_xlabel("差距占最佳 SAFE 上端（%）")
     export(fig,"09_quality",q)

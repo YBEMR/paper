@@ -2,6 +2,8 @@
 
 更新：2026-11-27。
 
+**M1-i 泛化与热压力验证已完成。** 35°C 的 12 条新流上，60 秒时 NT 和 ZQ-Beam 均 12/12 SAFE，NC 为 10/12，C2 为 11/12。NT 对 NC 在共同 SAFE 的 10 条上平均节能 0.960%，对 C2 的 11 条为 2.127%，对 ZQ-Beam 的 12 条为 0.131%。两条流在 45°C 的 24 次运行均未得 SAFE。支持将有限预算下的跨场景主动热感知作为独立论文研究点，保留两个热准则的竞争定位。[中文报告](research/m1i_generalization/README.md) · [分组统计](research/m1i_generalization/groups.md) · [逐工况曲线](research/m1i_generalization/results.md)
+
 **M1-h 文献同核消融已完成。** 14 条公开次序、70 条重计时轨迹。60 秒 NT 对 NC 为 8 胜 6 平，平均节能 0.963%；对 ZQ-Beam 为 3 胜 7 平 4 负，平均节能 −0.145%。两种热感知评分均取得 14/14 SAFE。保留 NT 的候选定位，适用结论限于冻结 P1 和公开工况。[中文报告](research/m1h_common_beam/README.md) · [逐工况结果](research/m1h_common_beam/results.md)
 
 **M1-g 已完成。** 冻结 NT 在 14 条公开次序上均取得 SAFE。两种逐任务文献主适配均未排全；在预登记的事后释放顺序诊断中，Li 恢复 1 条。60 秒 NT 对原始 C2 为 11 胜 3 负，平均节能 1.292%。建议保留 NT，并将方法贡献限定于异步期限、跨窗热状态与联合容量分配的 P1 场景。[中文报告](research/m1g_literature_comparison/README.md) · [逐工况数据与曲线](research/m1g_literature_comparison/results.md)

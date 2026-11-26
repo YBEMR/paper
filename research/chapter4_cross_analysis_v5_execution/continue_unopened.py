@@ -1,4 +1,4 @@
-"""Run unopened v5 cells with the original parent, worker, Q4 pools and budget."""
+"""Continue v5 cells with the original parent, worker, Q4 pools and budget."""
 import argparse
 import hashlib
 import json
@@ -28,7 +28,8 @@ def require(ok, detail):
         raise ValueError(detail)
 
 
-def main(repo, run, after_continuation_02=False):
+def main(repo, run, after_continuation_02=False, retry_interrupted=False):
+    require(not retry_interrupted or after_continuation_02, "retry mode requires both interruption records")
     repo, run = repo.resolve(), run.resolve()
     old = run / "restart_01/formal"
     dest = run / ("continuation_03" if after_continuation_02 else "continuation_02")
@@ -86,6 +87,8 @@ def main(repo, run, after_continuation_02=False):
         interrupted[second] = previous_cell
         first_unopened = 3
         prior_runs.append(previous)
+    remaining = rows[1:] if retry_interrupted else rows[first_unopened:]
+    retries = set(interrupted) if retry_interrupted else set()
     require(not formal.is_relative_to(repo) and not formal.is_relative_to(BUNDLE), "destination")
     dest.mkdir(exist_ok=False)
     formal.mkdir()
@@ -102,13 +105,19 @@ def main(repo, run, after_continuation_02=False):
     cross.write(dest / "continuation.json", dict(created=cross.utc(), original=str(old), runner_sha256=digest(Path(__file__)),
         original_freeze_sha256=digest(HERE / "freeze.json"), reused=complete, copied=copied,
         prior_attempts={name: dict(folder=str(folder), files=inventory(folder)) for name, folder in interrupted.items()},
-        retry_budget_s=0, new_cells=rows[first_unopened:], max_new_method_s=sum(r["budget_s"] for r in rows[first_unopened:]),
-        supervisor_pid=os.getpid(), policy="First attempts only; preserved original pool charges and paired CPU allocation."))
+        retry_budget_s=sum(row["budget_s"] for row in remaining if row["id"] in retries),
+        retry_ids=sorted(retries), new_cells=rows[first_unopened:], execution_order=[row["id"] for row in remaining],
+        max_new_method_s=sum(row["budget_s"] for row in remaining), supervisor_pid=os.getpid(),
+        policy="One attempt per listed cell, starting from Q4 with its original charge and paired CPU allocation."))
     records = [saved]
     cross.write(formal / "batch_progress.json", records)
-    for index, row in enumerate(rows[first_unopened:], first_unopened):
-        require(all(not (prior / "cells" / row["id"]).exists() for prior in prior_runs),
-                "another original attempt opened")
+    for index, row in enumerate(rows):
+        if row not in remaining:
+            continue
+        prior_cells = {prior / "cells" / row["id"] for prior in prior_runs if (prior / "cells" / row["id"]).exists()}
+        expected_prior = {interrupted[row["id"]]} if row["id"] in retries else set()
+        require(prior_cells == expected_prior and all(not (p / "receipt.json").exists() for p in prior_cells),
+                "prior attempt status changed: " + row["id"])
         cpu = cpus[(index // 2) % len(cpus)]
         print(cross.utc(), "START", row["id"], flush=True)
         receipt = batch.run_process("cell", row, formal / "cells" / row["id"], cpu, pools[row["case"]]["charged_s"], cross.PIN)
@@ -116,10 +125,16 @@ def main(repo, run, after_continuation_02=False):
         cross.write(formal / "batch_progress.json", records)
         print(cross.utc(), receipt["status"], row["id"], flush=True)
         require(receipt["status"] == "COMPLETE", "cell failed; retain evidence: " + row["id"])
-    cross.write(formal / "batch_end.json", dict(outcome="INCOMPLETE_INTERRUPTED_CELL", utc=cross.utc(),
-        completed_receipts=len(records), registered=len(rows), receipts=records, missing=list(interrupted)))
+    missing = [row["id"] for row in rows if row["id"] not in {r["id"] for r in records}]
+    cross.write(formal / "batch_end.json", dict(outcome="INCOMPLETE_INTERRUPTED_CELL" if missing else "FINISHED",
+        utc=cross.utc(), completed_receipts=len(records), registered=len(rows), receipts=records, missing=missing))
     from types import SimpleNamespace
-    audit.main(SimpleNamespace(repo=repo, run=formal, out=dest / "analysis_partial", ab_root=None))
+    analysis = dest / ("analysis_partial" if missing else "analysis")
+    audit.main(SimpleNamespace(repo=repo, run=formal, out=analysis, ab_root=None))
+    if not missing:
+        result = cross.read(analysis / "audit.json")
+        require((result["outcome"], result["audited_CD"], result["audited_AB_raw"], result["complete_pairs"]) ==
+                ("PASS", 24, 24, 12), "formal audit incomplete")
 
 
 if __name__ == "__main__":
@@ -128,5 +143,7 @@ if __name__ == "__main__":
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--after-continuation-02", action="store_true",
                         help="Skip the interrupted D1 C/102 as well as D1 D/101; start at D1 D/102.")
+    parser.add_argument("--retry-interrupted", action="store_true",
+                        help="Also retry D1 D/101 and C/102 once, starting fresh at Q4 under 900 s each.")
     args = parser.parse_args()
-    main(args.repo, args.run, args.after_continuation_02)
+    main(args.repo, args.run, args.after_continuation_02, args.retry_interrupted)

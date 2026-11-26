@@ -91,7 +91,8 @@ def main():
               prior=pro["before"]["plan"],prior_J=pro["before"]["J"],AB=ab["after"]["plan"],AB_J=ab["after"]["J"],
               Proposed=pro["after"]["plan"],Proposed_J=pro["after"]["J"],scope_each=12,
               ab_solver=ab["solver"]["status"],proposed_solver=pro["solver"]["status"])])
-    plot(tasks,frequencies,p.horizon)
+    with plt.rc_context(plt.rcParamsDefault):
+        plot(tasks,frequencies,p.horizon)
 
 
 def plot(tasks,frequencies,horizon):

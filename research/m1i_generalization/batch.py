@@ -25,9 +25,9 @@ def lane(index,core):
     assert all(os.environ[k]=="1" for k in THREADS)
     work=WORK/"batch"/f"lane{index}"
     os.environ["M1G_RAW"]=str(work/"warm-runtime")
+    from archive import archive_run
     from adapter import e,flow,template
     from runner import timed_run
-    from archive import archive_run
     import numba,numpy,scipy
     from scipy.linalg import expm
     verify()

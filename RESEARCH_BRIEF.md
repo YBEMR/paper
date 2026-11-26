@@ -2,6 +2,8 @@
 
 更新：2026-11-27。
 
+**M1-h 文献同核消融已完成。** 14 条公开次序、70 条重计时轨迹。60 秒 NT 对 NC 为 8 胜 6 平，平均节能 0.963%；对 ZQ-Beam 为 3 胜 7 平 4 负，平均节能 −0.145%。两种热感知评分均取得 14/14 SAFE。保留 NT 的候选定位，适用结论限于冻结 P1 和公开工况。[中文报告](research/m1h_common_beam/README.md) · [逐工况结果](research/m1h_common_beam/results.md)
+
 **M1-g 已完成。** 冻结 NT 在 14 条公开次序上均取得 SAFE。两种逐任务文献主适配均未排全；在预登记的事后释放顺序诊断中，Li 恢复 1 条。60 秒 NT 对原始 C2 为 11 胜 3 负，平均节能 1.292%。建议保留 NT，并将方法贡献限定于异步期限、跨窗热状态与联合容量分配的 P1 场景。[中文报告](research/m1g_literature_comparison/README.md) · [逐工况数据与曲线](research/m1g_literature_comparison/results.md)
 
 以下为此前的状态记录。

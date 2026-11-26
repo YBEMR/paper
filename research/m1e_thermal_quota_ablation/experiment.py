@@ -116,7 +116,8 @@ def expand(c, j, parents, method, start, deadline, log):
                     if rank_thermal:
                         risk = peak if final else max(peak, max(c.propagate(temp, means[:4].mean(axis=0), 1.)))
                 drain = max(max(ledger[2]), max(ledger[6]+c.args[4][:len(cfg)]))
-                state = dict(config=cfg, id=key, f=ledger[2], k=ledger[3], temperature=temp,
+                state = dict(config=cfg, id=key, f=tuple(map(int, ledger[2])),
+                             k=tuple(map(int, ledger[3])), temperature=temp,
                              peak=peak, risk=risk, energy=energy, drain=drain, slack=int(ledger[-1]),
                              action=action, parent=parent["id"])
                 pool[key] = state

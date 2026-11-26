@@ -195,4 +195,3 @@ def standalone(case,method,dest):
                 stages=calls,final_status=calls[-1]["status"] if calls else "NO_CONSTRUCTION")
     e.p1.put(dest/"standalone"/case.label/(method+".json"),result)
     return result
-

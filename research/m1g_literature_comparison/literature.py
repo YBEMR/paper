@@ -276,4 +276,3 @@ def lft(p,book,stats):
             break
         if not accepted:
             book.add(i,u,k,t)
-

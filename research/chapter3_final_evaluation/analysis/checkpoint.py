@@ -23,7 +23,7 @@ def checkpoint(case):
             if res["final"]:
                 verify_final(f,res,p)
                 row["plan"]=res["final"]["plan"]
-                if (res["status"]=="SAFE" and res["elapsed_s"]<=job["budget_s"] and
+                if (res["status"]=="SAFE" and receipt["charged_s"]<=job["budget_s"] and res["elapsed_s"]<=job["budget_s"] and
                         res["post"]["elapsed_s"]<=.2*job["budget_s"]):
                     row["SAFE_J"]=res["final"]["J"]
                 row["initial_J"]=res["initial"]["J"] if res["initial"] else ""

@@ -92,6 +92,8 @@ def collect(require_end=True):
         row.update(status=res["status"],actual_status=res["status"],post_s=res["post"]["elapsed_s"],
                    worker_elapsed_s=res["elapsed_s"],calls=res["assessments"],post_rounds=res["post"]["rounds"])
         flags=[]
+        if receipt["charged_s"]>job["budget_s"]:
+            flags.append("WALL_OVERRUN")
         if res["elapsed_s"]>job["budget_s"]:
             flags.append("COMPUTE_OVERRUN")
         if row["post_s"]>job["budget_s"]*.2:

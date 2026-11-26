@@ -1,4 +1,4 @@
-"""Continue the 22 never-opened v5 cells using the frozen parent, worker and original pool charges."""
+"""Run unopened v5 cells with the original parent, worker, Q4 pools and budget."""
 import argparse
 import hashlib
 import json
@@ -28,10 +28,10 @@ def require(ok, detail):
         raise ValueError(detail)
 
 
-def main(repo, run):
+def main(repo, run, after_continuation_02=False):
     repo, run = repo.resolve(), run.resolve()
     old = run / "restart_01/formal"
-    dest = run / "continuation_02"
+    dest = run / ("continuation_03" if after_continuation_02 else "continuation_02")
     formal = dest / "formal"
     gate_path = run / "smoke/smoke_gate.json"
     freeze = cross.read(HERE / "freeze.json")
@@ -68,6 +68,24 @@ def main(repo, run):
     require(cross.read(old / "batch_progress.json") == [saved], "reused receipt")
     audit.audit_cell(old / "cells" / complete, "D1", "AB", 101, ids["D1", "Q4"], audit.model_for(repo, "D1"),
                      expected_charge=pools["D1"]["charged_s"])
+    first_unopened = 2
+    prior_runs = [old]
+    interrupted = {partial: old / "cells" / partial}
+    if after_continuation_02:
+        previous = run / "continuation_02/formal"
+        second = rows[2]["id"]
+        require(sorted(p.name for p in (previous / "cells").iterdir()) == sorted([complete, second]),
+                "continuation_02 advanced; inspect receipts")
+        require(cross.read(previous / "batch_progress.json") == [saved] and
+                not (previous / "batch_end.json").exists(), "continuation_02 closure changed")
+        previous_cell = previous / "cells" / second
+        opened = cross.read(previous_cell / "start.json")
+        require(all(opened[k] == v for k, v in rows[2].items()) and opened["subject"] == cross.PIN and
+                not (previous_cell / "receipt.json").exists() and not (previous_cell / "result.json").exists(),
+                "second interruption identity changed")
+        interrupted[second] = previous_cell
+        first_unopened = 3
+        prior_runs.append(previous)
     require(not formal.is_relative_to(repo) and not formal.is_relative_to(BUNDLE), "destination")
     dest.mkdir(exist_ok=False)
     formal.mkdir()
@@ -81,15 +99,16 @@ def main(repo, run):
     for name in ("check.json", "pool_receipts.json", "batch_start.json"):
         shutil.copyfile(old / name, formal / name)
         require(digest(old / name) == digest(formal / name), "copy differs: " + name)
-    old_partial = inventory(old / "cells" / partial)
     cross.write(dest / "continuation.json", dict(created=cross.utc(), original=str(old), runner_sha256=digest(Path(__file__)),
         original_freeze_sha256=digest(HERE / "freeze.json"), reused=complete, copied=copied,
-        interrupted=partial, interrupted_files=old_partial, retry_budget_s=0, new_cells=rows[2:],
-        max_new_method_s=22 * 900, supervisor_pid=os.getpid(), policy="First attempts only; preserved original pool charges and paired CPU allocation."))
+        prior_attempts={name: dict(folder=str(folder), files=inventory(folder)) for name, folder in interrupted.items()},
+        retry_budget_s=0, new_cells=rows[first_unopened:], max_new_method_s=sum(r["budget_s"] for r in rows[first_unopened:]),
+        supervisor_pid=os.getpid(), policy="First attempts only; preserved original pool charges and paired CPU allocation."))
     records = [saved]
     cross.write(formal / "batch_progress.json", records)
-    for index, row in enumerate(rows[2:], 2):
-        require(not (old / "cells" / row["id"]).exists(), "another original attempt opened")
+    for index, row in enumerate(rows[first_unopened:], first_unopened):
+        require(all(not (prior / "cells" / row["id"]).exists() for prior in prior_runs),
+                "another original attempt opened")
         cpu = cpus[(index // 2) % len(cpus)]
         print(cross.utc(), "START", row["id"], flush=True)
         receipt = batch.run_process("cell", row, formal / "cells" / row["id"], cpu, pools[row["case"]]["charged_s"], cross.PIN)
@@ -98,7 +117,7 @@ def main(repo, run):
         print(cross.utc(), receipt["status"], row["id"], flush=True)
         require(receipt["status"] == "COMPLETE", "cell failed; retain evidence: " + row["id"])
     cross.write(formal / "batch_end.json", dict(outcome="INCOMPLETE_INTERRUPTED_CELL", utc=cross.utc(),
-        completed_receipts=len(records), registered=len(rows), receipts=records, missing=[partial]))
+        completed_receipts=len(records), registered=len(rows), receipts=records, missing=list(interrupted)))
     from types import SimpleNamespace
     audit.main(SimpleNamespace(repo=repo, run=formal, out=dest / "analysis_partial", ab_root=None))
 
@@ -107,5 +126,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("--after-continuation-02", action="store_true",
+                        help="Skip the interrupted D1 C/102 as well as D1 D/101; start at D1 D/102.")
     args = parser.parse_args()
-    main(args.repo, args.run)
+    main(args.repo, args.run, args.after_continuation_02)

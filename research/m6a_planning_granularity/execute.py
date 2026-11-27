@@ -31,7 +31,8 @@ def bounded(name,limit,fn):
 
 def gate():
     global study
-    import study
+    import granularity_runtime as study
+    sys.path.insert(0,str(root))
     import precheck
     precheck.run()
     save(archive/"machine.json",dict(single_thread=True,affinity=sorted(os.sched_getaffinity(0)),
@@ -40,7 +41,7 @@ def gate():
 if __name__=="__main__":
     cores=sorted(os.sched_getaffinity(0))
     os.sched_setaffinity(0,{cores[0]})
-    bounded("preflight",180,gate)
+    bounded("preflight",179.97,gate)
     import search_batch
     search_batch.orig_cores=cores
     print("ALL PREFLIGHT CHECKS PASSED",flush=True)

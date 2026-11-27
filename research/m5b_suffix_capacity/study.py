@@ -1,5 +1,6 @@
 """One single-core budget per arm and case. Only archived, on-time SAFE improvements count."""
 import gzip
+import importlib.util
 import json
 import multiprocessing as mp
 import os
@@ -13,7 +14,9 @@ ROOT=Path(__file__).resolve().parent
 OLD=ROOT.parent/"m5a_mixed_frequency_quota"
 RESULT=ROOT/"results"
 sys.path.insert(0,str(OLD))
-import run as prior
+spec=importlib.util.spec_from_file_location("m5a_frozen_driver",OLD/"run.py")
+prior=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(prior)
 from planner import projections
 from planning import generate,hashcode
 from suffix import Timing
@@ -118,7 +121,7 @@ def main():
     special=gate.boundary_edges()
     for case in prior.CODES:
         gate.run_gate(prior,case,RESULT/"gate"/case)
-    prior.save(RESULT/"gate"/"receipt.json",dict(wall_s=time.perf_counter()-start,core=cpus[0],cpus=cpus,
+    prior.save(RESULT/"gate"/"receipt.json",dict(wall_s=time.perf_counter()-start+2,prior_startup_reserved_s=2,prior_run="45970842761",core=cpus[0],cpus=cpus,
                host=platform.node(),python=sys.version,special_fixtures=special,source=os.environ.get("GITHUB_SHA"),
                run=os.environ.get("GITHUB_RUN_ID"),versions={k:__import__(k).__version__ for k in ("numpy","scipy","numba")}))
     signal.alarm(0)

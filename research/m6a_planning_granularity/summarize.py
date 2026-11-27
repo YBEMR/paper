@@ -1,7 +1,7 @@
 """Read only completed online certificates. Separate offline replays retain their own labels."""
 import collections
 import itertools
-from study import *
+from granularity_runtime import *
 
 def rows(path, fast=False):
     try:
@@ -17,7 +17,7 @@ def rows(path, fast=False):
 def table(path, rows):
     if rows:
         with path.open("w",encoding="utf8",newline="") as f:
-            w=csv.DictWriter(f,fieldnames=list(dict.fromkeys(k for r in rows for k in r)))
+            w=csv.DictWriter(f,lineterminator="\n",fieldnames=list(dict.fromkeys(k for r in rows for k in r)))
             w.writeheader()
             w.writerows(rows)
 

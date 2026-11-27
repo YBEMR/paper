@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 from attempt_inventory import attempts
+from recover_26300 import RECOVERY, validate_recovery, verified_receipts
 from release_continuation import group_name, interval_text, mechanism_summary
 from windows_26300 import CHECKPOINT, CHECKPOINT_SHA, STAGE, SUBJECT, audit, cross, digest, require
 
@@ -18,9 +19,10 @@ def evidence_archive(run, repo, out):
     codec.OUT, codec.DEST = run, out
     out.mkdir()
     groups = defaultdict(list)
-    for path in sorted((run / STAGE).rglob("*")):
-        if path.is_file():
-            groups[group_name(path.relative_to(run))].append(path)
+    for stage in (STAGE, RECOVERY):
+        for path in sorted((run / stage).rglob("*")):
+            if path.is_file():
+                groups[group_name(path.relative_to(run))].append(path)
     manifest = {}
     for group, files in sorted(groups.items()):
         manifest[group] = codec.pack(group, files)
@@ -101,6 +103,13 @@ def report(out, state, pairs, physical):
     lines += ["", "每个正式单元的 900 秒上限包括本版本该工况共享初解构造的实测用时。中断、预检和初解构造单独保留。离线核对使用已存储的计划、证书和每轮接受记录。", "",
               f"本批 {state['new_raw_files']} 个原始文件均经逐字节还原核对。"
               " [26300 分片清单](archive/manifest.json) · [26200 原始证据](../checkpoints/windows_26200/README.md) · [实际启动记录](attempts.csv) · [审计结果](audit.json)"]
+    if state["recovery_roster"]:
+        lines += ["", "## 中断与补测", "",
+                  "26300 原批次截止后，同时缺少结果和回执的位置按事先登记的规则单独补测。"
+                  + "原批次缺少终点 " + "、".join(state["pre_recovery_missing"]) + "。"
+                  + "补测获得正式终点 " + str(len(state["recovered"])) + " 个。",
+                  "", "补测前可用 " + str(state["pre_recovery_pairs"]) + " 对。"
+                  + "[补测前按工况汇总](paired_summary_before_recovery.csv) · [补测记录规则](../recovery_protocol.md)"]
     if state["missing"]:
         lines += ["", "尚缺完整终点的登记单元为 " + "、".join(state["missing"]) + "。"]
     (out / "README.md").write_text("\n".join(lines)+"\n", encoding="utf8", newline="\n")
@@ -139,6 +148,23 @@ def analyze(repo, run, out):
     actual_receipts = {p.parent.name:cross.read(p) for p in (new / "cells").glob("*/receipt.json")}
     require({r["id"]:r for r in end["receipts"]} == actual_receipts and end["completed"] == len(accepted)
             and set(end["missing"]) == new_ids - accepted, "Stage closure")
+    first_missing = set(end["missing"])
+    recovered = set()
+    retry_ids = set()
+    if (run / RECOVERY).exists():
+        retry, retry_reg = validate_recovery(run)
+        retry_ids = {r["id"] for r in retry_reg["roster"]}
+        retry_end = cross.read(retry / "batch_end.json")
+        retry_receipts = verified_receipts(retry, retry_reg)
+        recovered = {r["id"] for r in retry_receipts if r["status"] == "COMPLETE"}
+        retry_launches = attempts(run, formal_roots=(RECOVERY + "/formal",))
+        require(retry_ids <= first_missing and {r["cell"] for r in retry_launches} == retry_ids
+                and retry_end["receipts"] == retry_receipts and retry_end["registered"] == len(retry_ids)
+                and retry_end["completed"] == len(recovered) and set(retry_end["missing"]) == retry_ids - recovered,
+                "Recovery closure")
+        records.extend({**r, "windows_build": "26300"} for r in retry_launches)
+    missing = first_missing - recovered
+    accepted.update(recovered)
     ids, refs = cross.identities(), audit.read_e()
     inventory, pairs, mechanisms, matches, checkpoints = [], [], [], [], []
     out.mkdir()
@@ -153,8 +179,11 @@ def analyze(repo, run, out):
                 build = "26300" if current else "26200"
                 builds[arm] = build
                 base = (history / "formal") if ab else (new if current else old)
+                if not ab and key in recovered:
+                    base = retry
                 folder = base / "cells" / key
-                label = dict(case=case, seed=seed, arm=arm, windows_build=build)
+                label = dict(case=case, seed=seed, arm=arm, windows_build=build,
+                             source="historical" if ab else base.parent.name)
                 if current and key not in accepted:
                     inventory.append(dict(**label, status="MISSING_FINAL_RECEIPT"))
                     continue
@@ -178,18 +207,25 @@ def analyze(repo, run, out):
                                                 left_build=builds[left], right_build=builds[right], **match))
             if len(group) == 4:
                 tags = dict(case=case, seed=seed, A_build=builds["A"], B_build=builds["B"], C_build=builds["C"], D_build=builds["D"])
+                for arm, method in (("C","AB"), ("D","Proposed")):
+                    pos = f"{case}_{method}_T3_{seed}"
+                    tags[arm+"_source"] = RECOVERY if pos in recovered else (STAGE if pos in new_ids else "continuation_04")
                 arms = [group[arm] for arm in "ABCD"]
                 pairs.append(dict(**tags, **audit.compare_pair(*arms, refs[case])))
                 checkpoints.extend(checkpoint_rows(arms, tags))
-    for name, data in (("inventory",inventory),("paired",pairs),("paired_summary",summarize(pairs)),("round_mechanisms",mechanisms),
+    original_pairs = [r for r in pairs if RECOVERY not in (r["C_source"], r["D_source"])]
+    for name, data in (("inventory",inventory),("paired",pairs),("paired_summary",summarize(pairs)),
+                       ("paired_summary_before_recovery",summarize(original_pairs)),("round_mechanisms",mechanisms),
                        ("matched_rounds",matches),("common_checkpoints",checkpoints),("attempts",[{**r,"copies":json.dumps(r["copies"])} for r in records])):
         audit.table(out / (name+".csv"), data)
     n = sum(r["arm"] in ("C","D") and r["status"]=="AUDITED_SAFE" for r in inventory)
-    require(n == 14+len(accepted) and len(inventory)==48 and len(pairs) == sum(all(f"{c}_{m}_T3_{s}" not in end["missing"]
+    require(n == 14+len(accepted) and len(inventory)==48 and len(pairs) == sum(all(f"{c}_{m}_T3_{s}" not in missing
             for m in ("AB","Proposed")) for c in cross.CASES for s in cross.SEEDS), "Pair count mismatch")
     state = dict(outcome="ALL_ENDPOINTS_AUDITED_ACROSS_TWO_BUILDS" if n==24 else "INCOMPLETE", audited_CD=n, registered_CD=24,
                  historical_AB_raw=24, deterministic_E_cases=4, complete_pairs=len(pairs), old_CD=14, new_CD=len(accepted),
-                 missing=end["missing"], physical_attempts=len(records), new_raw_files=evidence_archive(run,repo,out/"archive"),
+                 missing=sorted(missing), pre_recovery_missing=sorted(first_missing), pre_recovery_pairs=len(original_pairs),
+                 recovered=sorted(recovered), recovery_roster=sorted(retry_ids), physical_attempts=len(records),
+                 new_raw_files=evidence_archive(run,repo,out/"archive"),
                  registration_sha256=digest(stage/"registration.json"), old_archive_commit=SUBJECT)
     cross.write(out / "audit.json", state)
     report(out,state,pairs,records)

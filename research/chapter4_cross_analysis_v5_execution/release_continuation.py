@@ -56,7 +56,7 @@ def interval_text(rows, key):
 
 
 def mechanism_summary(analysis, pairs, cases):
-    paired = {(r["case"], r["seed"]) for r in pairs}
+    paired = {(r["case"], str(r["seed"])) for r in pairs}
     rounds = [r for r in table(analysis / "round_mechanisms.csv") if (r["case"], r["seed"]) in paired]
     matches = [r for r in table(analysis / "matched_rounds.csv") if r["pair"] == "CD" and (r["case"], r["seed"]) in paired]
     lines = ["## 实际补偿与匹配轮次", "",

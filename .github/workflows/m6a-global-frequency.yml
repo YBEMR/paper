@@ -1,0 +1,87 @@
+name: M6a global frequency and mapping
+on:
+  push:
+    branches: [research/m6a-global-frequency-mapping]
+    paths: [research/m6a_global_frequency_mapping/START]
+permissions:
+  contents: write
+env:
+  U1_NT: ${{ github.workspace }}/nt
+  U1_THREE: ${{ github.workspace }}/unused
+  U1_FOUR: ${{ github.workspace }}/four
+  U1_OUT: ${{ github.workspace }}/scratch
+  M1G_RAW: ${{ github.workspace }}/warm
+  GEN: ${{ github.workspace }}/gen
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  NUMBA_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+jobs:
+  diagnostic:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m6a_global_frequency_mapping/
+            /research/m5b_suffix_capacity/archive/*.tar.gz
+            /research/m5b_suffix_capacity/archive/endpoints/
+            /research/u1_unified_diagnostic/interface.py
+            /research/u2_adaptive_groups/common_u2.py
+      - uses: actions/checkout@v4
+        with:
+          path: gen
+          ref: 85969e8ed78cbab4d693122819ebe866e0721bb7
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1i_generalization/data/repetitions.csv
+            /research/m1i_generalization/data/evidence/
+      - uses: actions/checkout@v4
+        with:
+          path: nt
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1*/*.py
+            /research/m1*/SHA256SUMS
+            /research/m1_transient_thermal_quota_20261126/frozen/
+            /research/m1_transient_thermal_quota_20261126/inputs/
+            /research/m1i_generalization/registration/
+      - uses: actions/checkout@v4
+        with:
+          path: four
+          ref: 96a13920a46f01b6a9710b88275d0ac08763db4b
+          persist-credentials: false
+          sparse-checkout: research/chapter4_cross_analysis_v5/formal_runner/v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 scipy==1.17.0 numba==0.63.1 psutil
+      - working-directory: driver/research/m6a_global_frequency_mapping
+        run: |
+          g++ -Wall -Wextra -O3 -std=c++17 -ffp-contract=off -fPIC -shared dp.cpp -o dp.so
+          python -Bu runner.py
+          python -Bu pack.py
+          (cd archive && sha256sum --quiet -c SHA256SUMS)
+      - working-directory: driver
+        run: |
+          dir=research/m6a_global_frequency_mapping/archive
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin research/m6a-global-frequency-mapping
+          test "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)"
+          while IFS= read -r -d '' f; do git add -- "$f"; done < <(find "$dir" -type f -print0)
+          git diff --cached --stat
+          git commit -m 'Archive certified four-flow, matched twelve-flow and single-remap global frequency results'
+          git push origin HEAD:refs/heads/research/m6a-global-frequency-mapping
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m6a-physical-evidence
+          path: driver/research/m6a_global_frequency_mapping/archive

@@ -16,7 +16,7 @@ def read(p):return json.loads(p.read_bytes())
 def write(name,rows):
     if not rows:return
     with (OUT/name).open("w",newline="") as f:
-        w=csv.DictWriter(f,fieldnames=list(dict.fromkeys(k for r in rows for k in r)));w.writeheader();w.writerows(rows)
+        w=csv.DictWriter(f,fieldnames=list(dict.fromkeys(k for r in rows for k in r)),lineterminator="\n");w.writeheader();w.writerows(rows)
 def lines(f):return [json.loads(s) for s in f.read_bytes().splitlines() if s.endswith(b"}")]
 def main():
     OUT.mkdir(exist_ok=True)
@@ -36,7 +36,7 @@ def main():
     assert len(plans)==len(certs)==budget["unique_physical"]
     # Read-only sufficient evidence of conservatism: current certified SAFE paths
     # whose own main-stage completion could not survive the uniform reserve.
-    base=R.parent
+    base=ROOT.parent
     reg=base/"m1i_generalization/registration"
     cfgdir=base/"m1_transient_thermal_quota_20261126/frozen/p1/config"
     duration={}

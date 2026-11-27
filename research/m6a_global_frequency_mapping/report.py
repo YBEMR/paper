@@ -66,6 +66,8 @@ def main():
     text+=table(["阶段","实耗核秒","上限"],[[k,f"{v:.3f}",lim] for (k,v),lim in zip(budget["by_stage"].items(),(300,960,2880,1440))]+[["总计",f"{budget['total']:.3f}",5580]])
     text += [f"单元回执状态 {dict(Counter(r['status'] for r in budget['receipts']))}。共归档 {audit['physical']} 份不同物理排程；{len(stats)} 次两设备递推尝试中，{len(mins)} 次使用额外预留，其中 {sum(x['outcome']=='SAFE' for x in mins)} 次得到完整 SAFE 证书。详细的修正前超期量、保守预留无路径、每层去重后状态数和耗时均可追溯。","",
         "逐工况完整能耗分项、证书界、开销见 [端点表](archive/endpoints.csv)。[双方逐流改善量](analysis/paired.csv) · [状态统计](analysis/dp_statistics.csv) · [改派提名](analysis/mapping_nominations.csv) · [同父四格结果](archive/witnesses.json) · [全档见证摘要](analysis/matched_witnesses.csv) · [完整排程索引](archive/physical_index.csv) · [预算回执](archive/budget.json) · [协议](PROTOCOL.md)。每个物理包内包含计划、连续证书及完整温度事件数组。开发性见证和十二流配对分别解释。",""]
+    environment=read(A/"environment.json")
+    text += [f"正式实验代码提交 `{environment['source']}`，运行编号 `{environment['run']}`。历史构造与预热口径见[原始起点匹配账本](archive/gate.json)，各单元回执保留机器、核心和本轮墙钟。",""]
     example=rows(B/"reserve_conservatism.csv")
     text += [f"对全部 {len(example)} 份不同 SAFE 排程直接读其原始时刻，有 {sum(int(r['excluded_requests'])>0 for r in example)} 份至少包含一个主阶段完成余量不足 13 tick 的请求。这些排程已被真实 CPU 队列和连续证书接受，说明统一预留确实会缩小搜索范围。见[逐排程预留核查](analysis/reserve_conservatism.csv)。",""]
     (R/"REPORT_zh.md").write_text("\n".join(text))

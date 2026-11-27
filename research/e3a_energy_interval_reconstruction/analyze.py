@@ -30,7 +30,7 @@ def compare_pairs(pool,certs):
         reversals=strict,largest=([largest[1],largest[2],largest[3],largest[0]] if largest else None))
 def main():
     RESULT.mkdir(exist_ok=True)
-    endrows=[];stage_rows=[];reversals=[];rankings=[];energy_rows=[];windows=[];mechanisms={}
+    endrows=[];stage_rows=[];reversals=[];rankings=[];energy_rows=[];windows=[];mechanisms={};accepted=[]
     pre=read(RUN/'preflight/receipt.json')
     budget=[dict(case='all',arm='preflight',budget_s=600,charged_s=pre['wall_s']+pre['historical_inventory_reserved_s'],wall_s=pre['wall_s'],reservation_s=pre['historical_inventory_reserved_s'])]
     gate=read(RUN/'gate.json')
@@ -69,6 +69,16 @@ def main():
             budget.append(dict(case=c,arm=arm,budget_s=receipt['budget_s'],charged_s=receipt['wall_s'],
                                wall_s=receipt['wall_s'],cpu_s=receipt['cpu_s'],single_cpu=receipt['core'][0],
                                local_calls=sum('solver' in r for r in allrows),max_local_s=max((r['solver']['local_wall_s'] for r in allrows if 'solver'in r),default=0)))
+            running=base
+            for row in allrows:
+                x=row.get('result',{})
+                if x.get('status')!='SAFE' or not improves(x,running):continue
+                accepted.append(dict(case=c,arm=arm,seq=row['seq'],wall_s=row['wall_s'],mode=row['kind'],
+                    region=row.get('region'),request_ids=row.get('requests'),before=running['plan'],after=x['plan'],
+                    saving_J=running['J']-x['J'],baseline_saving_J=base['J']-x['J'],
+                    reference_saving_J=running['E35']-x['E35'],correction_saving_J=running['temperature']-x['temperature']))
+                running=x
+            assert running['plan']==best['plan']
             baseline_plan=native_plan(folder/'physical/plans'/(base['plan']+'.json.gz'))
             final_plan=native_plan(folder/'physical/plans'/(best['plan']+'.json.gz'))
             changes=additions(p,baseline_plan,final_plan)
@@ -85,9 +95,11 @@ def main():
                 winners=[x for x in valid if improves(x,base)]
                 stage_rows.append(dict(case=c,arm=arm,mode=kind,attempts=len(bucket),timing_invalid=sum(r.get('result',{}).get('status')=='TIMING_INVALID' for r in bucket),
                     physical_returns=sum('result' in r and 'plan'in r['result'] for r in bucket),SAFE_calls=len(valid),
-                    unique_SAFE=len({x['plan'] for x in valid}),strictly_better_unique=len({x['plan'] for x in winners}),
+                    unique_SAFE=len({x['plan'] for x in valid}),nonseed_SAFE_unique=len({x['plan'] for x in valid}-{base['plan']}),strictly_better_unique=len({x['plan'] for x in winners}),
                     best_returned_J=min((x['J'] for x in valid),default=None),best_with_seed_J=min([base['J']]+[x['J'] for x in winners]),
                     solver_statuses=dict(collections.Counter(r['solver']['status'] for r in bucket if 'solver'in r))))
+            if arm!='diagnostic' and improves(best,base):
+                mechanisms[c+'_'+arm+'_end']=dict(original=base,winner=best,**changes)
             if arm=='diagnostic' and improves(best,base):
                 source=next(x for x in allrows if x.get('result',{}).get('plan')==best['plan'])
                 mechanisms[c+'_gain']=dict(source=source,region=rby[source['region']],original=base,winner=best,**changes,
@@ -101,5 +113,17 @@ def main():
                 assert [h for _,h,_ in probe_records]==[z['plan'] for z in pool if z['plan']]
     assert sum(r['charged_s'] for r in budget)<=6000
     for name,vals in [('endpoints',endrows),('stage_counts',stage_rows),('budget',budget),('reversals',reversals),('regions',windows),('probe_rankings',rankings),('energy',energy_rows)]:table(name+'.csv',vals)
+    table('accepted_moves.csv',accepted)
+    if gate['open']:
+        by={(r['case'],r['arm']):r for r in endrows}
+        contrasts=[]
+        for c in CASES:
+            for baseline,challenger in [('A','C'),('B','C'),('C','D')]:
+                a,b=by[c,baseline],by[c,challenger]
+                lo=a['energy_lo']-b['energy_hi'];hi=a['energy_hi']-b['energy_lo']
+                verdict='LOWER' if lo>0 else 'HIGHER' if hi<0 else 'IDENTICAL_PLAN' if a['best_plan']==b['best_plan'] else 'OVERLAPPING'
+                contrasts.append(dict(case=c,baseline=baseline,challenger=challenger,
+                                      saving_J=a['SAFE_J']-b['SAFE_J'],saving_lo_J=lo,saving_hi_J=hi,verdict=verdict))
+        table('contrasts.csv',contrasts)
     put(RESULT/'mechanisms.json',mechanisms)
 if __name__=='__main__':main()

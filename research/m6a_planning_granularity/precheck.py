@@ -1,6 +1,6 @@
 import tarfile
 from time import perf_counter
-from study import *
+from granularity_runtime import *
 
 def history(code):
     item=CASES[code]

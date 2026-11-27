@@ -9,9 +9,16 @@ import shutil
 import signal
 from collections import Counter
 from itertools import combinations
-import run as experiment
-from run import (ARC, OUT, OLD, CODES, setup, prior, study, failed_physical, read, save, sha,
-                 seed, splice, encode, Timing, Boundary, np)
+import importlib.util
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("m5c_experiment", Path(__file__).with_name("run.py"))
+experiment = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(experiment)
+ARC, OUT, OLD, CODES = experiment.ARC, experiment.OUT, experiment.OLD, experiment.CODES
+setup, prior, study = experiment.setup, experiment.prior, experiment.study
+read, save, sha = prior.read, prior.save, prior.sha
+seed, splice, encode = experiment.seed, experiment.splice, experiment.encode
+failed_physical, Timing, Boundary, np = experiment.failed_physical, experiment.Timing, experiment.Boundary, experiment.np
 import archive_results as frozen_archive
 
 

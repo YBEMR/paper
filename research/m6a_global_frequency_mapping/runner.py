@@ -6,7 +6,10 @@ import sys
 import time
 from pathlib import Path
 BOOT=time.perf_counter()
-import experiment as ex
+import importlib.util
+spec=importlib.util.spec_from_file_location("m6a_isolated_study",Path(__file__).with_name("experiment.py"))
+ex=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ex)
 from interface import read,save
 
 def call(fn,args,folder,cap,source=None):
@@ -28,7 +31,7 @@ def call(fn,args,folder,cap,source=None):
 def main():
     os.sched_setaffinity(0,{min(os.sched_getaffinity(0))})
     ex.RUN=ex.u2.stack()
-    overhead=time.perf_counter()-BOOT
+    overhead=time.perf_counter()-BOOT+2.0  # Includes the first import-only startup (no inputs were loaded).
     cap=300-overhead-5
     gt=call(ex.correctness,(),ex.OUT/"correctness",cap)
     assert (ex.OUT/"gate.json").is_file()

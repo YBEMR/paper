@@ -212,7 +212,10 @@ def screen(eng,flow,parent,folder,turn):
     return pools
 
 def counter(eng,flow,parent,folder,i,joint,tag):
-    only=both_counter(eng,flow,parent,folder,tag)
+    key=parent[2]["plan_sha256"]
+    if not hasattr(eng,"m6_counter"):eng.m6_counter={}
+    if key not in eng.m6_counter:eng.m6_counter[key]=both_counter(eng,flow,parent,folder,tag)
+    only=eng.m6_counter[key]
     c=list(parent[0]);src=c[i][0];out=[]
     for k in range(3 if src==2 else 10):
         c[i]=(5-src,k);cfg=tuple(c);ok,s,ref,_=timing(flow,cfg)

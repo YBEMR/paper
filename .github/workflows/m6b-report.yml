@@ -1,0 +1,54 @@
+name: Verify archived-pool diagnosis and publish Chinese report
+on:
+  push:
+    branches: [research/m6b-candidate-reoptimization]
+    paths: [research/m6b_candidate_reoptimization/report.py]
+permissions:
+  contents: write
+env:
+  U1_OUT: ${{ github.workspace }}/audit-tmp
+  GEN: ${{ github.workspace }}/unused-history
+  OPENBLAS_NUM_THREADS: '1'
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m6b_candidate_reoptimization/
+            /research/m6a_global_frequency_mapping/archive/endpoints.csv
+            /.github/workflows/m6b*.yml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5
+      - working-directory: research/m6b_candidate_reoptimization
+        run: |
+          (cd archive && sha256sum --quiet -c SHA256SUMS)
+          python -Bu analysis.py
+          python -Bu report.py
+          key=$(python -c "import csv;print(next(csv.DictReader(open('analysis/cells.csv')))['final_plan'])")
+          python restore.py "$key" "$RUNNER_TEMP/one-verified-plan"
+          sha256sum *.py *.md START analysis/* archive/SHA256SUMS ../../.github/workflows/m6b*.yml > SHA256SUMS
+          sha256sum --quiet -c SHA256SUMS
+      - run: |
+          dir=research/m6b_candidate_reoptimization
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin research/m6b-candidate-reoptimization
+          test "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)"
+          while IFS= read -r -d '' f; do git add -- "$f"; done < <(find "$dir/analysis" -type f -print0)
+          git add -- "$dir/SHA256SUMS" "$dir/REPORT_zh.md"
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'Publish Chinese decision report, complete-pool rankings, equal-budget gains and HOT-only witnesses'
+          git push origin HEAD:refs/heads/research/m6b-candidate-reoptimization
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m6b-complete-diagnosis
+          path: |
+            research/m6b_candidate_reoptimization/
+            .github/workflows/m6b*.yml

@@ -1,0 +1,72 @@
+name: M1-j one-time replacement
+on:
+  push:
+    branches: [research/m1j-replacement]
+    paths: [research/m1j_retention/replacement/START]
+permissions:
+  contents: read
+jobs:
+  timing:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [0, 1, 2, 3, 4, 5]
+    env:
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      NUMBA_NUM_THREADS: '1'
+      M1J_LANE: ${{ matrix.lane }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1*/**/*.py
+            /research/m1*/SHA256SUMS
+            /research/m1_transient_thermal_quota_20261126/inputs/
+            /research/m1_transient_thermal_quota_20261126/frozen/
+            /research/m1i_generalization/registration/
+            /research/m1j_retention/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install frozen numeric versions
+        run: python -m pip install numpy==2.3.5 scipy==1.17.0 numba==0.63.1 psutil pyyaml
+      - name: Run the registered lane once
+        working-directory: research/m1j_retention
+        run: python -Bu replacement_lane.py "$M1J_LANE"
+      - name: Preserve original records and complete certificates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1j-certificates-lane-${{ matrix.lane }}
+          path: |
+            research/m1j_retention/data/environment/
+            research/m1j_retention/data/runs/
+            research/m1j_retention/data/evidence/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+      - name: Preserve lossless event volumes
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1j-events-lane-${{ matrix.lane }}
+          path: research/m1j_retention/work/volumes/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Preserve incomplete archival state on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1j-recovery-lane-${{ matrix.lane }}
+          path: research/m1j_retention/work/
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0

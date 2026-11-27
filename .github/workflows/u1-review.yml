@@ -1,0 +1,41 @@
+name: U1 independent archived-evidence check
+on:
+  push:
+    branches: [research/u1-unified-diagnostic]
+    paths: [research/u1_unified_diagnostic/REVIEW]
+permissions:
+  contents: write
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          sparse-checkout: research/u1_unified_diagnostic
+      - uses: actions/checkout@v4
+        with:
+          path: nt
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          sparse-checkout: research/m1i_generalization/registration
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy matplotlib
+      - name: Reconstruct and verify all archived traces
+        run: U1_NT="$GITHUB_WORKSPACE/nt" python driver/research/u1_unified_diagnostic/review.py
+      - name: Publish verified tables and figure
+        working-directory: driver
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin research/u1-unified-diagnostic
+          test "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)"
+          d=research/u1_unified_diagnostic/results
+          for n in routes.csv improvements.csv changes.csv feedback.csv rounds.csv interfaces.csv pools.csv q4_rounds.csv seeds.csv review.json quality.png; do git add -- "$d/$n"; done
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'Validate U1 certificates and publish exact anytime curves and actual mechanism changes'
+          git push origin HEAD:refs/heads/research/u1-unified-diagnostic

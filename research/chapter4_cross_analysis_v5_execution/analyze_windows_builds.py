@@ -68,9 +68,26 @@ def summarize(pairs):
 
 
 def report(out, state, pairs, physical):
+    count = len(pairs)
+    wins = {key: sum(r["final_"+key+"_verdict"] == "A_HIGHER" for r in pairs)
+            for key in ("A_C", "B_D", "C_D")}
+    matches = [r for r in audit.csvread(out / "matched_rounds.csv") if r["pair"] == "CD"]
+    outside = [r for r in matches if r["realized_outside_ordinary"]]
+    exact = [r for r in outside if r["ordinary_solver"] == r["feedback_solver"] == "EXACT_REFERENCE"]
+    mechanism_note = [f"在 {len(matches)} 个同前态、同目标、同规模的 C/D 匹配轮次中，"
+                      f"反馈在 {len(outside)} 轮实际改动了普通邻域以外的补偿请求。"]
+    if exact:
+        r = exact[0]
+        mechanism_note.append(f"例如 {r['case']} 种子 {r['seed']} 第 {r['round']} 轮，两侧都精确完成各自邻域的参考目标搜索。"
+                              f"反馈改动了普通邻域以外的请求 {r['realized_outside_ordinary']}，"
+                              f"该轮普通邻域的轮末 SAFE 能耗减去反馈的轮末 SAFE 能耗为 {float(r['delta_mJ']):.4f} mJ。"
+                              "这项比较只覆盖该轮搜索的两个邻域。")
     lines = ["# 第四章 A–E 交叉验证", "",
              f"四个工况、三个种子共登记 24 个 C/D 单元。本次核实 {state['audited_CD']}/24 个 C/D 终点和 {len(pairs)}/12 对结果，另核实 24 个历史 A/B 终点与四个确定性 E 参照。", "",
              "A、B 采用第三章初解，C、D 采用第四章容量规划初解。A、C 使用普通邻域，B、D 使用关键区间反馈。E 使用第四章 ThermalUnion，每个工况复用一个经认证的终点。", "",
+             f"固定普通邻域后，换用第四章容量规划初解（Q4）在 {wins['A_C']}/{count} 个配对中降低了最终认证能耗。"
+             f"固定关键区间反馈后，换用 Q4 在 {wins['B_D']}/{count} 个配对中降低了最终认证能耗。"
+             f"从同一 Q4 初解出发，反馈在 {wins['C_D']}/{count} 个配对中优于普通邻域，收益大小随工况变化。", "",
              "## 同种子的最终能耗差", "",
              "单位为 mJ。各列为工况内有效配对的中位数及范围。正的 A−B 或 C−D 表示反馈方法更省电，负的 D−E 表示 D 更省电。", "",
              "| 工况 | 配对 | A−B | C−D | A−C | B−D | D−E |", "|---|---:|---:|---:|---:|---:|---:|"]
@@ -111,6 +128,7 @@ def report(out, state, pairs, physical):
               f"D 低于 E 的有 {de['B_HIGHER']} 对，高于 E 的有 {de['A_HIGHER']} 对，认证区间重叠 {de['INTERVAL_OVERLAP']} 对。", "",
               "[逐种子结果及认证区间](paired.csv) · [各工况的配置与最终交互差](paired_summary.csv) · [分版本终点与证书核对](inventory.csv)", "",
               *mechanism_summary(out, pairs, cross.CASES),
+              "".join(mechanism_note), "",
               "配置阶段按共同轮次和 30、60、120、300、600 秒检查点比较。在最后有记录的轮次之后，超出的时间检查点记为截尾。[共同检查点](common_checkpoints.csv) · [固定初解的目标与超期分层](../fixed_initial/README.md)", "",
               "## 计费与证据", ""]
     for build in ("26200", "26300"):

@@ -9,33 +9,34 @@ PAIRS = list(product(range(10),range(3)))
 OFFSETS = [(0,0)]+[(x,y) for k in (1,-1,2,-2) for x,y in ((k,0),(0,k),(k,-k))]
 
 @njit(cache=True)
-def timing(config, kinds, ready, deadlines, post_length, lengths, energy, rates, switch, horizon, boundary):
+def timing(config, kinds, ready, deadlines, post_length, lengths, threshold, horizon, boundary):
     n=len(config)
     finish=np.zeros(2,np.int64)
     levels=np.zeros(2,np.int64)
     ends=np.empty(n,np.int64)
-    cost=0
+    # Integer feature counts; exact frozen energy coefficients exceed 100 bits.
+    features=np.zeros(40,np.int64)
+    tail_features=np.zeros(40,np.int64)
     for i in range(n):
         u=int(config[i]>=10)
         level=int(config[i])-10*u
         old=levels[u]
         start=max(ready[i],finish[u]+5*(old!=level))
         gap=start-finish[u]
-        hold=rates[u,old]*gap+switch*(old!=level)
-        drop=rates[u,old]*5+switch*(1+(level!=0))
-        early=old>0 and gap>=5*(1+(level!=0)) and drop<hold
-        cost+=energy[kinds[i],u,level]+(drop if early else hold)
+        early=gap>=threshold[u,old,level]
+        features[13*kinds[i]+int(config[i])]+=1
+        features[26+10*u+old]+=5 if early else gap
+        features[39]+=1+(level!=0) if early else int(old!=level)
         finish[u]=start+lengths[kinds[i],u,level]
         ends[i]=finish[u]
         levels[u]=level
-    tail=0
     tail_late=0
     for u in range(2):
         old=levels[u]
         gap=horizon-finish[u]
-        hold=rates[u,old]*gap+switch*(old!=0)
-        drop=rates[u,old]*5+switch
-        tail+=min(hold,drop) if old>0 and gap>=5 else hold
+        early=gap>=threshold[u,old,0]
+        tail_features[26+10*u+old]+=5 if early else gap
+        tail_features[39]+=1 if early else int(old!=0)
         tail_late=max(tail_late,5*(old!=0)-gap)
     slack=10**9
     backlog=0
@@ -45,7 +46,7 @@ def timing(config, kinds, ready, deadlines, post_length, lengths, energy, rates,
         backlog+=int(post>boundary)
         slack=min(slack,deadlines[i]-post)
     late=max(0,-slack,tail_late,post-horizon)
-    return finish[0],finish[1],levels[0],levels[1],cost,tail,slack,backlog,post,late
+    return (finish[0],finish[1],levels[0],levels[1],slack,backlog,post,late),features,tail_features
 
 @dataclass(slots=True)
 class State:
@@ -66,15 +67,22 @@ class Builder:
         self.closed=False
         E=engine
         lengths=np.zeros((2,2,10),dtype=np.int64)
-        energy=np.zeros_like(lengths)
-        rates=np.zeros((2,10),dtype=np.int64)
+        coef=np.zeros(40,dtype=object)
+        threshold=np.full((2,10,10),2**50,dtype=np.int64)
         for i,kind in enumerate("AB"):
             for unit,level in [(u,k) for u,count in ((2,10),(3,3)) for k in range(count)]:
                 lengths[i,unit-2,level]=E.length[kind,unit,level]
-                energy[i,unit-2,level]=E.inc[kind,unit,level]
-                rates[unit-2,level]=E.rate[unit,level]
-        assert (int(np.max(energy))*E.n+int(np.max(rates))*2*E.p.horizon+2*E.n*E.sw)<2**63
-        self.args=(flow.kinds,np.array(E.a),np.array(E.D),np.array(E.q),lengths,energy,rates,E.sw,E.p.horizon)
+                idx=10*(unit-2)+level
+                coef[13*i+idx]=E.inc[kind,unit,level]
+                rate=E.rate[unit,level]
+                coef[26+idx]=rate
+                if level>0 and rate>0:
+                    for new in range(10):
+                        ticks=5+(E.sw*(1+int(new!=0)-int(level!=new)))//rate+1
+                        threshold[unit-2,level,new]=max(5*(1+int(new!=0)),ticks)
+        coef[39]=E.sw
+        self.coef=coef
+        self.args=(flow.kinds,np.array(E.a),np.array(E.D),np.array(E.q),lengths,threshold,E.p.horizon)
         self.types=[flow.kinds[ids] for ids in E.groups]
         self.counts=[tuple(int(sum(t==k)) for k in (0,1)) for t in self.types]
         self.root=State(b"",(0,)*10,())
@@ -100,7 +108,8 @@ class Builder:
                     ext=self.flow.extension(self.types[j],a,b,*pair,*q)
                     self.ext_cache[key]=ext
                 cfg=parent.code+ext
-                result=timing(np.frombuffer(cfg,np.uint8),*self.args,(j+1)*E.dur)
+                timing_row,cost,tail=timing(np.frombuffer(cfg,np.uint8),*self.args,(j+1)*E.dur)
+                result=(*timing_row[:4],int(cost@self.coef),int(tail@self.coef),*timing_row[4:])
                 if local:
                     self.replays+=1
                 yield State(cfg,result,parent.pairs+(pair,)),q,(dx,dy)
@@ -126,4 +135,3 @@ def unique(states):
     for v in states:
         by_code.setdefault(v.code,v)
     return list(by_code.values())
-

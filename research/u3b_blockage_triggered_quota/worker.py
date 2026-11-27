@@ -110,4 +110,3 @@ def main():
     ctx.store("finish",dict(wall_s=finished-start,clock=finished))
 if __name__=="__main__":
     main()
-

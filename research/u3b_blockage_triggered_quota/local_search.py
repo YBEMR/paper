@@ -78,7 +78,7 @@ def anchor_window(ctx,anchor):
         post=np.array([r["posts"][i]+b.e.q[i] for i in ids])
         slack=min(b.e.D[i]-post[h] for h,i in enumerate(ids))
         backlog=sum(v>(j+1)*b.e.dur for v in post)
-        energy=sum(b.args[5][b.flow.kinds[i],int(anchor.code[i]>=10),anchor.code[i]%10] for i in ids)
+        energy=sum(b.coef[13*b.flow.kinds[i]+anchor.code[i]] for i in ids)
         rows.append([int(slack),-int(backlog),-int(energy),j])
     return min(rows)[3],rows
 
@@ -114,4 +114,3 @@ def thermal_block(ctx,method,anchor,first_cert,trace):
         if b.closed:
             break
     return False
-

@@ -67,4 +67,3 @@ class Guidance:
     def predict(self,state):
         delta=self.activity(state)/(np.diff(self.edges)[:,None]/10000)-self.base_power
         return float(np.max(self.base_T+np.einsum("twij,wj->ti",self.K,delta)))
-

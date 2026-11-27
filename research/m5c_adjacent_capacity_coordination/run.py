@@ -1,6 +1,7 @@
 """One preregistered batch. The gate, each cell and the offline audit have separate clocks."""
 import csv
 import gzip
+import importlib.util
 import json
 import os
 import platform
@@ -19,8 +20,10 @@ OLD = ROOT.parent / "m5b_suffix_capacity"
 OUT = ROOT / "work"
 ARC = ROOT / "archive"
 sys.path.insert(0, str(OLD))
-import study
-from study import prior, failed_physical
+spec = importlib.util.spec_from_file_location("m5b_study", OLD / "study.py")
+study = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(study)
+prior, failed_physical = study.prior, study.failed_physical
 from planning import generate
 from suffix import Timing, Boundary
 from coordination import Space, Leg, scan, recipes
@@ -260,10 +263,10 @@ def lane(i):
 
 def main():
     os.sched_setaffinity(0,{CPUS[0]})
-    signal.alarm(max(1,115-int(time.perf_counter()-START)))
+    signal.alarm(max(1,112-int(time.perf_counter()-START)))
     setup()
     functional_gate()
-    save(ARC/"gate/receipt.json",dict(wall_s=time.perf_counter()-START+2, startup_allowance_s=2,
+    save(ARC/"gate/receipt.json",dict(wall_s=time.perf_counter()-START+5, startup_allowance_s=2, earlier_import_failure_reserved_s=3,
          cpu_s=time.process_time(),core=CPUS[0],host=platform.node(),run=os.getenv("GITHUB_RUN_ID"),
          source=os.getenv("GITHUB_SHA"),versions={k:__import__(k).__version__ for k in ["numpy","numba","scipy"]}))
     signal.alarm(0)

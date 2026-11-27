@@ -1,0 +1,121 @@
+name: NT planning window diagnostic
+on:
+  push:
+    branches: [research/m6a-planning-granularity]
+    paths: [research/m6a_planning_granularity/START]
+permissions:
+  contents: write
+concurrency:
+  group: m6a-planning-granularity-once
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      NUMBA_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_MAIN_FREE: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/m6a-planning-granularity
+          sparse-checkout: research/m6a_planning_granularity
+      - name: Bind immutable task source and publish run location
+        working-directory: research/m6a_planning_granularity
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test ! -e run-location.json
+          python -c 'import os,json; print(json.dumps(dict(run=os.environ["GITHUB_RUN_ID"],source=os.environ["GITHUB_SHA"])))' > run-location.json
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- run-location.json
+          git commit -m "登记规划窗口诊断的唯一执行来源"
+          git push origin HEAD:research/m6a-planning-granularity
+      - uses: actions/checkout@v4
+        with:
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          path: nt
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1*/*.py
+            /research/m1*/SHA256SUMS
+            /research/m1_transient_thermal_quota_20261126/frozen/
+            /research/m1_transient_thermal_quota_20261126/inputs/
+            /research/m1i_generalization/registration/cases.json
+            /research/m1i_generalization/registration/inputs/
+      - uses: actions/checkout@v4
+        with:
+          ref: 85969e8ed78cbab4d693122819ebe866e0721bb7
+          path: history
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1i_generalization/registration/source_hashes.json
+            /research/m1i_generalization/data/evidence/A02*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/A03*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/A06*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/B07*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/C10*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/C11*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/*/receipt.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install fixed numerical runtime and verify unmodified NT inputs
+        run: |
+          python -m pip install --disable-pip-version-check numpy==2.3.5 scipy==1.17.0 numba==0.63.1 psutil threadpoolctl orjson
+          export M6_NT="$PWD/nt" M6_HISTORY="$PWD/history"
+          python - <<'PY'
+          import json,pathlib,hashlib
+          m=pathlib.Path("history/research/m1i_generalization/registration/source_hashes.json")
+          H=lambda b: hashlib.sha256(b).hexdigest()
+          assert H(m.read_bytes())=="a62dadd4335d9c4461f7b4bb8a2b2a4f1c569bcc4d7772906c8570a4109420aa"
+          for p,h in json.loads(m.read_bytes()).items():
+              f=pathlib.Path("nt")/p
+              if f.exists(): assert H(f.read_bytes())==h,p
+          PY
+          git -C nt apply --check "$PWD/research/m6a_planning_granularity/adaptation.patch"
+          git -C nt apply "$PWD/research/m6a_planning_granularity/adaptation.patch"
+      - name: Gate, paired single-core runs and offline replay
+        shell: bash
+        run: |
+          export M6_NT="$PWD/nt" M6_HISTORY="$PWD/history" M1G_RAW="$RUNNER_TEMP/m6warm"
+          cd research/m6a_planning_granularity
+          mkdir -p archive
+          python -u execute.py 2>&1 | tee archive/execution.log
+      - name: Archive experiment evidence
+        if: always()
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m6a-planning-evidence
+          path: research/m6a_planning_granularity/archive
+          compression-level: 1
+          if-no-files-found: warn
+      - name: Publish receipts, results and evidence locator
+        if: always()
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        working-directory: research/m6a_planning_granularity
+        run: |
+          mkdir -p tables
+          python - <<'PY'
+          import os,json,shutil,pathlib
+          a=pathlib.Path("archive")
+          for pat in ("*.json","*.csv","execution.log","gate/*.json","formal/*/*/receipt.json"):
+              for p in a.glob(pat):
+                  dest=pathlib.Path("tables")/p.relative_to(a)
+                  dest.parent.mkdir(parents=True,exist_ok=True)
+                  shutil.copyfile(p,dest)
+          pathlib.Path("tables/evidence.json").write_text(json.dumps(dict(artifact=os.environ.get("ARTIFACT_URL"),run=os.environ["GITHUB_RUN_ID"],source=os.environ["GITHUB_SHA"])))
+          PY
+          git add -- tables
+          git diff --cached --check
+          git commit -m "归档规划粒度诊断实测回执、逐流截面与全量物理证据索引"
+          git push origin HEAD:research/m6a-planning-granularity
+

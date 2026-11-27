@@ -92,7 +92,7 @@ def main():
             for group,arm in modes:
                 p=ARCH/group/case/m/arm;rc=read(p/"receipt.json");records=lines(p/"mapping_events.jsonl.gz")
                 assert rc["status"] in ("CAP","NATURAL") and rc["wall_s"]<=rc["limit_s"]
-                charged=rc["wall_s"];budget.append(dict(stage=group,case=case,source=m,arm=arm,**rc))
+                charged=rc["wall_s"];budget.append(dict(stage=group,case=case,algorithm=m,arm=arm,**rc))
                 completed=[e for e in records if e["kind"]=="complete"]
                 starts=[e for e in records if e["kind"]=="start"];assert [e["mapping"] for e in starts]==noms[arm][:len(starts)]
                 assert [r["mapping"] for r in completed]==noms[arm][:len(completed)]
@@ -166,7 +166,7 @@ def main():
                         rawjoins.append(dict(case=case,source=m,call=row["call"],width=row["width"],rank=row["beam_rank"],time=row["first_s"],
                             historical_plan=row["plan"],historical_cfg=row["cfg"],mapping=k,historical_status=row["status"],historical_J=row["original_J"],
                             completed=r is not None,best_J=flat(r["best"]).get("J") if r else None,best_plan=flat(r["best"]).get("plan") if r else None))
-    resc=read(ARCH/"gate/receipt.json");budget.append(dict(stage="gate",case="",source="",arm="",**resc))
+    resc=read(ARCH/"gate/receipt.json");budget.append(dict(stage="gate",case="",algorithm="",arm="",**resc))
     out("budget.csv",budget);out("inventory.csv",case_rows);out("cells.csv",runs);out("map_stages.csv",visits);out("energy_stages.csv",stages_detail)
     with gzip.open(A/"all_mapping_statuses.jsonl.gz","wt") as f:
         for row in all_mapping_classes:f.write(json.dumps(row,separators=(",",":"))+"\n")

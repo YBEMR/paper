@@ -41,6 +41,8 @@ def main():
     text+=tab(["来源","映射范围","处理数","最终有 SAFE","普通最低 J","温度修正最低 J","保留在位后 J","胜本方原最佳调频数","胜 Zhou 原最佳调频数","胜 Zhou 本轮全池最佳数"],
         [[x["source"],{"safe":"曾安全","all":"全部有效域","hot_only":"超温独有"}[x["category"]],x["n"],x["recovered"],num(x["best_ord_raw"]),num(x["best_thermal_raw"]),num(x["best_final"]),x["beats_own_P"],x["beats_Zhou_P"],x["beats_Zhou_full"]] for x in qual])
     for m in METHODS:
+        arms={r["arm"]:r for r in runs if r["case"]=="C10" and r["source"]==m}
+        text += [f"在等预算筛选中，{m} 两组各获 {arms['S']['nominated']} 个名额。仅安全名单达到 {num(arms['S']['final'])} J，允许热独有后达到 {num(arms['H']['final'])} J；后者距该来源全池最佳 {num(float(arms['H']['final'])-float(arms['ALL']['final']))} J。",""]
         winners=[x for x in ranks if x["source"]==m and x["after_SAFE_rank"]=="1"]
         for x in winners:
             text += [f"{m} 的最优映射最早在束宽 {x['first_width']}、第 {num(x['first_s'],3)} 秒交付，宽度内第 {x['first_beam_rank']} 名。其历史代表为 {x['origin']}，能耗 {num(x['rep_J'])} J，历史参考能耗排名 {x['reference_rank']}，含超温的原始能耗排名 {x['original_energy_rank']}。重新调频后的最佳安全能耗为 {num(x['final_J'])} J。",""]

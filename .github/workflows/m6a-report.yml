@@ -1,0 +1,45 @@
+name: Verify M6a physical evidence and publish report
+on:
+  push:
+    branches: [research/m6a-global-frequency-mapping]
+    paths: [research/m6a_global_frequency_mapping/report.py]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m6a_global_frequency_mapping/
+            /research/m1i_generalization/registration/
+            /research/m1_transient_thermal_quota_20261126/frozen/p1/config/
+            /.github/workflows/m6a*.yml
+      - working-directory: research/m6a_global_frequency_mapping
+        run: |
+          (cd archive && sha256sum --quiet -c SHA256SUMS)
+          python analysis.py
+          python report.py
+          sha256sum *.py *.cpp *.md START analysis/* archive/SHA256SUMS ../../.github/workflows/m6a*.yml > SHA256SUMS
+          sha256sum --quiet -c SHA256SUMS
+      - run: |
+          dir=research/m6a_global_frequency_mapping
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin research/m6a-global-frequency-mapping
+          test "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)"
+          while IFS= read -r -d '' f; do git add -- "$f"; done < <(find "$dir/analysis" -type f -print0)
+          git add -- "$dir/SHA256SUMS" "$dir/REPORT_zh.md"
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'Publish Chinese global frequency diagnosis and verified matched physical comparisons'
+          git push origin HEAD:refs/heads/research/m6a-global-frequency-mapping
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m6a-complete-diagnosis
+          path: |
+            research/m6a_global_frequency_mapping/
+            .github/workflows/m6a*.yml

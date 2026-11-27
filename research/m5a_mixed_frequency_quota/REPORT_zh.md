@@ -49,4 +49,4 @@ A06 的 D 终点比 C 终点低 0.059249 J，说明此次改变配额的路线�
 | 上述预算合计 | 114.162 / 1500 |
 | 另列的归档后算术审计 | 1.375 CPU 秒，计入后合计约 115.54 |
 执行源码提交为 `394dc5e601919131f110c2f2e7cb29416825c986`，原始实验归档提交为 `42a7939602f1d8e7415fd30a4bad4522a7162343`。归档后检查只处理已留档的 64 个配置及解析松弛，无新增调度搜索或热认证。物理包按流保存，内含原生 plan.json、certificate.json 和 events.json 索引。按索引顺序解压 blocks/ 下的 zlib 块，按小端 float64 与记载 shape 重组即可恢复 31 列逐事件数组，其 SHA-256 可直接对照。
-[预登记协议](PROTOCOL.md) · [搜索细则](SEARCH.md) · [各方法最终完整排程与证书](archive/endpoints) · [四流物理包与 SHA-256](archive) · [运行回执](archive/audit.json) · [执行记录](https://github.com/YBEMR/paper/actions/runs/45962343206) · [离散速度规划的文献依据](https://doi.org/10.1007/s11241-017-9291-6)
+[预登记协议](PROTOCOL.md) · [搜索细则](SEARCH.md) · [各方法最终完整排程与证书](archive/endpoints) · [四流物理包与 SHA-256](archive) · [源码与补充表 SHA-256](SOURCE_SHA256SUMS) · [运行回执](archive/audit.json) · [执行记录](https://github.com/YBEMR/paper/actions/runs/45962343206) · [离散速度规划的文献依据](https://doi.org/10.1007/s11241-017-9291-6)

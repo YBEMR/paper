@@ -159,7 +159,7 @@ def main(nt,archive,out):
                    ranked_pairs=sum(z.get("ranked_option_pairs",0) for z in r["coverage"]))
     write(out/"rejections.csv",bad)
     for k,v in (("structure",details),("capacity_dual",bounds),("nomination",top)):
-        (out/(k+".json")).write_text(json.dumps(v,indent=1),encoding="utf8")
+        (out/(k+".json")).write_bytes(json.dumps(v,indent=1).encode("utf8"))
     (out/"receipt.json").write_text(json.dumps(dict(wall_s=time.perf_counter()-start,cpu_s=time.process_time(),
            affinity=process.cpu_affinity(),search_cells=0,thermal_certificates=0,recorded_proposals=64)))
 if __name__=="__main__":main(*map(Path,sys.argv[1:]))

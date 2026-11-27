@@ -15,6 +15,9 @@ def save(path,obj):
 def run(case,method,r=1,offline=False):
     label=("offline" if offline else "online")+f"-{case}-{method}-r{r}"
     out=ROOT/label
+    if (out/"incident.json").is_file():
+        label+="-recovery"
+        out=ROOT/label
     receipt=out/"receipt.json"
     if receipt.exists():
         return load(receipt)
@@ -31,7 +34,10 @@ def run(case,method,r=1,offline=False):
         while True:
             now=time.perf_counter()
             if logical is None and (out/"start.json").is_file():
-                logical=load(out/"start.json")["clock"]
+                try:
+                    logical=load(out/"start.json")["clock"]
+                except PermissionError:
+                    pass  # Windows briefly locks a just-published marker. Keep polling.
             if (out/"finish.json").is_file() or proc.poll() is not None:
                 break
             if (logical is not None and now>=logical+cap) or (offline and now-start>=remaining-.25):

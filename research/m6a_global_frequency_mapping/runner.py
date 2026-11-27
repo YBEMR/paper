@@ -31,7 +31,7 @@ def call(fn,args,folder,cap,source=None):
 def main():
     os.sched_setaffinity(0,{min(os.sched_getaffinity(0))})
     ex.RUN=ex.u2.stack()
-    overhead=time.perf_counter()-BOOT+2.0  # Includes the first import-only startup (no inputs were loaded).
+    overhead=time.perf_counter()-BOOT+15.0  # Conservative charge for the two interrupted preflight startups.
     cap=300-overhead-5
     gt=call(ex.correctness,(),ex.OUT/"correctness",cap)
     assert (ex.OUT/"gate.json").is_file()

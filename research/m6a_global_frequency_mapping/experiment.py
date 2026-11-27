@@ -36,7 +36,7 @@ def build(obj,folder):
     flow=u2.make_flow(api,obj,folder);case=obj["case"]
     fourth.CFG["instances"][case]=[list(obj["word"]),1,35,1]
     e=fourth.Engine(case,folder)
-    assert table(e.p.req)==table(flow.p.req) and all(r["deadline_tick"]-r["release_tick"]==3000 for r in e.p.req)
+    assert table(e.p.req)==table(flow.p.req) and all(r["deadline_ms"]-r["release_ms"]==300 and r["deadline_tick"]-r["release_tick"] in (2999,3000) for r in e.p.req)
     e.replay=lambda c:state(flow,u2.encoded(c))
     return e,flow
 

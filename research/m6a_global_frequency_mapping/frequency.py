@@ -9,6 +9,20 @@ DP = ct.CDLL(str(Path(__file__).with_name("dp.so"))).frequency_dp
 I,D,L = (np.ctypeslib.ndpointer(dtype=t,flags="C_CONTIGUOUS") for t in (np.int32,np.float64,np.int64))
 DP.argtypes = [ct.c_int]*4+[ct.c_double,I,I,I,I,D,D,D,D,D,ct.c_int,I,L,D,ct.c_int]
 DP.restype = ct.c_double
+EX=ct.CDLL(str(Path(__file__).with_name("dp.so"))).exact_dp
+U=np.ctypeslib.ndpointer(dtype=np.uint64,flags="C_CONTIGUOUS")
+EX.argtypes=[ct.c_int]*4+[U,I,I,I,I,ct.c_int,I,L,D,ct.c_int]
+EX.restype=ct.c_double
+
+def integer_device(data,weights,compact=True,debug=False):
+    ready,limit,epochs,dt,*_=data
+    n,m=dt.shape;h=len(data[8])-1;tail=data[-1]
+    assert max(weights[:1+m],default=0)*(h+2*n+2)+max(weights[1+m:],default=0)*n<2**126 and min(weights)>=0
+    words=np.array([(v>>64,v%(1<<64)) for v in weights],dtype=np.uint64)
+    path=np.zeros(n,np.int32);counts=np.zeros((n,3),np.int64)
+    tab=np.full((n,h+1,m) if debug else (1,),np.inf)
+    opt=EX(n,m,h,tail,words,ready,limit,epochs,dt,int(compact),path,counts,tab,h+1 if debug else 0)
+    return opt,path,counts,tab
 
 def device(data, compact=True, debug=False):
     a,latest,epochs,dt,act,rate,beta,ib,T,sw,tail=data
@@ -50,7 +64,12 @@ def solve(eng,cfg,reserve,trace):
     for u in (2,3):
         ids=[i for i,(v,_) in enumerate(cfg) if v==u]
         args=data_for(eng,ids,u,reserve,trace)
-        cost,k,stats,_=device(args)
+        if trace is None:
+            m=args[3].shape[1]
+            weights=[eng.sw,*[eng.rate[u,j] for j in range(m)],*[eng.inc[eng.types[i],u,j] for i in ids for j in range(m)]]
+            cost,k,stats,_=integer_device(args,weights)
+        else:
+            cost,k,stats,_=device(args)
         ledger.append(dict(device=u,count=len(ids),states=stats[:,2].tolist(),predecessors=int(stats[:,0].sum()),
                            max_states=int(stats[:,2].max(initial=0)),finite=bool(np.isfinite(cost)),
                            objective_increment=cost/eng.scale if np.isfinite(cost) else None))
@@ -95,5 +114,10 @@ def gate():
             result,path,stats,tab=device(data,compact,True)
             assert np.array_equal(np.isfinite(tab),np.isfinite(reference))
             assert np.allclose(tab,reference,rtol=0,atol=1e-10) and np.isclose(opt,result)
+        if not np.any(T):
+            vals=[15,*map(int,rate),*map(int,data[4].ravel())]
+            for compact in (False,True):
+                result,path,counts,tab=integer_device(data,vals,compact,True)
+                assert np.array_equal(tab,reference) and result==opt
         tests.append(dict(seed=seed,configs=m**n,layers=n,reachable=int(np.isfinite(reference).sum())))
     return tests

@@ -1,0 +1,105 @@
+name: U1 unified thermal diagnosis
+on:
+  push:
+    branches: [research/u1-unified-diagnostic]
+    paths: [research/u1_unified_diagnostic/START]
+permissions:
+  contents: write
+jobs:
+  diagnostic:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    env:
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      NUMBA_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      BLIS_NUM_THREADS: '1'
+      U1_NT: ${{ github.workspace }}/nt
+      U1_THREE: ${{ github.workspace }}/three
+      U1_FOUR: ${{ github.workspace }}/four
+      U1_OUT: ${{ github.workspace }}/u1-evidence
+      M1G_RAW: ${{ github.workspace }}/u1-nt-setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          sparse-checkout: research/u1_unified_diagnostic
+      - uses: actions/checkout@v4
+        with:
+          path: nt
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1*/*.py
+            /research/m1*/SHA256SUMS
+            /research/m1_transient_thermal_quota_20261126/frozen/
+            /research/m1_transient_thermal_quota_20261126/inputs/
+            /research/m1i_generalization/registration/
+            /research/m1i_generalization/data/evidence/A03*/physical.tar.xz
+            /research/m1i_generalization/data/evidence/A03*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/A06*/physical.tar.xz
+            /research/m1i_generalization/data/evidence/A06*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/C10*/physical.tar.xz
+            /research/m1i_generalization/data/evidence/C10*/runs.tar.xz
+            /research/m1i_generalization/data/evidence/C12*/physical.tar.xz
+            /research/m1i_generalization/data/evidence/C12*/runs.tar.xz
+      - uses: actions/checkout@v4
+        with:
+          path: three
+          ref: c585f3461378c3188b4a032991cd875fa5fa4aa4
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/chapter3_final_evaluation/*.py
+            /research/chapter3_final_evaluation/execution_lock.json
+            /research/critical_interval_coordination_g2/*.py
+            /research/global_config_coordination_g1/*.py
+            /research/domain_joint_optimization_e0_e1/*.py
+            /research/domain_joint_optimization_e2a/*.py
+            /research/cross_scene_taskflow_diagnostic/*.py
+            /research/cross_scene_taskflow_diagnostic/config/
+            /research/cross_scene_taskflow_followup/*.py
+      - uses: actions/checkout@v4
+        with:
+          path: four
+          ref: 96a13920a46f01b6a9710b88275d0ac08763db4b
+          persist-credentials: false
+          sparse-checkout: research/chapter4_cross_analysis_v5/formal_runner/v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 scipy==1.17.0 numba==0.63.1 ortools==9.11.4210 psutil
+      - name: Audit then run serial roster
+        run: python -Bu driver/research/u1_unified_diagnostic/batch.py
+      - name: Verify and archive original evidence
+        if: always() && !cancelled()
+        run: |
+          if test -d "$U1_OUT"; then python -Bu driver/research/u1_unified_diagnostic/pack.py; fi
+      - name: Back up verified archive
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: U1-evidence
+          path: driver/research/u1_unified_diagnostic/results
+          if-no-files-found: ignore
+      - name: Publish scoped receipt and evidence
+        if: always() && !cancelled()
+        working-directory: driver
+        run: |
+          d=research/u1_unified_diagnostic/results
+          test -d "$d" || exit 0
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote get-url origin
+          git fetch origin research/u1-unified-diagnostic
+          test "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)"
+          git add -- "$d/curves.csv" 2>/dev/null || true
+          for f in "$d"/*; do git add -- "$f"; done
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'Archive U1 audited interfaces, serial timing and continuous evidence'
+          git push origin HEAD:refs/heads/research/u1-unified-diagnostic

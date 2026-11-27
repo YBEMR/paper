@@ -1,0 +1,41 @@
+name: M5a immutable historical plans
+on:
+  push:
+    branches: [research/m5a-mixed-frequency-quota]
+    paths: [research/m5a_mixed_frequency_quota/recover.py]
+permissions:
+  contents: write
+jobs:
+  copy:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: research/m5a_mixed_frequency_quota
+      - uses: actions/checkout@v4
+        with:
+          path: old-u1
+          ref: 44e99658159ded9042fd47a5c448b5be5868bcdb
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /research/u1_unified_diagnostic/results/physical.tar.gz.part*
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: old-nt
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /research/m1j_retention/data/evidence/C11_LHLLHLLHLHHHLHLH_T35/physical.tar.xz
+          persist-credentials: false
+      - run: |
+          cat old-u1/research/u1_unified_diagnostic/results/physical.tar.gz.part* > "$RUNNER_TEMP/u1.tar.gz"
+          dir=research/m5a_mixed_frequency_quota
+          cpu=$(python -c 'import os; print(min(os.sched_getaffinity(0)))')
+          timeout 60 taskset -c "$cpu" python "$dir/recover.py" "$RUNNER_TEMP/u1.tar.gz" old-nt/research/m1j_retention/data/evidence/C11_LHLLHLLHLHHHLHLH_T35/physical.tar.xz
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$dir/history/A06/plan.json" "$dir/history/A06/certificate.json" "$dir/history/C11/plan.json" "$dir/history/C11/certificate.json" "$dir/history/recovery_time.json"
+          git diff --cached --check
+          git commit -m 'Recover exact U1 and NT-retention SAFE plans for M5-a intake'
+          git push origin HEAD:refs/heads/research/m5a-mixed-frequency-quota

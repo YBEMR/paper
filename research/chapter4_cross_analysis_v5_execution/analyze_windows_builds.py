@@ -78,6 +78,25 @@ def report(out, state, pairs, physical):
         rows = [r for r in pairs if r["case"] == case]
         vals = [interval_text(rows, "final_"+key+"_mJ") if rows else "—" for key in ("A_B", "C_D", "A_C", "B_D", "D_E")]
         lines.append("| " + " | ".join([case, f"{len(rows)}/3", *vals]) + " |")
+    lines += ["", "## 初解与反馈分别改变了多少能耗", "",
+              "A−C 固定普通邻域，B−D 固定反馈邻域。两者为正时，换用 Q4 初解后最终能耗下降。"
+              "交互差为 (A−B)−(C−D)，每个种子先作差，再在工况内取中位数。正值表示反馈在第三章初解上的收益更大，负值表示反馈在 Q4 上的收益更大。",
+              "", "| 工况 | Q4 使普通邻域终点更省电 | Q4 使反馈终点更省电 | 配置阶段交互差中位数（mJ） | 最终交互差中位数（mJ） |",
+              "|---|---:|---:|---:|---:|"]
+    for case in cross.CASES:
+        rows = [r for r in pairs if r["case"] == case]
+        if not rows:
+            lines.append(f"| {case} | — | — | — | — |")
+            continue
+        count = len(rows)
+        ac = sum(r["final_A_C_verdict"] == "A_HIGHER" for r in rows)
+        bd = sum(r["final_B_D_verdict"] == "A_HIGHER" for r in rows)
+        interaction = [median(r[phase + "_interaction_mJ"] for r in rows) for phase in ("configuration", "final")]
+        lines.append(f"| {case} | {ac}/{count} | {bd}/{count} | {interaction[0]:.4f} | {interaction[1]:.4f} |")
+    lines += ["", "各工况只有三个登记种子。表中次数按两端认证区间可区分的方向统计，区间重叠时不计入节能次数。"
+              "固定初解的独立检查发现，F1 同一组 69 个单请求节能动作在第三章初解上全部产生虚拟超期，在 Q4 上全部满足虚拟期限。"
+              "F2 的 60 个共同动作中，引起超期的动作则从 0 个增加到 24 个。"
+              "这些结果说明初解会改变反馈可介入的机会，具体节能量取决于后续限时搜索和认证终点。[逐动作核对](../fixed_initial/README.md)"]
     lines += ["", "## 系统版本与配对", "",
               "续跑使用同一台 Windows 实验机，系统内部版本由 26200 更新为 26300。Python、六项依赖、76 份冻结文件、200 个求解器运行文件和物理核顺序复核一致。26300 批次独立通过两臂预检，重新生成其使用的共享 Q4 初解池。", "",
               "| C / D 内部版本 | 有效配对 | D 更省电 | C 更省电 | 认证区间重叠 |", "|---|---:|---:|---:|---:|"]

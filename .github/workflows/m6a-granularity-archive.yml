@@ -1,0 +1,34 @@
+name: Preserve planning window evidence
+on:
+  push:
+    branches: [research/m6a-planning-granularity]
+    paths: [research/m6a_planning_granularity/PACK]
+permissions:
+  actions: read
+  contents: write
+jobs:
+  preserve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/m6a-planning-granularity
+          sparse-checkout: research/m6a_planning_granularity
+      - name: Preserve and verify the finished run without scheduling any tasks
+        working-directory: research/m6a_planning_granularity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test ! -d evidence
+          gh api repos/YBEMR/paper/actions/artifacts/15203894256/zip > "$RUNNER_TEMP/record.zip"
+          python3 archive_evidence.py "$RUNNER_TEMP/record.zip"
+          echo "$GITHUB_RUN_ID" > evidence/archive-run.txt
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- evidence
+          git diff --cached --check
+          git commit -m "持久归档24格候选轨迹、全部按时证书和物理排程，逐成员核查"
+          git push origin HEAD:research/m6a-planning-granularity
+

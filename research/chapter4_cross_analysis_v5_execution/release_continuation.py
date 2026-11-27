@@ -37,18 +37,44 @@ def pack_raw(run, repo, dest):
         for path in (run / name).rglob("*"):
             if path.is_file():
                 groups[group_name(path.relative_to(run))].append(path)
-    groups["metadata"].extend(p for p in run.iterdir() if p.is_file())
+    for name in ("plan.json", "check.json", "interruption_review_01.json", "formal_console.log",
+                 "continuation_03_console.log", "d1_c103_retry_authorization.json"):
+        path = run / name
+        if path.is_file():
+            groups["metadata"].append(path)
     manifest = {}
     for name, files in sorted(groups.items()):
         manifest[name] = codec.pack(name, files)
         codec.verify_archive(name, manifest[name])
-    (dest / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf8")
+    (dest / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf8", newline="\n")
     return sum(group["files"] for group in manifest.values())
 
 
 def interval_text(rows, key):
     values = [float(r[key]) for r in rows]
     return f"{median(values):.4f} [{min(values):.4f}, {max(values):.4f}]"
+
+
+def mechanism_summary(analysis, pairs, cases):
+    paired = {(r["case"], r["seed"]) for r in pairs}
+    rounds = [r for r in table(analysis / "round_mechanisms.csv") if (r["case"], r["seed"]) in paired]
+    matches = [r for r in table(analysis / "matched_rounds.csv") if r["pair"] == "CD" and (r["case"], r["seed"]) in paired]
+    lines = ["## 实际补偿与匹配轮次", "",
+             "只统计 C/D 两端均有完整证书的种子。B、D 两列依次给出选中补偿请求、确实改动配置、跨场景改动的次数。同一请求在不同轮次重复发生时逐轮计数。", "",
+             "| 工况 | B 选中 / 改动 / 跨场景 | D 选中 / 改动 / 跨场景 | C/D 匹配轮数 | 普通邻域外有实际改动的匹配轮数 | 双侧均达时限的匹配轮数 |",
+             "|---|---:|---:|---:|---:|---:|"]
+    for case in cases:
+        counts = []
+        for arm in ("B", "D"):
+            group = [r for r in rounds if r["case"] == case and r["arm"] == arm]
+            fields = ("selected_compensators", "realized_compensators", "cross_scene_realized")
+            counts.append(" / ".join(str(sum(int(r[k]) for r in group)) for k in fields) if group else "—")
+        same = [r for r in matches if r["case"] == case]
+        outside = sum(bool(r["realized_outside_ordinary"]) for r in same)
+        time_limited = sum(r["ordinary_solver"] == r["feedback_solver"] == "TIME_LIMIT" for r in same)
+        lines.append(f"| {case} | {counts[0]} | {counts[1]} | {len(same)} | {outside} | {time_limited} |")
+    lines.extend(["", "匹配要求轮前计划、请求目标和邻域大小相同。双侧均达时限的轮次只能比较各自在截止前找到的解。逐轮记录见 [round_mechanisms.csv](round_mechanisms.csv) 和 [matched_rounds.csv](matched_rounds.csv)。", ""])
+    return lines
 
 
 def main(run, repo, out):
@@ -102,6 +128,7 @@ def main(run, repo, out):
         f"以双方认证能耗区间判定，Q4 初解上反馈组低于普通组 {cd['A_HIGHER']} 对，高于普通组 {cd['B_HIGHER']} 对，区间重叠 {cd['INTERVAL_OVERLAP']} 对。D 的终点低于 E {de['B_HIGHER']} 对，高于 E {de['A_HIGHER']} 对，区间重叠 {de['INTERVAL_OVERLAP']} 对。每个工况的 E 为同一个确定性参照。", "",
         "逐种子结果、能耗差及其证书区间见 [paired.csv](paired.csv)。[paired_summary.csv](paired_summary.csv) 给出配置阶段和最终阶段的交互差。[matched_rounds.csv](matched_rounds.csv) 列出相同前态、目标与邻域大小的可比轮次。[common_checkpoints.csv](common_checkpoints.csv) 保留共同时间与轮次检查点，超出实测轨迹的时间点记为截尾。", "",
         "对原配置与目标配置均相同的单请求动作，F1 的超期数从第三章初解的 69/69 降至 Q4 的 0/69，F2 从 0/60 升至 24/60。各类别的分母和幅度分层见[固定初解对照](../fixed_initial/README.md)。", "",
+        *mechanism_summary(analysis, pairs, cases),
         "## 计时与中断", "",
         f"{len(complete)} 份完整回执的计费时间合计 {sum(r['charged_s'] for r in complete):.2f} 秒。每个单元的 900 秒上限包含该工况一次共享 Q4 构造的实测时长。本批串行运行 C/D，A/B 来自历史正式批次，E 复用已认证终点。E 的同机耗时本批未测。", "",
         f"按实际启动记录去重，共 {len(runs)} 次正式启动，其中 {len(lost)} 次中断且没有最终回执。"

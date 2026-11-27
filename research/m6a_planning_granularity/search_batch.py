@@ -2,7 +2,7 @@
 import signal
 import time
 import traceback
-from study import *
+from granularity_runtime import *
 
 def online(code, arm, folder, pipe):
     c=flows[code]

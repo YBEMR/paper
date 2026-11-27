@@ -13,9 +13,9 @@ def read(path):
     return json.loads(path.read_bytes())
 
 
-def attempts(run, *, closed=False):
+def attempts(run, *, closed=False, formal_roots=FORMAL_ROOTS):
     rows = {}
-    for location in FORMAL_ROOTS:
+    for location in formal_roots:
         cells = run / location / "cells"
         for start in sorted(cells.glob("*/start.json")):
             folder = start.parent
@@ -54,7 +54,7 @@ def attempts(run, *, closed=False):
                              final_plan=final.get("plan"))
     records = sorted(rows.values(), key=lambda r: r["started_utc"])
     if closed:
-        latest = next((run / loc for loc in reversed(FORMAL_ROOTS) if (run / loc).is_dir()))
+        latest = next((run / loc for loc in reversed(formal_roots) if (run / loc).is_dir()))
         end = read(latest / "batch_end.json")
         complete = [r for r in records if r["status"] == "COMPLETE"]
         roster = read(latest / "batch_start.json")["roster"]

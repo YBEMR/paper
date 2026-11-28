@@ -1,0 +1,39 @@
+name: Index completed historical A and C evidence for all nominations
+on:
+  push:
+    branches: [research/ch3-direct-thermal-dp]
+    paths: [research/ch3_direct_thermal_dp/INVENTORY]
+permissions:
+  contents: write
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_direct_thermal_dp/*.py
+            /research/ch3_direct_thermal_dp/REPORT_zh.md
+            /research/ch3_direct_thermal_dp/decision.json
+            /research/ch3_direct_thermal_dp/SHA256SUMS
+            /research/ch3_direct_thermal_dp/out/nominees.json
+            /research/ch3_direct_thermal_dp/out/slots/
+            /research/ch3_direct_thermal_dp/tables/
+            /research/ch3_center_confirmation/lanes/*/r1/paired_results/*/physical/index.json
+      - working-directory: research/ch3_direct_thermal_dp
+        run: |
+          python -Bu archive_tables.py
+          sed -i '/  REPORT_zh.md$/d;/  decision.json$/d' SHA256SUMS
+          sha256sum REPORT_zh.md decision.json tables/available_mappings.csv tables/available_pools.csv tables/hot_recovery_all.csv >> SHA256SUMS
+          tail -5 SHA256SUMS | sha256sum --quiet -c -
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git add -- REPORT_zh.md decision.json SHA256SUMS tables/available_mappings.csv tables/available_pools.csv tables/hot_recovery_all.csv
+          git diff --cached --check
+          git commit -m 'Account for every historical stage and both HOT nominations without new solver calls'
+          git push origin HEAD:"$GITHUB_REF_NAME"
+          test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$(git rev-parse HEAD)"

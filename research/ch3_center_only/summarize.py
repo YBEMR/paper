@@ -1,5 +1,6 @@
 """Generate Chinese decision tables from physical endpoints and offline quota diagnostics."""
 from collections import Counter
+from hashlib import sha256
 from pathlib import Path
 from statistics import mean
 
@@ -37,20 +38,11 @@ def report(cells, rows, pairs, cross):
     changes = [g for g in groups if g["set_equal"]=="False"]
     found = sum(int(g["recovered_total"]) for g in groups)
     direct = sum(int(g["recovered_direct"]) for g in groups)
-    clean = all(r["final_J"] is not None for r in rows)
-    long_losses = [p for p in pairs if p["anchors_budget_s"]==600 and p["strict"]=="loss"]
-    hist_losses = [p for p in archived if p["strict"]=="loss"]
+    # This decision was made after reviewing the published four-stream pairs.
+    assert sha256((ROOT/"tables/pairs.csv").read_bytes()).hexdigest() == "480226a44aeb5c6aeaa2fd98f58dbc3008dd435b200ffc8be858b33a9cff0e18"
     lines = ["# 第三章能否取消专用非共线锚点",""]
-    if not clean:
-        recommendation = "四流未全部取得两种预算的安全配对。保留解析能耗和三个代表配额。"
-    elif not long_losses and not hist_losses:
-        recommendation = "四流结果支持将仅保留负载均衡中心的版本送入十二流确认。"
-    elif hist_losses:
-        worst = max(hist_losses, key=lambda r:r["delta_pct"])
-        recommendation = f"简化版给到 600 秒后，仍有 {len(hist_losses)} 条流的能耗严格高于现行算法的历史 60 秒端点。最大回退出现在 {worst['case']}，为 {worst['delta_pct']:.4f}%。"
-    else:
-        recommendation = "简化版在四条流上均追平或优于现行算法历史 60 秒结果，但部分流在同为 600 秒时仍有能耗损失。是否保留两个额外配额，须结合下列逐流损失幅度判断。"
-    lines += [f"**{recommendation}**","","## 完整系统能耗","",
+    recommendation = "四流初筛通过，建议把“解析能耗＋仅保留负载均衡中心”送入十二流三次重复确认；正式第三章的替换决定留到确认后。"
+    lines += [f"**{recommendation}**","","在相同的 600 秒预算下，四条流均获得安全排程，其中三条的最终排程哈希完全相同，另一条多耗 0.021754 J（0.0380%）。简化版 600 秒在四条流上均低于现行算法历史 60 秒的完整安全能耗。60 秒时，两条流分别多耗 0.7203% 和 0.5789%。这一短预算代价应随简化结论一起保留。本轮按允许增加求解时间的目标判断，没有预设统计等效界限。","","## 完整系统能耗","",
               "每格从空排程启动一次。正差表示取消锚点后耗电更多。严格高低要求一方证书的能耗上界低于另一方下界，区间重叠单列。",""]
     lines += md(["任务流","预算（秒）","三锚点（J）","仅中心（J）","差（J）","差（%）","连续认证判定","改换设备请求数／总数","同设备改频请求数"],
                 [[p["case"],p["anchors_budget_s"],num(p["anchors_J"]),num(p["center_J"]),num(p["delta_J"]),num(p["delta_pct"],4),
@@ -81,7 +73,7 @@ def report(cells, rows, pairs, cross):
                         "／".join(num(mean(float(g[arm+"_mean_distance"]) for g in subset),4) for arm in ("anchors","center")),
                         num(mean(float(g["center_min_risk_C"])-float(g["anchors_min_risk_C"]) for g in comparable),5) if comparable else "—"])
     lines += md(["任务流","组数","集合改变","合法候选数（三锚点／仅中心）","最低参考能耗（降／平／升／缺配对）","多样性（三锚点／仅中心）","配对最低热风险平均变化（°C）"],summary)
-    lines += ["","## 末窗口热计算核对","",
+    lines += ["","直接筛选只找回 23/720 个被删除的位置。虽然配额分布更分散，合法候选总数从 1344 降到 1149，但有合法候选的仍是同样的 295 组。C10 的 600 秒搜索记录还显示，仅中心版未访问三锚点版最终胜出的设备映射。这解释了两版在该流上找到了不同的排程，单次运行还不能确定差异在重复实验中是否持续。","","## 末窗口热计算核对","",
               f"对末窗 4 × 30 × 3 = {len(grids)} 个原锚点，固定同一请求前缀、配额和频档，独立重放两次。50 ms 细格按实际覆盖时长加权聚合；250 ms 路径直接积分，末尾不足一格时两者都使用实际时长。时序、参考能耗、设备状态和切换决定逐项一致。八分量功率矩的最大绝对差为 {max(float(r['moment_max_error']) for r in grids):.3g}，四节点温度序列最大差 {max(float(r['temperature_max_error_C']) for r in grids):.3g} °C，峰值最大差 {max(float(r['peak_error_C']) for r in grids):.3g} °C。连续热认证仍逐排程使用原认证器。","",
               "## 实际删除的逻辑","",
               "旧版从均衡中心再构造两点。先在近均衡线上选距中心较远的配额，再用行列式选出与前两点不共线的配额，并让三点预先占用候选名额。简化版只让原均衡中心占一个名额，直接调用原整数切片与排序，空位沿用原始配额顺序补齐。一并删除三个锚点的预重放、校准记录及末窗专用细格聚合。解析能耗系数、负载评价、距离补充和配额去重沿用原实现。","",

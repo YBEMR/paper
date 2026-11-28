@@ -6,7 +6,7 @@ from pathlib import Path
 from types import FunctionType
 
 import numpy as np
-from trial import ROOT, PREV, analytic_expand, f, m
+from anchor_cell import ROOT, PREV, analytic_expand, f, m
 from diagnose import GroupView
 
 

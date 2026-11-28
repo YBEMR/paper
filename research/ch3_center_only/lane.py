@@ -24,7 +24,7 @@ def main(code):
                      M1G_RAW=str(folder/"warm"))
             start=time.perf_counter()
             env["CELL_START"]=str(start)
-            child=subprocess.Popen([sys.executable,"-Bu",str(ROOT/"trial.py"),code,arm,str(budget),str(folder)],
+            child=subprocess.Popen([sys.executable,"-Bu",str(ROOT/"anchor_cell.py"),code,arm,str(budget),str(folder)],
                                    env=env,start_new_session=True)
             try:
                 child.wait(timeout=max(0,start+budget-.015-time.perf_counter()))

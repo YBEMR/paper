@@ -1,0 +1,62 @@
+name: Audit certified chapter-three integrated quality decision
+on:
+  push:
+    branches: [research/ch3-integrated-quality-v1]
+    paths: [research/ch3_integrated_quality_v1/report.py]
+permissions:
+  contents: write
+env:
+  GEN: ${{ github.workspace }}/gen
+  OPENBLAS_NUM_THREADS: '1'
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_integrated_quality_v1/
+            /.github/workflows/ch3-quality*.yml
+      - uses: actions/checkout@v4
+        with:
+          path: gen
+          ref: 85969e8ed78cbab4d693122819ebe866e0721bb7
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /research/m1i_generalization/data/repetitions.csv
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5
+      - working-directory: driver/research/ch3_integrated_quality_v1
+        run: |
+          (cd archive && sha256sum --quiet -c SHA256SUMS)
+          python -Bu audit.py
+          python -Bu report.py
+          python -c "import csv,pathlib,os;from evidence import restore;row=next(r for r in csv.DictReader(open('tables/runs.csv')) if r['status']=='SAFE');restore(row['case'],row['plan'],pathlib.Path(os.environ['RUNNER_TEMP'])/'restored-endpoint')"
+          sha256sum *.py *.md START tables/* archive/SHA256SUMS ../../.github/workflows/ch3-quality*.yml > SHA256SUMS
+          sha256sum --quiet -c SHA256SUMS
+      - working-directory: driver
+        run: |
+          dir=research/ch3_integrated_quality_v1
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin research/ch3-integrated-quality-v1
+          test "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)"
+          while IFS= read -r -d '' f; do git add -- "$f"; done < <(find "$dir/tables" -type f -print0)
+          git add -- "$dir/REPORT_zh.md" "$dir/SHA256SUMS"
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'Publish first integrated-version decision, paired outcomes, stage endpoints and timing audit'
+          git push origin HEAD:refs/heads/research/ch3-integrated-quality-v1
+      - uses: actions/upload-artifact@v4
+        with:
+          include-hidden-files: true
+          name: chapter3-integrated-quality-complete
+          compression-level: 1
+          path: |
+            driver/research/ch3_integrated_quality_v1/
+            driver/.github/workflows/ch3-quality*.yml

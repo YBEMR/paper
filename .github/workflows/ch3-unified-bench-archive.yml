@@ -1,0 +1,41 @@
+name: Archive verified benchmark in per-flow commits
+on:
+  push:
+    branches: [research/ch3-unified-baseline-evaluation]
+    paths: [research/ch3_unified_baseline_evaluation/ARCHIVE]
+permissions:
+  actions: read
+  contents: write
+jobs:
+  archive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: research/ch3_unified_baseline_evaluation
+      - uses: actions/download-artifact@v4
+        with:
+          name: complete-benchmark-evidence
+          run-id: 46121216114
+          github-token: ${{ github.token }}
+          path: research/ch3_unified_baseline_evaluation
+      - working-directory: research/ch3_unified_baseline_evaluation
+        env:
+          BRANCH: research/ch3-unified-baseline-evaluation
+        run: |
+          sha256sum --quiet -c SHA256SUMS
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config pack.threads 1
+          git config pack.window 0
+          git config pack.compression 1
+          find tables figures -type f -print0 | xargs -0 -n 120 git add --
+          git add -- REPORT_zh.md SHA256SUMS
+          git commit -m 'Publish audited benchmark report, figures, per-run costs and full evidence manifest'
+          git push origin HEAD:refs/heads/$BRANCH
+          for c in gate A01 A02 A03 A04 A05 A06 B07 B08 C09 C10 C11 C12; do
+            find "archive/$c" -type f -print0 | xargs -0 -n 120 git add --
+            git commit -m "Archive verified original benchmark evidence for $c"
+            git push origin HEAD:refs/heads/$BRANCH
+          done

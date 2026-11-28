@@ -18,7 +18,8 @@ def main():
     core=min(os.sched_getaffinity(0))
     os.sched_setaffinity(0,{core})
     start=time.monotonic()
-    deadline=start+595
+    previous=0.01726883600002793
+    deadline=start+595-previous
     steps=[]
     def run(name,cmd,cwd):
         tick=time.monotonic()
@@ -39,17 +40,17 @@ def main():
         patterns.extend([base+"/physical/",base+"/center-60/refine.jsonl",base+"/center-600/refine.jsonl",
                          base+"/center-60/search.jsonl",base+"/center-600/search.jsonl",
                          base+"/center-60/certificates.jsonl",base+"/center-600/certificates.jsonl"])
-    rc=run("acquire frozen r1 physical archives",["git","-c","pack.threads=1","sparse-checkout","add","--no-cone",*patterns],DRIVER)
+    rc=run("acquire frozen r1 physical archives",["git","-c","pack.threads=1","sparse-checkout","add",*patterns],DRIVER)
     if rc==0:
         rc=run("compile frozen DP",["g++","-O3","-std=c++17","-ffp-contract=off","-fPIC","-shared","dp.cpp","-o","dp.so"],
                ROOT.parent/"m6a_global_frequency_mapping")
     if rc==0:
         rc=run("restore, compare and certify", [sys.executable,"-Bu","evaluate_fixed.py"],ROOT)
     elapsed=time.monotonic()-start
-    receipt=dict(elapsed_s=elapsed,limit_core_s=600,guard_s=595,core=core,steps=steps,status=rc,source=os.environ["GITHUB_SHA"])
+    receipt=dict(elapsed_s=elapsed,prior_s=previous,cumulative_s=previous+elapsed,limit_core_s=600,guard_s=595,core=core,steps=steps,status=rc,source=os.environ["GITHUB_SHA"])
     (OUT/"budget.json").write_text(json.dumps(receipt,indent=2)+"\n")
     print(receipt,flush=True)
-    assert elapsed<600
+    assert elapsed+previous<600
     if rc not in (0,"budget"):
         sys.exit(1)
 

@@ -64,14 +64,33 @@ def main():
     unique=set()
     sources=Counter()
     frequency_rows=[]
+    recorded={}
+    for path in (OUT/"slots").glob("*/*.json"):
+        verified=read(path)
+        recorded[verified["case"],verified["seed"]]=verified["comparison"]
+    indices={}
     for r in manifest:
         c,b,k=r["case"],r["budget"],r["rank"]
         x=dict(case=c,construction_s=b,rank=k,seed=r["seed"],mapping=r["mapping"],seed_status=r["point"]["status"],
                mapping_occurrences=duplicates[c,r["mapping"]],seed_ref_J=r["point"]["e35"],seed_J=r["point"]["J"],
                seed_peak_upper_C=r["point"]["peak"],nomination_s=r["nomination_s"])
         file=OUT/"slots"/c/f"{b}-{k}.json"
-        done=file.exists()
-        result=read(file)["comparison"] if done else {}
+        written=file.exists()
+        result=read(file)["comparison"] if written else {}
+        if not written and (c,r["seed"]) in recorded:
+            index=ROOT.parent/f"ch3_center_confirmation/lanes/{c}/r1/paired_results/{c}/physical/index.json"
+            if index.exists():
+                if c not in indices:
+                    indices[c]=read(index)["plans"]
+                ix=indices[c][r["seed"]]
+                verified=recorded[c,r["seed"]]
+                assert ix["mapping"]==r["mapping"] and ix["trace_sha"]==verified["trace"]
+                for s,h in r["history"].items():
+                    if h["point"]:
+                        assert h["point"]==verified["proposed"][s]
+                result=verified
+        done=bool(result)
+        x["completion_basis"]="written_slot" if written else "verified_identical_plan_trace" if done else "incomplete"
         outcomes=result.get("outcomes",{})
         x.update(complete=done,seed_trace=result.get("trace"),ordinary_complete_in_history=r["history"]["ordinary"]["completed"],
                  thermal_complete_in_history=r["history"]["thermal"]["completed"],A_thermal_guide=result.get("guide"))
@@ -184,7 +203,7 @@ def main():
         lines+=markdown(["流","历史构造","位置","原始峰温上界（°C）","两阶段恢复","直接恢复","普通恢复"],
                     [[h["case"],h["construction_s"],h["rank"],number(h["seed_peak_C"],4),*["是" if h[a+"_recovered"] else "否" for a in "ABC"]] for h in hot])
     else:
-        lines+=["本轮已完成的位置没有实际超温样本，无法据此确认超温恢复能力。"]
+        lines+=["两处实际超温提名均缺少直接热调频的结果。历史上已完成的恢复记录见文末的全部提名清单。"]
     if traces:
         for stage,desc in (("direct","直接调频提案"),("thermal","两阶段热修正提案")):
             data=[v for v in traces if v["kind"]==stage]

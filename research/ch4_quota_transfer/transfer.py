@@ -1,5 +1,6 @@
 """A single cold solve; both methods use the frozen direct thermal mapping optimizer."""
 import ast,inspect,json,os,sys,time
+import mmap
 from pathlib import Path
 
 ROOT=Path(os.environ["TRANSFER_ROOT"])
@@ -22,7 +23,7 @@ def emit(p,obj):
     with p.open("ab",buffering=0) as h:h.write(json.dumps(obj,separators=(",",":"),default=lambda x:x.item()).encode()+b"\n")
 
 
-def make(native,arm,mode="light",record=None):
+def make(native,arm,mode="light",record=None,live=None):
     src=inspect.getsource(native)
     def change(a,b):
         nonlocal src
@@ -66,6 +67,13 @@ def make(native,arm,mode="light",record=None):
     if fine:change("    return pool, True","            gen0=clock()\n    return pool, True")
     else:change("    return pool, True","    record(dict(j=j,groups=groups,slots=slots,checks=checks,valid=len(pool),prop=prop,complete=True))\n    return pool, True")
     ns=dict(native.__globals__,record=record)
+    if live is not None:
+        change("            slots+=len(chosen)","            live[0]+=len(chosen)\n            slots+=len(chosen)")
+        change("                checks+=1","                live[1]+=1\n                checks+=1")
+        change("                energy = ledger","                live[2]+=1\n                energy = ledger")
+        change("                    temp = c.propagate","                    live[3]+=1\n                    temp = c.propagate")
+        change("                risk = peak if final","                if not final:live[3]+=1\n                risk = peak if final")
+        ns["live"]=live
     exec(compile(src,"<frozen expansion with quota selector and measurements>","exec"),ns)
     return ns["expand"]
 
@@ -89,7 +97,10 @@ def main(case,arm,cap,dest):
     def note(row):
         nonlocal first
         emit(dest/"layers.jsonl",dict(new=first,**row));first=False
-    expand=make(native,arm,"light",note)
+    with (dest/"counts.bin").open("w+b") as backing:
+        backing.truncate(32)
+        live=memoryview(mmap.mmap(backing.fileno(),32)).cast("q")
+    expand=make(native,arm,"light",note,live)
     def layer(*args):
         nonlocal first
         first=True

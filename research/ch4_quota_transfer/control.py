@@ -123,7 +123,8 @@ def main():
         dest=ROOT/sys.argv[2]
         prior=sum(json.loads(p.read_bytes())["accounted_now"] for p in ROOT.glob("diag*/receipt.json"))
         if dest.exists() or 119-prior<2:raise RuntimeError("diagnostic already assigned or CPU exhausted")
-        r=monitored(dest,[sys.executable,"-Bu",str(HERE/"fixed.py"),str(dest)],350,119-prior)
+        script="probe.py" if sys.argv[2].startswith("diag_probe") else "fixed.py"
+        r=monitored(dest,[sys.executable,"-Bu",str(HERE/script),str(dest)],350,119-prior)
         save(dest/"receipt.json",r)
         print(r)
         if r["reason"]!="natural":raise RuntimeError((dest,r))

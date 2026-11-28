@@ -1,0 +1,133 @@
+name: Paired mapping-first energy comparison
+on:
+  push:
+    branches: [research/ch3-mapping-first-nested]
+    paths: [research/ch3_mapping_first_nested/STAGE2]
+permissions:
+  contents: write
+env:
+  U1_NT: ${{ github.workspace }}/nt
+  U1_THREE: ${{ github.workspace }}/unused
+  U1_FOUR: ${{ github.workspace }}/four
+  U1_OUT: ${{ github.workspace }}/scratch
+  M1G_RAW: ${{ github.workspace }}/warm
+  NT_SHA: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+  GEN_SHA: 85969e8ed78cbab4d693122819ebe866e0721bb7
+  DP_SHA: 5b6c92468be980da4c679b123565698174eabdfb
+  GEN: ${{ github.workspace }}/gen
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  NUMBA_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+jobs:
+  compare:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [A02, A06, C10, C11]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_mapping_first_nested/*.py
+            /research/ch3_mapping_first_nested/STAGE2
+            /research/ch3_mapping_first_nested/stage1/gate.json
+            /research/ch3_integrated_quality_v3/*.py
+            /research/ch3_integrated_quality_v1/*.py
+            /research/ch3_integrated_quality_v2/*.py
+            /research/m6a_global_frequency_mapping/*.py
+            /research/m6a_global_frequency_mapping/dp.cpp
+            /research/m6a_global_frequency_mapping/SHA256SUMS
+            /research/u1_unified_diagnostic/interface.py
+            /research/u2_adaptive_groups/common_u2.py
+      - uses: actions/checkout@v4
+        with:
+          path: gen
+          ref: 85969e8ed78cbab4d693122819ebe866e0721bb7
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1i_generalization/registration/
+      - uses: actions/checkout@v4
+        with:
+          path: nt
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1*/*.py
+            /research/m1*/SHA256SUMS
+            /research/m1_transient_thermal_quota_20261126/frozen/
+            /research/m1_transient_thermal_quota_20261126/inputs/
+            /research/m1i_generalization/registration/
+      - uses: actions/checkout@v4
+        with:
+          path: four
+          ref: 96a13920a46f01b6a9710b88275d0ac08763db4b
+          persist-credentials: false
+          sparse-checkout: research/chapter4_cross_analysis_v5/formal_runner/v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 scipy==1.17.0 numba==0.63.1 psutil
+      - working-directory: driver/research/m6a_global_frequency_mapping
+        run: g++ -Wall -Wextra -O3 -std=c++17 -ffp-contract=off -fPIC -shared dp.cpp -o dp.so
+      - name: Independent cold cells on the same CPU
+        working-directory: driver/research/ch3_mapping_first_nested
+        run: python -Bu lane.py "${{ matrix.code }}"
+      - name: Audit and pack online physical evidence
+        if: always()
+        working-directory: driver/research/ch3_mapping_first_nested
+        run: python -Bu pack_lane.py "${{ matrix.code }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paired-${{ matrix.code }}
+          path: driver/research/ch3_mapping_first_nested/paired_results/${{ matrix.code }}
+          compression-level: 1
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: interrupted-${{ matrix.code }}
+          path: |
+            driver/research/ch3_mapping_first_nested/paired_raw/${{ matrix.code }}
+            !**/jit/**
+          compression-level: 1
+  publish:
+    needs: compare
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: research/ch3_mapping_first_nested
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: paired-*
+          path: inputs
+      - run: |
+          dir=research/ch3_mapping_first_nested/paired_results
+          mkdir -p "$dir"
+          for code in A02 A06 C10 C11; do
+            test -d "inputs/paired-$code"
+            mv "inputs/paired-$code" "$dir/$code"
+          done
+          cd "$dir"
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > ../PAIRED_SHA256SUMS
+          sha256sum --quiet -c ../PAIRED_SHA256SUMS
+          cd ../../..
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          while IFS= read -r -d '' f; do git add -- "$f"; done < <(find "$dir" -type f -print0)
+          git add -- research/ch3_mapping_first_nested/PAIRED_SHA256SUMS
+          git diff --cached --stat
+          git commit -m 'Archive paired cold-start cells, full mapping ledgers and continuous physical evidence'
+          git push origin HEAD:"$GITHUB_REF_NAME"

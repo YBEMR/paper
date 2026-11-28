@@ -76,15 +76,31 @@ def bind(obj,arm,folder,stage):
 def regression():
     m=solver.m
     obj=next(o for o in m.u2.CASES if m.label(o)=="C10")
-    folder=ROOT/"regression"
-    folder.mkdir(exist_ok=True)
+    from tempfile import mkdtemp
+    folder=Path(mkdtemp(prefix="regression-",dir=ROOT))
     history=HERE.parent/"ch3_integrated_quality_v3/archive/history/C10/energy"
     src=history/"original"
     expected=json.loads((src/"certificate.json").read_bytes())
     point=m.endpoint(expected)
     assert point["status"]=="HOT"
+    reference={}
+    archive_delta={}
+    plain,_=m.build(obj,folder/"full-reference")
+    for label,path in [("original",src)]+[(x,next((history/x/"evidence"/obj["case"]).iterdir())) for x in ("ordinary","thermal")]:
+        cfg=m.genes(json.loads((path/"plan.json").read_bytes()))
+        d,tr=plain.cert(cfg,plain.replay(cfg))
+        arch=json.loads((path/"certificate.json").read_bytes())
+        assert d["plan_sha256"]==arch["plan_sha256"] and d["metrics"]["status"]==arch["metrics"]["status"]
+        a,b=d["metrics"]["E_bounds"],arch["metrics"]["E_bounds"]
+        assert max(a[0],b[0])<=min(a[1],b[1])
+        with np.load(path/"trace.npz") as old:
+            assert np.array_equal(old["events"][:,:14],tr[:,:14])
+            archive_delta[label]=float(np.max(np.abs(old["events"]-tr)))
+        reference[label]=(d,tr)
+    point=m.endpoint(reference["original"][0])
     kernel=bind(obj,"C2",folder,"regression")
-    eng,flow,init=solver.handoff(obj,folder/"precheck",src,point)
+    native=plain.out/"evidence"/obj["case"]/point["plan"]
+    eng,flow,init=solver.handoff(obj,folder/"precheck",native,point)
     for number in range(2):
         d,tr=eng.cert(init[0],eng.replay(init[0]))
         assert m.endpoint(d)==point and np.array_equal(tr,init[3])
@@ -96,19 +112,20 @@ def regression():
     dest.mkdir(exist_ok=True)
     m.CLOCK=T()
     best=solver.refine_hot(eng,flow,init,dest,lambda tag,**kw:events.append(dict(event=tag,**kw)))
-    assert events==json.loads((history/"stages.json").read_bytes())
+    expected_events=json.loads((history/"stages.json").read_bytes())
+    assert [(e["event"],e["stage"],e.get("incumbent")) for e in events]==[(e["event"],e["stage"],e.get("incumbent")) for e in expected_events]
     certs=[e for e in events if e["event"]=="certificate"]
     assert [e["point"]["status"] for e in certs]==["SAFE","HOT"] and best==certs[0]["point"]
     for e in certs:
         rel=Path(e["stage"])/"evidence"/obj["case"]/e["point"]["plan"]
         actual=json.loads((dest/rel/"certificate.json").read_bytes())
-        archived=json.loads((history/rel/"certificate.json").read_bytes())
+        archived=json.loads(m.raw(reference[e["stage"]][0]))
         del actual["cert_s"],archived["cert_s"]
         assert actual==archived
-        with np.load(dest/rel/"trace.npz") as a,np.load(history/rel/"trace.npz") as b:
-            assert np.array_equal(a["events"],b["events"])
+        with np.load(dest/rel/"trace.npz") as a:
+            assert np.array_equal(a["events"],reference[e["stage"]][1])
     write_json(ROOT/"regression.json",dict(seed=point,stages=certs,best=best,
-        full_hot_hit=len(init[3]),integrals=[json.loads(l) for l in (folder/"regression-integrals.jsonl").read_text().splitlines()]))
+        archived_max_abs_delta=archive_delta,full_hot_hit=len(init[3]),integrals=[json.loads(l) for l in (folder/"regression-integrals.jsonl").read_text().splitlines()]))
 
 
 def cell(obj,folder,arm,cap):

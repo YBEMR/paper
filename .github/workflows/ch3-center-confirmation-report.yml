@@ -1,0 +1,116 @@
+name: Archive and decide twelve-stream center-only confirmation
+on:
+  push:
+    branches: [research/ch3-center-confirmation]
+    paths: [research/ch3_center_confirmation/ANALYZE]
+permissions:
+  contents: write
+  actions: read
+env:
+  SCIENCE_RUN: '46130375737'
+  SOURCE_SHA: ca1b75c56b49fb1e57c9b7fcadad2b50e157cd8f
+jobs:
+  reduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [A01, A02, A03, A04, A05, A06, B07, B08, C09, C10, C11, C12]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_center_confirmation/*.py
+            /research/ch3_analytic_quota/analyze.py
+            /research/ch3_mapping_first_nested/restore_plan.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 matplotlib
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SCIENCE_RUN }}
+          name: lane-${{ matrix.code }}
+          path: input
+      - name: Verify and restore endpoints for every repetition
+        run: |
+          (cd input && sha256sum --quiet -c SHA256SUMS)
+          python -Bu research/ch3_center_confirmation/reduce_lane.py input "${{ matrix.code }}" "$SOURCE_SHA" "$SCIENCE_RUN"
+          cd input
+          sha256sum reduced.json.gz r{1,2,3}/final_endpoints.tar.gz > AUDIT_SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ matrix.code }}
+          path: |
+            input/reduced.json.gz
+            input/AUDIT_SHA256SUMS
+            input/r*/final_endpoints.tar.gz
+          compression-level: 0
+  publish:
+    needs: reduce
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_center_confirmation/*.py
+            /research/ch3_center_confirmation/*.sh
+            /research/ch3_center_confirmation/ANALYZE
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install matplotlib
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: audit-*
+          path: audits
+      - name: Calculate the sealed decision before archiving
+        run: |
+          mkdir summaries
+          for code in A01 A02 A03 A04 A05 A06 B07 B08 C09 C10 C11 C12; do
+            (cd "audits/audit-$code" && sha256sum --quiet -c AUDIT_SHA256SUMS)
+            cp "audits/audit-$code/reduced.json.gz" "summaries/$code.json.gz"
+          done
+          python -Bu research/ch3_center_confirmation/analyze_final.py summaries
+          cd research/ch3_center_confirmation
+          sha256sum REPORT_zh.md decision.json energy_60s.png energy_600s.png tables/* > REPORT_SHA256SUMS
+          sha256sum --quiet -c REPORT_SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: confirmation-report
+          path: |
+            research/ch3_center_confirmation/REPORT_zh.md
+            research/ch3_center_confirmation/decision.json
+            research/ch3_center_confirmation/REPORT_SHA256SUMS
+            research/ch3_center_confirmation/tables
+            research/ch3_center_confirmation/energy_*s.png
+      - name: Publish the checked decision
+        run: |
+          d=research/ch3_center_confirmation
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          gh auth setup-git
+          git fetch --depth=1 origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          find "$d/tables" -type f -print0 > "$RUNNER_TEMP/report-files"
+          git add --sparse --pathspec-from-file="$RUNNER_TEMP/report-files" --pathspec-file-nul
+          git add --sparse -- "$d/REPORT_zh.md" "$d/decision.json" "$d/REPORT_SHA256SUMS" "$d/energy_60s.png" "$d/energy_600s.png"
+          git diff --cached --check -- "$d/REPORT_zh.md"
+          git diff --cached --stat
+          git commit -m 'Publish twelve-stream energy medians, repeated pairings, actual overheads and adoption decision'
+          git push origin HEAD:"$GITHUB_REF_NAME"
+          git rev-parse HEAD > "$RUNNER_TEMP/confirmed-head"
+      - name: Persist physical evidence, one checked stream at a time
+        run: |
+          export PUBLICATION_HEAD="$RUNNER_TEMP/confirmed-head"
+          for code in A01 A02 A03 A04 A05 A06 B07 B08 C09 C10 C11 C12; do
+            bash research/ch3_center_confirmation/publish_lane.sh "$code"
+          done
+          test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$(cat "$PUBLICATION_HEAD")"

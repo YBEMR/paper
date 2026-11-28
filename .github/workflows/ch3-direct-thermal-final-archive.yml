@@ -1,0 +1,47 @@
+name: Preserve all verified cold thermal evidence
+on:
+  push:
+    branches: [research/ch3-direct-thermal-final]
+    paths: [research/ch3_direct_thermal_final/ARCHIVE]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  preserve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitignore
+            /research/ch3_direct_thermal_final/ARCHIVE
+            /research/ch3_direct_thermal_final/results/60/decision.json
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          run-id: 46142516357
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/verified
+      - name: Publish scoped manifests and immutable evidence on the study branch
+        run: |
+          set -euo pipefail
+          read b run sha < research/ch3_direct_thermal_final/ARCHIVE
+          test "$run" = "46142516357"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for c in A01 A02 A03 A04 A05 A06 B07 B08 C09 C10 C11 C12; do
+            src="$RUNNER_TEMP/verified/results-$c"
+            (cd "$src" && sha256sum --quiet -c SHA256SUMS)
+            dest="research/ch3_direct_thermal_final/lanes/$b/$c"
+            test ! -e "$dest"
+            mkdir -p "$dest"
+            cp -a "$src/." "$dest/"
+            find "$dest" -type f -print0 | git add --sparse --pathspec-from-file=- --pathspec-file-nul
+            git diff --cached --quiet -- . ":(exclude)$dest/**"
+            git commit -qm "Preserve six independently verified $c cold runs, complete certificates and trajectory blocks"
+            git push -q origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+            echo "Published $c $(git rev-parse HEAD)"
+          done
+          test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$(git rev-parse HEAD)"

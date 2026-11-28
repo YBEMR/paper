@@ -1,0 +1,113 @@
+name: Complete the remaining fixed thermal-frequency pools
+on:
+  push:
+    branches: [research/ch3-direct-thermal-completion]
+    paths: [research/ch3_direct_thermal_completion/START]
+permissions:
+  contents: write
+env:
+  U1_NT: ${{ github.workspace }}/nt
+  U1_THREE: ${{ github.workspace }}/unused
+  U1_FOUR: ${{ github.workspace }}/four
+  U1_OUT: ${{ github.workspace }}/scratch
+  M1G_RAW: ${{ github.workspace }}/warm
+  NT_SHA: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+  GEN_SHA: 85969e8ed78cbab4d693122819ebe866e0721bb7
+  DP_SHA: 5b6c92468be980da4c679b123565698174eabdfb
+  GEN: ${{ github.workspace }}/gen
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  NUMBA_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+jobs:
+  compare:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Record acquisition start
+        run: echo "ACQUIRE_START=$(date +%s.%N)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          fetch-depth: 2
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_analytic_quota/method.py
+            /research/ch3_center_only/*.py
+            /research/ch3_direct_thermal_dp/
+            /research/ch3_direct_thermal_completion/
+            /research/ch3_center_confirmation/lanes/*/SHA256SUMS
+            /research/ch3_center_confirmation/lanes/*/r1/paired_results/*/physical/index.json
+            /research/ch3_mapping_first_nested/*.py
+            /research/ch3_integrated_quality_v3/*.py
+            /research/ch3_integrated_quality_v1/*.py
+            /research/ch3_integrated_quality_v2/*.py
+            /research/m6a_global_frequency_mapping/*.py
+            /research/m6a_global_frequency_mapping/dp.cpp
+            /research/m6a_global_frequency_mapping/SHA256SUMS
+            /research/u1_unified_diagnostic/interface.py
+            /research/u2_adaptive_groups/common_u2.py
+      - uses: actions/checkout@v4
+        with:
+          path: gen
+          ref: 85969e8ed78cbab4d693122819ebe866e0721bb7
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1i_generalization/registration/
+      - uses: actions/checkout@v4
+        with:
+          path: nt
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1*/*.py
+            /research/m1*/SHA256SUMS
+            /research/m1_transient_thermal_quota_20261126/frozen/
+            /research/m1_transient_thermal_quota_20261126/inputs/
+            /research/m1i_generalization/registration/
+      - uses: actions/checkout@v4
+        with:
+          path: four
+          ref: 96a13920a46f01b6a9710b88275d0ac08763db4b
+          persist-credentials: false
+          sparse-checkout: research/chapter4_cross_analysis_v5/formal_runner/v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 scipy==1.17.0 numba==0.63.1 psutil
+      - name: Acquire and verify frozen physical archives
+        working-directory: driver/research/ch3_direct_thermal_completion
+        run: python -Bu prepare.py
+      - name: Complete only the unverified positions on one core
+        working-directory: driver/research/ch3_direct_thermal_completion
+        run: python -Bu resume.py
+      - name: Archive scientific evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remaining-fixed-pools
+          path: |
+            driver/research/ch3_direct_thermal_completion/out
+            driver/research/ch3_direct_thermal_completion/tables
+            driver/research/ch3_direct_thermal_completion/*.json
+            driver/research/ch3_direct_thermal_completion/REPORT_zh.md
+          compression-level: 1
+      - name: Publish scoped evidence and verify remote commit
+        working-directory: driver
+        run: |
+          set -eu
+          cd research/ch3_direct_thermal_completion
+          find out tables -type f | sort | xargs -d '\n' sha256sum > SHA256SUMS
+          sha256sum acquisition.json decision.json REPORT_zh.md >> SHA256SUMS
+          sha256sum -c --quiet SHA256SUMS
+          cd ../..
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python research/ch3_direct_thermal_completion/publish.py
+          git diff --cached --check -- ':!*.csv' ':!*.jsonl'
+          git commit -m 'Archive completed fixed-pool comparison, HOT witnesses and separate compute receipt'
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+          test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$(git rev-parse HEAD)"

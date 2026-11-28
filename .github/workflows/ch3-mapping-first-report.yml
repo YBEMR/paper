@@ -1,0 +1,38 @@
+name: Audit mapping-first comparison and render decision
+on:
+  push:
+    branches: [research/ch3-mapping-first-nested]
+    paths: [research/ch3_mapping_first_nested/REPORT_START]
+permissions:
+  contents: write
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: research/ch3_mapping_first_nested
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy matplotlib
+      - working-directory: research/ch3_mapping_first_nested
+        run: |
+          sha256sum --quiet -c STAGE1_SHA256SUMS
+          (cd paired_results && sha256sum --quiet -c ../PAIRED_SHA256SUMS)
+          python -Bu summarize.py
+          sha256sum REPORT_zh.md energy_vs_time.png selected_endpoints.tar.gz tables/*.csv > REPORT_SHA256SUMS
+          sha256sum --quiet -c REPORT_SHA256SUMS
+      - run: |
+          dir=research/ch3_mapping_first_nested
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          while IFS= read -r -d '' f; do git add -- "$f"; done < <(find "$dir/tables" -type f -name '*.csv' -print0)
+          git add -- "$dir/REPORT_zh.md" "$dir/energy_vs_time.png" "$dir/selected_endpoints.tar.gz" "$dir/REPORT_SHA256SUMS"
+          git diff --cached --check -- "$dir/REPORT_zh.md"
+          git diff --cached --stat
+          git commit -m 'Report paired SAFE energy, coverage and mapping diagnosis with verified thermal evidence'
+          git push origin HEAD:"$GITHUB_REF_NAME"

@@ -1,0 +1,61 @@
+name: Publish fixed-pool thermal DP diagnosis
+on:
+  push:
+    branches: [research/ch3-direct-thermal-dp]
+    paths: [research/ch3_direct_thermal_dp/ANALYZE]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: research/ch3_direct_thermal_dp
+      - name: Resolve the sealed comparison archive
+        id: inputs
+        run: |
+          run=$(cat research/ch3_direct_thermal_dp/ANALYZE)
+          [[ "$run" =~ ^[0-9]+$ ]]
+          echo "id=$run" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.inputs.outputs.id }}
+          name: fixed-pool-evidence
+          path: research/ch3_direct_thermal_dp/out
+      - name: Score completed comparisons and retain unfinished positions
+        working-directory: research/ch3_direct_thermal_dp
+        run: |
+          python -Bu report.py
+          find out tables -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum REPORT_zh.md decision.json >> SHA256SUMS
+          sha256sum --quiet -c SHA256SUMS
+      - name: Archive study evidence and report
+        run: |
+          set -euo pipefail
+          d=research/ch3_direct_thermal_dp
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          for g in "$d"/out/evidence/*; do
+            test -d "$g" || continue
+            find "$g" -type f -print0 > "$RUNNER_TEMP/scope"
+            git add --pathspec-from-file="$RUNNER_TEMP/scope" --pathspec-file-nul
+            git diff --cached --quiet -- . ":(exclude)$g/**"
+            git diff --cached --stat | tail -1
+            git commit -m "Archive $(basename "$g") fixed-pool frequency evidence and physical certificates"
+            git push origin HEAD:"$GITHUB_REF_NAME"
+          done
+          find "$d/out" -type f ! -path "$d/out/evidence/*" -print0 > "$RUNNER_TEMP/scope"
+          find "$d/tables" -type f -print0 >> "$RUNNER_TEMP/scope"
+          git add --pathspec-from-file="$RUNNER_TEMP/scope" --pathspec-file-nul
+          git add -- "$d/REPORT_zh.md" "$d/decision.json" "$d/SHA256SUMS"
+          git diff --cached --check -- "$d/REPORT_zh.md"
+          git diff --cached --stat | tail -1
+          git commit -m 'Publish fixed-mapping and nomination-pool decision, thermal recovery witnesses and measured budget'
+          git push origin HEAD:"$GITHUB_REF_NAME"
+          test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$(git rev-parse HEAD)"

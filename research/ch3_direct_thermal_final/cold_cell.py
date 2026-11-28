@@ -6,7 +6,6 @@ import sys
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT.parent/"ch3_center_only"))
 from anchor_cell import f, m, paired
-from simplified import expand
 
 
 def direct(eng, flow, seed, dest, emit):
@@ -54,6 +53,7 @@ def main(code,arm,budget,dest):
     f.ORIGIN = m.CLOCK = float(os.environ["CELL_START"])
     f.log(dest/"start.jsonl","begin",core=list(os.sched_getaffinity(0)))
     m.RUN = m.u2.stack()
+    from simplified import expand
     m.RUN[0].e.expand = expand
     if arm == "B":
         f.refine = refine_safe

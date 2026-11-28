@@ -1,0 +1,44 @@
+name: Verify center-only endpoints and publish four-stream decision
+on:
+  push:
+    branches: [research/ch3-center-only]
+    paths: [research/ch3_center_only/ANALYZE]
+permissions:
+  contents: write
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_center_only/
+            /research/ch3_analytic_quota/analyze.py
+            /research/ch3_analytic_quota/tables/cells.csv
+            /research/ch3_mapping_first_nested/restore_plan.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 matplotlib
+      - name: Validate archives and reconstruct certified endpoints
+        working-directory: research/ch3_center_only
+        run: |
+          (cd paired_results && sha256sum --quiet -c ../PAIRED_SHA256SUMS)
+          python -Bu endpoints.py
+          sha256sum diagnostic/* tables/* final_evidence.tar.gz energy_vs_time.png REPORT_zh.md > REPORT_SHA256SUMS
+          sha256sum --quiet -c REPORT_SHA256SUMS
+      - name: Publish only verified study outputs
+        run: |
+          d=research/ch3_center_only
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          while IFS= read -r -d '' f; do git add -- "$f"; done < <(find "$d/tables" -type f -print0)
+          git add -- "$d/REPORT_zh.md" "$d/REPORT_SHA256SUMS" "$d/energy_vs_time.png" "$d/final_evidence.tar.gz"
+          git diff --cached --check -- "$d/REPORT_zh.md"
+          git diff --cached --stat
+          git commit -m 'Publish SAFE energy pairs, request-level mapping changes and terminal moment audit'
+          git push origin HEAD:"$GITHUB_REF_NAME"

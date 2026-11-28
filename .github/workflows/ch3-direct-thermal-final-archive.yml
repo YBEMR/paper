@@ -2,12 +2,13 @@ name: Preserve all verified cold thermal evidence
 on:
   push:
     branches: [research/ch3-direct-thermal-final]
-    paths: [research/ch3_direct_thermal_final/ARCHIVE]
+    paths: [research/ch3_direct_thermal_final/ARCHIVE, research/ch3_direct_thermal_final/seal.json]
 permissions:
   contents: write
   actions: read
 jobs:
   preserve:
+    if: github.event.head_commit.message != 'Seal the final thermal evidence and release redundant publication workers'
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     steps:
@@ -45,3 +46,27 @@ jobs:
             echo "Published $c $(git rev-parse HEAD)"
           done
           test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$(git rev-parse HEAD)"
+  close:
+    if: github.event.head_commit.message == 'Seal the final thermal evidence and release redundant publication workers'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Confirm both successful independent archives before releasing duplicate uploads
+        run: |
+          set -eu
+          repo="$GITHUB_REPOSITORY"
+          for id in 46143257759 46143506601; do
+            test "$(gh api "repos/$repo/actions/runs/$id" --jq '.conclusion')" = success
+          done
+          run=46142516357
+          test "$(gh api "repos/$repo/actions/runs/$run" --jq '.head_sha')" = '1db9c8854ea2bedfa1edaa4650cd35de81a26e37'
+          if [ "$(gh api "repos/$repo/actions/runs/$run" --jq '.status')" = in_progress ]; then
+            gh api "repos/$repo/actions/runs/$run/jobs?per_page=50" > "$RUNNER_TEMP/jobs.json"
+            jq -e '[.jobs[] | select(any(.steps[]; .name=="Run paired cold repetitions and seal physical evidence" and .conclusion=="success"))] | length == 12' "$RUNNER_TEMP/jobs.json"
+            jq -e '[.jobs[] | select(any(.steps[]; .name=="Run actions/upload-artifact@v4" and .conclusion=="success"))] | length == 12' "$RUNNER_TEMP/jobs.json"
+            gh run cancel "$run" --repo "$repo"
+          fi

@@ -1,5 +1,6 @@
 """Common-parent probe. Historical material is loaded only by this offline program."""
 import csv
+import importlib.util
 import itertools
 import math
 from pathlib import Path
@@ -7,7 +8,11 @@ from types import FunctionType
 
 import numpy as np
 from anchor_cell import ROOT, PREV, analytic_expand, f, m
-from diagnose import GroupView
+
+spec = importlib.util.spec_from_file_location("archived_analytic_diagnosis", PREV/"diagnose.py")
+archived_diagnosis = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(archived_diagnosis)
+GroupView = archived_diagnosis.GroupView
 
 
 def save(name, rows):

@@ -39,7 +39,10 @@ def pending():
 
 def main():
     start = time.monotonic()
-    assert subprocess.check_output(["git","rev-parse","HEAD^"],cwd=DRIVER,text=True).strip() == BASE
+    assert subprocess.check_output(["git","rev-parse","HEAD^"],cwd=DRIVER,text=True).strip() == "66a0abe5aa1cc84067ab384b5a8ddadab23da5f6"
+    # Confirm the inherited data and evaluator trees are identical to the frozen baseline.
+    parent = subprocess.check_output(["git","cat-file","-p","HEAD^"],cwd=DRIVER,text=True)
+    assert "parent "+BASE+"\n" in parent
     old_checks = checks(OLD / "SHA256SUMS")
     for rel, digest in old_checks.items():
         verify(OLD / rel, digest)
@@ -78,7 +81,15 @@ def main():
     for folder in ("slots","evidence"):
         shutil.copytree(OLD / "out" / folder, OUT / folder)
     shutil.copyfile(OLD / "out/nominees.json", OUT / "nominees.json")
-    data = dict(base=BASE, initial_checkout_and_environment_s=time.time()-float(os.environ["ACQUIRE_START"])-(time.monotonic()-start),
+    checkpoint = DRIVER.parent/"checkpoint"
+    inputs = ROOT/"out/checkpoint"
+    inputs.mkdir()
+    for p in ("acquisition.json","out/budget.json"):
+        shutil.copyfile(checkpoint/p,inputs/Path(p).name)
+    fresh = checkpoint/"out/evidence/C10/computed"
+    assert len(list(fresh.glob("*/ordinary/evidence/*/*/trace.npz"))) == 1
+    shutil.copytree(fresh,inputs/"C10")
+    data = dict(previous_preparation_wall_s=json.loads((inputs/"acquisition.json").read_bytes())["total_preparation_wall_s"],base=BASE, initial_checkout_and_environment_s=time.time()-float(os.environ["ACQUIRE_START"])-(time.monotonic()-start),
                 acquisition_and_prior_validation_s=fetched-start,archive_validation_and_staging_s=time.monotonic()-fetched,
                 total_preparation_wall_s=time.time()-float(os.environ["ACQUIRE_START"]),
                 frozen_files_checked=len(old_checks),selected_files=len(paths),

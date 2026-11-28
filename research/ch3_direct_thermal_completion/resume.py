@@ -21,12 +21,17 @@ def science():
     verified = {("SAFE","ordinary"),("SAFE","thermal")}
     hot = [(r["case"], r["seed"]) for r in rows if r["point"]["status"] == "HOT"]
     assert [c for c,k in hot] == ["C10","C11"] and len(set(hot)) == 2
+    # Compare the failed replay with the original archive, then use the historical
+    # stages themselves in A/C. Never substitute a replay with a different trace.
+    from inspect_match import audit
+    audit(fixed, rows)
+    verified.update({("HOT","ordinary"),("HOT","thermal")})
     groups = [[r for r in rows if (r["case"],r["seed"]) == key] for key in hot]
     groups.extend([r for r in rows if r["case"] == c and (c,r["seed"]) not in hot] for c in cases)
     for group in groups:
         print("Restoring and evaluating",group[0]["case"],len(group),group[0]["point"]["status"],flush=True)
         fixed.evaluate_case(group[0]["case"],group,verified)
-    print("Verified stage classes",sorted(verified),flush=True)
+    print("Finished archived stage reuse and offline completions",flush=True)
 
 
 def guard():
@@ -34,7 +39,8 @@ def guard():
     os.sched_setaffinity(0,{core})
     prior = json.loads((OLD/"out/budget.json").read_bytes())["cumulative_s"]
     start = time.monotonic()
-    deadline = start + 597
+    checkpoint_s = json.loads((OUT/"checkpoint/budget.json").read_bytes())["supplemental_core_s"]
+    deadline = start + 597 - checkpoint_s
     os.environ.update(CASE_DEADLINE=str(deadline-2),STUDY_START=str(start))
     steps = []
     def run(name, cmd, cwd):
@@ -51,7 +57,7 @@ def guard():
     def receipt(status):
         elapsed = time.monotonic()-start
         data = dict(source=os.environ["GITHUB_SHA"],historical_core_s=prior,elapsed_s=elapsed,
-                    supplemental_core_s=elapsed,cumulative_s=prior+elapsed,supplemental_limit_core_s=600,
+                    previous_attempt_core_s=checkpoint_s,supplemental_core_s=checkpoint_s+elapsed,cumulative_s=prior+checkpoint_s+elapsed,supplemental_limit_core_s=600,
                     cpu=core,steps=steps,status=status,preparation_receipt="../acquisition.json")
         (OUT/"budget.json").write_text(json.dumps(data,indent=2)+"\n")
         return data

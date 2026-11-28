@@ -72,6 +72,9 @@ def main():
     if maxloss:
         lines+=["",f"最大绝对整池损失为 {maxloss['case']}（{maxloss['construction_s']} 秒），增加 {float(maxloss['B_minus_A_J']):.6f} J。最大相对损失为 {maxpct['case']}（{maxpct['construction_s']} 秒），增加 {float(maxpct['B_minus_A_pct']):.5f}%。"]
     lines+=["",f"原批次保留 595.011 核秒。本次档案准备耗时 {prep['total_preparation_wall_s']:.3f} 秒墙钟，单独记账。补充计算限额为 600 核秒，最终回执含编译、恢复、调频、认证和科学结果写入。固定候选池诊断只评价排程质量。","","[两处超温候选的逐方法证书索引](tables/hot_witnesses.csv) · [档案校验与分段计时](acquisition.json) · [两批累计预算回执](out/budget.json)"]
+    match = json.loads((OUT/"checkpoint/match.json").read_bytes())
+    cols = [str(i) for i,n in enumerate(match["unequal_entries"]) if n]
+    lines += ["",f"C10 普通阶段的独立匹配复算具有相同的物理排程、物理事件和认证端点。完整轨迹在零起算的第 {', '.join(cols)} 列存在数值差异，起终节点温度的最大绝对差为 {match['max_temperature_trace_delta_C']:.6g} °C。A 与 C 采用历史已完成阶段的原证书和原轨迹；B 单独从原始超温提名求解。复算轨迹单独归档。两次档案准备分别耗时 {prep['previous_preparation_wall_s']:.3f} 和 {prep['total_preparation_wall_s']:.3f} 秒。","", "[匹配复核、两份轨迹哈希和逐列差异](out/checkpoint/match.json)"]
     report_file.write_text("\n".join(lines)+"\n",encoding="utf8")
 
 

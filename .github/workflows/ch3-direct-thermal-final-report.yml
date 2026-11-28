@@ -1,0 +1,80 @@
+name: Audit cold paired thermal results
+on:
+  push:
+    branches: [research/ch3-direct-thermal-final]
+    paths: [research/ch3_direct_thermal_final/ANALYZE]
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [A01,A02,A03,A04,A05,A06,B07,B08,C09,C10,C11,C12]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_direct_thermal_final/ANALYZE
+            /research/ch3_direct_thermal_final/*.py
+            /research/ch3_center_confirmation/lane.py
+            /research/ch3_analytic_quota/analyze.py
+            /research/ch3_mapping_first_nested/restore_plan.py
+      - name: Restore sealed lane and immutable run identity
+        run: |
+          read b run sha < research/ch3_direct_thermal_final/ANALYZE
+          echo "BUDGET=$b" >> "$GITHUB_ENV"
+          echo "SCIENCE_RUN=$run" >> "$GITHUB_ENV"
+          echo "SCIENCE_SHA=$sha" >> "$GITHUB_ENV"
+          git sparse-checkout add "/research/ch3_direct_thermal_final/lanes/$b/${{ matrix.code }}/"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy matplotlib
+      - name: Verify six cold runs and restore their endpoints
+        run: python -Bu research/ch3_direct_thermal_final/reduce.py "${{ matrix.code }}" "$BUDGET" "$RUNNER_TEMP/reduced"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ matrix.code }}
+          path: ${{ runner.temp }}/reduced
+  report:
+    needs: audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitignore
+            /research/ch3_direct_thermal_final/*.py
+            /research/ch3_direct_thermal_final/ANALYZE
+            /research/ch3_direct_thermal_final/initialization_faults.json
+            /research/ch3_direct_thermal_final/results/60/reduced/
+            /research/ch3_center_confirmation/*.py
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: audit-*
+          path: audits
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy matplotlib
+      - name: Build paired tables, figures, budget and decision
+        run: |
+          read b run sha < research/ch3_direct_thermal_final/ANALYZE
+          dest="research/ch3_direct_thermal_final/results/$b"
+          mkdir -p "$dest/reduced" "$dest/endpoints"
+          mv audits/*.json.gz "$dest/reduced/"
+          mv audits/*-endpoints.tar.gz "$dest/endpoints/"
+          python -Bu research/ch3_direct_thermal_final/aggregate.py "$b"
+          (cd "$dest" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS && sha256sum --quiet -c SHA256SUMS)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          find "$dest" -type f -print0 | git add --sparse --pathspec-from-file=- --pathspec-file-nul
+          git diff --cached --quiet -- . ":(exclude)$dest/**"
+          git commit -qm "Archive $b-second end-to-end decisions, certified comparisons and complete endpoint evidence"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+          test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$(git rev-parse HEAD)"

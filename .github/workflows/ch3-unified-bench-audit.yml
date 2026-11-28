@@ -1,0 +1,60 @@
+name: Audit the single frozen baseline batch
+on:
+  push:
+    branches: [research/ch3-unified-baseline-evaluation]
+    paths: [research/ch3_unified_baseline_evaluation/AUDIT]
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN: '46121050526'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_unified_baseline_evaluation/
+            /research/ch3_integrated_quality_v1/*.py
+      - name: Wait for the registered batch
+        run: |
+          gh run watch "$RUN" --exit-status --interval 45
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RUN }}
+          github-token: ${{ github.token }}
+          path: payload
+      - run: |
+          dir=research/ch3_unified_baseline_evaluation/archive
+          mkdir -p "$dir"
+          mv payload/benchmark-gate "$dir/gate"
+          for c in A01 A02 A03 A04 A05 A06 B07 B08 C09 C10 C11 C12; do mv "payload/bench-$c" "$dir/$c"; done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 matplotlib
+      - working-directory: research/ch3_unified_baseline_evaluation
+        run: |
+          python -Bu summarize.py
+          find . -type f ! -name SHA256SUMS ! -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum --quiet -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-benchmark-evidence
+          path: research/ch3_unified_baseline_evaluation
+          compression-level: 1
+      - run: |
+          dir=research/ch3_unified_baseline_evaluation
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin research/ch3-unified-baseline-evaluation
+          test "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)"
+          find "$dir/archive" "$dir/tables" "$dir/figures" -type f -print0 | xargs -0 -n 100 git add --
+          git add -- "$dir/REPORT_zh.md" "$dir/SHA256SUMS"
+          git diff --cached --stat | tail -12
+          git commit -m 'Publish 252 benchmark receipts, certified trajectories, figures and paired decision report'
+          git push origin HEAD:refs/heads/research/ch3-unified-baseline-evaluation

@@ -1,0 +1,124 @@
+name: Final cold confirmation of direct thermal DP
+on:
+  push:
+    branches: [research/ch3-direct-thermal-final]
+    paths: [research/ch3_direct_thermal_final/START]
+permissions:
+  contents: write
+env:
+  U1_NT: ${{ github.workspace }}/nt
+  U1_THREE: ${{ github.workspace }}/unused
+  U1_FOUR: ${{ github.workspace }}/four
+  U1_OUT: ${{ github.workspace }}/scratch
+  M1G_RAW: ${{ github.workspace }}/warm
+  NT_SHA: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+  GEN_SHA: 85969e8ed78cbab4d693122819ebe866e0721bb7
+  DP_SHA: 5b6c92468be980da4c679b123565698174eabdfb
+  GEN: ${{ github.workspace }}/gen
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  NUMBA_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+jobs:
+  compare:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [A01, A02, A03, A04, A05, A06, B07, B08, C09, C10, C11, C12]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/ch3_analytic_quota/method.py
+            /research/ch3_center_only/*.py
+            /research/ch3_center_confirmation/*.py
+            /research/ch3_direct_thermal_final/*.py
+            /research/ch3_direct_thermal_final/START
+            /.gitignore
+            /research/ch3_mapping_first_nested/*.py
+            /research/ch3_integrated_quality_v3/*.py
+            /research/ch3_integrated_quality_v1/*.py
+            /research/ch3_integrated_quality_v2/*.py
+            /research/m6a_global_frequency_mapping/*.py
+            /research/m6a_global_frequency_mapping/dp.cpp
+            /research/m6a_global_frequency_mapping/SHA256SUMS
+            /research/u1_unified_diagnostic/interface.py
+            /research/u2_adaptive_groups/common_u2.py
+      - uses: actions/checkout@v4
+        with:
+          path: gen
+          ref: 85969e8ed78cbab4d693122819ebe866e0721bb7
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1i_generalization/registration/
+      - uses: actions/checkout@v4
+        with:
+          path: nt
+          ref: b95570f9ae5b0cdb26abcdf78701e12f1c644f40
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /research/m1*/*.py
+            /research/m1*/SHA256SUMS
+            /research/m1_transient_thermal_quota_20261126/frozen/
+            /research/m1_transient_thermal_quota_20261126/inputs/
+            /research/m1i_generalization/registration/
+      - uses: actions/checkout@v4
+        with:
+          path: four
+          ref: 96a13920a46f01b6a9710b88275d0ac08763db4b
+          persist-credentials: false
+          sparse-checkout: research/chapter4_cross_analysis_v5/formal_runner/v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy==2.3.5 scipy==1.17.0 numba==0.63.1 psutil
+      - working-directory: driver/research/m6a_global_frequency_mapping
+        run: g++ -Wall -Wextra -O3 -std=c++17 -ffp-contract=off -fPIC -shared dp.cpp -o dp.so
+      - name: Check registration, cold entry points and pinned model before the clock
+        working-directory: driver/research/ch3_center_confirmation
+        run: python -Bu verify_inputs.py
+      - name: Read registered stage
+        run: |
+          b=$(head -n1 driver/research/ch3_direct_thermal_final/START | cut -d' ' -f1)
+          case "$b" in 60|600) ;; *) exit 1;; esac
+          echo "BUDGET=$b" >> "$GITHUB_ENV"
+      - name: Run paired cold repetitions and seal physical evidence
+        working-directory: driver/research/ch3_direct_thermal_final
+        run: python -Bu lane_final.py "${{ matrix.code }}" "$BUDGET"
+      - name: Verify all six receipts and manifest
+        working-directory: driver/research/ch3_direct_thermal_final
+        run: |
+          cd "lanes/$BUDGET/${{ matrix.code }}"
+          test "$(find . -name receipt.json | wc -l)" -eq 6
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum --quiet -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.code }}
+          path: driver/research/ch3_direct_thermal_final/lanes/${{ env.BUDGET }}/${{ matrix.code }}
+          if-no-files-found: warn
+          compression-level: 1
+      - name: Publish each verified repetition to its unique evidence branch
+        working-directory: driver
+        run: |
+          set -eu
+          lane="research/ch3_direct_thermal_final/lanes/$BUDGET/${{ matrix.code }}"
+          ref="refs/heads/research/ch3-direct-thermal-evidence-$GITHUB_RUN_ID-${{ matrix.code }}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for r in 1 2 3; do
+            find "$lane/r$r" -type f -print0 | git add --sparse --pathspec-from-file=- --pathspec-file-nul
+            if [ "$r" = 3 ]; then git add --sparse -- "$lane/SHA256SUMS"; fi
+            git diff --cached --quiet -- . ":(exclude)$lane/**"
+            git commit -qm "Seal $BUDGET-second ${{ matrix.code }} repetition $r with continuous physical evidence"
+            git push -q origin "HEAD:$ref"
+          done
+          test "$(git ls-remote origin "$ref" | cut -f1)" = "$(git rev-parse HEAD)"
